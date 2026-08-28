@@ -70,6 +70,90 @@ export const adminCommitDriverImport = (file: File, opts?: DriverImportOptions) 
         body: driverImportFormData(file, opts),
     });
 
+/* ── Legacy Mongo Driver Import (raw export CSV) ──── */
+// Super-admin-only (backend/routes/admin/legacy_driver_import.py). A
+// SEPARATE importer from Bulk Driver Import above: this one reads the raw
+// legacy Mongo export's drivers.csv (not the bespoke Saskatoon recruitment
+// CSV) and creates/links/enriches accounts for the ~900 driver profiles that
+// predate Spinr's current driver population. Same validate/commit-token
+// contract as Bulk Driver Import (reuses the identical backend token
+// mechanism, bound independently per endpoint), different response shape:
+// a row either creates a NEW driver, LINKS a new driver to an existing
+// account (no driver row yet), or ENRICHES an existing driver's history
+// (no new row, no live field touched) — see counts below.
+export interface LegacyDriverImportReportItem {
+    old_driver_id: string;
+    field: string;
+    message: string;
+}
+export interface LegacyDriverImportCounts {
+    rows: number;
+    new_users: number;
+    new_drivers: number;
+    linked_accounts: number;
+    enriched_drivers: number;
+    skipped_resume: number;
+}
+export interface LegacyDriverImportReport {
+    batch: string;
+    can_commit: boolean;
+    counts: LegacyDriverImportCounts;
+    warnings: LegacyDriverImportReportItem[];
+    errors: LegacyDriverImportReportItem[];
+    // Proves a /validate call happened for this exact (batch, CSV bytes,
+    // admin) — /commit requires it back, same gap-#45-shaped guarantee as
+    // Bulk Driver Import's own token. Optional: a locally-reconstructed
+    // "commit was refused, here's why" report never carries one — the fix
+    // is always to re-validate, which mints a fresh token.
+    validation_token?: string;
+}
+export interface LegacyDriverImportCommitResult {
+    batch: string;
+    committed: boolean;
+    new_users?: number;
+    new_drivers?: number;
+    linked_accounts?: number;
+    enriched_drivers?: number;
+    warnings?: LegacyDriverImportReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    counts?: LegacyDriverImportCounts;
+    errors?: LegacyDriverImportReportItem[];
+}
+export interface LegacyDriverImportOptions {
+    serviceAreaId?: string;
+    serviceAreaName?: string;
+    batch?: string;
+    // Required for /commit — pass report.validation_token from the
+    // preceding /validate call. Omitted for /validate itself.
+    validationToken?: string;
+}
+
+function legacyDriverImportFormData(file: File, opts?: LegacyDriverImportOptions): FormData {
+    const fd = new FormData();
+    fd.append("drivers_csv", file);
+    if (opts?.serviceAreaId) fd.append("service_area_id", opts.serviceAreaId);
+    if (opts?.serviceAreaName) fd.append("service_area_name", opts.serviceAreaName);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
+    return fd;
+}
+
+/** Dry-run: parse + validate the raw Mongo-export drivers.csv and return the
+ * report (no writes). */
+export const adminValidateLegacyDriverImport = (file: File, opts?: LegacyDriverImportOptions) =>
+    request<LegacyDriverImportReport>("/api/admin/legacy-drivers/import/validate", {
+        method: "POST",
+        body: legacyDriverImportFormData(file, opts),
+    });
+
+/** Commit the import. Returns committed=false + errors if the CSV no longer validates. */
+export const adminCommitLegacyDriverImport = (file: File, opts?: LegacyDriverImportOptions) =>
+    request<LegacyDriverImportCommitResult>("/api/admin/legacy-drivers/import/commit", {
+        method: "POST",
+        body: legacyDriverImportFormData(file, opts),
+    });
+
 /* ── Legacy Booking Import (4 CSVs) ───────── */
 // Super-admin-only (backend/routes/admin/booking_import.py). Imports completed
 // rides from the previous app into `rides`, plus one offsetting `payouts` row

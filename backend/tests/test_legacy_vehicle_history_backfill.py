@@ -17,6 +17,7 @@ from __future__ import annotations
 from backend.services import driver_import_service as svc
 
 IMPORT_SOURCE = svc.IMPORT_SOURCE
+MONGO_IMPORT_SOURCE = svc.MONGO_IMPORT_SOURCE
 
 
 def _vehicle_row(**overrides):
@@ -177,8 +178,66 @@ def test_plan_skips_unresolvable_driver_id(monkeypatch):
 
 
 def test_plan_skips_driver_without_legacy_import_source(monkeypatch):
+    """Regression: an organic (non-legacy) driver with no legacy_import_
+    metadata at all -- and no mongo_driver_history entry -- must still be
+    skipped exactly as before the MONGO_IMPORT_SOURCE generalization."""
     organic_driver = _spinr_driver(legacy_import_metadata={})
     _install(monkeypatch, drivers=[organic_driver])
+    plan = svc.plan_legacy_vehicle_history_backfill([_vehicle_row()], [_mongo_driver_row()])
+
+    assert plan.rows_to_insert == []
+    assert plan.skipped_not_legacy_driver == 1
+
+
+def test_plan_matches_driver_directly_created_by_mongo_importer(monkeypatch):
+    """A driver created (or linked to an existing account) by
+    build_mongo_driver_import_plan carries its own top-level
+    legacy_import_metadata.source == MONGO_IMPORT_SOURCE -- the vehicle-
+    history backfill must now match it, not just IMPORT_SOURCE (Saskatoon)
+    drivers."""
+    mongo_driver = _spinr_driver(
+        legacy_import_metadata={"source": MONGO_IMPORT_SOURCE, "old_driver_id": "mongo-driver-1"}
+    )
+    _install(monkeypatch, drivers=[mongo_driver])
+    plan = svc.plan_legacy_vehicle_history_backfill([_vehicle_row()], [_mongo_driver_row()])
+
+    assert not plan.warnings
+    assert plan.skipped_not_legacy_driver == 0
+    assert len(plan.rows_to_insert) == 6  # all six TRACKED_VEHICLE_FIELDS
+
+
+def test_plan_matches_enriched_driver_via_mongo_driver_history(monkeypatch):
+    """An existing driver ENRICHED by build_mongo_driver_import_plan
+    (drivers_to_enrich) keeps its ORIGINAL top-level source (here: no
+    legacy_import_metadata.source at all, i.e. an organic driver enriched
+    after the fact) -- its Mongo lineage lives only in the additive
+    mongo_driver_history list. The backfill must still match it by
+    checking that list for this row's old_driver_id."""
+    enriched_driver = _spinr_driver(
+        legacy_import_metadata={
+            "mongo_driver_history": [{"old_driver_id": "mongo-driver-1", "source": MONGO_IMPORT_SOURCE, "batch": "b1"}]
+        }
+    )
+    _install(monkeypatch, drivers=[enriched_driver])
+    plan = svc.plan_legacy_vehicle_history_backfill([_vehicle_row()], [_mongo_driver_row()])
+
+    assert not plan.warnings
+    assert plan.skipped_not_legacy_driver == 0
+    assert len(plan.rows_to_insert) == 6
+
+
+def test_plan_skips_enriched_driver_whose_history_does_not_match_this_row(monkeypatch):
+    """An enriched driver's mongo_driver_history must be checked for THIS
+    row's specific old_driver_id, not just non-empty presence -- a history
+    entry for a different old_driver_id must not authorize a match."""
+    enriched_driver = _spinr_driver(
+        legacy_import_metadata={
+            "mongo_driver_history": [
+                {"old_driver_id": "some-other-mongo-id", "source": MONGO_IMPORT_SOURCE, "batch": "b1"}
+            ]
+        }
+    )
+    _install(monkeypatch, drivers=[enriched_driver])
     plan = svc.plan_legacy_vehicle_history_backfill([_vehicle_row()], [_mongo_driver_row()])
 
     assert plan.rows_to_insert == []

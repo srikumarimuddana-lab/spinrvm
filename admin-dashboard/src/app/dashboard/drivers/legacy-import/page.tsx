@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
     Upload,
     FileDown,
@@ -10,11 +10,10 @@ import {
     Info,
 } from "lucide-react";
 import {
-    adminValidateDriverImport,
-    adminCommitDriverImport,
-    getServiceAreas,
-    type DriverImportReport,
-    type DriverImportReportItem,
+    adminValidateLegacyDriverImport,
+    adminCommitLegacyDriverImport,
+    type LegacyDriverImportReport,
+    type LegacyDriverImportReportItem,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,13 +25,6 @@ import {
     CardContent,
 } from "@/components/ui/card";
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select";
-import {
     Table,
     TableHeader,
     TableBody,
@@ -43,59 +35,36 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { exportToCsv } from "@/lib/export-csv";
+import Link from "next/link";
 
-// Header for the downloadable template. The first nine columns are required by
-// the backend (REQUIRED_DRIVER_COLUMNS); the rest are optional but commonly
-// used. Keep in sync with services/driver_import_service.py normalize_header.
+// A minimal, realistic-shaped sample matching the RAW Mongo export's own
+// column names (backend/services/driver_import_service.py's
+// REQUIRED_MONGO_DRIVER_COLUMNS = {"_id", "name", "phone"}; the rest are
+// read if present, ignored otherwise). This is NOT the same template as
+// Bulk Driver Import's (that one is the bespoke Saskatoon recruitment CSV
+// shape) — do not merge the two templates, the backend reads them with two
+// different, deliberately separate parsers.
 const TEMPLATE_HEADER = [
-    "old_driver_id",
-    "full_name",
+    "_id",
+    "name",
     "phone",
     "email",
-    "vehicle_plate",
-    "vehicle_type",
-    "vehicle_year",
-    "vehicle_make",
-    "vehicle_model",
-    "vehicle_color",
-    "vin",
-    "date_of_birth",
-    "license_number",
-    "license_class",
-    "license_expiry",
-    "insurance_expiry",
-    "vehicle_inspection_expiry",
-    "criminal_record_check_expiry",
-    "work_authorization_expiry",
-    "spinr_approved",
-    "approved_from_sgi",
-    "pr",
-    "citizen",
+    "ratings",
+    "created_at",
+    "is_deleted",
+    "is_block",
+    "set_up_profile",
 ];
 const TEMPLATE_SAMPLE = [
-    "LEGACY-001",
+    "6923ea32d1bde481895439f4",
     "Jane Doe",
     "3065551234",
     "jane@example.com",
-    "ABC123",
-    "Sedan",
-    "2020",
-    "Toyota",
-    "Corolla",
-    "Black",
-    "2T1BURHE0JC123456",
-    "1990-05-14",
-    "D1234567",
-    "5",
-    "2027-05-14",
-    "2026-11-01",
-    "2026-09-30",
-    "2026-08-15",
-    "indefinite",
-    "yes",
-    "yes",
-    "no",
-    "yes",
+    "4.5",
+    "1700000000000",
+    "false",
+    "false",
+    "true",
 ];
 
 function downloadTemplate() {
@@ -104,7 +73,7 @@ function downloadTemplate() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "spinr-driver-import-template.csv";
+    link.download = "spinr-legacy-mongo-driver-import-template.csv";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -117,7 +86,7 @@ const REPORT_COLUMNS = [
     { key: "message", label: "message" },
 ];
 
-function IssueTable({ items }: { items: DriverImportReportItem[] }) {
+function IssueTable({ items }: { items: LegacyDriverImportReportItem[] }) {
     return (
         <div className="overflow-x-auto rounded-md border">
             <Table>
@@ -142,29 +111,44 @@ function IssueTable({ items }: { items: DriverImportReportItem[] }) {
     );
 }
 
-export default function BulkImportPage() {
+function Stat({
+    label,
+    value,
+    tone,
+}: {
+    label: string;
+    value: number;
+    tone?: "warn" | "error";
+}) {
+    const toneCls =
+        tone === "error" && value > 0
+            ? "text-destructive"
+            : tone === "warn" && value > 0
+              ? "text-warning"
+              : "text-foreground";
+    return (
+        <div className="rounded-md border p-3">
+            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
+            <div className="text-xs text-muted-foreground">{label}</div>
+        </div>
+    );
+}
+
+export default function LegacyDriverImportPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [file, setFile] = useState<File | null>(null);
-    const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
-    const [serviceAreaId, setServiceAreaId] = useState<string>("");
-    const [report, setReport] = useState<DriverImportReport | null>(null);
+    const [serviceAreaName, setServiceAreaName] = useState("Saskatoon");
+    const [report, setReport] = useState<LegacyDriverImportReport | null>(null);
     const [validating, setValidating] = useState(false);
     const [committing, setCommitting] = useState(false);
     const [committedSummary, setCommittedSummary] = useState<string | null>(null);
 
-    useEffect(() => {
-        getServiceAreas()
-            .then((rows) => setServiceAreas(Array.isArray(rows) ? rows : []))
-            .catch(() => setServiceAreas([]));
-    }, []);
-
     if (!allowed) return null;
 
-    const importOpts = () =>
-        serviceAreaId ? { serviceAreaId } : { serviceAreaName: "Saskatoon" };
+    const importOpts = () => ({ serviceAreaName: serviceAreaName.trim() || "Saskatoon" });
 
     const resetReport = () => {
         setReport(null);
@@ -181,7 +165,7 @@ export default function BulkImportPage() {
         setValidating(true);
         setCommittedSummary(null);
         try {
-            const rep = await adminValidateDriverImport(file, importOpts());
+            const rep = await adminValidateLegacyDriverImport(file, importOpts());
             setReport(rep);
         } catch (e) {
             toast({
@@ -200,28 +184,44 @@ export default function BulkImportPage() {
         try {
             // batch + validationToken must come from this exact report — the
             // backend binds the token to (batch, CSV bytes, admin) and
-            // refuses commit otherwise (gap #45).
-            const res = await adminCommitDriverImport(file, {
+            // refuses commit otherwise.
+            const res = await adminCommitLegacyDriverImport(file, {
                 ...importOpts(),
                 batch: report.batch,
                 validationToken: report.validation_token,
             });
             if (res.committed) {
                 setCommittedSummary(
-                    `Imported ${res.imported_drivers ?? 0} drivers (${res.imported_users ?? 0} accounts).` +
-                        (res.updated_drivers ? ` Updated ${res.updated_drivers} existing driver(s).` : "") +
+                    `Created ${res.new_drivers ?? 0} new driver(s) (${res.new_users ?? 0} new account(s)).` +
+                        (res.linked_accounts
+                            ? ` Linked ${res.linked_accounts} new driver profile(s) to existing account(s).`
+                            : "") +
+                        (res.enriched_drivers
+                            ? ` Enriched ${res.enriched_drivers} existing driver(s) with legacy history.`
+                            : "") +
                         (res.warnings && res.warnings.length ? ` ${res.warnings.length} warning(s).` : ""),
                 );
                 setReport(null);
                 setFile(null);
                 if (fileInputRef.current) fileInputRef.current.value = "";
-                toast({ title: "Import complete", description: `${res.imported_drivers ?? 0} drivers imported.` });
+                toast({
+                    title: "Import complete",
+                    description: `${res.new_drivers ?? 0} new, ${res.linked_accounts ?? 0} linked, ${res.enriched_drivers ?? 0} enriched.`,
+                });
             } else {
                 // The CSV no longer validates (data changed since validate).
                 setReport({
                     batch: res.batch,
                     can_commit: false,
-                    counts: res.counts ?? { rows: 0, users: 0, drivers: 0, updated: 0, skipped_resume: 0 },
+                    counts:
+                        res.counts ?? {
+                            rows: 0,
+                            new_users: 0,
+                            new_drivers: 0,
+                            linked_accounts: 0,
+                            enriched_drivers: 0,
+                            skipped_resume: 0,
+                        },
                     warnings: res.warnings ?? [],
                     errors: res.errors ?? [],
                 });
@@ -247,37 +247,43 @@ export default function BulkImportPage() {
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
             <div>
-                <h1 className="text-2xl font-semibold">Bulk Driver Import</h1>
+                <h1 className="text-2xl font-semibold">Legacy Driver Import (Mongo export)</h1>
                 <p className="text-sm text-muted-foreground">
-                    Upload a CSV of drivers to create their accounts and profiles. Validate first, review
-                    the report, then commit. Document files are uploaded per-driver afterwards from the
-                    driver&apos;s page. Importing the previous app&apos;s raw MongoDB export instead? Use{" "}
-                    <a href="/dashboard/drivers/legacy-import" className="underline">
-                        Legacy Driver Import
-                    </a>{" "}
-                    — a different CSV shape, a different driver population.
+                    Import driver profiles from the previous app&apos;s raw MongoDB export
+                    (<span className="font-mono">drivers.csv</span>). A separate population from
+                    the Saskatoon recruitment sheet — see{" "}
+                    <Link href="/dashboard/drivers/import" className="underline">
+                        Bulk Driver Import
+                    </Link>{" "}
+                    for that one. Every newly-created driver here is forced{" "}
+                    <span className="font-mono">needs_review</span>, unverified, and offline
+                    regardless of what the export says — no document files are imported (the
+                    export only has filenames, no images).
                 </p>
             </div>
 
-            {/* No longer linked from the sidebar (moved to Data Transfer, which
-                also carries documents/history/SGI forms) — kept reachable by
-                direct URL since this CSV format and the Data Transfer ZIP
-                bundle format aren't the same thing, and deleting a working,
-                tested import path outright is a bigger call than this nav
-                consolidation needs to make. */}
-            <div className="rounded-md border bg-muted/40 p-3 text-sm">
-                Looking for the full Data Transfer module (export, ZIP-bundle import, SGI compliance forms)?{" "}
-                <a href="/dashboard/data-transfer" className="font-medium underline">
-                    Go to Data Transfer
-                </a>
-                .
+            <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <div className="space-y-1">
+                    <p className="font-medium">A row can create, link, or enrich — not always a new row.</p>
+                    <p className="text-muted-foreground">
+                        A phone matching an existing account with no driver yet gets a NEW driver
+                        linked to that account (no duplicate account). A phone matching an
+                        existing driver gets that driver&apos;s history enriched instead — no
+                        competing row is created, and none of that driver&apos;s live fields
+                        (name, phone, status, vehicle, rating) are ever touched.
+                    </p>
+                </div>
             </div>
 
             <Card>
                 <CardHeader>
                     <CardTitle>1. Prepare your CSV</CardTitle>
                     <CardDescription>
-                        Start from the template. The first nine columns are required; the rest are optional.
+                        Start from the template, or use the raw <span className="font-mono">drivers.csv</span>{" "}
+                        from the Mongo export directly — only <span className="font-mono">_id</span>,{" "}
+                        <span className="font-mono">name</span>, and <span className="font-mono">phone</span>{" "}
+                        are required.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -298,11 +304,11 @@ export default function BulkImportPage() {
                 <CardContent className="space-y-4">
                     <div className="grid gap-4 sm:grid-cols-2">
                         <div className="space-y-1">
-                            <label htmlFor="drivers-csv" className="text-sm font-medium">
-                                Drivers CSV
+                            <label htmlFor="legacy-drivers-csv" className="text-sm font-medium">
+                                Drivers CSV (raw Mongo export)
                             </label>
                             <Input
-                                id="drivers-csv"
+                                id="legacy-drivers-csv"
                                 ref={fileInputRef}
                                 type="file"
                                 accept=".csv,text/csv"
@@ -310,28 +316,18 @@ export default function BulkImportPage() {
                             />
                         </div>
                         <div className="space-y-1">
-                            <label htmlFor="service-area" className="text-sm font-medium">
-                                Service area
+                            <label htmlFor="legacy-service-area" className="text-sm font-medium">
+                                Service area (name)
                             </label>
-                            <Select
-                                value={serviceAreaId || "__default__"}
-                                onValueChange={(v) => {
-                                    setServiceAreaId(v === "__default__" ? "" : v);
+                            <Input
+                                id="legacy-service-area"
+                                value={serviceAreaName}
+                                onChange={(e) => {
+                                    setServiceAreaName(e.target.value);
                                     resetReport();
                                 }}
-                            >
-                                <SelectTrigger id="service-area">
-                                    <SelectValue placeholder="Saskatoon (default)" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="__default__">Saskatoon (default)</SelectItem>
-                                    {serviceAreas.map((sa) => (
-                                        <SelectItem key={sa.id} value={sa.id}>
-                                            {sa.name || sa.id}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                                placeholder="Saskatoon"
+                            />
                         </div>
                     </div>
                     <div className="flex items-center gap-3">
@@ -368,10 +364,11 @@ export default function BulkImportPage() {
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                             <Stat label="Rows" value={counts?.rows ?? 0} />
-                            <Stat label="To create" value={counts?.drivers ?? 0} />
-                            <Stat label="To update" value={counts?.updated ?? 0} />
+                            <Stat label="New drivers" value={counts?.new_drivers ?? 0} />
+                            <Stat label="Linked to existing account" value={counts?.linked_accounts ?? 0} />
+                            <Stat label="Enriched existing driver" value={counts?.enriched_drivers ?? 0} />
                             <Stat label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
                             <Stat label="Warnings" value={report.warnings.length} tone="warn" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
@@ -387,7 +384,7 @@ export default function BulkImportPage() {
                                         variant="ghost"
                                         size="sm"
                                         onClick={() =>
-                                            exportToCsv("driver-import-errors", report.errors, REPORT_COLUMNS)
+                                            exportToCsv("legacy-driver-import-errors", report.errors, REPORT_COLUMNS)
                                         }
                                     >
                                         <FileDown className="mr-2 h-4 w-4" />
@@ -408,10 +405,7 @@ export default function BulkImportPage() {
                         )}
 
                         <div className="flex items-center gap-3 pt-2">
-                            <Button
-                                onClick={handleCommit}
-                                disabled={!report.can_commit || committing}
-                            >
+                            <Button onClick={handleCommit} disabled={!report.can_commit || committing}>
                                 {committing ? (
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                 ) : (
@@ -428,29 +422,6 @@ export default function BulkImportPage() {
                     </CardContent>
                 </Card>
             )}
-        </div>
-    );
-}
-
-function Stat({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-}) {
-    const toneCls =
-        tone === "error" && value > 0
-            ? "text-destructive"
-            : tone === "warn" && value > 0
-              ? "text-warning"
-              : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
 }

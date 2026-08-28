@@ -22,7 +22,7 @@ what's left, in the order it's safe to do it, with a straight risk call on each 
 
 | Data | Old collection | Current status |
 |---|---|---|
-| Completed trips | `bookings` (status=completed) | Imported since 2026-07-29; 224 rows in production today. The 19 net-new 08-22 rows are the separate, already-approved runbook — not part of this plan. |
+| Completed trips | `bookings` (status=completed) | Imported since 2026-07-29; **186** rows in production today (corrected 2026-08-27 — the 224 figure here was stale, traced to a single 2026-07-29 `audit_logs` row not reconciled against the live count; see `docs/runbooks/legacy-booking-import-2026-08-22-batch.md`). The 19 net-new 08-22 rows are the separate, already-approved runbook — not part of this plan. |
 | Rider profiles | `customers` | Phone-matched, 918/1,137 linked to real Spinr accounts. |
 | Driver SIN/DOB | `banks` | Imported into existing **encrypted** columns only. Raw banking numbers (account/transit/institution) deliberately never touched — Stripe Connect re-collects banking directly from the driver; there is no plan to change this, and it shouldn't be revisited. |
 | "Imported" transparency | admin-dashboard driver/rider list+detail rows, driver-app Documents screen, rider/driver-app ride-detail screens | All shipped (2026-08-19 and 2026-08-25 sessions). Ride-detail badge is dark-shipped, off by default (`legacy_ride_badge_enabled`). |
@@ -106,6 +106,22 @@ mutated). Docs-only (no image/document files exist in the export — filenames o
 new document-verification-state risk.
 **Recommendation:** build this before anything else in this phase — it's the dependency
 every other driver-activity item below needs.
+
+**Status (2026-08-27): core service + CLI + admin route built, both real-export findings
+resolved** (`build_mongo_driver_import_plan`/`commit_mongo_driver_import_plan` in
+`backend/services/driver_import_service.py`, `backend/scripts/import_legacy_mongo_drivers.py`,
+`routes/admin/legacy_driver_import.py` — `POST /api/admin/legacy-drivers/import/{validate,commit}`,
+gated on `require_module("drivers")`, mirroring `driver_import.py`'s validate/commit-token/rate-
+limit pattern exactly — 35 tests), not yet run against production. Full writeup in
+`docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`. Finding 1: 63.6% of rows
+had a blank `name` — confirmed as abandoned-onboarding rows with zero ride linkage, not a
+data bug; imports with a warning + placeholder name instead of blocking the batch. Finding 2:
+35.6% of rows' phones already match an existing production account — decided as "link, don't
+skip" (a `users`-only match gets a new driver row pointed at the existing account) / "enrich,
+don't duplicate" (a `drivers`-row match gets an additive history entry, no new row, no live
+field touched) rather than the original hard-error rule, once checked against production
+showed the real scale. See `docs/runbooks/legacy-migration-playbook.md` item #11 for the
+full decision record.
 
 ### Phase 2 — Vehicle history backfill (regulatory-flagged, high value)
 
@@ -249,19 +265,36 @@ Two small, concrete gaps worth fixing regardless of which phases above get appro
 these are about *displaying* data that's already imported, not new imports:
 
 - **Rider-app and driver-app ride *list* screens don't compute `show_legacy_badge`** — only
-  the single-ride detail endpoint does. So even with the flag on, a rider/driver scrolling
-  their trip history sees no visual distinction until they tap into a specific ride.
-  **Backend half fixed 2026-08-27**: both list endpoints
+  the single-ride detail endpoint does. **Backend half fixed 2026-08-27**: both list endpoints
   (`routes/rides/queries.py::get_ride_history`, `routes/drivers/ride_reads.py::get_ride_history`)
   now compute and return `show_legacy_badge` per row, same gating as the detail endpoint — see
-  `docs/change-log/2026-08-27-legacy-badge-list-endpoint-parity.md`. **Still open**: neither
-  app's list-row UI reads the new field yet — the frontend wiring itself is the remaining step.
-- **Driver-app payout history's "Previous app" grouping filters on `payout_type === 'stripe_sync'`**,
-  but the legacy-import offset payouts this session's booking importer writes use
-  `payout_type === 'legacy_import'`. This looks like a real mismatch worth verifying — if
-  confirmed, the legacy offset payouts may be showing up in the driver's *regular* payout
-  list instead of the intended "Previous app" footer section. Flagged, not yet confirmed as
-  a live bug — needs a direct read of `payout-history.tsx` to confirm before fixing.
+  `docs/change-log/2026-08-27-legacy-badge-list-endpoint-parity.md`. That backend addition is
+  harmless either way (an unused response field), so it stays as-is.
+  **Correction (2026-08-28): the frontend half is NOT an open gap — do not build it.** This
+  line originally called the missing list-row UI wiring "the remaining step," written without
+  checking whether the badge belonged on list rows in the first place. It doesn't: on
+  2026-08-13, a later and more deliberate product decision
+  (`docs/change-log/2026-08-13-blended-lifetime-earnings.md`) explicitly **removed** the
+  "Imported" ride-card badge from both apps' Activity list rows (superseding the earlier A30
+  decision this doc was still assuming), once driver-app moved to a single blended lifetime-
+  earnings figure that made a per-card "not counted here" badge false/redundant. A driver-app
+  regression test (`driver-app/__tests__/components/ActivityView.test.tsx`) pins "never shows
+  an imported/legacy badge or explainer on a ride card." **Discovered 2026-08-28** when two
+  parallel worktree sub-agents, tasked with building exactly this "remaining step," independently
+  found the conflict, stopped before committing anything, and escalated rather than silently
+  reversing a tested decision. Confirmed with the user: the 2026-08-13 decision stands. The
+  ride-*detail* screens (`ride-details.tsx`, `ride-detail.tsx`) are unaffected either way — they
+  still show the badge, and always did; only the list/card view is, and remains, badge-free.
+- **Driver-app payout history's "Previous app" grouping — confirmed and fixed 2026-08-27.**
+  The filter only matched `payout_type === 'stripe_sync'`; a full backend grep found two more
+  real previous-app types (`legacy_import`, the booking importer's offsetting payout; and
+  `legacy_outstanding_correction`, the legacy payout-correction service) that were falling
+  through into the driver's *regular* payout list instead of the "Previous app" footer. Fixed
+  by widening the grouping to an explicit 3-type set — see
+  `docs/change-log/2026-08-27-payout-history-previous-app-grouping.md`. Also corrected a stale
+  comment in the same file claiming this section "retires itself" after Aug 31, 2026 — that
+  cutoff was removed by a 2026-08-13 backend decision (previous-app payouts are now shown
+  permanently); the comment hadn't been updated to match.
 
 ## 6a. A third gap, found while investigating §5a — the ToS/Privacy checkbox re-prompts every returning login (not migration-specific, but directly adjacent to it)
 
@@ -325,7 +358,17 @@ A returning user never sees it again after their first successful login.
   `true` in production since 2026-08-21 — no write needed.
 - §5b — **Insurance-period reconstruction**: sign-off recorded. Correction tool (GPS-based,
   393 rides) scoped, not yet built.
-- §6a — **Login checkbox re-prompt**: approved to fix. In progress.
+- §6a — **Login checkbox re-prompt**: approved to fix. **Done** — both apps'
+  `login.tsx` now only surface the consent checkbox when the backend actually
+  returns `consent_required`, not unconditionally on every login.
 - Phases 1-2 (driver profiles, vehicle history): approved to build next.
 - Phases 3 (partially — the correction tool itself), 4, 5, 6: remain scoped-but-deferred as
   originally written — no change to that call.
+- Phase 1 blank-name policy: **decided, option b** (warning + placeholder name, not a
+  batch-blocking error) — root-caused against the real export as abandoned onboarding with
+  zero ride linkage, not a data-quality bug. See
+  `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`.
+- Phase 1 existing-match collision rate (35.6% of the real export, confirmed against
+  production): **decided and built** — link a new driver row to an existing account-only
+  match; enrich (additive history, no new row, no live field touched) an existing-driver
+  match. Same doc, §3/§6.

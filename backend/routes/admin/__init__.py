@@ -93,6 +93,7 @@ from .drivers import router as drivers_router
 from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
+from .legacy_driver_import import router as legacy_driver_import_router
 from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
@@ -157,6 +158,10 @@ admin_router.include_router(drivers_router, dependencies=[Depends(require_module
 admin_router.include_router(driver_distance_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(driver_appeals_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(driver_import_router, dependencies=[Depends(require_module("drivers"))])
+# Legacy Mongo driver-profile import (2026-08-27 migration plan Phase 1) —
+# a different CSV/population/service-layer pair from driver_import_router
+# above, same module grant since it creates/links/enriches driver rows too.
+admin_router.include_router(legacy_driver_import_router, dependencies=[Depends(require_module("drivers"))])
 # Driver earnings statements (payout section: date-filter -> download / email
 # to driver). Read-only + driver-addressed email; drivers module grant.
 admin_router.include_router(driver_statements_router, dependencies=[Depends(require_module("drivers"))])

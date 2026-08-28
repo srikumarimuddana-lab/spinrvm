@@ -178,6 +178,26 @@ def _split_name(full_name: str) -> tuple[str, str]:
     return parts[0], " ".join(parts[1:])
 
 
+def _rider_csv_import_entry(
+    batch: str, imported_at: str, *, ratings_raw: str | None, temp_email: str | None, tz: str | None
+) -> dict[str, Any]:
+    """Build the `rider_csv_import` provenance entry, additively including
+    the fields that have no live `users` column (see build_plan's own
+    comment for why: no `ratings`/`temp_email`/rider-facing `timezone`
+    column exists, and "ratings" is itself ambiguous in the source data).
+    Only non-empty values are included, matching this file's existing
+    conditional-inclusion style for optional CSV columns.
+    """
+    entry: dict[str, Any] = {"batch": batch, "source": IMPORT_SOURCE, "imported_at": imported_at}
+    if ratings_raw:
+        entry["ratings_raw"] = ratings_raw
+    if temp_email:
+        entry["temp_email"] = temp_email
+    if tz:
+        entry["timezone"] = tz
+    return entry
+
+
 def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
     plan = RiderImportPlan()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -217,7 +237,19 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
         email = (row.get("email") or "").strip().lower() or None
         customer_id = (row.get("customer_id") or "").strip() or None
         gender = (row.get("gender") or "").strip() or None
-        ratings_raw = (row.get("ratings") or "").strip()
+        # No `users` column exists for any of these three (checked: no `ratings`,
+        # `temp_email`, or rider-facing `timezone` column on `users` — only
+        # `service_areas`/corporate tables have a `timezone` column, and drivers
+        # have `total_ratings`, not riders). "ratings" is also genuinely
+        # ambiguous in the source data: HEADER_ALIASES maps both `no_of_rides`
+        # and `rating` onto this same key, so the old export itself doesn't
+        # distinguish a star rating from a ride count. Rather than invent a
+        # speculative new column or silently drop real historical data, these
+        # are preserved read-only under legacy_import_metadata.rider_csv_import
+        # below -- same "history, not a live field" pattern already used
+        # elsewhere in this migration effort (e.g. driver_import_service.py's
+        # was_deleted_in_source/was_blocked_in_source).
+        ratings_raw = (row.get("ratings") or "").strip() or None
         temp_email = (row.get("temp_email") or "").strip() or None
         tz = (row.get("timezone") or "").strip() or None
 
@@ -290,7 +322,12 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
             if not existing_user.get("is_rider"):
                 update_fields["is_rider"] = True
 
-            if len(update_fields) > 1:
+            # A row can be worth an update even when no LIVE field changed --
+            # ratings_raw/temp_email/tz have no live column (see the comment
+            # above) but are still real history worth recording once, not
+            # silently dropped just because nothing else on the account moved.
+            has_new_history = bool(ratings_raw or temp_email or tz)
+            if len(update_fields) > 1 or has_new_history:
                 # P0-A: stamp provenance on every row this batch actually
                 # modifies — merge onto whatever metadata already exists
                 # (e.g. a prior stripe_migration import) rather than
@@ -298,7 +335,9 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
                 existing_meta = existing_user.get("legacy_import_metadata") or {}
                 update_fields["legacy_import_metadata"] = {
                     **existing_meta,
-                    "rider_csv_import": {"batch": batch, "source": IMPORT_SOURCE, "imported_at": now_iso},
+                    "rider_csv_import": _rider_csv_import_entry(
+                        batch, now_iso, ratings_raw=ratings_raw, temp_email=temp_email, tz=tz
+                    ),
                 }
                 plan.users_to_update.append(update_fields)
 
@@ -325,7 +364,9 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
         if gender:
             user_row["gender"] = gender
         user_row["legacy_import_metadata"] = {
-            "rider_csv_import": {"batch": batch, "source": IMPORT_SOURCE, "imported_at": now_iso}
+            "rider_csv_import": _rider_csv_import_entry(
+                batch, now_iso, ratings_raw=ratings_raw, temp_email=temp_email, tz=tz
+            )
         }
 
         plan.users_to_create.append(user_row)

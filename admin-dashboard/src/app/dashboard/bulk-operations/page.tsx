@@ -502,7 +502,11 @@ export default function BulkOperationsPage() {
                     <Link href="/dashboard/drivers/import" className="underline">
                         Bulk Driver Import
                     </Link>{" "}
-                    page.
+                    page (Saskatoon recruitment CSV) or{" "}
+                    <Link href="/dashboard/drivers/legacy-import" className="underline">
+                        Legacy Driver Import
+                    </Link>{" "}
+                    (raw Mongo export).
                 </p>
             </div>
 

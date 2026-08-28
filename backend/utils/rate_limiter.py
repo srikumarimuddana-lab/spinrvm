@@ -448,6 +448,13 @@ wallet_import_commit_limit = default_limiter.limit("10/hour")
 # gap #45 — this endpoint previously had no rate limit at all.
 driver_import_commit_limit = default_limiter.limit("10/hour")
 
+# Admin legacy Mongo driver-profile import (Phase 1 of the 2026-08-27
+# migration plan) -- separate importer, separate population (drivers.csv's
+# ~900 un-imported Mongo-ObjectId-keyed rows), separate quota from the
+# Saskatoon CSV importer above. Same posture: /validate is read-only,
+# /commit creates/links/enriches real rows and gets the tighter limit.
+legacy_mongo_driver_import_commit_limit = default_limiter.limit("10/hour")
+
 # Admin Data Transfer jobs (list/detail/download-link) — read-only status
 # polling, but download-link regeneration mints a fresh signed Storage URL
 # each call; bound it the same as other admin list/detail endpoints.

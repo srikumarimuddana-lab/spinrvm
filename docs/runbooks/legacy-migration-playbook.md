@@ -471,6 +471,14 @@ rushed).
     > where the importer becomes actually reachable by an admin — CLI-only until now. See
     > `docs/change-log/2026-08-27-legacy-driver-admin-route.md` for the full Change Impact Log.
     >
+    > **[2026-08-28 — ADMIN-DASHBOARD UI PAGE BUILT.]** New dedicated page,
+    > `admin-dashboard/src/app/dashboard/drivers/legacy-import/page.tsx`, mirroring the existing
+    > Saskatoon-CSV importer's page exactly (validate → review → commit, same token handling),
+    > cross-linked from that page and from `bulk-operations`. `npx tsc --noEmit`, `eslint`, and a
+    > **real `npm run build`** all clean; smoke test added (25/25 pass). See
+    > `docs/change-log/2026-08-28-legacy-driver-admin-ui.md`. Phase 1 is now reachable end-to-end
+    > from the dashboard, not just via API client.
+    >
     > **Finding A (resolved):** 588/925 rows (63.6%) have a blank `name` — confirmed, not assumed,
     > to be abandoned onboarding (100% correlated with `set_up_profile=false`, 0/588 ever referenced
     > by a `bookings.driver_id`) rather than a data-quality/export bug. Fixed as a warning +

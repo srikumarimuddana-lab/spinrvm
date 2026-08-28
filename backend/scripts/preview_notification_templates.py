@@ -50,10 +50,12 @@ import argparse
 import base64
 import glob
 import html
+import json
 import os
 import re
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +66,7 @@ BRAND_RED = "#FF3B30"
 BRAND_RED_CONTRAST = "#D32F2F"
 INK = "#1A1A1A"
 MUTED = "#6B7280"
+LINK_BLUE = "#1D4ED8"
 SURFACE = "#FFFFFF"
 PAGE_BG = "#F0F0F0"
 HEADER_BG = "#F2F2F2"
@@ -88,20 +91,88 @@ def _logo_data_uri() -> str:
     return f"data:image/png;base64,{b64}"
 
 
+def _fetch_settings_row() -> dict:
+    """Read the admin `settings` row (id='app_settings') straight from the
+    Supabase REST API, using only the standard library.
+
+    The real senders get this through ``settings_loader.get_app_settings()``,
+    which needs the whole backend dependency chain. This asks the same
+    database for the same row over plain HTTP instead, so the preview shows
+    the SAME company details a real email would.
+
+    Returns ``{}`` when ``SUPABASE_URL``/``SUPABASE_SERVICE_ROLE_KEY`` are not
+    set or the call fails — never raises, and never guesses: the caller falls
+    back to the same static constants production falls back to.
+    """
+    base = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+    if not base or not key:
+        return {}
+    url = f"{base}/rest/v1/settings?id=eq.app_settings&select=*&limit=1"
+    req = urllib.request.Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 — a preview must degrade, not crash
+        print(f"settings fetch failed ({exc}) — using static fallbacks", file=sys.stderr)
+        return {}
+    return rows[0] if isinstance(rows, list) and rows else {}
+
+
+def _coalesce(settings: dict, key: str) -> str:
+    """Mirrors utils/address_format.coalesce_setting: blank/whitespace is unset."""
+    return (str(settings.get(key) or "")).strip()
+
+
+def _address_lines(settings: dict) -> tuple:
+    """Mirrors utils/address_format.address_lines — street, then locality."""
+    street = _coalesce(settings, "company_address")
+    locality = " ".join(
+        p
+        for p in (
+            _coalesce(settings, "company_city"),
+            _coalesce(settings, "company_province"),
+            _coalesce(settings, "company_postal_code"),
+        )
+        if p
+    )
+    return tuple(line for line in (street, locality) if line)
+
+
 class Company:
-    """Stand-in for utils.company_details.CompanyDetails — sample values only."""
+    """Company identity for the preview.
 
-    name = "Spinr Mobility Inc."
-    app_name = "Spinr"
-    identity_line = COMPANY_LINE
-    contact_line = COMPANY_CONTACT_LINE
-    support_email = "support@spinr.ca"
-    logo_url = _logo_data_uri()
-    address_lines = ("123 2nd Ave N", "Saskatoon, SK  S7K 2C6")
-    app_download_url = "https://spinr.ca/app"
+    Read from the live admin `settings` row when credentials are available;
+    otherwise the exact static fallbacks ``utils/company_details.py`` uses
+    when its own settings load fails. Deliberately does NOT carry an invented
+    street address: a made-up address in a preview of a real email is worse
+    than no address, because it looks authoritative and is not.
+    """
+
+    def __init__(self, settings: dict):
+        self.from_settings = bool(settings)
+        self.name = _coalesce(settings, "company_name") or "Spinr"
+        self.app_name = _coalesce(settings, "company_app_name") or "Spinr"
+        self.support_email = _coalesce(settings, "company_email") or "support@spinr.ca"
+        self.address_lines = _address_lines(settings)
+        self.logo_url = _logo_data_uri()
+        self.app_download_url = _coalesce(settings, "company_app_download_url") or None
+
+        address = ", ".join(self.address_lines)
+        self.identity_line = f"{self.name} — {address}" if address else COMPANY_LINE
+        contact_parts = [
+            p
+            for p in (
+                _coalesce(settings, "company_email"),
+                _coalesce(settings, "company_website"),
+                _coalesce(settings, "company_phone"),
+            )
+            if p
+        ]
+        self.contact_line = " · ".join(contact_parts) if contact_parts else COMPANY_CONTACT_LINE
 
 
-COMPANY = Company()
+COMPANY = Company(_fetch_settings_row())
 
 # ── HTML helpers — copied from utils/email_layout.py ────────────────────────
 
@@ -162,7 +233,17 @@ def _brand_rule_html():
     return f'<tr><td style="background:{BRAND_RED};height:4px;font-size:0;line-height:0;">&nbsp;</td></tr>'
 
 
-def _body_html(greeting, paragraphs, cta, footnote):
+def _linkify(escaped, links):
+    """Mirrors utils/email_layout._linkify — anchors applied after escaping."""
+    for text, url in (links or {}).items():
+        if not text or not url:
+            continue
+        anchor = f'<a href="{_esc(url)}" style="color:{LINK_BLUE};text-decoration:underline;">{_esc(text)}</a>'
+        escaped = escaped.replace(_esc(text), anchor)
+    return escaped
+
+
+def _body_html(greeting, paragraphs, cta, footnote, links=None):
     parts = []
     first_pad = "32px"
     if greeting:
@@ -172,9 +253,12 @@ def _body_html(greeting, paragraphs, cta, footnote):
         )
         first_pad = "16px"
     for para in paragraphs:
+        body = _esc_multiline(para)
+        if links:
+            body = _linkify(body, links)
         parts.append(
             f'<tr><td style="padding:{first_pad} {_PAD_X}px 0;">'
-            f'<p style="color:{MUTED};font-size:15px;line-height:24px;margin:0;">{_esc_multiline(para)}</p></td></tr>'
+            f'<p style="color:{MUTED};font-size:15px;line-height:24px;margin:0;">{body}</p></td></tr>'
         )
         first_pad = "14px"
     if cta:
@@ -195,9 +279,15 @@ def _body_html(greeting, paragraphs, cta, footnote):
 
 
 def _footer_html(company):
+    # Mirrors utils/email_layout.footer_html exactly, fallback included:
+    #   lines = company.address_lines or ((company.address,) if company.address else ())
+    # With nothing configured that is an EMPTY tuple — production prints the
+    # company name and contact line with no address block at all. Substituting
+    # anything here (a locality string, let alone an invented street address)
+    # would make the preview show a footer production never renders.
+    lines = company.address_lines
     address = "".join(
-        f'<div style="color:{FOOTER_TEXT};font-size:13px;line-height:20px;">{_esc(line)}</div>'
-        for line in company.address_lines
+        f'<div style="color:{FOOTER_TEXT};font-size:13px;line-height:20px;">{_esc(line)}</div>' for line in lines
     )
     contact = (
         f'<div style="color:{FOOTER_TEXT};font-size:13px;line-height:20px;padding-top:12px;">'
@@ -212,7 +302,7 @@ def _footer_html(company):
 
 
 def email_card_html(
-    *, heading=None, paragraphs=(), greeting=None, subtitle=None, cta=None, footnote=None, meta_lines=()
+    *, heading=None, paragraphs=(), greeting=None, subtitle=None, cta=None, footnote=None, meta_lines=(), links=None
 ) -> str:
     """The branded email card, as a fragment (no <html>/<head>) for embedding
     multiple previews on one printable page. Mirrors render_email's markup."""
@@ -221,7 +311,7 @@ def email_card_html(
        style="max-width:{_MAX_WIDTH_PX}px;background:{SURFACE};border-radius:14px;overflow:hidden;margin:0 auto;font-family:{FONT_STACK};">
 {_brand_rule_html()}
 {_header_html(COMPANY, subtitle, heading=heading, meta_lines=meta_lines)}
-{_body_html(greeting, paras, cta, footnote)}
+{_body_html(greeting, paras, cta, footnote, links)}
 {_footer_html(COMPANY)}
 </table>"""
 
@@ -265,6 +355,7 @@ DRIVER_EMAIL_ITEMS = [
                 f"Questions any time: {SAMPLE_SUPPORT}",
             ],
             footnote=f"Didn't sign up for a {SAMPLE_APP} driver account? Contact {SAMPLE_SUPPORT} and we'll close it.",
+            links={"training.spinr.ca": "https://training.spinr.ca"},
         ),
     ),
 ]
@@ -710,10 +801,18 @@ def _message_page(item: dict) -> str:
 
 
 def _cover(title: str, subtitle: str, count_line: str) -> str:
+    source = (
+        "Company name, address and contact details are LIVE, read from the admin Settings row."
+        if COMPANY.from_settings
+        else "No SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY in this environment, so company name, "
+        "address and contact details fall back to the same static defaults production uses when "
+        "its own settings load fails — set those two variables to preview the real configured values."
+    )
     return (
         f'<div class="cover"><h1>{_esc(title)}</h1>'
         f"<p>{_esc(subtitle)}</p>"
         f'<p><b style="color:#fff">{_esc(count_line)}</b></p>'
+        f"<p>{_esc(source)}</p>"
         "<p>Sample data only — fake name, amounts, and codes. Not a report of real sends; "
         "SMS/push have no per-recipient content log in Spinr today (see email_send_log's "
         "PIPEDA-driven design), so this is a format/copy check against current source, "

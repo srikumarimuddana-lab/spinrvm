@@ -17,7 +17,13 @@ import pytest
 
 import utils.email_layout as layout
 from utils.company_details import CompanyDetails
-from utils.email_layout import BRAND_RED, BRAND_RED_CONTRAST, RenderedEmail, render_email, render_text
+from utils.email_layout import (
+    BRAND_RED,
+    BRAND_RED_CONTRAST,
+    RenderedEmail,
+    render_email,
+    render_text,
+)
 from utils.report_branding import COMPANY_CONTACT_LINE, COMPANY_LINE
 
 pytestmark = [pytest.mark.unit, pytest.mark.anyio]
@@ -62,6 +68,48 @@ async def test_uses_the_documented_brand_red():
     assert BRAND_RED in html
     # Buttons use the AA-contrast variant, not full-strength red.
     assert BRAND_RED_CONTRAST in html
+
+
+async def test_links_render_the_phrase_as_an_anchor():
+    """A paragraph phrase named in ``links`` becomes a real hyperlink.
+
+    Exists because the address is written without a scheme
+    ("training.spinr.ca") so a driver can also type it — the exact form
+    several clients decline to auto-link, leaving it as unclickable grey body
+    text.
+    """
+    rendered = await _render(
+        paragraphs=["Complete your driver training at training.spinr.ca before your first ride."],
+        links={"training.spinr.ca": "https://training.spinr.ca"},
+    )
+    assert '<a href="https://training.spinr.ca"' in rendered.html
+    assert f"color:{LINK_BLUE}" in rendered.html
+    # The plain-text alternative needs no markup — it already shows the address.
+    assert "training.spinr.ca" in rendered.text
+    assert "<a href" not in rendered.text
+
+
+async def test_links_are_opt_in_and_change_nothing_when_absent():
+    """No ``links`` must render exactly as before the parameter existed — the
+    guarantee that keeps the whole-document snapshots meaningful."""
+    assert "<a href" not in (await _render(paragraphs=["Visit training.spinr.ca today."])).html
+
+
+async def test_link_colour_is_the_contrast_safe_blue():
+    # Same rule as BRAND_RED_CONTRAST: the palette's Info blue (#3B82F6) is
+    # 3.7:1 on white and fails AA for body text, so links use a darkened form.
+    assert LINK_BLUE == "#1D4ED8", "link blue must stay the AA-contrast Info variant"
+
+
+async def test_linkify_cannot_inject_markup_from_paragraph_text():
+    """Linkification runs after escaping, so markup in either the paragraph or
+    the link phrase stays inert text rather than becoming live HTML."""
+    rendered = await _render(
+        paragraphs=["Careful: <script>alert(1)</script> and training.spinr.ca."],
+        links={"training.spinr.ca": "https://training.spinr.ca"},
+    )
+    assert "<script>" not in rendered.html
+    assert "&lt;script&gt;" in rendered.html
 
 
 async def test_footer_uses_the_configured_company_identity():

@@ -29,6 +29,7 @@ import io
 import mimetypes
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -1170,8 +1171,17 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[s
         raise RuntimeError("refusing to apply with validation errors")
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    conflicts: list[str] = []
-    for upd in plan.updates:
+
+    def _apply_one(upd: dict[str, Any]) -> str | None:
+        """Write one driver's update. Returns its old_driver_id if the race
+        guard didn't match (conflict), else None. Each row touches a
+        different driver_id with no cross-row dependency, so running these
+        concurrently changes nothing about *what* gets written, only how
+        long it takes -- same reasoning as commit_mongo_driver_import_plan's
+        own concurrency fix (2026-08-28): a plain sequential loop here, one
+        SELECT + one optional encrypt RPC + one UPDATE per row, hit the same
+        real-scale commit-timeout risk.
+        """
         fields: dict[str, Any] = {"updated_at": now_iso}
         plain_sin = upd.get("_plain_sin")
         if plain_sin:
@@ -1203,10 +1213,13 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[s
         if upd.get("date_of_birth"):
             query = query.is_("date_of_birth", "null")
         res = query.execute()
-        if not res.data:
-            conflicts.append(upd["old_driver_id"])
+        return upd["old_driver_id"] if not res.data else None
 
-    return conflicts
+    if not plan.updates:
+        return []
+    with ThreadPoolExecutor(max_workers=_COMMIT_POOL_WORKERS, thread_name_prefix="sin-dob-backfill-apply") as pool:
+        results = [fut.result() for fut in [pool.submit(_apply_one, upd) for upd in plan.updates]]
+    return [old_id for old_id in results if old_id is not None]
 
 
 def sin_source(driver: dict[str, Any] | None) -> str | None:
@@ -1790,6 +1803,20 @@ def build_mongo_driver_import_plan(
         return plan
 
     users_by_phone, users_by_email, drivers_by_phone = _prefetch_existing(driver_rows)
+    # Rows within the SAME CSV batch that share a phone (or email) must
+    # resolve to the same user_id / driver row rather than each
+    # independently deciding "no match yet, create new" -- the DB prefetch
+    # above is a single snapshot taken before this loop starts, so it can't
+    # see a user/driver this very loop is about to create. Without this, two
+    # same-phone rows both fall into the "create new" branch, producing two
+    # users_to_insert entries with an identical phone -- which then violates
+    # the phone UNIQUE constraint as a 409 on the bulk INSERT at commit time.
+    # Found 2026-08-28: the real 924-row export has 8 phone groups (15 rows)
+    # and 5 email groups (9 rows) sharing a value with a sibling row in the
+    # same file -- previously masked by an unrelated commit-timeout bug that
+    # always killed the request before the insert ever ran.
+    pending_driver_row_by_phone: dict[str, dict[str, Any]] = {}
+    pending_user_id_by_email: dict[str, str] = {}
     seen_old_ids: set[str] = set()
 
     for row in driver_rows:
@@ -1846,7 +1873,39 @@ def build_mongo_driver_import_plan(
 
         matched_user = users_by_phone.get(phone) or (users_by_email.get(email) if email else None)
         matched_driver = drivers_by_phone.get(phone)
+        pending_driver_row = pending_driver_row_by_phone.get(phone)
         create_new_user = True
+
+        if pending_driver_row is not None:
+            # A row earlier in this same batch already created (or linked)
+            # a driver for this exact phone -- merge into that row's own
+            # still-pending history in place. There is nothing in the DB
+            # yet to issue a drivers_to_enrich UPDATE against, and creating
+            # a second driver row here would duplicate the phone the same
+            # way a second users_to_insert row would.
+            history = list(pending_driver_row["legacy_import_metadata"].get("mongo_driver_history") or [])
+            history.append(
+                {
+                    "batch": import_batch,
+                    "old_driver_id": old_id,
+                    "source": MONGO_IMPORT_SOURCE,
+                    "was_deleted_in_source": parse_bool(row.get("is_deleted", "")) is True,
+                    "was_blocked_in_source": parse_bool(row.get("is_block", "")) is True,
+                    "incomplete_profile_in_source": incomplete_profile_in_source,
+                    "linked_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            pending_driver_row["legacy_import_metadata"]["mongo_driver_history"] = history
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id,
+                    "phone",
+                    "matches a driver created earlier in this same import batch "
+                    f"(old_driver_id={pending_driver_row['legacy_import_metadata']['old_driver_id']}); "
+                    "merged into that row's history instead of creating a duplicate",
+                )
+            )
+            continue
 
         if matched_driver or matched_user:
             driver_meta = (matched_driver.get("legacy_import_metadata") or {}) if matched_driver else {}
@@ -1931,6 +1990,24 @@ def build_mongo_driver_import_plan(
             )
             user_id = matched_user["id"]
             create_new_user = False
+        elif email and email in pending_user_id_by_email:
+            # A row earlier in this batch already created a new user with
+            # this same email but a DIFFERENT phone (so the pending_driver_row
+            # check above didn't catch it). users.email has no UNIQUE
+            # constraint, so this wouldn't 409, but creating a second
+            # account for what's evidently the same person contradicts the
+            # "never create a duplicate account" intent already established
+            # above for the DB-matched case.
+            user_id = pending_user_id_by_email[email]
+            create_new_user = False
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id,
+                    "email",
+                    "matches an account created earlier in this same import batch by email; "
+                    "linking new driver profile to it instead of creating a duplicate account",
+                )
+            )
         else:
             user_id = str(uuid.uuid4())
 
@@ -1987,8 +2064,53 @@ def build_mongo_driver_import_plan(
         if rating is not None:
             driver_row["rating"] = rating
         plan.drivers_to_insert.append(driver_row)
+        # Register this row's outcome so a LATER row in this same batch
+        # sharing the phone (or, for a brand-new account, the email) merges
+        # into it instead of independently deciding "no match, create new".
+        pending_driver_row_by_phone[phone] = driver_row
+        if create_new_user and email:
+            pending_user_id_by_email[email] = user_id
 
     return plan
+
+
+# Bounded pool for the per-row round-trips below (update/enrich loops, PII
+# encryption RPCs) -- local to this commit path, not the shared DB thread
+# pool in repositories/_base.py, so one big admin batch can't starve
+# concurrent request traffic. Sized well under Supabase/PostgREST's own
+# connection limits for a single admin-triggered burst.
+_COMMIT_POOL_WORKERS = 20
+
+
+def _run_concurrently(items: list, fn) -> None:
+    """Run fn(item) for every item on a bounded thread pool, then re-raise
+    the first exception hit (if any) -- same fail-the-whole-commit contract
+    the original sequential ``for`` loop had, just no longer serialized.
+    """
+    if not items:
+        return
+    with ThreadPoolExecutor(max_workers=_COMMIT_POOL_WORKERS, thread_name_prefix="legacy-import-commit") as pool:
+        futures = [pool.submit(fn, item) for item in items]
+        for fut in futures:
+            fut.result()
+
+
+def _update_user_row(upd: dict) -> None:
+    upd = dict(upd)
+    user_id = upd.pop("id")
+    if not upd:
+        return
+    upd["updated_at"] = datetime.now(timezone.utc).isoformat()
+    supabase.table("users").update(upd).eq("id", user_id).execute()
+
+
+def _update_driver_row(enrich: dict) -> None:
+    enrich = dict(enrich)
+    driver_id = enrich.pop("id")
+    if not enrich:
+        return
+    enrich["updated_at"] = datetime.now(timezone.utc).isoformat()
+    supabase.table("drivers").update(enrich).eq("id", driver_id).execute()
 
 
 def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
@@ -1999,28 +2121,35 @@ def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
     # users_to_update / drivers_to_enrich are additive-only updates to
     # EXISTING rows (never touched by the insert calls above/below) -- same
     # pop-id-then-update shape as rider_import_service.commit_plan's own
-    # users_to_update loop.
-    for upd in plan.users_to_update:
-        upd = dict(upd)
-        user_id = upd.pop("id")
-        if not upd:
-            continue
-        upd["updated_at"] = datetime.now(timezone.utc).isoformat()
-        supabase.table("users").update(upd).eq("id", user_id).execute()
-    drivers = []
-    for driver in plan.drivers_to_insert:
+    # users_to_update loop. Each row updates a different id with no
+    # cross-row dependency, so running them concurrently changes nothing
+    # about *what* gets written, only how long it takes -- issuing these
+    # (and the license-number encryption RPCs below) one HTTP round-trip at
+    # a time made a real-scale commit (924-row Phase 1 batch: 114 + 215
+    # sequential UPDATEs, ~120 sequential encrypt RPCs) take long enough to
+    # trip the request's upstream proxy timeout, surfacing to the operator
+    # as a raw "Internal Server Error" with NO write applied (confirmed via
+    # a zero-row check against production) rather than this function's own
+    # error handling ever getting a chance to run -- found 2026-08-28
+    # running the real batch.
+    _run_concurrently(plan.users_to_update, _update_user_row)
+
+    def _prepare_driver_insert(driver: dict) -> dict:
         copied = dict(driver)
         copied["license_number"] = encrypt_pii(copied.pop("_plain_license_number", None))
-        drivers.append(copied)
+        return copied
+
+    drivers: list = [None] * len(plan.drivers_to_insert)  # preserve original row order
+    if plan.drivers_to_insert:
+        with ThreadPoolExecutor(max_workers=_COMMIT_POOL_WORKERS, thread_name_prefix="legacy-import-commit") as pool:
+            futures = {
+                pool.submit(_prepare_driver_insert, driver): i for i, driver in enumerate(plan.drivers_to_insert)
+            }
+            for fut, i in futures.items():
+                drivers[i] = fut.result()
     if drivers:
         supabase.table("drivers").insert(drivers).execute()
-    for enrich in plan.drivers_to_enrich:
-        enrich = dict(enrich)
-        driver_id = enrich.pop("id")
-        if not enrich:
-            continue
-        enrich["updated_at"] = datetime.now(timezone.utc).isoformat()
-        supabase.table("drivers").update(enrich).eq("id", driver_id).execute()
+    _run_concurrently(plan.drivers_to_enrich, _update_driver_row)
 
 
 def print_mongo_driver_import_report(plan: MongoDriverImportPlan, *, dry_run: bool) -> None:

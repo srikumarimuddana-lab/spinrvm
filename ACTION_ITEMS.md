@@ -16588,17 +16588,93 @@ how much they de-risk a public launch._
   `grep -rn "asyncio.create_task" backend/routes/ | grep -v websocket.py`
   (should return nothing).
 
-- [ ] **C42-B. `shared/**/__tests__` is not wired into any CI job.** The tests
-  under `shared/api/__tests__/` and `shared/utils/__tests__/` are unreachable by
-  every workflow — rider-app's and driver-app's Jest `roots` default to their
-  own `rootDir`, so `shared/` is only reached through imports, never collected
-  as test files. They run today only via an explicit
-  `npx jest --roots ../shared` from `rider-app/`. Consequence: the new
-  `client.deadlineHeader.test.ts` (and the pre-existing `client.authHeader`,
-  `client.refresh`, `client.sos` suites) will not gate a regression. Note when
-  fixing: running them that way currently surfaces 2 pre-existing failures in
-  `shared/utils/__tests__/pii.test.ts` (a `redactCoords` rounding assertion),
-  which will need triage before the job can be made blocking.
+- [x] **C42-B. `shared/**/__tests__` is not wired into any CI job — FIXED
+  2026-08-27.** The tests under `shared/api/__tests__/`, `shared/utils/__tests__/`,
+  `shared/validators/__tests__/`, and `shared/constants/__tests__/` were
+  unreachable by every workflow — rider-app's and driver-app's Jest `roots`
+  default to their own `rootDir`, so `shared/` was only reached through
+  imports, never collected as test files.
+  - **Fix:** added `roots: ['<rootDir>', '<rootDir>/../shared']` to
+    `rider-app/jest.config.js`. CI's existing `yarn test --ci --coverage
+    --forceExit --reporters=default` step (already in `rider-app-test`, no
+    workflow change needed) now runs all 9 `shared/` suites alongside
+    rider-app's own 123, with no separate CI job. `collectCoverageFrom`
+    globs are unaffected (none reference `../shared`), so the coverage
+    threshold gate's numbers didn't move — verified: rider-app alone still
+    123 suites/1750 tests before, 133 suites/1875 tests after adding
+    `shared/`'s 9 suites/106 tests, threshold check still exits 0. Left
+    driver-app's config untouched — rider-app is the one config that
+    doesn't mock `@shared/*` (driver-app's `moduleNameMapper` redirects
+    every `@shared/(.*)$` import to `__mocks__/@shared/$1`), so running the
+    real `shared/` suites there risked interacting with those mocks for no
+    benefit (same test files, same result) — matches the item's own note
+    that they were already only ever run manually from `rider-app/`.
+  - **3 pre-existing failures surfaced on first run (this item's own note
+    undercounted — said 2 in `pii.test.ts`; actual was 1 in `pii.test.ts`
+    plus 2 more, undocumented, in `client.authHeader.test.ts` and
+    `client.refresh.test.ts` — exactly the risk of code nothing runs), all
+    fixed:**
+    1. **`pii.test.ts` — `redactCoords` rounding bug (real, in
+       `shared/utils/pii.ts`, not the test):** `Math.round(n * 10) / 10`
+       rounds `.5` ties toward `+Infinity`, not away from zero, so
+       `redactCoords(-106.65)` returned `"-106.6"` instead of `"-106.7"` —
+       `-106.65 * 10 === -1066.5` exactly, and `Math.round(-1066.5) ===
+       -1066`. Fixed by rounding the magnitude and reapplying the sign
+       (`Math.sign(n) * Math.round(Math.abs(n) * 10) / 10`), verified
+       against every existing case in the test file (positive, negative,
+       zero, whole-number) before applying.
+    2. **`client.authHeader.test.ts` — missing mock, not a code bug:** every
+       sibling test file (`client.sos`, `client.deadlineHeader`,
+       `client.refresh`) mocks `'../../config/spinr.config'` directly
+       because the real module pulls in `expo-constants`, which throws
+       under this app-independent invocation (`Cannot read properties of
+       undefined (reading 'EXDevLauncher')`) once `react-native` itself is
+       also mocked. `client.authHeader.test.ts` alone was missing that
+       mock — added it, matching the sibling pattern exactly.
+    3. **`client.refresh.test.ts` — real bug in `shared/api/client.ts`'s
+       401-refresh dedup, BLOCKER-class (auth path, every authenticated
+       request):** `_inflight401Retries`, a `Set<string>` keyed by `"METHOD
+       url"`, was meant to cap a persistently-401ing endpoint to one
+       refresh-retry (loop prevention). But because the key is per-URL, not
+       per-call, a SECOND concurrent original request to the same URL
+       (e.g. two `api.get('/rides/active')` calls racing — exactly what
+       the failing test, "deduplicates concurrent refresh calls", exercises)
+       found the key already claimed by the first request and skipped the
+       refresh-queue path entirely (`_subscribeTokenRefresh`), falling
+       straight through to a thrown `SpinrApiError` instead of waiting for
+       the shared refresh and retrying. **Fix:** replaced the per-URL Set
+       with a per-call-chain flag — `client.get/post/put/patch/delete` each
+       gained an internal `_isRetry = false` parameter (not part of the
+       public call surface; every existing external call site passes at
+       most 2-3 args today, confirmed via
+       `grep -rn "api\.\(get\|post\|put\|patch\|delete\)(" rider-app/
+       driver-app/ shared/` for any 3+-arg caller — none found, so this is
+       fully backward-compatible), threaded through to `handleApiError`'s
+       new `isRetryAttempt` parameter, which now gates the 401-refresh
+       block (`!isRetryAttempt`) instead of the Set. Each method's own
+       `retryFn` closure now passes `true`, so a call spawned BY a retry
+       still caps at one further attempt (loop prevention preserved) while
+       two concurrent ORIGINAL calls (`isRetryAttempt` false on both) now
+       both correctly enter the block and the second correctly queues
+       behind the first's in-flight `_refreshPromise`.
+  - **Verification:** rider-app `yarn test --ci --coverage --forceExit
+    --reporters=default` (the exact CI invocation) — 133 suites / 1875
+    tests green, exit 0, `yarn tsc --noEmit` clean. driver-app (untouched
+    config, re-verified only because `client.ts` is a shared dependency) —
+    116 suites / 1315 tests green, `yarn tsc --noEmit` clean. The target
+    test (`client.refresh.test.ts`'s dedup case) re-run 3× standalone after
+    the fix — deterministic pass every time, not a flake either direction.
+    One unrelated pre-existing flake hit once in a full-suite run
+    (`rideOptionsScreen.test.tsx`, the documented C37/C41-class leaked-timer
+    flake on this exact file) — confirmed via standalone re-run (119/119)
+    and a second full-suite run (clean), per CLAUDE.md's re-run-once
+    guidance; not this fix's doing.
+  - **Files:** `rider-app/jest.config.js`, `shared/api/client.ts`,
+    `shared/api/__tests__/client.authHeader.test.ts`, `shared/utils/pii.ts`.
+  - **Change Impact Log:** `docs/change-log/2026-08-27-shared-tests-ci-wiring-and-401-dedup-fix.md`
+    (the `client.ts` 401-dedup fix touches the auth path used by every
+    authenticated request — rides, payments, wallet — so gets the full
+    template, not just this summary).
 
 - [ ] **C42-C. Drop the legacy `X-Deadline-Ms` path once no deployed app build
   sends it.** The absolute epoch header is the skew-vulnerable spelling; it is

@@ -24,6 +24,14 @@ jest.mock('../../config', () => ({
   API_URL: 'http://localhost:8000',
 }));
 
+// client.ts imports SpinrConfig from '../config/spinr.config', which pulls in
+// expo-constants. Mock the module itself rather than its dependency tree
+// (matches client.sos.test.ts / client.deadlineHeader.test.ts).
+jest.mock('../../config/spinr.config', () => ({
+  __esModule: true,
+  default: { backendUrl: 'http://localhost:8000' },
+}));
+
 jest.mock('../../services/firebase', () => ({
   auth: { currentUser: null, onAuthStateChanged: null },
   isFirebaseConfigured: false,

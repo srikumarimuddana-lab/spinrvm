@@ -9,6 +9,16 @@ module.exports = {
   // Bumping the same file's timeout each time it was that file's turn was
   // whack-a-mole; fixing the shared default addresses the actual cause.
   testTimeout: 15000,
+  // ACTION_ITEMS.md C42-B: shared/**/__tests__ was unreachable by every CI
+  // workflow — Jest's default roots is just <rootDir>, so shared/ (a sibling
+  // package, not under rider-app/) was only exercised via imports, never
+  // collected as test files. Adding it here means CI's existing
+  // `yarn test --ci --coverage --forceExit` (this app's normal test step)
+  // now also runs shared/api, shared/utils, shared/validators, and
+  // shared/constants' test suites — no separate CI job needed. Coverage
+  // collection is unaffected: collectCoverageFrom below only globs this
+  // app's own directories, none of which match anything under ../shared.
+  roots: ['<rootDir>', '<rootDir>/../shared'],
   setupFiles: ['./jest-setup-expo.js'],
   setupFilesAfterEnv: ['@testing-library/jest-native/extend-expect'],
   testPathIgnorePatterns: [

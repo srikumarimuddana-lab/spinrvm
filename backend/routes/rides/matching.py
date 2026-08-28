@@ -68,6 +68,13 @@ _MAX_DISPATCH_ATTEMPTS = 30
 # not for a dependency to recover.
 _DISPATCH_ERROR_BACKOFF = (10, 30, 60)
 
+# Row cap on the batched quest-progress lookup for an offer batch. Sized well
+# above max_simultaneous_offers (hard-capped at 10) times a generous number of
+# concurrently-active quests per driver, so a driver holding several never gets
+# their banner silently dropped by truncation. Only decorative offer-card data
+# rides on this, so the cap bounds the read rather than gating correctness.
+_QUEST_HINT_ROW_CAP = 200
+
 
 def _dispatch_error_delay(attempt: int) -> int:
     """Delay before re-arming after a FAILED dispatch attempt (not the
@@ -909,35 +916,55 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
     _surge_mult = float(ride.get("surge_multiplier") or 1.0)
 
+    # Quest progress for every claimed driver, in ONE query.
+    #
+    # This used to be a serial embedded-join query *inside* the notify loop —
+    # up to max_offers (10) round-trips, one per driver, on the dispatch
+    # offer→notification path that carries a P95 < 2 s SLA. The data is a
+    # cosmetic progress banner on the offer card, so it was paying latency on
+    # the most timing-sensitive path in the product for decoration.
+    #
+    # Semantics are unchanged: the per-driver query had `.limit(1)` with no
+    # ORDER BY, i.e. "any one active quest", so first-row-wins per driver here
+    # is the same contract. The batch is bounded by _QUEST_HINT_ROW_CAP because
+    # a driver may hold several active quests at once, so len(uids) could
+    # truncate and silently drop a driver's banner.
+    #
+    # Fails open as one unit rather than per driver: on error nobody gets a
+    # banner and the offer still goes out. That trades N failure points for 1
+    # on data that is decorative by definition.
+    _quest_by_uid: Dict[str, Dict[str, Any]] = {}
+    _quest_uids = [d.get("user_id") for d, _ in claimed_drivers if d.get("user_id")]
+    if _quest_uids:
+        try:
+            _qr = await _deps.db_supabase.run_sync(
+                _deps.db_supabase.supabase.table("quest_progress")
+                .select("driver_id, current_value, status, quest:quests(title, target_value, reward_amount)")
+                .in_("driver_id", _quest_uids)
+                .eq("status", "active")
+                .limit(_QUEST_HINT_ROW_CAP)
+                .execute
+            )
+            for _qp in _qr.data or []:
+                _uid = _qp.get("driver_id")
+                if not _uid or _uid in _quest_by_uid:
+                    continue
+                _q = _qp.get("quest") or {}
+                _tv = float(_q.get("target_value") or 1)
+                _cv = float(_qp.get("current_value") or 0)
+                _quest_by_uid[_uid] = {
+                    "title": _q.get("title", ""),
+                    "current_value": _cv,
+                    "target_value": _tv,
+                    "progress_pct": round(min(_cv / _tv, 1.0) * 100, 1) if _tv else 0,
+                    "reward_amount": float(_q.get("reward_amount") or 0),
+                }
+        except Exception as e:
+            logger.error(f"Failed to fetch quest progress for {len(_quest_uids)} claimed driver(s): {e}", exc_info=True)
+
     # ── Notify each claimed driver ────────────────────────────────
     for driver, _eta in claimed_drivers:
-        # Per-driver quest progress
-        _quest_hint = None
-        try:
-            driver_uid = driver.get("user_id")
-            if driver_uid:
-                qr = await _deps.db_supabase.run_sync(
-                    _deps.db_supabase.supabase.table("quest_progress")
-                    .select("current_value, status, quest:quests(title, target_value, reward_amount)")
-                    .eq("driver_id", driver_uid)
-                    .eq("status", "active")
-                    .limit(1)
-                    .execute
-                )
-                if qr.data:
-                    qp = qr.data[0]
-                    q = qp.get("quest") or {}
-                    tv = float(q.get("target_value") or 1)
-                    cv = float(qp.get("current_value") or 0)
-                    _quest_hint = {
-                        "title": q.get("title", ""),
-                        "current_value": cv,
-                        "target_value": tv,
-                        "progress_pct": round(min(cv / tv, 1.0) * 100, 1) if tv else 0,
-                        "reward_amount": float(q.get("reward_amount") or 0),
-                    }
-        except Exception as e:
-            logger.error(f"Failed to fetch quest progress for driver {driver['id']}: {e}", exc_info=True)
+        _quest_hint = _quest_by_uid.get(driver.get("user_id"))
 
         # Per-driver signed URL for the notification's BigPicture fare banner.
         # Bound to this ride + driver and short-lived; rendered on demand by

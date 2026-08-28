@@ -7,57 +7,67 @@
 #   @srikumarimuddana-lab  -- admin (the account/org owner)
 #   @ittalenthireca-sketch -- write (opens/authors PRs; per this repo's own
 #                              observed history, effectively the PR-author
-#                              identity, not an independent reviewer)
+#                              identity on most PRs)
+#
+# Both accounts are listed below (OR semantics -- either one's approval
+# satisfies the rule). IMPORTANT caveat: GitHub never counts a PR's own
+# author as a valid approver for required-review/CODEOWNERS purposes, even
+# when that author is a listed code owner. Since @ittalenthireca-sketch
+# authors most PRs in this repo, listing it here only adds real coverage
+# on PRs it does NOT author (e.g. one @srikumarimuddana-lab opens, or a
+# future third collaborator) -- it does not let @ittalenthireca-sketch
+# self-approve its own PRs. On PRs @ittalenthireca-sketch opens,
+# @srikumarimuddana-lab's approval remains the only one that counts.
 #
 # The domain-team routing this file used to name (`@spinr-org/TBD-payments-
 # reviewers` etc.) was never real -- there is no `spinr-org` GitHub
 # organization with those teams, so GitHub could never resolve those
 # handles and "Require review from Code Owners" could never have enforced
 # anything even if branch protection enabled it. Replaced below with the
-# one real reviewing account this repo actually has. The domain structure
-# is kept (not collapsed to a single `*` rule) because it's real, useful
-# documentation of which paths are money/schema/security/dispatch/safety
-# -sensitive -- matching the same domain boundaries `.github/labeler.yml`
-# and `ci-guardrails.yml`'s `risk-label`/`change-impact-log-gate` jobs
-# already use -- and because it's a one-line-per-domain edit to point at a
-# real team the moment one exists, rather than a redesign.
+# real accounts this repo actually has. The domain structure is kept (not
+# collapsed to a single `*` rule) because it's real, useful documentation
+# of which paths are money/schema/security/dispatch/safety-sensitive --
+# matching the same domain boundaries `.github/labeler.yml` and
+# `ci-guardrails.yml`'s `risk-label`/`change-impact-log-gate` jobs already
+# use -- and because it's a one-line-per-domain edit to point at a real
+# team the moment one exists, rather than a redesign.
 #
 # Rules are evaluated bottom-up: the last matching pattern wins, so more
 # specific paths are listed after more general ones.
 #
 # TO EXTEND once real per-domain reviewers/teams exist: replace the
-# relevant domain's `@srikumarimuddana-lab` below with `@spinr-org/<real-
-# team-slug>` (a team GitHub can actually resolve), then enable "Require
-# review from Code Owners" in Settings -> Branches -> main (see
-# docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section 1 for the
-# rest of that branch-protection checklist).
+# relevant domain's owners below with `@spinr-org/<real-team-slug>` (a team
+# GitHub can actually resolve), then enable "Require review from Code
+# Owners" in Settings -> Branches -> main (see docs/audit/2026-08-27-cicd-
+# gates-guardrails-audit.md Section 1 for the rest of that branch-
+# protection checklist).
 
 # Default — every PR needs at least one reviewer
-*                                       @srikumarimuddana-lab
+*                                       @srikumarimuddana-lab @ittalenthireca-sketch
 
 # Money-adjacent backend surfaces
-backend/routes/payments*               @srikumarimuddana-lab
-backend/services/fare_service.py       @srikumarimuddana-lab
-backend/services/corporate_*           @srikumarimuddana-lab
-backend/routes/corporate_*             @srikumarimuddana-lab
-backend/routes/wallet*                 @srikumarimuddana-lab
-backend/utils/payment_retry.py         @srikumarimuddana-lab
-backend/utils/surge_engine.py          @srikumarimuddana-lab
+backend/routes/payments*               @srikumarimuddana-lab @ittalenthireca-sketch
+backend/services/fare_service.py       @srikumarimuddana-lab @ittalenthireca-sketch
+backend/services/corporate_*           @srikumarimuddana-lab @ittalenthireca-sketch
+backend/routes/corporate_*             @srikumarimuddana-lab @ittalenthireca-sketch
+backend/routes/wallet*                 @srikumarimuddana-lab @ittalenthireca-sketch
+backend/utils/payment_retry.py         @srikumarimuddana-lab @ittalenthireca-sketch
+backend/utils/surge_engine.py          @srikumarimuddana-lab @ittalenthireca-sketch
 
 # Schema changes — every migration touches production data
-backend/migrations/                    @srikumarimuddana-lab
+backend/migrations/                    @srikumarimuddana-lab @ittalenthireca-sketch
 
 # Auth / security-sensitive surfaces
-backend/routes/auth*                   @srikumarimuddana-lab
-backend/core/config.py                 @srikumarimuddana-lab
-backend/core/middleware.py             @srikumarimuddana-lab
-backend/utils/crypto.py                @srikumarimuddana-lab
-backend/utils/rate_limiter.py          @srikumarimuddana-lab
-.github/workflows/security-gates.yml   @srikumarimuddana-lab
+backend/routes/auth*                   @srikumarimuddana-lab @ittalenthireca-sketch
+backend/core/config.py                 @srikumarimuddana-lab @ittalenthireca-sketch
+backend/core/middleware.py             @srikumarimuddana-lab @ittalenthireca-sketch
+backend/utils/crypto.py                @srikumarimuddana-lab @ittalenthireca-sketch
+backend/utils/rate_limiter.py          @srikumarimuddana-lab @ittalenthireca-sketch
+.github/workflows/security-gates.yml   @srikumarimuddana-lab @ittalenthireca-sketch
 
 # Dispatch / ride state machine
-backend/services/dispatch_service.py   @srikumarimuddana-lab
-backend/routes/rides/                  @srikumarimuddana-lab
+backend/services/dispatch_service.py   @srikumarimuddana-lab @ittalenthireca-sketch
+backend/routes/rides/                  @srikumarimuddana-lab @ittalenthireca-sketch
 
 # Safety / SOS
-backend/routes/safety*                 @srikumarimuddana-lab
+backend/routes/safety*                 @srikumarimuddana-lab @ittalenthireca-sketch

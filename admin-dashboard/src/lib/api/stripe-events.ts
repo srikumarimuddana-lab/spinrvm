@@ -6,7 +6,7 @@ import { request } from "./client";
 export interface StuckStripeEvent {
     event_id: string;
     event_type: string | null;
-    created_at: string | null;
+    received_at: string | null;
     age_minutes: number | null;
 }
 
@@ -24,7 +24,7 @@ export interface StuckEventCount {
 export interface StripeEventDetail {
     event_id: string;
     event_type: string | null;
-    created_at: string | null;
+    received_at: string | null;
     processed_at: string | null;
     age_minutes: number | null;
     payload: Record<string, unknown> | null;

@@ -1,10 +1,10 @@
 diff --git a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
-index de86dba..d92369b 100644
+index 3200bb8..e89f348 100644
 --- a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
 +++ b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
-@@ -17,9 +17,36 @@ import Platform from '../../Utilities/Platform';
- import View from '../View/View';
- import * as React from 'react';
+@@ -20,9 +20,36 @@ import * as React from 'react';
+ 
+ export type ActivityIndicatorInstance = HostInstance;
  
 +// PATCH (spinr rider-app/driver-app):
 +// RN 0.85.2's Android ActivityIndicator path imports ProgressBarAndroid, whose
@@ -41,7 +41,7 @@ index de86dba..d92369b 100644
  
  const GRAY = '#999999';
 diff --git a/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js b/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
-index 5ce30f3..428ffb8 100644
+index 437a83b..6950596 100644
 --- a/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
 +++ b/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
 @@ -11,7 +11,7 @@
@@ -106,10 +106,10 @@ index 5ce30f3..428ffb8 100644
  export type RefreshControlPropsIOS = Readonly<{
    /**
 diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
-index d441435..e927210 100644
+index bf284ba..fefc21b 100644
 --- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
 +++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
-@@ -16,7 +16,7 @@ import type {ViewProps} from '../View/ViewPropTypes';
+@@ -17,7 +17,7 @@ import type {ViewProps} from '../View/ViewPropTypes';
  import StyleSheet from '../../StyleSheet/StyleSheet';
  import Platform from '../../Utilities/Platform';
  import useMergeRefs from '../../Utilities/useMergeRefs';
@@ -118,9 +118,9 @@ index d441435..e927210 100644
    Commands as AndroidSwitchCommands,
  } from './AndroidSwitchNativeComponent';
  import SwitchNativeComponent, {
-@@ -25,6 +25,86 @@ import SwitchNativeComponent, {
- import * as React from 'react';
- import {useLayoutEffect, useRef, useState} from 'react';
+@@ -28,6 +28,86 @@ import {useLayoutEffect, useRef, useState} from 'react';
+ 
+ export type SwitchInstance = HostInstance;
  
 +// PATCH (spinr rider-app/driver-app):
 +// RN 0.85.2's AndroidSwitchNativeComponent is declared with
@@ -206,7 +206,7 @@ index d441435..e927210 100644
    /**
     * Background color when the switch is turned on.
 diff --git a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js b/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
-index a668765..3d96b9c 100644
+index ea1a363..22cfa44 100644
 --- a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
 +++ b/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
 @@ -25,6 +25,18 @@ const {useRef, useImperativeHandle} = React;
@@ -238,7 +238,7 @@ index a668765..3d96b9c 100644
          <DebuggingOverlayNativeComponent
            ref={nativeComponentRef}
 diff --git a/node_modules/react-native/Libraries/Modal/Modal.js b/node_modules/react-native/Libraries/Modal/Modal.js
-index 28233e6..d2e2eac 100644
+index e9201f0..a536378 100644
 --- a/node_modules/react-native/Libraries/Modal/Modal.js
 +++ b/node_modules/react-native/Libraries/Modal/Modal.js
 @@ -17,10 +17,107 @@ import NativeEventEmitter from '../EventEmitter/NativeEventEmitter';
@@ -351,7 +351,7 @@ index 28233e6..d2e2eac 100644
  const View = require('../Components/View/View').default;
  const AppContainer = require('../ReactNative/AppContainer').default;
 diff --git a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
-index da05855..c7eb322 100644
+index a12dcb5..3be5b76 100644
 --- a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
 +++ b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
 @@ -15,6 +15,7 @@ import type {HostComponent} from '../../types/HostComponent';
@@ -360,7 +360,7 @@ index da05855..c7eb322 100644
  import ScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollViewNativeComponent';
 +import View from '../../../../Libraries/Components/View/View';
  import Platform from '../../../../Libraries/Utilities/Platform';
- import AndroidHorizontalScrollContentViewNativeComponent from '../../specs_DEPRECATED/components/AndroidHorizontalScrollContentViewNativeComponent';
+ import AndroidHorizontalScrollContentViewNativeComponent from '../../components/scrollview/specs/AndroidHorizontalScrollContentViewNativeComponent';
  
 diff --git a/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js b/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
 index c640b5a..a6f35b1 100644

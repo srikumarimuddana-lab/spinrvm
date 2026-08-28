@@ -87,7 +87,7 @@ export default function CustomAlert({
 
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
 
   useEffect(() => {
     if (visible) {

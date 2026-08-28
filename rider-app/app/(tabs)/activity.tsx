@@ -367,7 +367,7 @@ export default function ActivityScreen() {
     <View style={styles.listFooter}>
       <Text style={styles.listFooterText}>No more rides</Text>
     </View>
-  ) : null;
+  ) : undefined;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

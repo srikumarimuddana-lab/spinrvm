@@ -71,7 +71,7 @@ export default function VerifyEmailScreen() {
   const [codeSent, setCodeSent] = useState(false);
   const [alreadyVerified, setAlreadyVerified] = useState(!!user?.email_verified);
   const [countdown, setCountdown] = useState(0);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const requestInFlight = useRef(false);
 
   const shakeAnim = useAnimatedValue(0);

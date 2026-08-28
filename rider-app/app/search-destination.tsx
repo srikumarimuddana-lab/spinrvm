@@ -87,9 +87,9 @@ export default function SearchDestinationScreen() {
     sessionToken,
   } = usePlacesAutocomplete(locationReady ? searchQuery : '', bias);
 
-  const pickupRef = useRef<TextInput>(null);
-  const dropoffRef = useRef<TextInput>(null);
-  const stopRefs = useRef<(TextInput | null)[]>([]);
+  const pickupRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const dropoffRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const stopRefs = useRef<(React.ComponentRef<typeof TextInput> | null)[]>([]);
 
   // Latest-value refs for reading pickup/dropoff inside effects that must
   // NOT re-fire when pickup/dropoff themselves change (see the two effects

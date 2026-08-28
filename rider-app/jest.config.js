@@ -36,6 +36,11 @@ module.exports = {
     // the real runtime modules for tests.
     '^react/jsx-runtime$': '<rootDir>/node_modules/react/jsx-runtime',
     '^react/jsx-dev-runtime$': '<rootDir>/node_modules/react/jsx-dev-runtime',
+    // Same class again for RN 0.87: its types moved behind the exports map
+    // (types_generated/index.d.ts, no top-level "types" field), so tsconfig now
+    // paths "react-native" -> that .d.ts for tsc. jest-expo converts the path
+    // too; override back to the real runtime package.
+    '^react-native$': '<rootDir>/node_modules/react-native',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.
     // Mock the index so jest-expo's setup.js gets a no-op instead of the real runtime.

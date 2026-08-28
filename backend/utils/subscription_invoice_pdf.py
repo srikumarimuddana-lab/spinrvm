@@ -102,7 +102,11 @@ def generate_subscription_invoice_pdf(
     pdf.cell(
         85,
         5,
-        to_latin1((company.address if company is not None else "") or "Saskatoon, SK, Canada"),
+        # A configured company with a blank address prints NO address rather
+        # than a hardcoded city: a stale location on a tax document is wrong,
+        # a missing one is merely incomplete. The literal survives only for
+        # the pre-retrofit (company is None) path.
+        to_latin1(company.address if company is not None else "Saskatoon, SK, Canada"),
         align="R",
         ln=True,
     )

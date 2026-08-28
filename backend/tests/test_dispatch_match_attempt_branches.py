@@ -508,3 +508,69 @@ async def test_area_lookup_failure_still_reaches_resolve_matching_config():
 
     assert "area" in seen_kwargs, "the already-fetched area row must be threaded through, not re-read"
     assert seen_kwargs["area"] is None, "a failed area read must not be passed off as an empty area"
+
+
+async def test_pass_required_area_reads_driver_subscriptions_once():
+    """P2-B3: the subscription gate and the daily-quota filter share one read.
+
+    Both queried `driver_subscriptions` with the identical
+    `{driver_id IN …, status: active}` filter on the same dispatch attempt —
+    they differed only in projection. The gate now carries the union of the
+    columns and the quota filter narrows those rows in Python, so a
+    pass-required area costs one read instead of two on the P95 < 2 s path.
+
+    Uses an area with subscription_required=True, since that is what makes the
+    gate run at all; in a free area the gate is skipped and the quota filter's
+    own read is the only one (there is no area-level "has finite passes" flag
+    to short-circuit on, and finding one would cost the query it would save).
+    """
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    driver = _make_driver("drv-1")
+    sub_reads: list = []
+
+    async def _get_rows(table, filters=None, **kwargs):
+        if table == "drivers":
+            return [driver]
+        if table == "driver_subscriptions":
+            sub_reads.append(kwargs.get("columns"))
+            # No expires_at → never expired; rides_per_day None → unlimited, so
+            # the driver survives both filters and the attempt runs to the end.
+            return [{"driver_id": "drv-1", "started_at": None, "expires_at": None, "rides_per_day": None}]
+        if table == "service_areas":
+            return [{"id": "area-1", "parent_service_area_id": None}]
+        return []
+
+    async def _find_one(table, filters=None, **kwargs):
+        if table == "service_areas":
+            return {"id": "area-1", "parent_service_area_id": None, "subscription_required": True}
+        return None
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[])),
+        patch("backend.routes.rides.matching._dispatch_retry", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.get_rows = AsyncMock(side_effect=_get_rows)
+        mock_db.find_one = AsyncMock(side_effect=_find_one)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=False)
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    assert len(sub_reads) == 1, f"driver_subscriptions read {len(sub_reads)}× — expected 1"
+    # The single read must carry the union, or the quota filter silently sees
+    # no rides_per_day and treats every finite pass as unlimited.
+    assert "rides_per_day" in (sub_reads[0] or ""), "the shared read must project rides_per_day"
+    assert "started_at" in (sub_reads[0] or ""), "the shared read must project started_at"
+    assert "plan_id" in (sub_reads[0] or ""), "the shared read must still project plan_id for the gate"

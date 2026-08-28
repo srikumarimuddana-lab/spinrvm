@@ -474,6 +474,13 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # query — no N+1 per driver.  Fails open on DB error so a transient fault
     # cannot halt dispatch entirely; the accept_ride guard is the backstop.
     _sub_required: bool = False  # pre-init so cascade block can read it if try block skips
+    # Raw driver_subscriptions rows, when the gate below fetched them. The daily
+    # quota filter further down wants the same rows from the same table with the
+    # same filter, so it reuses these instead of issuing a second identical
+    # query. None (not []) means "the gate did not run", which is a different
+    # thing from "it ran and found nothing" — only the latter lets the quota
+    # filter skip its own read.
+    _gate_subs: Optional[list] = None
     if all_drivers and ride.get("service_area_id"):
         try:
             # Finding F: child areas (airport sub-regions) inherit subscription_required
@@ -486,9 +493,13 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 _active_subs = await _deps.db_supabase.get_rows(
                     "driver_subscriptions",
                     {"driver_id": {"$in": _candidate_ids}, "status": "active"},
-                    columns="driver_id,expires_at,plan_id",
+                    # started_at/rides_per_day are not read here — they are the
+                    # two extra columns the daily-quota filter needs, carried on
+                    # this query so that filter can skip a second identical read.
+                    columns="driver_id,started_at,expires_at,plan_id,rides_per_day",
                     limit=len(_candidate_ids),
                 )
+                _gate_subs = list(_active_subs or [])
                 _now_utc = datetime.now(timezone.utc)
                 # Filter by expiry; guard None from parse_iso_utc so one malformed
                 # row can't zero out all candidates via TypeError → except → all_drivers=[].
@@ -561,12 +572,29 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 from utils.spinr_pass import exhausted_driver_ids  # type: ignore
 
             _q_ids = [d["id"] for d in all_drivers]
-            _q_subs = await _deps.db_supabase.get_rows(
-                "driver_subscriptions",
-                {"driver_id": {"$in": _q_ids}, "status": "active"},
-                columns="driver_id,started_at,expires_at,rides_per_day",
-                limit=len(_q_ids),
-            )
+            if _gate_subs is not None:
+                # The subscription gate already fetched these exact rows — same
+                # table, same {driver_id IN …, status: active} filter — over a
+                # superset of this pool (it ran before the gate narrowed
+                # all_drivers). Narrowing it here is what a fresh query would
+                # return, so re-issuing one is a pure duplicate round-trip on
+                # the P95 < 2 s dispatch path.
+                #
+                # The RAW gate rows are reused, not its expiry-filtered
+                # _valid_subs: the quota query never filtered on expiry either,
+                # because exhausted_driver_ids does its own window handling.
+                _q_id_set = set(_q_ids)
+                _q_subs = [_s for _s in _gate_subs if _s.get("driver_id") in _q_id_set]
+            else:
+                # Free area: the gate never ran, so this is the only read. There
+                # is no area-level "has finite passes" flag to short-circuit on,
+                # and discovering one would cost the very query it would save.
+                _q_subs = await _deps.db_supabase.get_rows(
+                    "driver_subscriptions",
+                    {"driver_id": {"$in": _q_ids}, "status": "active"},
+                    columns="driver_id,started_at,expires_at,rides_per_day",
+                    limit=len(_q_ids),
+                )
             if _q_subs:
                 # area_timezone() would re-read the row we already hold; it is
                 # a plain `.get("timezone")` on exactly this row.

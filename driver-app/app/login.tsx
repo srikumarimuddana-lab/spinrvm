@@ -217,7 +217,17 @@ export default function LoginScreen() {
       >
         {/* Welcome text */}
         <View style={styles.welcomeSection}>
-          <Text style={styles.greeting}>Welcome back 👋</Text>
+          {/* Greeting tracks the same first-login signal as the consent
+              checkbox below (hasAuthenticatedBefore). The two are mutually
+              exclusive by construction: if the checkbox is showing, this
+              device has never completed a sign-in, so the person reading it
+              is not coming *back* to anything. Greeting a brand-new driver
+              with "Welcome back" while asking them to accept the Terms for
+              the first time read as a bug. Defaults (flag false) to the
+              new-driver copy, matching the checkbox's own fail-open. */}
+          <Text style={styles.greeting}>
+            {hasAuthenticatedBefore ? 'Welcome back 👋' : 'Welcome to Spinr 👋'}
+          </Text>
           <Text style={styles.title}>Enter your phone number</Text>
           <Text style={styles.subtitle}>
             We&apos;ll send you a verification code to confirm your identity

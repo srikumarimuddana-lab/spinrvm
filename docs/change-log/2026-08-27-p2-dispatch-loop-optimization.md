@@ -183,7 +183,7 @@ last_captured_at=latest_captures.get(str(ride_id))
 
 - [x] **Automated tests** — full `pytest -m "not slow"`, split into 10 chunks (a single
       process is killed by this container's memory ceiling; an environment limit, not a
-      test failure). **12,759 passed, 7 skipped, 1 xfailed, 0 failed.**
+      test failure). **12,785 passed, 7 skipped, 1 xfailed, 0 failed.**
 
       The first full run surfaced **11 real failures in `test_stale_p3_closer.py`**, and
       they were mine: renaming `_latest_capture_time` to the batched
@@ -215,6 +215,28 @@ last_captured_at=latest_captures.get(str(ride_id))
       `.claude/skills/spinr-background-loop`; loop TTL rule respected per loop; no money
       arithmetic touched; no PII added to logs (the `document_expiry` projection *narrows*
       what leaves the DB).
+- [x] **Reviewer agents run** (automated PR review is dark per `ACTION_ITEMS.md` C9, so
+      these were manual). Both found real defects and both are fixed in this branch:
+      - `spinr-dispatch-reviewer` on B1–B4 → **three defects**, all confirmed against
+        `origin/main` before fixing. The serious one: collapsing five `service_areas`
+        reads also collapsed five *different* failure handlers, which I had treated as
+        interchangeable. The subscription gate's read used to fail **closed**; my
+        `_parent_area()` swallowed the error and returned `{}`, which reads as
+        `subscription_required=False` — so a failed parent lookup stopped aborting the
+        attempt and started dispatching to drivers with no pass. My own docstring
+        asserted the opposite. Fixed by removing both swallows so each consumer is back
+        on its original handler. Second defect: the `area=None`-on-failure hand-off
+        assumed the resolver's retry would also fail; if it succeeded, nothing raised and
+        `_ride_area` stayed `{}` — same bypass, second route. Third: B4's claimed row
+        replaced a `get_driver_by_id` that filtered `deleted_at IS NULL`, so a
+        soft-deleted driver could pass revalidation; the claim's UPDATE now filters it.
+      - `spinr-realtime-reliability-reviewer` on B5–B7 → **verdict REPLAY-SAFE, no
+        blockers**; TTL arithmetic verified correct per loop, all four confirmed already
+        replay-safe, the `$or` PostgREST encoding verified at the wire level, and
+        migration 371's precedence traced end-to-end. Two observability warnings, both
+        fixed: `push_retry` recorded no heartbeat at all (pre-existing, but B6 made the
+        silent branch the common case in production), and no test covered any loop's
+        lock-denied branch — which is precisely why the heartbeat gap went unnoticed.
 - [ ] **Manual repro in staging** — not performed; see below.
 - [x] **Feature flag** — deliberately none; justified in §8.
 
@@ -232,9 +254,10 @@ last_captured_at=latest_captures.get(str(ride_id))
   cadence, which no test here would catch.
 - **No before/after latency measurement.** The P95 dispatch claim (< 2 s) was not
   re-measured; the improvement is round-trip arithmetic, not a profile.
-- **The `spinr-dispatch-reviewer` agent was not run.** The user's instruction was to
-  implement P1 and P2; the manual reviewer pass the plan called for on B1–B4 has not
-  happened, and automated PR review is dark per `ACTION_ITEMS.md` C9.
+- **`repositories/corporate_repo.py::mark_low_balance_notified` is now dead** in the
+  production call graph — B5 switched its only caller to the claim variant. Left in
+  place: it is still re-exported from `db_supabase` and has its own direct unit test, so
+  deleting a public helper is outside this change's scope. Flagged, not removed.
 - **No frontend surface was touched, so no build was run.** There is also **no active
   visual-regression coverage on any surface** (`ACTION_ITEMS.md` B38) — irrelevant to this
   backend-only change, stated so silence doesn't imply coverage.

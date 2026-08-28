@@ -469,7 +469,7 @@ async def _run_full_dispatch(ride, driver, *, use_eta=False, eta_side_effect=Non
     ):
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=fresh_driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=fresh_driver)
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(return_value=None)
@@ -537,7 +537,7 @@ async def test_fetch_rider_exception_is_non_fatal():
     ):
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(return_value=None)
@@ -579,7 +579,7 @@ async def test_service_area_polygon_fetch_exception_is_non_fatal():
         # the polygon fetch's own find_one raises.
         mock_db.find_one = AsyncMock(side_effect=[None, RuntimeError("service_areas polygon lookup failed")])
         mock_db.get_rows = AsyncMock(return_value=[driver])
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(return_value=None)
@@ -619,8 +619,7 @@ async def test_max_offers_breaks_claim_loop():
     ):
         mock_db.get_rows = AsyncMock(return_value=[d1, d2])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
-        mock_db.get_driver_by_id = AsyncMock(side_effect=[d1, d2])
+        mock_db.claim_driver_atomic = AsyncMock(side_effect=[d1, d2])
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(return_value=None)
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Jamie"})
@@ -669,8 +668,7 @@ async def test_period_2_opened_for_each_claimed_driver_after_offer_insert():
     ):
         mock_db.get_rows = AsyncMock(return_value=[d1, d2])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
-        mock_db.get_driver_by_id = AsyncMock(side_effect=[d1, d2])
+        mock_db.claim_driver_atomic = AsyncMock(side_effect=[d1, d2])
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(return_value=None)
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Jamie"})
@@ -718,7 +716,7 @@ async def test_period_2_not_opened_when_offer_insert_fails():
     ):
         mock_db.get_rows = AsyncMock(return_value=[d1])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=d1)
         mock_db.get_driver_by_id = AsyncMock(return_value=d1)
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(side_effect=RuntimeError("ride_offers insert failed"))
@@ -874,7 +872,7 @@ async def _run_single_driver_dispatch(ride):
     ):
         mock_db.find_one = AsyncMock(return_value=None)
         mock_db.get_rows = AsyncMock(return_value=[driver])
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(return_value=None)

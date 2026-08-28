@@ -408,7 +408,9 @@ class TestDatabaseSupabaseFunctions:
         mock_supabase_client.table.return_value = mock_query
 
         result = await claim_driver_atomic("driver_123")
-        assert result is True
+        # Returns the claimed row now, not a bool — dispatch revalidates
+        # eligibility on it instead of re-reading the driver.
+        assert result == {"id": "driver_123", "is_available": False}
 
     @pytest.mark.asyncio
     async def test_get_ride(self, mock_supabase_client):

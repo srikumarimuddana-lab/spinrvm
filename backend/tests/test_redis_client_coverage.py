@@ -801,3 +801,73 @@ class TestHumanizeBytes:
         huge = 5 * 1024 * 1024 * 1024 * 1024 * 1024  # 5 exabytes
         result = _humanize_bytes(huge)
         assert result == "5B"  # pins the actual (buggy) behavior
+
+
+class TestTryAcquireLeaderLock:
+    """P2-B6: the shared leader-lock wrapper the high-frequency loops use.
+
+    These loops are already replay-safe, so the lock is LOAD shedding, not a
+    correctness guard — which is exactly why it must fail OPEN.
+    """
+
+    @pytest.mark.anyio
+    async def test_ttl_is_floored_at_one_second(self, monkeypatch):
+        """A caller computing int(interval * 0.85) from a sub-2s interval lands
+        on 0, and a 0 TTL is degenerate: depending on the backend it either
+        expires instantly (no lock at all) or never expires — in which case the
+        loop deadlocks itself, skipping every tick after the first. That is not
+        theoretical: route_finalizer_loop(interval_seconds=0) hung on it."""
+        from backend.utils import redis_client
+
+        seen: list = []
+
+        async def _set_nx(key, value, ttl):
+            seen.append(ttl)
+            return True
+
+        monkeypatch.setattr(redis_client, "redis_set_nx", _set_nx)
+
+        assert await redis_client.try_acquire_leader_lock("x", 0) is True
+        assert await redis_client.try_acquire_leader_lock("x", -5) is True
+        assert seen == [1, 1]
+
+    @pytest.mark.anyio
+    async def test_fails_open_on_redis_error(self, monkeypatch):
+        """redis_set_nx raises on a real Redis-configured-but-unavailable
+        error. Every caller of this helper is already replay-safe, so the right
+        degradation is "every replica proceeds", i.e. exactly the behaviour
+        before the lock existed — never a silently skipped tick."""
+        from backend.utils import redis_client
+
+        async def _boom(_key, _value, _ttl):
+            raise ConnectionError("redis down")
+
+        monkeypatch.setattr(redis_client, "redis_set_nx", _boom)
+
+        assert await redis_client.try_acquire_leader_lock("x", 10) is True
+
+    @pytest.mark.anyio
+    async def test_reports_the_loser(self, monkeypatch):
+        from backend.utils import redis_client
+
+        async def _lost(_key, _value, _ttl):
+            return False
+
+        monkeypatch.setattr(redis_client, "redis_set_nx", _lost)
+
+        assert await redis_client.try_acquire_leader_lock("x", 10) is False
+
+    @pytest.mark.anyio
+    async def test_key_is_namespaced(self, monkeypatch):
+        from backend.utils import redis_client
+
+        keys: list = []
+
+        async def _set_nx(key, _value, _ttl):
+            keys.append(key)
+            return True
+
+        monkeypatch.setattr(redis_client, "redis_set_nx", _set_nx)
+
+        await redis_client.try_acquire_leader_lock("push_retry", 10)
+        assert keys == ["spinr:push_retry:lock"]

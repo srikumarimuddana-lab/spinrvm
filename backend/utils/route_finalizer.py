@@ -24,6 +24,7 @@ try:
     from .loop_monitor import record_heartbeat as _record_heartbeat
     from .metrics import inc as _metric_inc
     from .metrics import observe as _metric_observe
+    from .redis_client import try_acquire_leader_lock
     from .route_distance import compute_segmented_road_route
     from .route_reconstruction import reconstruct_completed_route
     from .route_segments import SegmentedRoute, segment_route
@@ -33,6 +34,7 @@ except ImportError:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
+    from utils.redis_client import try_acquire_leader_lock  # type: ignore
     from utils.route_distance import compute_segmented_road_route  # type: ignore
     from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
@@ -524,6 +526,18 @@ async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_
     """Replay-safe 15-second loop for versioned route finalization."""
     tick = 0
     while True:
+        # Leader lock: LOAD shedding only, not correctness. This loop is
+        # already replay-safe, so N replicas running it is correct — just N×
+        # the DB work at a 15s cadence, which the 2026-08-26 audit
+        # measured among the top query sources. Same rationale
+        # dispute_evidence_reminder.py already states for its own lock.
+        # Fails OPEN, so a Redis blip restores exactly today's behaviour.
+        # TTL < the minimum sleep below, or a pod finds its own key alive and
+        # halves the cadence.
+        if not await try_acquire_leader_lock("route_finalizer", int(interval_seconds * 0.85), logger_=logger):
+            _record_heartbeat(_LOOP_NAME)
+            await asyncio.sleep(interval_seconds)
+            continue
         try:
             # Backstop first on the sweep ticks so a healed ride can be
             # claimed by this same tick's finalization pass.

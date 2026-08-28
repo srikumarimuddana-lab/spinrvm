@@ -166,9 +166,8 @@ class TestWAVDispatchQuery:
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
             ),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
-            patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
             patch(
-                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.claim_driver_atomic",
                 AsyncMock(return_value={**wav_driver, "is_online": True}),
             ),
             patch(
@@ -212,9 +211,8 @@ class TestWAVDispatchQuery:
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
             ),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
-            patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
             patch(
-                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.claim_driver_atomic",
                 AsyncMock(return_value={**std_driver, "is_online": True}),
             ),
             patch(

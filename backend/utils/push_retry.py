@@ -16,10 +16,12 @@ try:
     from ..db_supabase import run_sync
     from ..features import _is_expo_token, _send_expo_push
     from ..supabase_client import supabase
+    from .redis_client import try_acquire_leader_lock
 except ImportError:
     from db_supabase import run_sync  # type: ignore
     from features import _is_expo_token, _send_expo_push  # type: ignore
     from supabase_client import supabase  # type: ignore
+    from utils.redis_client import try_acquire_leader_lock  # type: ignore
 
 _LOOP_INTERVAL = 30  # seconds between ticks
 _MAX_ATTEMPTS = 5  # give up after this many failures
@@ -64,6 +66,17 @@ async def enqueue_push(
 async def push_retry_loop() -> None:
     """Background loop: attempt delivery of queued push notifications every 30s."""
     while True:
+        # Leader lock: LOAD shedding only, not correctness. This loop is
+        # already replay-safe, so N replicas running it is correct — just N×
+        # the DB work at a 30s cadence, which the 2026-08-26 audit
+        # measured among the top query sources. Same rationale
+        # dispute_evidence_reminder.py already states for its own lock.
+        # Fails OPEN, so a Redis blip restores exactly today's behaviour.
+        # TTL < the minimum sleep below, or a pod finds its own key alive and
+        # halves the cadence.
+        if not await try_acquire_leader_lock("push_retry", int(_LOOP_INTERVAL * 0.85)):
+            await asyncio.sleep(_LOOP_INTERVAL)
+            continue
         try:
             await _tick()
         except Exception:

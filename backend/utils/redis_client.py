@@ -416,3 +416,50 @@ def _humanize_bytes(n: int) -> str:
     if unit == "B":
         return f"{int(size)}{unit}"
     return f"{size:.1f}{unit}"
+
+
+def loop_pod_id() -> str:
+    """Stable-per-process identifier for leader-lock ownership.
+
+    Only ever read back diagnostically — SET NX decides the winner, not this
+    value — but a real id makes "which replica holds it" answerable from a
+    redis-cli GET during an incident.
+    """
+    import socket
+
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+async def try_acquire_leader_lock(name: str, ttl_seconds: int, *, logger_=None) -> bool:
+    """Try to become the single replica running this tick. Fails OPEN.
+
+    A convenience wrapper over ``redis_set_nx`` for the background loops that
+    take a leader lock purely to shed DB load — every caller of this helper is
+    ALREADY replay-safe by atomic claim or idempotency key, so the lock is an
+    optimisation, never a correctness guard. A loop whose correctness depends
+    on single-execution must not use this: it fails open, so on a Redis error
+    every replica proceeds, exactly as it would with no lock at all.
+
+    TTL RULE (load-bearing): ``ttl_seconds`` must be SHORTER than the minimum
+    possible sleep between ticks, jitter included. Otherwise the pod that ran
+    the last tick wakes to find its OWN key still alive, fails SET NX, and
+    sleeps another full interval — silently halving the loop's cadence.
+    ``interval * 0.85`` against a ``* 0.9`` jitter floor is the established
+    formula (see offer_expiry_reaper.py and ledger_projection.py).
+
+    With REDIS_URL unset, redis_client falls back to an in-process dict, so
+    every replica wins its own local lock and the loop behaves exactly as it
+    did before the lock existed. That is the intended degradation.
+    """
+    log = logger_ or logger
+    # Floor at 1s. A caller computing `int(interval * 0.85)` from a sub-2s
+    # interval lands on 0, and a 0/negative TTL is degenerate: depending on the
+    # backend it either expires instantly (no lock at all) or never expires (the
+    # loop deadlocks itself, skipping every tick after the first). Neither is
+    # what a caller asking for a lock means.
+    ttl_seconds = max(1, int(ttl_seconds))
+    try:
+        return await redis_set_nx(f"spinr:{name}:lock", loop_pod_id(), ttl_seconds)
+    except Exception as lock_err:
+        log.error("%s: leader lock unavailable (%s), proceeding without it", name, lock_err)
+        return True

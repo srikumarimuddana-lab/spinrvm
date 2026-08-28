@@ -39,7 +39,13 @@ async def test_flags_stale_company_and_emits_metric():
 
         await run_kyb_reverification_tick()
 
-    m_mark.assert_awaited_once_with(company_id="c1")
+    assert m_mark.await_count == 1
+    _kw = m_mark.await_args.kwargs
+    assert _kw["company_id"] == "c1"
+    # The write is a conditional claim now: it must carry the re-flag
+    # cooldown boundary so the DB, not this loop, decides the winner
+    # when several replicas reach the same company at once.
+    assert _kw["not_flagged_since_iso"]
     m_inc.assert_any_call("spinr_corporate_kyb_reverification_due_total", {}, by=1)
     m_gauge.assert_any_call("spinr_corporate_kyb_reverification_pending", 1)
 
@@ -66,7 +72,13 @@ async def test_never_changes_company_status():
     # call exists anywhere in this module to assert against, which is itself
     # the point: mark_kyb_reverify_flagged's own signature only ever touches
     # kyb_reverify_flagged_at (see repositories/corporate_repo.py).
-    m_mark.assert_awaited_once_with(company_id="c1")
+    assert m_mark.await_count == 1
+    _kw = m_mark.await_args.kwargs
+    assert _kw["company_id"] == "c1"
+    # The write is a conditional claim now: it must carry the re-flag
+    # cooldown boundary so the DB, not this loop, decides the winner
+    # when several replicas reach the same company at once.
+    assert _kw["not_flagged_since_iso"]
 
 
 @pytest.mark.asyncio
@@ -109,7 +121,13 @@ async def test_reflags_after_cooldown_elapsed():
 
         await run_kyb_reverification_tick()
 
-    m_mark.assert_awaited_once_with(company_id="c1")
+    assert m_mark.await_count == 1
+    _kw = m_mark.await_args.kwargs
+    assert _kw["company_id"] == "c1"
+    # The write is a conditional claim now: it must carry the re-flag
+    # cooldown boundary so the DB, not this loop, decides the winner
+    # when several replicas reach the same company at once.
+    assert _kw["not_flagged_since_iso"]
 
 
 @pytest.mark.asyncio
@@ -203,7 +221,9 @@ async def test_flagging_failure_for_one_company_does_not_block_others():
         ),
         patch(
             "utils.kyb_reverification.mark_kyb_reverify_flagged",
-            AsyncMock(side_effect=[Exception("db down"), None]),
+            # True = claim won. It returns a bool now (conditional update), so
+            # None here would read as "another replica already flagged it".
+            AsyncMock(side_effect=[Exception("db down"), True]),
         ) as m_mark,
         patch("utils.kyb_reverification._metric_inc") as m_inc,
         patch("utils.kyb_reverification._metric_gauge"),
@@ -215,3 +235,35 @@ async def test_flagging_failure_for_one_company_does_not_block_others():
     assert m_mark.await_count == 2
     # Only c2 succeeded -> exactly 1 newly-flagged this tick.
     m_inc.assert_any_call("spinr_corporate_kyb_reverification_due_total", {}, by=1)
+
+
+@pytest.mark.asyncio
+async def test_lost_claim_is_not_counted_or_logged():
+    """P2-B5: a company another replica already flagged must not be counted.
+
+    The flag write used to be unconditional, so with this loop running on
+    every replica two of them could both pass the re-flag cooldown, both stamp
+    the row, and both increment the due_total metric — inflating it by a
+    factor of the replica count and double-logging the compliance event.
+    """
+    with (
+        patch("utils.kyb_reverification.get_app_settings", AsyncMock(return_value=_SETTINGS_ON)),
+        patch(
+            "utils.kyb_reverification.list_companies_needing_kyb_reverification",
+            AsyncMock(return_value=[_company(id="c1"), _company(id="c2")]),
+        ),
+        # c1's claim is lost to another replica; c2's is won.
+        patch(
+            "utils.kyb_reverification.mark_kyb_reverify_flagged",
+            AsyncMock(side_effect=[False, True]),
+        ),
+        patch("utils.kyb_reverification._metric_inc") as m_inc,
+        patch("utils.kyb_reverification._metric_gauge"),
+    ):
+        from utils.kyb_reverification import run_kyb_reverification_tick
+
+        await run_kyb_reverification_tick()
+
+    # Only the won claim counts — one, not two.
+    assert m_inc.call_count == 1
+    assert m_inc.call_args.kwargs.get("by") == 1

@@ -238,16 +238,33 @@ async def match_and_claim_driver(
     return result
 
 
-async def claim_driver_atomic(driver_id: str) -> bool:
-    """Atomically set is_available = false for driver if currently available."""
+async def claim_driver_atomic(driver_id: str) -> Optional[Dict[str, Any]]:
+    """Atomically set is_available = false for driver if currently available.
+
+    Returns the CLAIMED ROW on success, None on failure. It used to return a
+    bare bool and throw the row away, which forced the caller into an
+    immediate ``get_driver_by_id`` — guaranteed uncached, because this
+    function invalidates that very cache entry twice. Dispatch claims up to
+    max_simultaneous_offers drivers per attempt on a path with a P95 < 2 s
+    SLA, so that was up to 10 avoidable round-trips per dispatch.
+
+    The returned row is the post-update representation, so it is not merely as
+    fresh as a follow-up SELECT — it is strictly fresher: it is the state at
+    the instant of the atomic claim, with no window for a concurrent write to
+    slip in between. Callers revalidating eligibility (is_online / is_verified
+    / status) should use it directly.
+
+    Truthiness is unchanged, so ``if await claim_driver_atomic(...)`` reads the
+    same as before.
+    """
     if not supabase:
-        # Returning False is the SAFE direction here — an unclaimed driver is
+        # Returning falsy is the SAFE direction here — an unclaimed driver is
         # simply not offered the ride, so dispatch degrades rather than
         # double-offering. It is still a write that silently did not happen,
         # and this is the fifth helper named in _base.update_one's deferred
         # note; it logs for the same reason as the other four.
         _write_skipped("claim_driver_atomic", "drivers")
-        return False
+        return None
 
     await invalidate_driver_cache(driver_id=driver_id)
 
@@ -268,7 +285,9 @@ async def claim_driver_atomic(driver_id: str) -> bool:
             .execute()
         )
         data = _rows_from_res(res)
-        return len(data) > 0
+        # The updated representation, not just a row count — the caller needs
+        # it to revalidate eligibility without a second read.
+        return data[0] if data else None
 
     claimed = await run_sync(_claim)
     if claimed:

@@ -123,6 +123,39 @@ field touched) rather than the original hard-error rule, once checked against pr
 showed the real scale. See `docs/runbooks/legacy-migration-playbook.md` item #11 for the
 full decision record.
 
+**Pre-flight computation completed 2026-08-28, still not executed.** With a Supabase MCP
+connection available this session (read/write SQL, but not the application's own
+`SUPABASE_SERVICE_ROLE_KEY`), the real, unmodified `build_mongo_driver_import_plan()` was run
+locally against real current production match-state (existing `users`/`drivers` fetched
+read-only, no writes) to get an accurate, fully-validated plan instead of relying on the
+now-stale phone-match percentages above (computed against an earlier export/production
+snapshot). Result, self-consistent against all 925 rows of the current 08-22 export:
+
+| Outcome | Count |
+|---|---|
+| New users created | 595 |
+| New drivers created | 709 (= 595 new-user + 114 linked-to-existing-account) |
+| Existing accounts linked (new driver row, existing user) | 114 |
+| Existing drivers enriched (history only, no new row) | 215 |
+| Blank-name placeholder warnings | 587 |
+| Rows rejected (invalid phone) | 1 |
+| **Total accounted for** | **709 + 215 + 1 = 925** ✓ |
+
+The 120 unique `license_number` values among the planned driver inserts were also encrypted
+for real via the production `encrypt_driver_pii` RPC (read/write SQL access, not the
+application's own service-role key) — genuine ciphertext, not placeholders. No `INSERT`/`UPDATE`
+has been executed against `users`/`drivers` — turning this validated plan into literal SQL and
+running it hit the environment's own PII-safety classifier twice in a row (once on writing a
+batch-SQL file containing ~600 real names/phones/emails, once on merely re-reading the
+already-computed plan) and was deliberately not pushed through by retrying with other tools.
+**Decision (2026-08-28): defer actual execution to a session/operator with the real
+`SUPABASE_SERVICE_ROLE_KEY`**, who can either re-run the validated CLI script directly
+(`python backend/scripts/import_legacy_mongo_drivers.py --drivers-csv <path> --service-area-id
+361d17bb-ec55-4561-943f-e3bbee5d7a55 --apply`) or pick up from this pre-flight computation.
+Either way, the counts above are the real, tested expectation to verify the eventual run
+against — the CLI's own printed report should match them (allowing for any legitimate drift if
+the source export or production match-state changes before it's actually run).
+
 ### Phase 2 — Vehicle history backfill (regulatory-flagged, high value)
 
 **What:** `vehicle_details.csv` (355 rows: VIN, insurance/registration expiry, year/color/

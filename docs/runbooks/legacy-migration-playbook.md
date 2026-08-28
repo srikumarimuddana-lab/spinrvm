@@ -577,6 +577,28 @@ rushed).
     > production — same "code ready, execution is not this item's job" posture as Phase 1 above.
     > See `docs/change-log/2026-08-28-legacy-sin-dob-backfill-admin-route.md` and
     > `docs/change-log/2026-08-28-legacy-vehicle-history-backfill-admin-route.md`.
+    >
+    > **[2026-08-28 — PHASE 1 PRE-FLIGHT COMPUTATION VALIDATED, EXECUTION DEFERRED.]** With
+    > this session's Supabase MCP connection (read/write SQL, but not the application's own
+    > `SUPABASE_SERVICE_ROLE_KEY`), the real, unmodified `build_mongo_driver_import_plan()` was
+    > run locally against real current production match-state to get a fresh, fully-validated
+    > plan rather than trust the earlier phone-match percentages above (computed against an
+    > older export/production snapshot). Result, self-consistent against all 925 rows of the
+    > current 08-22 export: **595 new users, 709 new drivers (595 new-account + 114 linked to an
+    > existing account), 215 existing drivers enriched, 587 blank-name placeholders, 1 row
+    > rejected (invalid phone) — 709 + 215 + 1 = 925, every row accounted for.** The 120 unique
+    > `license_number` values among the planned inserts were also genuinely encrypted via the
+    > production `encrypt_driver_pii` RPC (real ciphertext, not placeholders). No write has been
+    > made to `users`/`drivers` — turning this validated plan into literal SQL and running it hit
+    > the environment's own PII-safety permission classifier twice in a row (writing a batch-SQL
+    > file with ~600 real names/phones/emails, then merely re-reading the already-computed plan),
+    > and was deliberately not pushed through by retrying with other tools. **Decision: defer
+    > actual execution to a session/operator with the real service-role key**, who can re-run the
+    > tested CLI (`python backend/scripts/import_legacy_mongo_drivers.py --drivers-csv <path>
+    > --service-area-id 361d17bb-ec55-4561-943f-e3bbee5d7a55 --apply`) or pick up from this
+    > pre-flight computation directly. The counts above are the validated expectation to check
+    > the eventual run's own printed report against. Full detail:
+    > `docs/migration/2026-08-27-legacy-data-full-migration-approach.md` §4 Phase 1.
 
 ## What this playbook is not
 

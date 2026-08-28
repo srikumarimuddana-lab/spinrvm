@@ -506,7 +506,15 @@ export default function BulkOperationsPage() {
                     <Link href="/dashboard/drivers/legacy-import" className="underline">
                         Legacy Driver Import
                     </Link>{" "}
-                    (raw Mongo export).
+                    (raw Mongo export) — with{" "}
+                    <Link href="/dashboard/drivers/legacy-sin-dob-backfill" className="underline">
+                        SIN/DOB
+                    </Link>{" "}
+                    and{" "}
+                    <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
+                        vehicle-history
+                    </Link>{" "}
+                    backfills for drivers created there.
                 </p>
             </div>
 

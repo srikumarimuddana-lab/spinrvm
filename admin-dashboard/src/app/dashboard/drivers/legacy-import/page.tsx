@@ -141,6 +141,14 @@ export default function LegacyDriverImportPage() {
 
     const [file, setFile] = useState<File | null>(null);
     const [serviceAreaName, setServiceAreaName] = useState("Saskatoon");
+    // Name-only lookup is ambiguous in production: "Saskatoon" and "Saskatoon
+    // Airport" both match get_service_area()'s `ilike("name", "%Saskatoon%")`,
+    // which then refuses to guess and requires an explicit id. Default to the
+    // real Saskatoon service area's id so the common case (this page is
+    // Saskatoon-specific, same as the name default above) works without the
+    // operator needing to know about the ambiguity; the field stays editable
+    // for any other service area.
+    const [serviceAreaId, setServiceAreaId] = useState("361d17bb-ec55-4561-943f-e3bbee5d7a55");
     const [report, setReport] = useState<LegacyDriverImportReport | null>(null);
     const [validating, setValidating] = useState(false);
     const [committing, setCommitting] = useState(false);
@@ -148,7 +156,10 @@ export default function LegacyDriverImportPage() {
 
     if (!allowed) return null;
 
-    const importOpts = () => ({ serviceAreaName: serviceAreaName.trim() || "Saskatoon" });
+    const importOpts = () => ({
+        serviceAreaName: serviceAreaName.trim() || "Saskatoon",
+        serviceAreaId: serviceAreaId.trim() || undefined,
+    });
 
     const resetReport = () => {
         setReport(null);
@@ -258,7 +269,16 @@ export default function LegacyDriverImportPage() {
                     for that one. Every newly-created driver here is forced{" "}
                     <span className="font-mono">needs_review</span>, unverified, and offline
                     regardless of what the export says — no document files are imported (the
-                    export only has filenames, no images).
+                    export only has filenames, no images). Once a driver exists here, backfill
+                    their{" "}
+                    <Link href="/dashboard/drivers/legacy-sin-dob-backfill" className="underline">
+                        SIN/DOB
+                    </Link>{" "}
+                    or{" "}
+                    <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
+                        vehicle history
+                    </Link>{" "}
+                    from the same export.
                 </p>
             </div>
 
@@ -327,6 +347,20 @@ export default function LegacyDriverImportPage() {
                                     resetReport();
                                 }}
                                 placeholder="Saskatoon"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label htmlFor="legacy-service-area-id" className="text-sm font-medium">
+                                Service area ID (optional — required if the name matches more than one area)
+                            </label>
+                            <Input
+                                id="legacy-service-area-id"
+                                value={serviceAreaId}
+                                onChange={(e) => {
+                                    setServiceAreaId(e.target.value);
+                                    resetReport();
+                                }}
+                                placeholder="e.g. 361d17bb-ec55-4561-943f-e3bbee5d7a55"
                             />
                         </div>
                     </div>

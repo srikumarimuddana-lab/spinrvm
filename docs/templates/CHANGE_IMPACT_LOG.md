@@ -33,7 +33,7 @@ What changed, in plain language, before the code detail below.
 - What else reads/writes the same table, state field, endpoint, or background loop?
 - Could this regress a flow that currently works? Which one(s)?
 - Blast radius: isolated / single-surface / cross-surface — state it explicitly, don't leave it implied.
-- Any interaction with the 16 background loops (`backend/core/lifespan.py`), the ride state machine, or money/wallet deltas?
+- Any interaction with the background loops (`backend/core/lifespan.py` — `_WATCHDOG_LOOP_NAMES` is the live registry; don't cite a count here, it drifts), the ride state machine, or money/wallet deltas?
 
 ## 5. User-experience effect
 

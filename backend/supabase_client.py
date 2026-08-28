@@ -10,6 +10,11 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
+# Kept in lockstep with repositories._base._DB_THREAD_POOL_SIZE — same env
+# vars, same fallback order, same default. See the limits= comment below for
+# why this is duplicated rather than imported.
+_POOL_SIZE = int(os.environ.get("DB_THREAD_POOL_SIZE") or os.environ.get("DB_THREAD_POOL_MAX") or "64")
+
 supabase = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -32,7 +37,24 @@ if SUPABASE_URL and SUPABASE_KEY:
             headers=dict(_old.headers),
             http2=False,
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
-            limits=httpx.Limits(keepalive_expiry=15),
+            # Sized against the run_sync thread pool, NOT left on httpx's
+            # defaults. Every one of those threads can hold a request here at
+            # once, and httpx defaults to max_keepalive_connections=20 — so
+            # above 20 concurrent DB calls the surplus threads were paying a
+            # fresh TCP+TLS handshake per query, and with pool=5.0 a saturated
+            # pool fails as a 5-second stall then PoolTimeout rather than as
+            # anything diagnosable.
+            #
+            # _POOL_SIZE reads DB_THREAD_POOL_SIZE directly rather than
+            # importing it from repositories._base: _base imports `supabase`
+            # from this module, so the import would be circular. The fallback
+            # chain mirrors _base's exactly; if that knob moves, move it here
+            # too.
+            limits=httpx.Limits(
+                max_keepalive_connections=_POOL_SIZE,
+                max_connections=_POOL_SIZE * 2,
+                keepalive_expiry=15,
+            ),
             transport=httpx.HTTPTransport(retries=1),
             verify=True,
         )

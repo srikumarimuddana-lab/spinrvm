@@ -20,7 +20,7 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, AlertTriangle, Loader2, Info, Upload } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Loader2, Info, Upload, Copy } from "lucide-react";
 import {
     adminValidateVehicleHistoryBackfill,
     adminCommitVehicleHistoryBackfill,
@@ -118,6 +118,29 @@ function Stat({
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below —
+// counts only, no plate/VIN, matching the report's own no-raw-vehicle-data
+// guarantee.
+function buildSummaryText(report: VehicleHistoryBackfillReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Vehicle rows", c?.vehicle_rows ?? 0],
+        ["History rows to insert", c?.history_rows_to_insert ?? 0],
+        ["Skipped (unmatched)", c?.skipped_unmatched ?? 0],
+        ["Not a legacy driver (skipped)", c?.skipped_not_legacy_driver ?? 0],
+        ["Already backfilled (skipped)", c?.skipped_already_backfilled ?? 0],
+        ["Warnings", report.warnings.length],
+        ["Errors", report.errors.length],
+    ];
+    const lines = [
+        `Legacy Vehicle History Backfill — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export default function LegacyVehicleHistoryBackfillPage() {
@@ -357,6 +380,20 @@ export default function LegacyVehicleHistoryBackfillPage() {
                             />
                             <Stat label="Warnings" value={report.warnings.length} tone="warn" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
+                        </div>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
                         </div>
 
                         {report.errors.length > 0 && (

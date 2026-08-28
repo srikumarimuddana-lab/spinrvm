@@ -19,7 +19,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Upload, CheckCircle2, AlertTriangle, Loader2, Info } from "lucide-react";
+import { Upload, CheckCircle2, AlertTriangle, Loader2, Info, Copy } from "lucide-react";
 import {
     adminValidateSinDobBackfill,
     adminCommitSinDobBackfill,
@@ -118,6 +118,29 @@ function Stat({
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below —
+// counts only, same PII guarantee as the report itself (no raw SIN/DOB).
+function buildSummaryText(report: SinDobBackfillReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Rows", c?.rows ?? 0],
+        ["Drivers to update", c?.to_update ?? 0],
+        ["Unmatched (skipped)", c?.skipped_unmatched ?? 0],
+        ["Not a legacy driver (skipped)", c?.skipped_not_legacy_driver ?? 0],
+        ["Already on file (skipped)", c?.skipped_already_on_file ?? 0],
+        ["Duplicate match (skipped)", c?.skipped_duplicate_match ?? 0],
+        ["Warnings", report.warnings.length],
+        ["Errors", report.errors.length],
+    ];
+    const lines = [
+        `Legacy SIN/DOB Backfill — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export default function LegacySinDobBackfillPage() {
@@ -358,6 +381,20 @@ export default function LegacySinDobBackfillPage() {
                             />
                             <Stat label="Warnings" value={report.warnings.length} tone="warn" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
+                        </div>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
                         </div>
 
                         {report.errors.length > 0 && (

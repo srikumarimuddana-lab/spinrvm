@@ -20,10 +20,35 @@ env:
   NODE_VERSION: '22'
 
 jobs:
+  # Phase 2 blast-radius-aware triggering (docs/audit/2026-08-27-cicd-gates-
+  # guardrails-audit.md Section 5). Shared reusable filter, same one
+  # ci-guardrails.yml and security-gates.yml use -- see
+  # .github/workflows/detect-changes.yml for the full fail-open contract
+  # (skip only on a real pull_request event where the filter ran and
+  # reported the surface untouched; push/merge_group/workflow_dispatch,
+  # or a filter failure, always run everything -- this is the last line of
+  # defense before `main`, so path-filtering never gets to decide what
+  # runs there).
+  #
+  # `security-scan` (trufflehog + Trivy filesystem) is deliberately NOT
+  # gated: secret-scanning must never be path-filtered -- a secret can
+  # leak in any file type, including a workflow file itself. Same
+  # reasoning as G3/G5a in security-gates.yml.
+  detect-changes:
+    uses: ./.github/workflows/detect-changes.yml
+
   # Backend Tests
   backend-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
 
     services:
       postgres:
@@ -115,6 +140,14 @@ jobs:
   python-dependency-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -133,6 +166,14 @@ jobs:
   driver-app-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
+        needs.detect-changes.outputs.driver == 'true'
+      )
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -181,6 +222,14 @@ jobs:
   rider-app-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
+        needs.detect-changes.outputs.rider == 'true'
+      )
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -223,6 +272,14 @@ jobs:
   admin-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [detect-changes]
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result != 'success' ||
+        needs.detect-changes.outputs.workflows == 'true' ||
+        needs.detect-changes.outputs.admin == 'true'
+      )
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -275,8 +332,21 @@ jobs:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [backend-test]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    needs: [detect-changes, backend-test]
+    # Phase 2: unchanged on a push to main (still always runs, blocking --
+    # this is the last line of defense before main, never path-filtered).
+    # On a pull_request, additionally requires admin-dashboard/** to have
+    # changed (or the filter to have failed) -- this suite tests the admin
+    # dashboard specifically.
+    if: |
+      always() && (
+        github.ref == 'refs/heads/main' ||
+        (github.event_name == 'pull_request' && (
+          needs.detect-changes.result != 'success' ||
+          needs.detect-changes.outputs.workflows == 'true' ||
+          needs.detect-changes.outputs.admin == 'true'
+        ))
+      )
     continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
@@ -334,6 +404,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [backend-test]
+    # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
+    # 5): deliberately NOT gated on detect-changes, unlike e2e-test above.
+    # This job already self-skips to a near-zero-cost checkout + `find`
+    # (see "Check for committed visual baselines" below -- no baselines
+    # are committed yet), so there's negligible runtime left to save, and
+    # it's always continue-on-error already. Adding filter logic here
+    # would be complexity with no real turnaround-time payoff.
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     continue-on-error: true
     defaults:
@@ -423,8 +500,20 @@ jobs:
     name: Rider app E2E tests (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [rider-app-test]
-    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    needs: [detect-changes, rider-app-test]
+    # Phase 2: same pattern as e2e-test above -- unchanged on a push to
+    # main (always runs); on a pull_request, additionally requires
+    # rider-app/** (or shared/**, via detect-changes' own rider filter) to
+    # have changed.
+    if: |
+      always() && (
+        github.ref == 'refs/heads/main' ||
+        (github.event_name == 'pull_request' && (
+          needs.detect-changes.result != 'success' ||
+          needs.detect-changes.outputs.workflows == 'true' ||
+          needs.detect-changes.outputs.rider == 'true'
+        ))
+      )
     continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
@@ -474,8 +563,17 @@ jobs:
     name: Driver app E2E tests (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [driver-app-test]
-    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    needs: [detect-changes, driver-app-test]
+    # Phase 2: same pattern as rider-app-e2e above, scoped to driver.
+    if: |
+      always() && (
+        github.ref == 'refs/heads/main' ||
+        (github.event_name == 'pull_request' && (
+          needs.detect-changes.result != 'success' ||
+          needs.detect-changes.outputs.workflows == 'true' ||
+          needs.detect-changes.outputs.driver == 'true'
+        ))
+      )
     continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
@@ -657,6 +755,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [backend-test]
+    # Phase 2: no explicit `if:` here is deliberate -- this job has no
+    # custom condition of its own, so it uses GitHub Actions' implicit
+    # default (`if: success()` on its `needs`). Now that backend-test is
+    # gated (see above), a skipped backend-test automatically cascades to
+    # a skipped docker-image-scan too -- correct, since this builds and
+    # scans the backend Docker image, which is a pure function of
+    # backend/Dockerfile + backend/**. No separate condition needed.
     permissions:
       contents: read
       security-events: write

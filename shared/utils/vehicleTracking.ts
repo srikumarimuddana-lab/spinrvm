@@ -146,3 +146,71 @@ export function shortestArcRotationTarget(current: number, targetBearing: number
   else if (delta < -180) delta += 360;
   return current + delta;
 }
+
+/** Where a chosen bearing came from. `route`/`travel` are movement-derived. */
+export type BearingSource = 'route' | 'travel' | 'heading' | 'none';
+
+export interface BearingSelection {
+  /** Compass bearing 0–359, or null when nothing trustworthy is available. */
+  bearing: number | null;
+  source: BearingSource;
+}
+
+/**
+ * Choose which way the car should point for one position update.
+ *
+ * Priority: route segment → direction of travel → the reported GPS heading.
+ *
+ * Movement deliberately outranks the reported heading. A reported heading is
+ * not trustworthy across platforms: iOS sets `CLLocation.course` to -1 when it
+ * is invalid, but Android's `Location` carries a SEPARATE `hasBearing()` flag
+ * and `getBearing()` returns `0.0` when that flag is false — so "this fix has
+ * no course" reaches JS as a literal `0`, indistinguishable from genuinely
+ * driving due north. While the reported heading ranked above the travel
+ * fallback, that placeholder won every comparison and pinned the marker to
+ * north on east–west streets while the car slid sideways across the map
+ * (live-testing reports 2026-08-21 and 2026-08-28).
+ *
+ * Demoting it costs nothing for a driver who really is heading north: two
+ * fixes apart on a northbound street measure ~0 from movement anyway.
+ *
+ * `hasMovementBearing` carries whether movement has EVER established a bearing
+ * for this marker. Once it has, a reported heading is ignored entirely, so a
+ * placeholder 0 arriving while the car waits at a light cannot spin a
+ * known-westbound car back to north.
+ *
+ * Pure, so every branch is testable without a device or a map.
+ */
+export function selectBearing(params: {
+  /** Result of snapping this fix to the route, or null when off-route/no route. */
+  snap: RouteSnapResult | null;
+  movedMeters: number;
+  /** Previous rendered position — the travel bearing is measured from here. */
+  from: TrackingLatLng;
+  /** Position being rendered now. */
+  to: TrackingLatLng;
+  /** Raw `coords.heading` as reported by the platform. */
+  heading: number | null | undefined;
+  hasMovementBearing: boolean;
+  minMoveMeters: number;
+}): BearingSelection {
+  const { snap, movedMeters, from, to, heading, hasMovementBearing, minMoveMeters } = params;
+
+  if (snap && movedMeters >= minMoveMeters) {
+    return { bearing: snap.bearing, source: 'route' };
+  }
+  if (movedMeters >= minMoveMeters) {
+    return {
+      bearing: bearingDegrees(from.latitude, from.longitude, to.latitude, to.longitude),
+      source: 'travel',
+    };
+  }
+  // Under the movement threshold (stopped, or GPS jitter). A reported heading
+  // is the best evidence available only while movement has never produced one.
+  const reported =
+    heading != null && Number.isFinite(heading) && heading >= 0 ? heading : null;
+  if (reported != null && !hasMovementBearing) {
+    return { bearing: reported, source: 'heading' };
+  }
+  return { bearing: null, source: 'none' };
+}

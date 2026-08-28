@@ -9,6 +9,7 @@
 import {
   bearingDegrees,
   distanceMeters,
+  selectBearing,
   shortestArcRotationTarget,
   snapToRoute,
 } from '@shared/utils/vehicleTracking';
@@ -99,5 +100,83 @@ describe('shortestArcRotationTarget', () => {
   it('handles negative accumulated rotation', () => {
     // -350 normalizes to 10; target 350 -> shortest arc is -20 -> -370.
     expect(shortestArcRotationTarget(-350, 350)).toBe(-370);
+  });
+});
+
+describe('selectBearing — bearing source priority', () => {
+  // Westbound along Regina Ave: same latitude, decreasing longitude.
+  const FROM = { latitude: 50.4383, longitude: -104.62 };
+  const WEST_OF_IT = { latitude: 50.4383, longitude: -104.6203 }; // ~21 m west
+  const NORTH_OF_IT = { latitude: 50.43848, longitude: -104.62 }; // ~20 m north
+  const MIN_MOVE = 3;
+
+  const base = {
+    snap: null,
+    from: FROM,
+    to: WEST_OF_IT,
+    heading: null as number | null,
+    hasMovementBearing: false,
+    minMoveMeters: MIN_MOVE,
+  };
+
+  it('REGRESSION: a reported heading of 0 does not beat westbound movement', () => {
+    // Android's Location has a separate hasBearing() flag; getBearing()
+    // returns 0.0 when it is false, so "no course" arrives as a literal 0.
+    // While that outranked the travel fallback, the marker slid west across
+    // the map still pointing due north (live testing, Regina Ave).
+    const r = selectBearing({ ...base, movedMeters: 21, heading: 0 });
+    expect(r.source).toBe('travel');
+    expect(r.bearing).toBeCloseTo(270, 0);
+  });
+
+  it('does not over-correct: a genuine northbound course still reads ~0', () => {
+    // Demoting the reported heading must not cost a real due-north bearing —
+    // movement measures it independently.
+    const r = selectBearing({ ...base, to: NORTH_OF_IT, movedMeters: 20, heading: 0 });
+    expect(r.source).toBe('travel');
+    expect(r.bearing).toBeCloseTo(0, 0);
+  });
+
+  it('a route segment still outranks everything', () => {
+    const snap = {
+      coordinate: WEST_OF_IT,
+      bearing: 265,
+      segmentIndex: 0,
+      deviationMeters: 4,
+    };
+    const r = selectBearing({ ...base, snap, movedMeters: 21, heading: 90 });
+    expect(r.source).toBe('route');
+    expect(r.bearing).toBe(265);
+  });
+
+  it('uses the reported heading below the movement threshold, before any movement bearing', () => {
+    // Cold start, car stationary: a reported heading is the only evidence.
+    const r = selectBearing({ ...base, movedMeters: 1, heading: 137 });
+    expect(r.source).toBe('heading');
+    expect(r.bearing).toBe(137);
+  });
+
+  it('REGRESSION: a stationary reported 0 cannot spin an established bearing to north', () => {
+    // Westbound driver stopped at a light. Movement has already established
+    // 270; a placeholder 0 arriving now must be ignored, not applied.
+    const r = selectBearing({
+      ...base,
+      movedMeters: 1,
+      heading: 0,
+      hasMovementBearing: true,
+    });
+    expect(r.source).toBe('none');
+    expect(r.bearing).toBeNull();
+  });
+
+  it('treats -1 (iOS invalid course) and null as no heading', () => {
+    expect(selectBearing({ ...base, movedMeters: 1, heading: -1 }).source).toBe('none');
+    expect(selectBearing({ ...base, movedMeters: 1, heading: null }).source).toBe('none');
+    expect(selectBearing({ ...base, movedMeters: 1, heading: NaN }).source).toBe('none');
+  });
+
+  it('ignores sub-threshold movement rather than deriving from jitter', () => {
+    const r = selectBearing({ ...base, movedMeters: MIN_MOVE - 0.5, heading: null });
+    expect(r.source).toBe('none');
   });
 });

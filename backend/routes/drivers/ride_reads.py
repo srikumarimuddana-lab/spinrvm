@@ -243,8 +243,8 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 
 @router.get("/rides/history")
 async def get_ride_history(
-    limit: int = Query(20),
-    offset: int = Query(0),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     status: Optional[str] = Query(None),
     period: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),

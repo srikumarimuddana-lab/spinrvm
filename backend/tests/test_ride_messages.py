@@ -28,13 +28,12 @@ class TestGetRideMessages:
 
         with (
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            # First call: driver lookup (user is the rider → no driver row)
-            # Second call: ride_messages fetch
-            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=[[], messages_data])),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=messages_data)),
         ):
             from backend.routes.rides import get_ride_messages
 
-            result = await get_ride_messages("ride_1", current_user={"id": "user_1"})
+            # "_driver" is None — this user is the rider, not a driver
+            result = await get_ride_messages("ride_1", current_user={"id": "user_1", "_driver": None})
             assert result["success"] is True
             assert len(result["messages"]) == 2
 
@@ -48,7 +47,7 @@ class TestGetRideMessages:
             from backend.routes.rides import get_ride_messages
 
             with pytest.raises(HTTPException) as exc_info:
-                await get_ride_messages("ride_1", current_user={"id": "stranger"})
+                await get_ride_messages("ride_1", current_user={"id": "stranger", "_driver": None})
             assert exc_info.value.status_code == 403
 
     async def test_ride_not_found_returns_404(self):

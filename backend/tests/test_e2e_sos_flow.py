@@ -154,8 +154,7 @@ class TestSOSDriverTrigger:
 
         with (
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
-            # get_rows returns the driver row when queried by user_id
-            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[driver_row])),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
             patch("backend.routes.rides._deps.db_supabase.insert_one", insert_mock),
             patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
@@ -163,7 +162,8 @@ class TestSOSDriverTrigger:
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
                 body=_sos_request(),
-                current_user={"id": DRIVER_USER_ID},
+                # "_driver" is what get_current_user attaches for a driver account
+                current_user={"id": DRIVER_USER_ID, "_driver": driver_row},
             )
 
         _, incident = insert_mock.call_args[0]
@@ -183,16 +183,13 @@ class TestSOSAuthGuards:
 
         ride = _active_ride()  # rider_id = RIDER_ID, driver_id = DRIVER_ID
 
-        with (
-            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            # get_rows returns empty list — requester is not this ride's driver
-            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
-        ):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.trigger_emergency(
                     ride_id=RIDE_ID,
                     body=_sos_request(),
-                    current_user={"id": "stranger_user"},
+                    # "_driver" is None — the requester has no driver row at all
+                    current_user={"id": "stranger_user", "_driver": None},
                 )
 
         assert exc.value.status_code == 403

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -67,8 +67,8 @@ class UserStatusRequest(BaseModel):
 
 @router.get("/users")
 async def admin_get_users(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     search: Optional[str] = None,
     role: Optional[str] = None,
 ):
@@ -131,7 +131,10 @@ async def admin_get_users(
 class UserSearchRequest(BaseModel):
     search: str
     role: Optional[str] = "all"
-    limit: int = 5
+    # Bounded on the model: this POST path does not go through the
+    # GET /admin/users query-param signature, so a Query(le=...) there
+    # would not constrain it.
+    limit: int = Field(5, ge=1, le=200)
 
 
 @router.post("/users/search")
@@ -486,8 +489,8 @@ async def admin_export_users(
 @router.get("/dsars")
 async def admin_list_dsars(
     status: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     admin: dict = Depends(get_admin_user),
 ):
     """DV-17: List PIPEDA data-export requests with SLA deadline tracking.

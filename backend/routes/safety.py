@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
-    from ..dependencies import get_current_user
+    from ..dependencies import driver_row_for, get_current_user
     from ..documents import _resolve_upload_type, read_upload_capped
     from ..features import notify_safety_team
     from ..services.zoho_desk_integration import create_ticket_for_safety
@@ -25,7 +25,7 @@ try:
     from ..utils.background import spawn as _spawn
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import driver_row_for, get_current_user
     from documents import _resolve_upload_type, read_upload_capped  # type: ignore
     from features import notify_safety_team
     from services.zoho_desk_integration import create_ticket_for_safety
@@ -79,8 +79,9 @@ async def submit_safety_report(
             _is_rider = _ride.get("rider_id") == user_id
             _driver_row = None
             if not _is_rider:
-                _driver_rows = await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
-                _driver_row = _driver_rows[0] if _driver_rows else None
+                # Reuses the row auth already fetched; only the immutable id is
+                # read, so the 30s cache window is immaterial here.
+                _driver_row = await driver_row_for(current_user)
             _is_driver = bool(_driver_row) and _ride.get("driver_id") == _driver_row["id"]
             if _is_rider or _is_driver:
                 verified_ride_id = body.ride_context.ride_id

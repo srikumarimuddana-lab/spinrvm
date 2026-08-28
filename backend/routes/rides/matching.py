@@ -818,15 +818,20 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     for driver, eta_sec, _ in ranked:
         if len(claimed_drivers) >= max_offers:
             break
-        if await _deps.db_supabase.claim_driver_atomic(driver["id"]):
-            fresh = await _deps.db_supabase.get_driver_by_id(driver["id"])
+        fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+        if fresh:
+            # The claim's own UPDATE returns the post-claim row, so no follow-up
+            # get_driver_by_id is needed — and that read was guaranteed uncached
+            # anyway, because claim_driver_atomic invalidates the cache entry on
+            # both sides of the update. Up to max_offers of those per attempt.
+            #
             # Revalidate the FULL eligibility set on the freshly-read row, not
             # just is_online. claim_driver_atomic only guards id + is_available,
             # so an admin who suspended the driver or flipped them back to
             # needs_review between the candidate read and the claim would
             # otherwise still get offered — the exact stale-status case the
             # candidate filter (is_verified + status='active') is meant to stop.
-            if fresh and fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
+            if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
                 claimed_drivers.append((fresh, eta_sec))
             else:
                 await _deps.db_supabase.set_driver_available(driver["id"], True)

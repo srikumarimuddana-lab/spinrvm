@@ -78,7 +78,7 @@ async def test_match_driver_to_ride_counts_offers_sent():
             AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
         ),
         patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
-        patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+        patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=_driver())),
         patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
         patch(
             "backend.routes.rides._deps.db_supabase.get_user_by_id",

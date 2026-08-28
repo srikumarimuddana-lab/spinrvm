@@ -19,7 +19,7 @@ so this file closes:
   otherwise-`available=False` release (still needs a read for the increment).
 - `match_and_claim_driver`: no-supabase, driver found (cache invalidated),
   no eligible driver (None, no invalidation).
-- `claim_driver_atomic`: no-supabase, claim won, claim lost (race).
+- `claim_driver_atomic`: no-supabase, claim won (returns the row), claim lost (race).
 - `update_acceptance_rate`: no-supabase early return, EWMA math for
   accepted/rejected, and the swallow-on-exception branch (no re-raise).
 - `claim_ride_atomic`: no-supabase, claim won, claim lost.
@@ -408,14 +408,16 @@ class TestMatchAndClaimDriver:
 
 
 class TestClaimDriverAtomic:
-    async def test_no_supabase_returns_false(self):
+    async def test_no_supabase_returns_none(self):
         from backend.repositories import driver_repo
 
         with (
             patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()),
             patch.object(driver_repo, "supabase", None),
         ):
-            assert await driver_repo.claim_driver_atomic("d1") is False
+            # Falsy, as before — the helper now returns the claimed row, so the
+            # no-claim answer is None rather than False.
+            assert await driver_repo.claim_driver_atomic("d1") is None
 
     async def test_claim_won(self):
         from backend.repositories import driver_repo
@@ -430,7 +432,10 @@ class TestClaimDriverAtomic:
             patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()) as mock_invalidate,
         ):
             claimed = await driver_repo.claim_driver_atomic("d1")
-        assert claimed is True
+        # The CLAIMED ROW, not a bool: dispatch revalidates eligibility on it
+        # instead of issuing a follow-up get_driver_by_id that this function's
+        # own cache invalidation guarantees would miss.
+        assert claimed == {"id": "d1"}
         # Invalidated before AND after a successful claim.
         assert mock_invalidate.await_count == 2
 
@@ -445,7 +450,7 @@ class TestClaimDriverAtomic:
             patch.object(driver_repo, "invalidate_driver_cache", AsyncMock()) as mock_invalidate,
         ):
             claimed = await driver_repo.claim_driver_atomic("d1")
-        assert claimed is False
+        assert claimed is None
         # Only the pre-claim invalidation happened, not the post-claim one.
         assert mock_invalidate.await_count == 1
 

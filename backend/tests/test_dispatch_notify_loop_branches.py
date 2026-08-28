@@ -173,7 +173,7 @@ async def test_full_notify_loop_happy_path_builds_dispatch_payload():
 
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex", "rating": 4.9, "profile_image": None})
         mock_db.supabase.table = MagicMock(side_effect=_table_router(table_responses))
@@ -208,7 +208,7 @@ async def test_quest_progress_lookup_failure_is_non_fatal():
 
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex"})
 
@@ -265,7 +265,7 @@ async def test_offer_card_url_signing_failure_is_non_fatal():
     ):
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex"})
         mock_db.run_sync = AsyncMock(return_value=MagicMock(data=[]))
@@ -320,7 +320,7 @@ async def test_eta_ranking_failure_falls_back_to_haversine():
     ):
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex"})
         mock_db.run_sync = AsyncMock(return_value=MagicMock(data=[]))
@@ -348,7 +348,7 @@ async def test_push_notification_failure_is_non_fatal():
 
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex"})
         mock_db.run_sync = AsyncMock(return_value=MagicMock(data=[]))
@@ -427,8 +427,7 @@ async def test_quest_progress_is_one_batched_query_for_the_whole_offer_batch():
 
         mock_db.get_rows = AsyncMock(return_value=drivers)
         mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
-        mock_db.get_driver_by_id = AsyncMock(side_effect=lambda did: next(d for d in drivers if d["id"] == did))
+        mock_db.claim_driver_atomic = AsyncMock(side_effect=lambda did: next(d for d in drivers if d["id"] == did))
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex", "rating": 4.9, "profile_image": None})
         mock_db.supabase.table = MagicMock(side_effect=_counting_router)
         mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())

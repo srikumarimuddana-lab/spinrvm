@@ -54,7 +54,7 @@ jest.mock('@shared/components/ErrorBoundary', () => ({
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   const MapView = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn(), animateToRegion: jest.fn() }));
+    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn(), animateToRegion: jest.fn(), animateCamera: jest.fn() }));
     return ReactActual.createElement('MapView', props, props.children);
   });
   return { __esModule: true, default: MapView, PROVIDER_GOOGLE: 'google' };

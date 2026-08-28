@@ -41,6 +41,9 @@ import { useTranslation } from '../i18n';
 import { getRideMapCoords } from '../utils/rideMapCoords';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
+// After the rider pans the map, the follow-car camera stays paused this long.
+const FOLLOW_RESUME_MS = 10_000;
+
 function DriverArrivingScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -266,7 +269,20 @@ function DriverArrivingScreenContent() {
     // stale comparison.
   }, [currentRide?.status, currentRide?.id, rideId, router, clearRide]);
 
-  // ── Map fitting ──
+  // ── Map camera ──
+  // One pickup+driver framing when the driver's first fix (or a new driver /
+  // orientation change) arrives, then smoothly follow the car on subsequent
+  // fixes. The previous version re-ran fitToCoordinates on EVERY driver GPS
+  // update (~every 4 s), restarting a camera fly-to each time — the map
+  // visibly lurched during the whole arriving phase (live-testing feedback,
+  // Regina Ave 2026-08-28). Panning pauses following; resumes automatically.
+  const didInitialFitRef = useRef(false);
+  const followPausedUntilRef = useRef(0);
+  // Re-frame when the assigned driver changes (re-assignment) or the screen
+  // orientation changes the usable map area.
+  useEffect(() => {
+    didInitialFitRef.current = false;
+  }, [currentDriver?.id, SCREEN_HEIGHT]);
   useEffect(() => {
     // rideCoords is derived from currentRide via getRideMapCoords(), which
     // returns null whenever currentRide is null/falsy — so checking
@@ -274,19 +290,24 @@ function DriverArrivingScreenContent() {
     // on (or depend on) currentRide itself.
     if (rideCoords?.pickupLat != null && rideCoords?.pickupLng != null && mapRef.current) {
       if (currentDriver?.lat != null && currentDriver?.lng != null) {
-        mapRef.current.fitToCoordinates(
-          [
-            { latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng },
-            { latitude: currentDriver.lat, longitude: currentDriver.lng },
-          ],
-          { edgePadding: { top: 80, right: 50, bottom: SCREEN_HEIGHT * 0.5, left: 50 }, animated: true },
-        );
+        if (!didInitialFitRef.current) {
+          didInitialFitRef.current = true;
+          mapRef.current.fitToCoordinates(
+            [
+              { latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng },
+              { latitude: currentDriver.lat, longitude: currentDriver.lng },
+            ],
+            { edgePadding: { top: 80, right: 50, bottom: SCREEN_HEIGHT * 0.5, left: 50 }, animated: true },
+          );
+        } else if (Date.now() >= followPausedUntilRef.current) {
+          // Keep the rider's zoom; glide the center to the approaching car.
+          mapRef.current.animateCamera(
+            { center: { latitude: currentDriver.lat, longitude: currentDriver.lng } },
+            { duration: 800 },
+          );
+        }
       }
     }
-    // SCREEN_HEIGHT is a primitive from useWindowDimensions() — adding it
-    // means the map correctly refits on an orientation change too (a real,
-    // if minor, improvement — previously a rotation wouldn't have re-fit the
-    // bottom edge padding until some other dep also changed).
   }, [currentDriver?.lat, currentDriver?.lng, rideCoords?.pickupLat, rideCoords?.pickupLng, SCREEN_HEIGHT]);
 
   // ── Cancel handler (fixed: errors are caught, user stays on page) ──
@@ -408,6 +429,11 @@ function DriverArrivingScreenContent() {
             latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng,
             latitudeDelta: 0.02, longitudeDelta: 0.02,
           }}
+          onPanDrag={() => {
+            // Rider is looking around — pause the follow-car camera so it
+            // doesn't yank the map back; resumes after the pause window.
+            followPausedUntilRef.current = Date.now() + FOLLOW_RESUME_MS;
+          }}
         >
           {/* Driver → pickup route: origin is snapshotted on first driver fix so
               MapViewDirections only calls Directions API once per assigned driver.
@@ -461,10 +487,13 @@ function DriverArrivingScreenContent() {
             dropoff={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
           />
 
-          {/* Driver car */}
+          {/* Driver car — snapped to the driver→pickup route so it stays on
+              the road and faces along it between GPS fixes. */}
           {currentDriver?.lat != null && currentDriver?.lng != null && (
             <CarMarker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
-              heading={(currentDriver as any).heading} size={44} zIndex={105} />
+              heading={(currentDriver as any).heading}
+              routeCoordinates={driverRouteCoords.length > 1 ? driverRouteCoords : null}
+              size={44} zIndex={105} />
           )}
           {serviceAreaPolygons.map((coords, idx) => (
             <Polygon

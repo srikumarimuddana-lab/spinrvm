@@ -190,6 +190,12 @@ jobs:
           # No restore-keys: a partial restore from an older key keeps a
           # node_modules with prior patch hunks already applied, then
           # patch-package fails to re-apply on top. Force a clean miss.
+          # SHARED-KEY INVARIANT (2026-08-28): this combined cache action saves
+          # node_modules in a POST step, after every later step has run. Keep this
+          # job free of anything that mutates node_modules after `yarn install
+          # --frozen-lockfile`, or switch to the restore/save split used in
+          # mobile-dep-check.yml — a post-mutation save under this shared key
+          # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
           key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Install dependencies
@@ -243,6 +249,12 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: rider-app/node_modules
+          # SHARED-KEY INVARIANT (2026-08-28): this combined cache action saves
+          # node_modules in a POST step, after every later step has run. Keep this
+          # job free of anything that mutates node_modules after `yarn install
+          # --frozen-lockfile`, or switch to the restore/save split used in
+          # mobile-dep-check.yml — a post-mutation save under this shared key
+          # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
 
       - name: Install dependencies
@@ -529,6 +541,12 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: rider-app/node_modules
+          # SHARED-KEY INVARIANT (2026-08-28): this combined cache action saves
+          # node_modules in a POST step, after every later step has run. Keep this
+          # job free of anything that mutates node_modules after `yarn install
+          # --frozen-lockfile`, or switch to the restore/save split used in
+          # mobile-dep-check.yml — a post-mutation save under this shared key
+          # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
 
       - name: Install dependencies
@@ -589,6 +607,12 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: driver-app/node_modules
+          # SHARED-KEY INVARIANT (2026-08-28): this combined cache action saves
+          # node_modules in a POST step, after every later step has run. Keep this
+          # job free of anything that mutates node_modules after `yarn install
+          # --frozen-lockfile`, or switch to the restore/save split used in
+          # mobile-dep-check.yml — a post-mutation save under this shared key
+          # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
           key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Install dependencies

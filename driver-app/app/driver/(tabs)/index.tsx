@@ -680,6 +680,7 @@ function DriverDashboard() {
             isOnline={isOnline}
             variant={markerVariant}
             imageUri={markerImageUri}
+            routeCoordinates={routeCoords.length > 1 ? routeCoords : null}
           />
         )}
         <RoutePins pickup={pickupPoint} dropoff={dropoffPoint} />

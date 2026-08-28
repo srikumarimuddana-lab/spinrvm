@@ -65,9 +65,15 @@ const AUTH_WATCHDOG_MS = 10000;
 const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval: number; accuracy: Location.Accuracy }> = {
   idle:                  { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
   ride_offered:          { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
-  navigating_to_pickup:  { timeInterval: 4_000,  distanceInterval: 10, accuracy: Location.Accuracy.High },
+  // Pickup/trip phases tightened 4s/10m + 3s/8m → 2s/5m (2026-08-28): the
+  // rider-side car marker animates between fixes, and a 3-4 s gap between
+  // real positions reads as laggy/teleporting on the rider's map. Cost:
+  // ~1.5-2× trip-location point volume (every trip-phase fix is durably
+  // recorded — see tripLocationRecorder) and a modest battery increase,
+  // accepted for launch-quality live tracking.
+  navigating_to_pickup:  { timeInterval: 2_000,  distanceInterval: 5,  accuracy: Location.Accuracy.High },
   arrived_at_pickup:     { timeInterval: 8_000,  distanceInterval: 20, accuracy: Location.Accuracy.Balanced },
-  trip_in_progress:      { timeInterval: 3_000,  distanceInterval: 8,  accuracy: Location.Accuracy.High },
+  trip_in_progress:      { timeInterval: 2_000,  distanceInterval: 5,  accuracy: Location.Accuracy.High },
   trip_completed:        { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
 };
 
@@ -450,7 +456,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
         if (saved) {
           const { lat, lng } = JSON.parse(saved);
-          setLocation({ coords: { latitude: lat, longitude: lng, heading: 0, speed: 0, accuracy: 100, altitude: 0 }, timestamp: Date.now() } as any);
+          // heading -1 = "unknown" (expo-location convention) — a cached fix has
+          // no direction; 0 would render the car pointing due north across
+          // east-west streets until the first real GPS heading arrived.
+          setLocation({ coords: { latitude: lat, longitude: lng, heading: -1, speed: 0, accuracy: 100, altitude: 0 }, timestamp: Date.now() } as any);
         }
       } catch {}
     }

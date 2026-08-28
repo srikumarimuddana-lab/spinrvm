@@ -39,6 +39,9 @@ import { useTranslation } from '../i18n';
 
 // Straight-line ETA at urban speed — used during trip so we don't re-call
 // the Directions API on every GPS ping (that would be ~60 calls / 15-min ride).
+// After the rider pans the map, the follow-car camera stays paused this long.
+const FOLLOW_RESUME_MS = 10_000;
+
 function _haversineEtaMin(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371;
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -119,6 +122,14 @@ function RideInProgressScreenContent() {
     [isLandscape]
   );
 
+  // Camera: ONE framing per ride (driver + dropoff), then smoothly follow
+  // the car on each GPS update. The previous version re-ran fitToCoordinates
+  // on every driver position change (~every 3 s), restarting a camera fly-to
+  // each time — the whole map lurched even while the marker itself glided
+  // (live-testing feedback, Regina Ave 2026-08-28). Panning pauses following
+  // so the rider can look around; it resumes after FOLLOW_RESUME_MS.
+  const didInitialFitRef = React.useRef(false);
+  const followPausedUntilRef = React.useRef(0);
   useEffect(() => {
     // Snapshot props at effect entry — the closure shouldn't reach into
     // currentRide / currentDriver after an async state change. Driver lat/
@@ -140,17 +151,26 @@ function RideInProgressScreenContent() {
     const dropLat = ride.dropoff_lat;
     const dropLng = ride.dropoff_lng;
 
-    if (isCoord(dLat) && isCoord(dLng) && isCoord(dropLat) && isCoord(dropLng)) {
-      map.fitToCoordinates(
-        [
-          { latitude: dLat, longitude: dLng },
-          { latitude: dropLat, longitude: dropLng },
-        ],
-        {
-          edgePadding: { top: 50, right: 50, bottom: 250, left: 50 },
-          animated: true,
-        }
-      );
+    if (isCoord(dLat) && isCoord(dLng)) {
+      if (!didInitialFitRef.current && isCoord(dropLat) && isCoord(dropLng)) {
+        didInitialFitRef.current = true;
+        map.fitToCoordinates(
+          [
+            { latitude: dLat, longitude: dLng },
+            { latitude: dropLat, longitude: dropLng },
+          ],
+          {
+            edgePadding: { top: 50, right: 50, bottom: 250, left: 50 },
+            animated: true,
+          }
+        );
+      } else if (Date.now() >= followPausedUntilRef.current) {
+        // Keep the rider's current zoom — only glide the center to the car.
+        map.animateCamera(
+          { center: { latitude: dLat, longitude: dLng } },
+          { duration: 800 },
+        );
+      }
       return;
     }
 
@@ -653,6 +673,11 @@ function RideInProgressScreenContent() {
             showsUserLocation
             showsMyLocationButton={false}
             userInterfaceStyle={isDark ? "dark" : "light"}
+            onPanDrag={() => {
+              // Rider is looking around — stop the follow-car camera from
+              // yanking the map back; resume automatically after the pause.
+              followPausedUntilRef.current = Date.now() + FOLLOW_RESUME_MS;
+            }}
           >
             {/* Route: reuse saved polyline or store coords if available.
                 Only call Directions API when no cached route exists at all.
@@ -709,11 +734,13 @@ function RideInProgressScreenContent() {
               dropoff={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
             />
 
-            {/* Driver Car Marker */}
+            {/* Driver Car Marker — snapped to the live route so it stays on
+                the road and faces along it between GPS fixes. */}
             {currentDriver?.lat != null && currentDriver?.lng != null && (
               <CarMarker
                 coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
                 heading={(currentDriver as any).heading}
+                routeCoordinates={tripRouteCoords.length > 1 ? tripRouteCoords : null}
                 size={44}
                 zIndex={100}
               />

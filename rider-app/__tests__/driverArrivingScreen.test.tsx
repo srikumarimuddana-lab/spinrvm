@@ -62,7 +62,7 @@ const mockFitToCoordinates = jest.fn();
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   const MapView = ReactActual.forwardRef((props: any, ref: any) => {
-    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: (...a: any[]) => mockFitToCoordinates(...a) }));
+    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: (...a: any[]) => mockFitToCoordinates(...a), animateCamera: jest.fn() }));
     return ReactActual.createElement('MapView', props, props.children);
   });
   const Polygon = (props: any) => ReactActual.createElement('Polygon', props);

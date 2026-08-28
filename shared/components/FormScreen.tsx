@@ -72,7 +72,7 @@ export interface FormScreenProps {
   /** Extra offset above the keyboard (e.g. fixed header height). Default: 0. */
   keyboardVerticalOffset?: number;
   /** ScrollView ref escape hatch for screens that need imperative scroll. */
-  scrollViewRef?: React.Ref<React.ComponentRef<typeof ScrollView>>;
+  scrollViewRef?: React.Ref<ScrollView>;
   /** Override container background. Default: theme `colors.surface`. */
   style?: StyleProp<ViewStyle>;
   /** Inner content container style passthrough for the ScrollView. */

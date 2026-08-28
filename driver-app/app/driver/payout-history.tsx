@@ -206,7 +206,7 @@ export default function PayoutHistoryScreen() {
                 maxToRenderPerBatch={10}
                 windowSize={5}
                 removeClippedSubviews={true}
-                ListEmptyComponent={previousAppHistory.length === 0 ? renderEmpty : undefined}
+                ListEmptyComponent={previousAppHistory.length === 0 ? renderEmpty : null}
                 ListFooterComponent={
                     previousAppHistory.length > 0 ? (
                         <View>
@@ -224,7 +224,7 @@ export default function PayoutHistoryScreen() {
                                 <React.Fragment key={item.id}>{renderPayoutItem({ item })}</React.Fragment>
                             ))}
                         </View>
-                    ) : undefined
+                    ) : null
                 }
                 refreshControl={
                     <SafeRefreshControl

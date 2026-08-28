@@ -135,11 +135,6 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     routeCoordinates,
 }) => {
     const markerRef = useRef<any>(null);
-    // RN 0.87's stricter Animated typings drop the implicit `children` on
-    // Marker.Animated; re-add it (type-level only, no runtime change).
-    const AnimatedMarker = Marker.Animated as unknown as React.ComponentType<
-        React.ComponentProps<typeof Marker> & { children?: React.ReactNode; ref?: React.Ref<unknown> }
-    >;
     const animatedRegion = useRef(
         new AnimatedRegion({
             latitude: coordinate.latitude,
@@ -304,7 +299,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     const useCustomImage = !!imageUri && !imageFailed;
 
     return (
-        <AnimatedMarker
+        <Marker.Animated
             ref={markerRef}
             coordinate={animatedRegion as any}
             anchor={{ x: 0.5, y: 0.5 }}
@@ -337,7 +332,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     }}
                 />
             </View>
-        </AnimatedMarker>
+        </Marker.Animated>
     );
 };
 

@@ -43,7 +43,7 @@ export default function LegalScreen() {
             : undefined;
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
-    const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+    const scrollRef = useRef<ScrollView>(null);
     const privacyY = useRef(0);
     const tosY = useRef(0);
 

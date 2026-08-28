@@ -44,7 +44,7 @@ export default function VehicleInfoScreen() {
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [saving, setSaving] = useState(false);
 
-    const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+    const scrollRef = useRef<ScrollView>(null);
 
     const [form, setForm] = useState({
         vehicle_type_id: '',

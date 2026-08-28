@@ -615,7 +615,7 @@ export default function ActivityView() {
       renderItem={renderRideCard}
       ListHeaderComponent={listHeader}
       ListEmptyComponent={
-        loading ? undefined : (
+        loading ? null : (
           <View style={styles.ridesSection}>
             <View style={styles.emptyState}>
               <Ionicons name="car-sport-outline" size={48} color="#d1d5db" />
@@ -641,7 +641,7 @@ export default function ActivityView() {
               )}
             </TouchableOpacity>
           </View>
-        ) : undefined
+        ) : null
       }
       initialNumToRender={8}
       maxToRenderPerBatch={8}

@@ -78,7 +78,7 @@ export default function CancelReasonSheet({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { if (!isPending) onClose(); }}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => !isPending && onClose()}>
       <Pressable style={styles.backdrop} onPress={() => !isPending && onClose()} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

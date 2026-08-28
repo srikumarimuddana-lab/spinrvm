@@ -18,16 +18,11 @@ This is a thin HTTP wrapper only. All matching/validation/write logic is
 ``scripts/backfill_legacy_driver_sin_dob.py`` already calls from the CLI.
 Nothing here re-implements that logic.
 
-CSV parsing note: ``driver_import_service.py`` has no in-memory
-(text-based), raw-column-preserving Mongo-export reader as of this branch
-(only ``read_mongo_export_csv(path: Path)``, which reads from disk — fine
-for the CLI, not for an uploaded file). ``_parse_mongo_csv_text`` below is a
-local, route-layer mirror of that function's exact body (preserve column
-names as exported, do NOT run them through ``normalize_header`` — see
-``read_mongo_export_csv``'s own docstring for why: it would mangle this
-file's join key, ``_id``), adapted to read from an in-memory string instead
-of a path. Pure CSV parsing, not business logic, so it lives here rather
-than in the service module.
+CSV parsing: uses ``driver_import_service.py``'s
+``read_mongo_export_csv_text`` (the same raw-column-preserving, in-memory
+Mongo-export reader ``routes/admin/legacy_driver_import.py`` already uses)
+— never ``read_csv_text``/``normalize_header``, which would mangle this
+file's join key, ``_id``.
 
 Idempotency / re-commit safety: ``plan_legacy_sin_dob_import`` already skips
 anything already on file (a driver's existing ``sin``/``date_of_birth``
@@ -46,9 +41,7 @@ elsewhere in warnings) — never a SIN or DOB value.
 """
 
 import asyncio
-import csv
 import hashlib
-import io
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -87,22 +80,6 @@ MAX_CSV_BYTES = 2_000_000  # 2 MB, per file
 MAX_ROWS = 2_000  # per file
 
 
-def _parse_mongo_csv_text(text: str) -> list[dict[str, str]]:
-    """Parse a raw MongoDB-export CSV from an in-memory string, preserving
-    column names exactly as exported (no header normalization/aliasing).
-
-    Mirrors ``services/driver_import_service.py``'s ``read_mongo_export_csv``
-    body exactly, minus the file open — see that function's docstring for why
-    this file's ``_id`` column must survive untouched.
-    """
-    if text.startswith("﻿"):
-        text = text[1:]
-    reader = csv.DictReader(io.StringIO(text))
-    if not reader.fieldnames:
-        raise ValueError("CSV has no header row")
-    return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
-
-
 def _serialize_items(items: list[import_svc.ImportErrorItem]) -> list[dict[str, str]]:
     return [{"old_driver_id": i.old_driver_id, "field": i.field, "message": i.message} for i in items]
 
@@ -117,7 +94,7 @@ async def _read_one_csv(upload: UploadFile) -> tuple[list[dict[str, str]], bytes
     except UnicodeDecodeError as e:
         raise HTTPException(status_code=422, detail="CSV must be UTF-8 encoded") from e
     try:
-        rows = _parse_mongo_csv_text(text)
+        rows = import_svc.read_mongo_export_csv_text(text)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     if len(rows) > MAX_ROWS:

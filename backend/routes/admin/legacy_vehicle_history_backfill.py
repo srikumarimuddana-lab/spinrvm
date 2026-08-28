@@ -37,9 +37,7 @@ PIPEDA rules in CLAUDE.md and matching
 """
 
 import asyncio
-import csv
 import hashlib
-import io
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -85,38 +83,15 @@ def _serialize_items(items: list[import_svc.ImportErrorItem]) -> list[dict[str, 
     return [{"old_driver_id": i.old_driver_id, "field": i.field, "message": i.message} for i in items]
 
 
-def _read_mongo_export_csv_text(text: str) -> list[dict[str, str]]:
-    """Parse a raw MongoDB-export CSV's in-memory text content, preserving
-    column names exactly as exported.
-
-    This worktree's ``services/driver_import_service.py`` only has the
-    filesystem-``Path`` reader (``read_mongo_export_csv``), not an in-memory
-    ``read_mongo_export_csv_text`` sibling for an admin upload -- that helper
-    is part of the Phase 1 legacy-driver-import work landing separately on
-    the migration branch this route was written against, and isn't present
-    in this checkout as of this commit. Rather than add it to the shared
-    service module (out of this task's file boundary), this is a local
-    equivalent with identical behavior: deliberately does NOT go through
-    ``read_csv_text``/``parse_csv_rows`` -- that header-normalization pass
-    corrupts a raw Mongo export's own field names (most critically, it
-    strips ``_id``'s leading underscore to ``id``, breaking the
-    ``driver_id``/``_id`` joins ``plan_legacy_vehicle_history_backfill``
-    relies on). If/when ``read_mongo_export_csv_text`` lands in
-    ``driver_import_service.py``, this local copy should be deleted in favor
-    of it.
-    """
-    if text.startswith("﻿"):
-        text = text[1:]
-    reader = csv.DictReader(io.StringIO(text))
-    return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
-
-
 async def _read_csv(upload: UploadFile, *, max_rows: int, label: str) -> tuple[list[dict[str, str]], bytes]:
     """Return (parsed rows, raw bytes) for one uploaded Mongo-export CSV.
 
-    Uses ``_read_mongo_export_csv_text`` above, NOT ``read_csv_text`` -- the
-    latter's header normalization corrupts this export's own ``_id``/``name``
-    columns. See that function's docstring and ``read_mongo_export_csv``'s.
+    Uses ``driver_import_service.py``'s ``read_mongo_export_csv_text`` (the
+    same raw-column-preserving, in-memory Mongo-export reader
+    ``routes/admin/legacy_driver_import.py`` already uses), NOT
+    ``read_csv_text`` -- the latter's header normalization corrupts this
+    export's own ``_id``/``name`` columns. See that function's docstring and
+    ``read_mongo_export_csv``'s.
     """
     raw = await upload.read()
     if len(raw) > MAX_CSV_BYTES:
@@ -126,7 +101,7 @@ async def _read_csv(upload: UploadFile, *, max_rows: int, label: str) -> tuple[l
     except UnicodeDecodeError as e:
         raise HTTPException(status_code=422, detail=f"{label} must be UTF-8 encoded") from e
     try:
-        rows = _read_mongo_export_csv_text(text)
+        rows = import_svc.read_mongo_export_csv_text(text)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"{label}: {e}") from e
     if len(rows) > max_rows:

@@ -382,7 +382,7 @@ export default function DriverLostAndFoundChatScreen() {
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <FlatList
             data={[]}
-            renderItem={null}
+            renderItem={undefined}
             ListHeaderComponent={
               <View style={styles.reportForm}>
                 <Text style={styles.formLabel}>What did you find?</Text>

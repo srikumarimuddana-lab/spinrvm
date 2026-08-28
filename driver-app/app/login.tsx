@@ -39,7 +39,7 @@ export default function LoginScreen() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   // Explicit, unchecked-by-default consent gesture — the account-creation
   // endpoint (POST /auth/verify-otp, called from otp.tsx) rejects a
   // brand-new signup unless this was actively checked. Previously this

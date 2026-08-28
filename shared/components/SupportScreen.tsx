@@ -531,7 +531,7 @@ export default function SupportScreen({
                     <ActivityIndicator size="small" color={colors.primary} />
                   </View>
                 </View>
-              ) : null
+              ) : undefined
             }
           />
           <View style={styles.chatInputRow}>

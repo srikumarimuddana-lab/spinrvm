@@ -129,6 +129,11 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
     routeCoordinates,
 }) => {
     const markerRef = useRef<any>(null);
+    // RN 0.87's stricter Animated typings drop the implicit `children` on
+    // Marker.Animated; re-add it (type-level only, no runtime change).
+    const AnimatedMarker = Marker.Animated as unknown as React.ComponentType<
+        React.ComponentProps<typeof Marker> & { children?: React.ReactNode; ref?: React.Ref<unknown> }
+    >;
     // react-hooks/refs ("Cannot access refs during render"): AnimatedRegion
     // is the same kind of stable animation-driver object as Animated.Value
     // elsewhere in this app — mutated only via .timing() inside the
@@ -310,7 +315,7 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
     const useCustomImage = !!imageUri && !imageFailed;
 
     return (
-        <Marker.Animated
+        <AnimatedMarker
             ref={markerRef}
             coordinate={animatedRegion as any}
             anchor={{ x: 0.5, y: 0.5 }}
@@ -341,7 +346,7 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
                     }}
                 />
             </View>
-        </Marker.Animated>
+        </AnimatedMarker>
     );
 };
 

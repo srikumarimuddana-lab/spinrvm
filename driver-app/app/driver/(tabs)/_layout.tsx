@@ -46,7 +46,7 @@ export default function DriverTabsLayout() {
         options={{
           title: 'Drive',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="car-sport" size={24} color={color} />
+            <Ionicons name="car-sport" size={24} color={color as string} />
           ),
         }}
       />
@@ -55,7 +55,7 @@ export default function DriverTabsLayout() {
         options={{
           title: 'Activity',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="stats-chart" size={24} color={color} />
+            <Ionicons name="stats-chart" size={24} color={color as string} />
           ),
         }}
       />
@@ -64,7 +64,7 @@ export default function DriverTabsLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="person" size={24} color={color} />
+            <Ionicons name="person" size={24} color={color as string} />
           ),
         }}
       />

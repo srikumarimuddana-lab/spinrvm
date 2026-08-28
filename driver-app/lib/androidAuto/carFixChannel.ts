@@ -176,12 +176,18 @@ export const CARRIED_HEADING_MAX_AGE_MS = 12_000;
  * The bearing a fix should actually be stored with.
  *
  * Priority, best evidence first:
- *   1. A real GPS course on this fix.
- *   2. The direction from the previous fix, once the driver has moved
+ *   1. The direction from the previous fix, once the driver has moved
  *      MIN_COURSE_MOVE_M — and only when that fix is itself recent enough to
  *      be a baseline (MAX_COURSE_BASELINE_AGE_MS). This is the signal that is
  *      always available at road speed and always current — the one the old
  *      carry-forward hid.
+ *   2. A reported GPS course on this fix. This ranks BELOW movement, not
+ *      above it, because a reported course cannot be trusted on Android:
+ *      Location carries a separate hasBearing() flag and getBearing() returns
+ *      0.0 when it is false, so "no course" arrives as a literal 0 that is
+ *      indistinguishable from due north. Ranked first, that placeholder beat
+ *      the derived branch and pointed the icon north on every east–west
+ *      street — the same defect the phone's CarMarker had.
  *   3. The previous bearing, but only while it is younger than
  *      CARRIED_HEADING_MAX_AGE_MS.
  *   4. null. The surface treats that as "no course", which is a state it draws
@@ -201,18 +207,22 @@ export function resolveHeading(
   prevHeadingAgeMs: number,
   prevFixAgeMs: number = 0,
 ): { fix: CarLatLng; source: HeadingSource } {
-  // Negative is expo's "unknown" sentinel; null is "provider gave nothing".
-  const own = next.heading;
-  if (typeof own === 'number' && Number.isFinite(own) && own >= 0) {
-    return { fix: next, source: 'gps' };
-  }
-
+  // Movement first — see the priority note above for why a reported course
+  // does not outrank it.
   if (
     prev &&
     prevFixAgeMs <= MAX_COURSE_BASELINE_AGE_MS &&
     metresBetween(prev, next) >= MIN_COURSE_MOVE_M
   ) {
     return { fix: { ...next, heading: bearingBetween(prev, next) }, source: 'derived' };
+  }
+
+  // Negative is expo's "unknown" sentinel; null is "provider gave nothing".
+  // A 0 reaching here is accepted only because the driver has not moved far
+  // enough for a derived course, so there is nothing better to offer.
+  const own = next.heading;
+  if (typeof own === 'number' && Number.isFinite(own) && own >= 0) {
+    return { fix: next, source: 'gps' };
   }
 
   const carried = prev?.heading;

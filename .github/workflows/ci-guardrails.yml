@@ -39,6 +39,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ─── Detect changed surfaces (blast-radius-aware triggering, Phase 1) ─────
+  # docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section 2: this repo
+  # already path-filters migration-check.yml, the mobile-* workflows, and
+  # every deploy-*.yml correctly -- but ci.yml/ci-guardrails.yml/
+  # security-gates.yml run every job on every PR regardless of what changed,
+  # which is the direct cause of slow turnaround on a single-surface PR.
+  #
+  # Phase 1 (this change) wires the three gates below that were already
+  # advisory (continue-on-error: true) -- lint-trend-gate,
+  # breaking-change-gate, coverage-regression-gate -- to this filter as a
+  # low-risk trial: none of the three blocks a merge today, so a wrong
+  # filter mapping costs nothing worse than a job running when it didn't
+  # need to. Phase 2 (a follow-up, not this change) extends the same
+  # pattern to the blocking gates once this trial is observed clean across
+  # real PRs, and promotes this job into a shared `workflow_call` reusable
+  # workflow once ci.yml and security-gates.yml also need it (kept inline
+  # here for now, per CLAUDE.md "no single-use abstractions" -- one caller
+  # doesn't justify extraction yet).
+  #
+  # Uses dorny/paths-filter -- not a new dependency, already vendored and
+  # proven in this repo by eas-build.yml's own `detect` job (same pinned
+  # SHA). This workflow has no `push:` trigger at all (see `on:` above) --
+  # every dependent gate's own `if:` falls open on
+  # `github.event_name != 'pull_request'`, so a merge_group run or a manual
+  # workflow_dispatch always executes every gated job regardless of what
+  # this filter reports (it doesn't even run on those events -- see this
+  # job's own `if:` below). Path-filtering is a PR-time fast-feedback
+  # optimization only; it never gets to decide what runs on anything but a
+  # PR event.
+  #
+  # NAMING NOTE for whoever does Phase 2: the `admin` output below means
+  # `admin-dashboard/**` (the frontend surface). It is unrelated to
+  # `backend/routes/admin/` -- the directory `admin-coverage-floor-gate`
+  # tracks -- which lives under the `backend` output instead. Do not wire
+  # admin-coverage-floor-gate to `needs.detect-changes.outputs.admin`; that
+  # would scope it to admin-dashboard changes and skip it on the
+  # backend-admin-route PRs it actually exists to cover.
+  detect-changes:
+    name: Detect changed surfaces
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      admin: ${{ steps.filter.outputs.admin }} # admin-dashboard/** -- see NAMING NOTE above
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            admin:
+              - 'admin-dashboard/**'
+
   # ─── 0. Shared coverage run (feeds coverage-regression-gate and
   # money-path-coverage-floor-gate below) ───────────────────────────────────
   # ACTION_ITEMS.md C47: those two gates used to each independently run the
@@ -114,20 +169,41 @@ jobs:
   coverage-regression-gate:
     name: Coverage regression check
     runs-on: ubuntu-latest
-    needs: [shared-coverage-run]
-    # Runs regardless of shared-coverage-run's outcome (success, failure, or
-    # an external cancellation like C47) so a shared-run problem degrades
-    # this gate exactly like a missing coverage.json always has, rather than
-    # silently vanishing as "skipped" -- see the download step below.
-    if: always()
+    needs: [detect-changes, shared-coverage-run]
+    timeout-minutes: 30
+    # Gated on detect-changes' same fail-open pattern used below by
+    # lint-trend-gate/breaking-change-gate -- this gate has nothing to
+    # compare on a PR that never touched backend/, so it's included in the
+    # same Phase 1 trial even though it isn't one of the two jobs that
+    # trial's own intro comment above names; both are advisory
+    # (continue-on-error: true), matching that trial's stated safety bar.
+    # `needs.detect-changes.result == 'failure'` is the fail-open leg: if
+    # the filter itself couldn't run, default to running this job rather
+    # than silently skipping it on a PR that may have touched backend/.
+    # Also runs regardless of shared-coverage-run's own outcome (success,
+    # failure, or an external cancellation like C47) so a shared-run
+    # problem degrades this gate exactly like a missing coverage.json
+    # always has, rather than silently vanishing as "skipped" -- see the
+    # download step below.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     continue-on-error: true
     outputs:
-      # C24 (ACTION_ITEMS.md): with no CODECOV_TOKEN, base_pct always
-      # resolves to 0 and "no regression detected" and "no baseline to
-      # compare against" become indistinguishable to anyone reading just
-      # needs.coverage-regression-gate.result (continue-on-error always
-      # reports that as 'success' regardless of what happened inside).
-      # This output lets guardrail-summary render the honest distinction.
+      # C24 (ACTION_ITEMS.md) / 2026-08-27 fix (docs/audit/2026-08-27-cicd-
+      # gates-guardrails-audit.md Section 3): this gate used to depend on a
+      # CODECOV_TOKEN secret that was never provisioned (no one has Codecov
+      # account access to create one), so base_pct always resolved to 0 and
+      # "no regression detected" was indistinguishable from "no baseline to
+      # compare against." Fixed by computing the base-branch baseline
+      # locally instead (see "Compute base-branch coverage" below) --
+      # removes the third-party dependency entirely rather than waiting on
+      # a token that may never arrive. This output still lets
+      # guardrail-summary render an honest distinction for the remaining
+      # failure mode (the base-commit pytest run itself failing outright).
       baseline_status: ${{ steps.assert_no_regression.outputs.baseline_status }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -170,20 +246,107 @@ jobs:
                   f.write('0')
           "
 
-      - name: Fetch base branch coverage from Codecov
-        id: base_coverage
+      - name: Resolve merge-base SHA
+        id: mb
         env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-          BASE_BRANCH: ${{ github.base_ref || inputs.base_branch }}
-          REPO: ${{ github.repository }}
+          # Preserves the pre-existing workflow_dispatch `base_branch` input
+          # (on: workflow_dispatch: inputs: above) -- a manual run has no
+          # pull_request.base.sha, so without this the comparison would
+          # silently always fall back to origin/main regardless of what the
+          # dispatch input asked for.
+          BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
         run: |
-          # Attempt to fetch last known coverage for base branch from Codecov API
-          BASE_PCT=$(curl -s \
-            "https://codecov.io/api/v2/github/${REPO%%/*}/repos/${REPO##*/}/branches/${BASE_BRANCH}/coverage" \
-            -H "Authorization: Bearer ${CODECOV_TOKEN}" 2>/dev/null | \
-            python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('totals',{}).get('coverage','0'))" 2>/dev/null || echo "0")
-          echo "base_pct=$BASE_PCT" >> "$GITHUB_OUTPUT"
-          echo "Base branch coverage: $BASE_PCT%"
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then
+            BASE="origin/${BASE_BRANCH_INPUT:-main}"
+          fi
+          MB=$(git merge-base "$BASE" HEAD 2>/dev/null || echo "$BASE")
+          echo "sha=$MB" >> "$GITHUB_OUTPUT"
+          echo "Merge-base: $MB"
+
+      # Self-computed baseline, replacing the Codecov API dependency above
+      # (2026-08-27 fix, see this job's own outputs comment). Cached by
+      # merge-base SHA: many PRs share the same current main tip on any
+      # given day, so only the first PR against a given base commit pays
+      # for this second full pytest run -- every later one this run gets a
+      # cache hit and skips straight to "Extract base branch coverage"
+      # below. Cache is scoped to this job only (coverage.json for one
+      # specific commit, never invalidated -- a given SHA's coverage never
+      # changes), so no staleness risk from reusing a hit.
+      - name: Cache base-branch coverage
+        id: base_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: base-coverage.json
+          key: coverage-regression-base-${{ steps.mb.outputs.sha }}
+
+      - name: Compute base-branch coverage (cache miss only)
+        if: steps.base_cache.outputs.cache-hit != 'true'
+        # Every command below already tolerates its own failure (git
+        # checkout can fail to resolve an unusual SHA, pip can hit a
+        # transient network error, pytest can crash outright) -- the step
+        # itself must not hard-stop the job when one does. Without this,
+        # a checkout failure aborts the job here (no `if: always()` on the
+        # steps after this one), leaving `baseline_status` completely
+        # unset instead of the honest 'no-baseline' the missing-file path
+        # below produces -- guardrail-summary would then render that as a
+        # plain green pass, reintroducing the exact silent-pass bug (C24)
+        # this whole gate was rewritten to close, just via a different
+        # trigger.
+        continue-on-error: true
+        working-directory: backend
+        env:
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: test_key
+          JWT_SECRET: ci-only-not-a-real-secret-000000000000
+          ADMIN_PASSWORD: ci-placeholder-password
+          ENV: test
+        run: |
+          # Detached checkout of the merge-base commit -- this job's tree is
+          # not needed again after this step (PR-branch coverage was already
+          # extracted above), so overwriting it here is safe.
+          git checkout --quiet ${{ steps.mb.outputs.sha }} || exit 0
+          pip install --require-hashes -r requirements-locked.txt --quiet \
+            || pip install -r requirements-locked.txt --quiet || true
+          pytest --cov=. --cov-report=json:../base-coverage.json -q --no-header 2>/dev/null || true
+
+          # Validate the JSON before letting the cache step (next) see it.
+          # actions/cache saves whatever exists at `path:` at job end
+          # regardless of how this step went -- an empty/corrupt file left
+          # in place would get cached under this merge-base SHA's key
+          # permanently (the key never invalidates by design), silently
+          # degrading every later PR sharing that base commit to
+          # "not verified" for the rest of the day with no way to self-heal.
+          # Deleting an invalid result here means the next PR against the
+          # same base gets a real cache miss and retries the computation
+          # fresh, instead of inheriting today's fluke.
+          python3 -c "
+          import json
+          try:
+              json.load(open('../base-coverage.json'))
+          except Exception:
+              import os
+              if os.path.exists('../base-coverage.json'):
+                  os.remove('../base-coverage.json')
+              print('Base coverage JSON invalid or missing -- not caching.')
+          "
+
+      - name: Extract base branch coverage
+        id: base_coverage
+        run: |
+          python3 -c "
+          import json
+          try:
+              data = json.load(open('base-coverage.json'))
+              pct = data['totals']['percent_covered']
+          except Exception as e:
+              print(f'Base coverage read failed: {e}')
+              pct = 0
+          print(f'base_pct={pct}')
+          " | tee /tmp/base_pct_line
+          BASE_PCT=$(grep -oE '[0-9.]+' /tmp/base_pct_line | tail -1)
+          echo "base_pct=${BASE_PCT:-0}" >> "$GITHUB_OUTPUT"
+          echo "Base branch coverage: ${BASE_PCT:-0}%"
 
       - name: Assert no regression
         id: assert_no_regression
@@ -206,26 +369,31 @@ jobs:
           github_output = os.environ["GITHUB_OUTPUT"]
           github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
 
-          # C24 (ACTION_ITEMS.md): base_pct==0 means "Fetch base branch
-          # coverage from Codecov" got no real data (no CODECOV_TOKEN
-          # configured) -- NOT "verified zero regression". Conflating those
-          # two into one silent PASS is exactly the bug this fixes. This
-          # branch must never claim regression was checked when it wasn't.
+          # 2026-08-27: base_pct==0 now means the base-commit pytest run
+          # itself produced no readable coverage.json (crashed outright, or
+          # the cache/compute step above was skipped for some other
+          # reason) -- NOT "verified zero regression". Conflating those two
+          # into one silent PASS was the original C24 bug (ACTION_ITEMS.md)
+          # when this depended on a never-provisioned CODECOV_TOKEN; this
+          # branch must still never claim regression was checked when it
+          # wasn't, now that the mechanism is a locally-computed baseline
+          # instead of a third-party API call.
           if base_pct <= 0:
               print("UNKNOWN: no base-branch coverage data available -- this run did NOT verify")
-              print("whether coverage regressed. See ACTION_ITEMS.md C24 (no CODECOV_TOKEN secret")
-              print("configured, so the Codecov API call in the previous step returned nothing).")
+              print("whether coverage regressed. The base-commit pytest run produced no readable")
+              print("coverage.json -- see the 'Compute base-branch coverage' step's own log.")
               with open(github_output, "a") as f:
                   f.write("baseline_status=no-baseline\n")
               if github_summary:
                   with open(github_summary, "a") as f:
                       f.write(
                           "### ⚠️ Coverage Regression: NOT actually checked\n\n"
-                          "No base-branch coverage data was available (missing `CODECOV_TOKEN` "
-                          "secret -- see `ACTION_ITEMS.md` **C24**). This run could not tell "
-                          "whether this PR regressed coverage or not. The green check above "
-                          "reflects that this gate doesn't block merges while the token is "
-                          "missing, not that coverage was verified.\n"
+                          "No base-branch coverage data was available (the base-commit pytest "
+                          "run produced no readable `coverage.json` — see the 'Compute base-branch "
+                          "coverage' step's log). This run could not tell whether this PR regressed "
+                          "coverage or not. The green check above reflects that this gate doesn't "
+                          "block merges when the baseline can't be computed, not that coverage was "
+                          "verified.\n"
                       )
               # Not sys.exit(1): a missing baseline is an infra gap outside any
               # single PR author's control, not something this specific PR
@@ -389,11 +557,81 @@ jobs:
             --coverage-json shared-coverage.json \
             --changed-files-file /tmp/changed_files_money.txt
 
+  # ─── 1d. Admin routes / utilities coverage floor ─────────────────────────
+  # CLAUDE.md's coverage-minimums table names ">= 70%" for "Admin routes,
+  # utilities" -- the one tier in that table with no enforcing gate, closed
+  # here (2026-08-27, docs/audit/2026-08-27-cicd-gates-guardrails-audit.md
+  # Section 3 / Phase 3). Same scoped-and-blocking-but-only-for-touched-
+  # files shape as corporate-coverage-floor-gate/money-path-coverage-floor-
+  # gate above; see backend/scripts/check_admin_coverage_floor.py's
+  # docstring for why this tracks two directory-aggregate keys
+  # (routes/admin/, utils/) rather than an explicit file list like its two
+  # siblings, and for the real measured baseline this gate's floors cite.
+  admin-coverage-floor-gate:
+    name: Admin/utils coverage floor check
+    runs-on: ubuntu-latest
+    needs: [shared-coverage-run]
+    # Same rationale as money-path-coverage-floor-gate above: runs
+    # regardless of shared-coverage-run's outcome so a shared-run problem
+    # produces this gate's existing fail-closed "coverage report missing"
+    # result instead of silently vanishing as "skipped".
+    if: always()
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: List changed files
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || 'origin/main' }}"
+          git diff --name-only "$BASE"...HEAD > /tmp/changed_files_admin.txt || true
+          echo "Changed files in this PR:"
+          cat /tmp/changed_files_admin.txt
+
+      - name: Download shared coverage artifact
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shared-coverage-${{ github.run_id }}
+          path: backend
+
+      - name: Check per-module floors
+        working-directory: backend
+        run: |
+          python3 scripts/check_admin_coverage_floor.py \
+            --coverage-json shared-coverage.json \
+            --changed-files-file /tmp/changed_files_admin.txt
+
   # ─── 2. Lint warning count gate ───────────────────────────────────────────
   lint-trend-gate:
     name: Lint warning trend check
     runs-on: ubuntu-latest
     continue-on-error: true
+    needs: [detect-changes]
+    # Phase 1 blast-radius trial (see detect-changes' own comment above).
+    # Lints both backend (ruff) and admin-dashboard (ESLint), so it needs
+    # either surface. detect-changes only runs `if: pull_request` (see its
+    # own job), so on a merge_group/workflow_dispatch run it's skipped and
+    # its outputs are empty -- `github.event_name != 'pull_request'` is the
+    # always-run-everything fallback for exactly that case, not a push-to-
+    # main check (this workflow has no `push:` trigger at all).
+    # `needs.detect-changes.result == 'failure'` is a second fail-open leg:
+    # if the filter job itself errors out on a PR run (checkout or
+    # dorny/paths-filter failure), default to running this job rather than
+    # silently skipping an advisory check with no visible reason.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true' ||
+        needs.detect-changes.outputs.admin == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -828,6 +1066,18 @@ jobs:
     name: Breaking change detection
     runs-on: ubuntu-latest
     continue-on-error: true
+    needs: [detect-changes]
+    # Phase 1 blast-radius trial (see detect-changes' own comment above).
+    # Only ever diffs backend/routes/ and backend/db_supabase.py, so
+    # backend is the only surface that can produce a finding here.
+    # `needs.detect-changes.result == 'failure'` fails open on a filter-job
+    # error, same rationale as lint-trend-gate above.
+    if: |
+      always() && (
+        github.event_name != 'pull_request' ||
+        needs.detect-changes.result == 'failure' ||
+        needs.detect-changes.outputs.backend == 'true'
+      )
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -1115,6 +1365,7 @@ jobs:
       - coverage-regression-gate
       - corporate-coverage-floor-gate
       - money-path-coverage-floor-gate
+      - admin-coverage-floor-gate
       - lint-trend-gate
       - security-posture-gate
       - migration-safety-gate
@@ -1131,6 +1382,7 @@ jobs:
               'Coverage Regression':  '${{ needs.coverage-regression-gate.result }}',
               'Corporate Coverage Floor': '${{ needs.corporate-coverage-floor-gate.result }}',
               'Money-Path Coverage Floor': '${{ needs.money-path-coverage-floor-gate.result }}',
+              'Admin/Utils Coverage Floor': '${{ needs.admin-coverage-floor-gate.result }}',
               'Lint Trend':           '${{ needs.lint-trend-gate.result }}',
               'Security Posture':     '${{ needs.security-posture-gate.result }}',
               'Migration Safety':     '${{ needs.migration-safety-gate.result }}',

@@ -91,6 +91,24 @@ def _logo_data_uri() -> str:
     return f"data:image/png;base64,{b64}"
 
 
+def _load_settings_json(path_or_literal: str) -> dict:
+    """Settings supplied directly, as a JSON file path or a literal JSON object.
+
+    Escape hatch for running this where the Supabase REST call is not available
+    but the row can still be obtained some other way (an MCP/SQL client, a
+    psql dump). Keeps the preview honest: it renders whatever the real
+    `settings` row says, rather than falling back to constants.
+    """
+    candidate = Path(path_or_literal)
+    raw = candidate.read_text(encoding="utf-8") if candidate.is_file() else path_or_literal
+    row = json.loads(raw)
+    if isinstance(row, list):  # a REST/SQL result set, not a bare object
+        row = row[0] if row else {}
+    if not isinstance(row, dict):
+        raise ValueError("--settings-json must be a JSON object (or a one-element array of one)")
+    return row
+
+
 def _fetch_settings_row() -> dict:
     """Read the admin `settings` row (id='app_settings') straight from the
     Supabase REST API, using only the standard library.
@@ -172,7 +190,17 @@ class Company:
         self.contact_line = " · ".join(contact_parts) if contact_parts else COMPANY_CONTACT_LINE
 
 
-COMPANY = Company(_fetch_settings_row())
+def _resolve_settings() -> dict:
+    """Settings from --settings-json if given, else the live REST read, else {}."""
+    for i, arg in enumerate(sys.argv):
+        if arg == "--settings-json" and i + 1 < len(sys.argv):
+            return _load_settings_json(sys.argv[i + 1])
+        if arg.startswith("--settings-json="):
+            return _load_settings_json(arg.split("=", 1)[1])
+    return _fetch_settings_row()
+
+
+COMPANY = Company(_resolve_settings())
 
 # ── HTML helpers — copied from utils/email_layout.py ────────────────────────
 
@@ -892,6 +920,14 @@ def _html_to_pdf(chrome: str, html_path: Path, pdf_path: Path) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", default=str(REPO_ROOT / "backend" / "scripts" / "_preview_out"))
+    parser.add_argument(
+        "--settings-json",
+        help=(
+            "Path to a JSON file, or a literal JSON object, holding the admin `settings` row. "
+            "Use when SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY are unavailable but the row can be "
+            "fetched another way. Overrides the live REST read."
+        ),
+    )
     args = parser.parse_args()
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

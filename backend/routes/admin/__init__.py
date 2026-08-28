@@ -95,6 +95,7 @@ from .faqs import router as faqs_router
 from .incentives import router as incentives_router
 from .legacy_driver_import import router as legacy_driver_import_router
 from .legacy_sin_dob_backfill import router as legacy_sin_dob_backfill_router
+from .legacy_vehicle_history_backfill import router as legacy_vehicle_history_backfill_router
 from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
@@ -169,6 +170,13 @@ admin_router.include_router(legacy_driver_import_router, dependencies=[Depends(r
 # module gate as the bulk driver import above; the underlying write is
 # guarded further at commit time (never clobbers a value already on file).
 admin_router.include_router(legacy_sin_dob_backfill_router, dependencies=[Depends(require_module("drivers"))])
+# Legacy vehicle-history backfill (2026-08-27 migration plan Phase 2) —
+# admin-dashboard wrapper over services/driver_import_service.py's
+# plan/apply_legacy_vehicle_history_backfill (also used by
+# scripts/backfill_legacy_vehicle_history.py). Writes append-only
+# driver_vehicle_history rows; same drivers module grant as driver_import
+# above since it's a driver-record backfill too.
+admin_router.include_router(legacy_vehicle_history_backfill_router, dependencies=[Depends(require_module("drivers"))])
 # Driver earnings statements (payout section: date-filter -> download / email
 # to driver). Read-only + driver-addressed email; drivers module grant.
 admin_router.include_router(driver_statements_router, dependencies=[Depends(require_module("drivers"))])

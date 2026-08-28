@@ -461,6 +461,12 @@ legacy_mongo_driver_import_commit_limit = default_limiter.limit("10/hour")
 # write path and gets the tighter limit.
 legacy_sin_dob_backfill_commit_limit = default_limiter.limit("10/hour")
 
+# Admin legacy vehicle-history backfill (Phase 2 of the 2026-08-27 migration
+# plan) -- /validate is a read-only dry-run; /commit inserts append-only
+# driver_vehicle_history rows. Same posture as driver_import_commit_limit
+# above: commit is the write path and gets the tighter limit.
+legacy_vehicle_history_backfill_commit_limit = default_limiter.limit("10/hour")
+
 # Admin Data Transfer jobs (list/detail/download-link) — read-only status
 # polling, but download-link regeneration mints a fresh signed Storage URL
 # each call; bound it the same as other admin list/detail endpoints.

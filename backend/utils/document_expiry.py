@@ -145,7 +145,16 @@ async def check_expiring_documents():
                 _docs_page = await db.get_rows(
                     "driver_documents",
                     {"driver_id": {"$in": _driver_ids}, "status": "approved"},
-                    columns="driver_id,expiry_date,expires_at,requirement_name,type",
+                    # Every name here must be a REAL driver_documents column:
+                    # PostgREST rejects the whole query on the first unknown one
+                    # ("column driver_documents.X does not exist"), and the
+                    # except below then fails open into legacy-fields-only —
+                    # silently skipping doc types that HAVE no legacy column
+                    # (vehicle_registration, drivers_abstract). The columns are
+                    # id, driver_id, document_type, document_url, status,
+                    # rejection_reason, uploaded_at, updated_at, requirement_id,
+                    # side, requirement_key, expiry_date (migration 91).
+                    columns="driver_id,expiry_date,document_type,requirement_key",
                     limit=_DOC_PAGE_SIZE,
                     offset=_doc_offset,
                 )
@@ -204,10 +213,12 @@ async def check_expiring_documents():
         # Also check document_files / driver_documents for expiry_date. Rows
         # come from the one fleet-wide fetch above, not a per-driver query.
         for doc in docs_by_driver.get(driver["id"], []):
-            exp_dt = parse_iso_utc(doc.get("expiry_date") or doc.get("expires_at"))
+            exp_dt = parse_iso_utc(doc.get("expiry_date"))
             if exp_dt is None:
                 continue
-            doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
+            # document_type carries the human label ("Driver's License");
+            # requirement_key is the slug fallback ("drivers_license").
+            doc_name = doc.get("document_type") or doc.get("requirement_key") or "Document"
             # P2-6: same gate — process expired OR expiring within warning window
             if exp_dt > now and exp_dt > warning_cutoff:
                 continue

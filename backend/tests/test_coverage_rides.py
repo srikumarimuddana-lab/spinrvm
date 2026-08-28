@@ -1529,8 +1529,10 @@ async def test_match_driver_to_ride_assigns_driver():
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver])
-        mock_db.claim_driver_atomic = AsyncMock(return_value={"id": _DRIVER_ID})
-        mock_db.get_driver_by_id = AsyncMock(return_value=driver)
+        # The claim returns the CLAIMED ROW now, and dispatch revalidates
+        # is_online/is_verified/status on it — so it must be the full driver
+        # row, not the id-only stub the old truthiness-only check tolerated.
+        mock_db.claim_driver_atomic = AsyncMock(return_value=driver)
         mock_db.update_ride = AsyncMock()
         mock_db.set_driver_available = AsyncMock()
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alice", "last_name": "R"})
@@ -1959,9 +1961,10 @@ async def test_match_driver_offline_after_claim():
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver])
-        mock_db.claim_driver_atomic = AsyncMock(return_value={"id": _DRIVER_ID})
-        # Driver is now offline after claim
-        mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "is_online": False})
+        # Driver is offline as of the claim — the claim returns the row it just
+        # updated, so the "went offline between candidate read and claim" case
+        # is expressed on the claim's own return value now.
+        mock_db.claim_driver_atomic = AsyncMock(return_value={"id": _DRIVER_ID, "is_online": False})
         mock_db.set_driver_available = AsyncMock()
         mock_db.update_ride = AsyncMock()
         mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True))

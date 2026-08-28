@@ -454,7 +454,7 @@ class TestRideMatching:
 
         result = await claim_driver_atomic("driver_1")
 
-        assert result is True
+        assert result == {"id": "driver_1", "is_available": False}
 
 
 class TestRideHistory:

@@ -223,7 +223,7 @@ async def test_ride_offers_insert_failure_releases_claims_and_reraises():
     ):
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value=None)
-        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.claim_driver_atomic = AsyncMock(return_value=fresh_driver)
         mock_db.get_driver_by_id = AsyncMock(return_value=fresh_driver)
         mock_db.set_driver_available = AsyncMock()
         mock_db.run_sync = AsyncMock(side_effect=RuntimeError("ride_offers insert failed"))
@@ -574,3 +574,89 @@ async def test_pass_required_area_reads_driver_subscriptions_once():
     assert "rides_per_day" in (sub_reads[0] or ""), "the shared read must project rides_per_day"
     assert "started_at" in (sub_reads[0] or ""), "the shared read must project started_at"
     assert "plan_id" in (sub_reads[0] or ""), "the shared read must still project plan_id for the gate"
+
+
+async def test_claim_returns_the_row_so_no_follow_up_driver_read():
+    """P2-B4: the claim's own UPDATE feeds revalidation — no second read.
+
+    claim_driver_atomic invalidates the driver cache on BOTH sides of its
+    update, so the get_driver_by_id that used to follow it was guaranteed to
+    miss the cache and issue a full uncached SELECT. Dispatch claims up to
+    max_simultaneous_offers drivers per attempt, so that was up to 10
+    avoidable round-trips on a path with a P95 < 2 s SLA.
+
+    The returned row is not merely as fresh as that read — it is strictly
+    fresher, being the state at the instant of the atomic claim with no window
+    for a concurrent write to slip in between.
+    """
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    driver = _make_driver("drv-1")
+    claimed_row = {**driver, "is_available": False}
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[])),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+        patch("backend.routes.rides.matching._deps.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides.matching.sign_offer_card_token", return_value="tok"),
+    ):
+        mock_db.get_rows = AsyncMock(side_effect=_rows_by_table(drivers=[driver]))
+        mock_db.find_one = AsyncMock(return_value={"id": "area-1", "parent_service_area_id": None})
+        mock_db.claim_driver_atomic = AsyncMock(return_value=claimed_row)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_db.set_driver_available = AsyncMock()
+        mock_db.run_sync = AsyncMock(return_value=None)
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Jamie"})
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    mock_db.claim_driver_atomic.assert_awaited_once_with("drv-1")
+    mock_db.get_driver_by_id.assert_not_awaited()
+
+
+async def test_claim_row_failing_revalidation_releases_the_driver():
+    """The eligibility recheck now runs on the claim's returned row, so a
+    driver suspended between the candidate read and the claim must still be
+    released rather than offered the ride — the stale-status case the
+    candidate filter exists to stop.
+    """
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    driver = _make_driver("drv-1")
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[])),
+        patch("backend.routes.rides.matching._dispatch_retry", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.get_rows = AsyncMock(side_effect=_rows_by_table(drivers=[driver]))
+        mock_db.find_one = AsyncMock(return_value={"id": "area-1", "parent_service_area_id": None})
+        # Suspended between the candidate read and the claim.
+        mock_db.claim_driver_atomic = AsyncMock(return_value={**driver, "status": "suspended"})
+        mock_db.set_driver_available = AsyncMock()
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    mock_db.set_driver_available.assert_awaited_once_with("drv-1", True)

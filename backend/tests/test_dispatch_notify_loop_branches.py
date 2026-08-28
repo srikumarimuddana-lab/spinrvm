@@ -33,6 +33,9 @@ class _Chain:
     def eq(self, *a, **kw):
         return self
 
+    def in_(self, *a, **kw):
+        return self
+
     def or_(self, *a, **kw):
         return self
 
@@ -139,6 +142,10 @@ async def test_full_notify_loop_happy_path_builds_dispatch_payload():
         "quest_progress": MagicMock(
             data=[
                 {
+                    # The lookup is batched across the whole offer batch now,
+                    # so rows carry driver_id and are keyed back to a driver by
+                    # it. _make_driver's user_id is "<driver_id>-user".
+                    "driver_id": "drv-1-user",
                     "current_value": 3,
                     "status": "active",
                     "quest": {"title": "Weekly Streak", "target_value": 5, "reward_amount": 10},
@@ -368,3 +375,78 @@ async def test_push_notification_failure_is_non_fatal():
 
     # The WS offer still went out even though the FCM push spawn blew up.
     mock_manager.send_personal_message.assert_awaited_once()
+
+
+async def test_quest_progress_is_one_batched_query_for_the_whole_offer_batch():
+    """P2-B2: quest progress is fetched once for the batch, not per driver.
+
+    This lookup used to sit *inside* the notify loop — one serial round-trip
+    per claimed driver, up to max_simultaneous_offers (10) of them, on the
+    dispatch offer→notification path that carries a P95 < 2 s SLA. The data is
+    a cosmetic progress banner on the offer card, so it was buying latency on
+    the most timing-sensitive path in the product with decoration.
+
+    Asserts both halves of the fix: exactly one `quest_progress` table access
+    for a 3-driver batch, and every driver still gets their own correct hint
+    (a batch that returned one driver's quest to all three would be worse than
+    the N+1 it replaced).
+    """
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    drivers = [_make_driver("drv-1"), _make_driver("drv-2"), _make_driver("drv-3")]
+
+    # drv-2 has no active quest — it must come back with no hint rather than
+    # inheriting a neighbour's.
+    quest_rows = [
+        {
+            "driver_id": "drv-1-user",
+            "current_value": 3,
+            "status": "active",
+            "quest": {"title": "Weekly Streak", "target_value": 5, "reward_amount": 10},
+        },
+        {
+            "driver_id": "drv-3-user",
+            "current_value": 1,
+            "status": "active",
+            "quest": {"title": "Night Owl", "target_value": 4, "reward_amount": 8},
+        },
+    ]
+    table_responses = {"quest_progress": MagicMock(data=quest_rows)}
+
+    table_calls: list = []
+
+    def _counting_router(name):
+        table_calls.append(name)
+        return _Chain(table_responses.get(name, MagicMock(data=[])))
+
+    with ExitStack() as stack:
+        mock_db = stack.enter_context(patch("backend.routes.rides.matching._deps.db_supabase"))
+        for p in _base_patches(table_responses):
+            stack.enter_context(p)
+
+        mock_db.get_rows = AsyncMock(return_value=drivers)
+        mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
+        mock_db.claim_driver_atomic = AsyncMock(return_value=True)
+        mock_db.get_driver_by_id = AsyncMock(side_effect=lambda did: next(d for d in drivers if d["id"] == did))
+        mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alex", "rating": 4.9, "profile_image": None})
+        mock_db.supabase.table = MagicMock(side_effect=_counting_router)
+        mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())
+        mock_manager = MagicMock()
+        mock_manager.send_personal_message = AsyncMock()
+        stack.enter_context(patch("backend.routes.rides.matching._deps.manager", mock_manager))
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    quest_reads = [t for t in table_calls if t == "quest_progress"]
+    assert len(quest_reads) == 1, f"quest_progress queried {len(quest_reads)}× for a 3-driver batch — expected 1"
+
+    hints = {
+        target: (payload.get("quest_hint") or {}).get("title")
+        for payload, target in (c.args for c in mock_manager.send_personal_message.await_args_list)
+    }
+    assert hints == {
+        "driver_drv-1-user": "Weekly Streak",
+        "driver_drv-2-user": None,
+        "driver_drv-3-user": "Night Owl",
+    }

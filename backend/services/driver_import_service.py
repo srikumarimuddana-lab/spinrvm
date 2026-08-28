@@ -984,9 +984,17 @@ def print_report(plan: ImportPlan, *, dry_run: bool) -> None:
 # session's user decision before changing that scope.
 #
 # Safety rules, all enforced below:
-#   - only touches drivers already carrying this module's own
-#     ``IMPORT_SOURCE`` in ``legacy_import_metadata`` — a phone-number
+#   - only touches drivers already carrying one of this module's own known
+#     legacy-import sources in ``legacy_import_metadata`` — a phone-number
 #     coincidence can never touch an organic (non-legacy) driver's SIN/DOB.
+#     Covers all three shapes ``build_mongo_driver_import_plan`` can
+#     produce (see its module-level comment below): a driver directly
+#     created or linked by either importer carries its own top-level
+#     ``source in (IMPORT_SOURCE, MONGO_IMPORT_SOURCE)``; a driver only
+#     ENRICHED by the Mongo importer (``drivers_to_enrich``) keeps its
+#     original top-level ``source`` unchanged, so ``_has_mongo_driver_
+#     history_entry`` checks its additive ``mongo_driver_history`` list for
+#     this row's own ``old_driver_id`` instead.
 #   - never clobbers an existing ``sin`` or ``date_of_birth`` — if the
 #     driver already has one on file (self-entered or from an earlier
 #     backfill), that value wins.
@@ -998,6 +1006,24 @@ def print_report(plan: ImportPlan, *, dry_run: bool) -> None:
 #     as everywhere else in this module — never a raw phone, SIN, or DOB.
 
 LEGACY_BANK_SIN_DOB_SOURCE = "legacy_mongo_banks_sin_dob_import"
+
+
+def _has_mongo_driver_history_entry(meta: dict[str, Any], old_id: str) -> bool:
+    """True if ``old_id`` (a Mongo ``drivers.csv`` ``_id``) appears in this
+    driver/user's additive ``mongo_driver_history`` list -- the enriched-
+    driver shape ``build_mongo_driver_import_plan``'s ``drivers_to_enrich``
+    produces (see that function's module-level comment), where the driver's
+    own top-level ``legacy_import_metadata.source`` stays whatever
+    ORIGINALLY created it (e.g. ``IMPORT_SOURCE``, or nothing at all for an
+    organic driver) rather than being overwritten to ``MONGO_IMPORT_SOURCE``.
+    Used by both backfills below so an enriched driver's Mongo-side history
+    isn't silently invisible to them. Deliberately independent of (not a
+    call-through to) ``_mongo_driver_already_linked`` below, which serves a
+    different purpose (the Mongo importer's own resume/idempotency check,
+    including its top-level-source branch) -- kept separate so this change
+    cannot alter that already-shipped, tested behavior.
+    """
+    return any(str(h.get("old_driver_id")) == old_id for h in (meta.get("mongo_driver_history") or []))
 
 
 @dataclass
@@ -1075,7 +1101,9 @@ def plan_legacy_sin_dob_import(
             continue
 
         meta = driver.get("legacy_import_metadata") or {}
-        if meta.get("source") != IMPORT_SOURCE:
+        if meta.get("source") not in (IMPORT_SOURCE, MONGO_IMPORT_SOURCE) and not _has_mongo_driver_history_entry(
+            meta, old_id
+        ):
             plan.warnings.append(
                 ImportErrorItem(
                     old_id, "legacy_import_metadata", "matched driver is not a known legacy-imported driver; skipped"
@@ -1346,9 +1374,11 @@ def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:
 # prior value (``None`` for the first-ever row).
 #
 # Safety rules:
-#   - only touches drivers already tagged with this module's own
-#     ``IMPORT_SOURCE`` in ``legacy_import_metadata`` -- same phone-coincidence
-#     guard as the SIN/DOB backfill.
+#   - only touches drivers already tagged with one of this module's own known
+#     legacy-import sources in ``legacy_import_metadata`` -- same phone-
+#     coincidence guard, and the same ``source in (IMPORT_SOURCE,
+#     MONGO_IMPORT_SOURCE)`` OR ``_has_mongo_driver_history_entry`` check,
+#     as the SIN/DOB backfill above.
 #   - append-only, matching the target table's own invariant (migration 157's
 #     comment: "rows are inserted, never updated/deleted") -- this backfill
 #     never touches an existing driver_vehicle_history row, only ever adds
@@ -1487,7 +1517,9 @@ def plan_legacy_vehicle_history_backfill(
             continue
 
         meta = driver.get("legacy_import_metadata") or {}
-        if meta.get("source") != IMPORT_SOURCE:
+        if meta.get("source") not in (IMPORT_SOURCE, MONGO_IMPORT_SOURCE) and not _has_mongo_driver_history_entry(
+            meta, old_id
+        ):
             plan.warnings.append(
                 ImportErrorItem(
                     old_id, "legacy_import_metadata", "matched driver is not a known legacy-imported driver; skipped"
@@ -1679,15 +1711,16 @@ def print_vehicle_history_report(plan: VehicleHistoryBackfillPlan, *, dry_run: b
 #     ~63%-of-rows don't block the whole batch's commit. needs_review/
 #     unverified/offline already keeps them out of dispatch either way.
 #
-# Known follow-up NOT done by this section (flagged, not silently decided):
-#   the existing SIN/DOB backfill (plan_legacy_sin_dob_import, above) and the
-#   vehicle-history backfill (plan_legacy_vehicle_history_backfill, above)
-#   both gate on `legacy_import_metadata.source == IMPORT_SOURCE` (the
-#   Saskatoon value) -- neither will pick up drivers created by this section
-#   without a separate, deliberate change to generalize that check to also
-#   accept MONGO_IMPORT_SOURCE. Not done here: changing an already-shipped,
-#   tested safety gate on two other backfills is out of scope for "create
-#   the driver rows" and deserves its own review, not a silent side effect.
+# Follow-up closed 2026-08-28 (docs/change-log/2026-08-28-legacy-backfill-
+#   mongo-import-source.md): the SIN/DOB backfill (plan_legacy_sin_dob_import,
+#   above) and the vehicle-history backfill (plan_legacy_vehicle_history_
+#   backfill, above) now also match a driver created/linked/enriched by this
+#   section -- see `_has_mongo_driver_history_entry` and each function's own
+#   safety-rule comment for the three-shapes reasoning (directly-created and
+#   linked drivers carry their own top-level `source == MONGO_IMPORT_SOURCE`;
+#   an enriched driver's Mongo lineage lives only in its additive
+#   `mongo_driver_history` list, since enrichment never overwrites the
+#   driver's original top-level `source`).
 
 MONGO_IMPORT_SOURCE = "legacy_mongo_driver_import"
 

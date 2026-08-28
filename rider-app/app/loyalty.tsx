@@ -235,7 +235,7 @@ export default function LoyaltyScreen() {
                 {/* History header */}
                 <Text style={styles.sectionTitle}>Points History</Text>
               </View>
-            ) : undefined
+            ) : null
           }
           contentContainerStyle={styles.list}
           ListEmptyComponent={
@@ -245,7 +245,7 @@ export default function LoyaltyScreen() {
                 <Text style={styles.emptyTitle}>No points history yet</Text>
                 <Text style={styles.emptySub}>Complete rides to start earning points</Text>
               </View>
-            ) : undefined
+            ) : null
           }
         />
       )}

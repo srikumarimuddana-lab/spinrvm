@@ -56,7 +56,7 @@ export default function LoginScreen() {
   // backend still rejects account creation with consent_required and
   // otp.tsx prompts for it there, regardless of what this screen showed.
   const [hasAuthenticatedBefore, setHasAuthenticatedBefore] = useState(false);
-  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const inputRef = useRef<TextInput>(null);
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 

@@ -7,7 +7,7 @@ export function useAppResumeKey(): number {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
-      if (appStateRef.current?.match(/inactive|background/) && nextState === 'active') {
+      if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         setKey(k => k + 1);
       }
       appStateRef.current = nextState;

@@ -32,7 +32,7 @@ export default function ChatDriverScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentDriver, chatMessages, addChatMessage, setChatMessages } = useRideStore();
-  const scrollViewRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
   const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [sending, setSending] = useState(false);

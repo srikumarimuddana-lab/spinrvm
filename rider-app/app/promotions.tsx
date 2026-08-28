@@ -134,7 +134,7 @@ export default function PromotionsScreen() {
           keyExtractor={(item) => item.promo_id}
           contentContainerStyle={styles.list}
           ListHeaderComponent={
-            promos.length > 0 ? <Text style={styles.sectionTitle}>Available for you</Text> : undefined
+            promos.length > 0 ? <Text style={styles.sectionTitle}>Available for you</Text> : null
           }
           ListEmptyComponent={
             <View style={styles.empty}>

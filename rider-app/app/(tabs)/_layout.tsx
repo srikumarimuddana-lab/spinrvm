@@ -39,7 +39,7 @@ export default function TabLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="home" size={24} color={color as string} />
+            <Ionicons name="home" size={24} color={color} />
           ),
         }}
       />
@@ -48,7 +48,7 @@ export default function TabLayout() {
         options={{
           title: 'Activity',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="receipt-outline" size={24} color={color as string} />
+            <Ionicons name="receipt-outline" size={24} color={color} />
           ),
         }}
       />
@@ -57,7 +57,7 @@ export default function TabLayout() {
         options={{
           title: 'Account',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="person-outline" size={24} color={color as string} />
+            <Ionicons name="person-outline" size={24} color={color} />
           ),
         }}
       />

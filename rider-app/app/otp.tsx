@@ -50,7 +50,7 @@ export default function OtpScreen() {
   const [needsConsent, setNeedsConsent] = useState(false);
   const [resendingForConsent, setResendingForConsent] = useState(false);
   const { user, initialize, clearError } = useAuthStore();
-  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const inputRef = useRef<TextInput>(null);
   const resendInFlight = useRef(false);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);

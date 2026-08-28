@@ -74,6 +74,7 @@ def _enrich_with_completeness(drivers: list, users_by_id: dict) -> None:
         result = compute_profile_completeness(d, user)
         d["profile_completeness_score"] = result["score"]
         d["profile_missing_count"] = len(result["missing_required"])
+        d["profile_missing_fields"] = [m["label"] for m in result["missing_required"]]
 
 
 def _user_display_name(user: Optional[Dict]) -> str:
@@ -564,6 +565,8 @@ async def admin_get_drivers(
         except Exception as _sub_err:
             logger.warning(f"admin_get_drivers: subscription enrichment failed: {_sub_err}")
     _sub_now = datetime.now(timezone.utc)
+
+    _enrich_with_completeness(deduped, users_map)
 
     out = []
     for d in deduped:
@@ -1108,6 +1111,7 @@ async def admin_get_approval_queue(
                 "service_area_name": (areas_map.get(drow.get("service_area_id")) or {}).get("name"),
                 "vehicle_type_id": drow.get("vehicle_type_id"),
                 "vehicle_type_name": vtypes_map.get(drow.get("vehicle_type_id")),
+                "profile_completeness_score": compute_profile_completeness(drow, u)["score"],
             }
         )
 

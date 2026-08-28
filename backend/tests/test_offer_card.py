@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from utils.offer_card import coarsen_address, first_name, render_offer_card
+from utils.offer_card import coarsen_address, earnings_labels, first_name, render_offer_card
 from utils.offer_card_token import (
     OfferCardTokenError,
     sign_offer_card_token,
@@ -105,3 +105,25 @@ def test_render_minimal_fields():
     png = render_offer_card(fare=9.5)
     assert png is not None
     assert png[:8] == _PNG_MAGIC
+
+
+# ── Earnings copy (headline + boost pill) ───────────────────────────────
+
+
+def test_headline_is_fare_plus_area_boost():
+    # One number for what the driver actually earns — same total the offer
+    # panel (baseFare + totalBonus) and the push title show.
+    headline, pill = earnings_labels(12.50, 5.00)
+    assert headline == "$17.50"
+    assert pill == "INCL. $5.00 BOOST"
+
+
+@pytest.mark.parametrize("bonus", [None, 0, 0.0])
+def test_no_pill_without_a_boost(bonus):
+    headline, pill = earnings_labels(12.50, bonus)
+    assert headline == "$12.50"
+    assert pill is None
+
+
+def test_missing_fare_does_not_crash_the_label():
+    assert earnings_labels(None, None) == ("$0.00", None)

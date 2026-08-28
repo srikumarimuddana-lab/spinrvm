@@ -295,6 +295,7 @@ class DispatchService:
         ride: Dict[str, Any],
         *,
         app_settings: Optional[Dict[str, Any]] = None,
+        area: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, float, float, int, bool]:
         """
         Return ``(algorithm, min_rating, search_radius_km,
@@ -302,12 +303,21 @@ class DispatchService:
 
         Reads ``service_areas`` first (the area can override matching
         behaviour), then falls back to the global ``app_settings``.
+
+        ``area`` is the ride's already-fetched ``service_areas`` row, passed by
+        callers that need it for other things too — the same reason
+        ``app_settings`` is injectable. ``routes/rides/matching.py`` read the
+        identical row 4-5 times per dispatch attempt before this. Pass
+        ``{}`` (not ``None``) to mean "looked it up, no such row" so the lookup
+        is not repeated here.
         """
         if app_settings is None:
             app_settings = await get_app_settings()
 
         area_settings: Dict[str, Any] = {}
-        if ride.get("service_area_id"):
+        if area is not None:
+            area_settings = area or {}
+        elif ride.get("service_area_id"):
             area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
             if area:
                 area_settings = area

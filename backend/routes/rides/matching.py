@@ -5,6 +5,7 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
 from datetime import timedelta
+from typing import Any, Dict
 
 try:
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
@@ -219,9 +220,72 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # value, which drifted when admin changed the setting mid-session.
     offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
 
+    # ── One service_areas read per attempt ────────────────────────
+    # This same row used to be fetched 4-5 times per dispatch attempt, each an
+    # independent `SELECT *` carrying the `polygon` JSONB: once in
+    # resolve_matching_config, again for the subscription gate, again for the
+    # quota timezone, again for the vehicle cascade, and again for the polygon
+    # in the notify phase. They all want the row this ride is dispatching in.
+    #
+    # Fetched here rather than cached with a TTL deliberately: a cached area
+    # would go stale against an admin editing search_radius_km /
+    # subscription_required / vehicle_cascade_map mid-session — the exact drift
+    # the offer-timeout comment above records having been burned by. One read
+    # per attempt keeps every consumer on the same snapshot AND keeps admin
+    # edits landing on the very next attempt or retry.
+    #
+    # Failure semantics are preserved exactly, which is why this is not a bare
+    # await: on error the row is left empty AND `area=None` is passed below, so
+    # resolve_matching_config re-attempts the same read and raises just as it
+    # does today — dispatch must never quietly fall back to the global radius
+    # and rating floor when the area's overrides are unknown. The consumers
+    # further down (cascade, polygon, quota) keep their existing fail-open
+    # behaviour against the empty row for the same reason they had it before:
+    # a missing cascade map means no cascade, not a dead dispatch.
+    _ride_area: Dict[str, Any] = {}
+    _area_lookup_failed = False
+    if ride.get("service_area_id"):
+        try:
+            _ride_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}) or {}
+        except Exception:
+            _area_lookup_failed = True
+            logger.error(
+                "[DISPATCH] service-area lookup failed for ride_id=%s area=%s — "
+                "re-raising via resolve_matching_config rather than dispatching on global defaults",
+                ride_id,
+                ride.get("service_area_id"),
+                exc_info=True,
+            )
+
+    _parent_area_box: Dict[str, Any] = {}
+
+    async def _parent_area() -> Dict[str, Any]:
+        """The ride area's parent row, fetched at most once per attempt.
+
+        Lazy on purpose: the subscription gate only needs the parent when the
+        child row does not already set the flag, so an eager fetch would ADD a
+        query for the common case. Fails open (returns {}) exactly as the two
+        call sites it replaces did.
+        """
+        if "row" in _parent_area_box:
+            return _parent_area_box["row"]
+        _pid = _ride_area.get("parent_service_area_id")
+        row: Dict[str, Any] = {}
+        if _pid:
+            try:
+                row = await _deps.db_supabase.find_one("service_areas", {"id": _pid}) or {}
+            except Exception:
+                logger.error(
+                    "[DISPATCH] parent service-area lookup failed for area=%s — treating as unset",
+                    ride.get("service_area_id"),
+                    exc_info=True,
+                )
+        _parent_area_box["row"] = row
+        return row
+
     # Algorithm + radius + rating floor + batch config (area overrides app settings).
     algorithm, min_rating, search_radius, max_offers, use_eta = await _shared.dispatch.resolve_matching_config(
-        ride, app_settings=app_settings
+        ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
     )
 
     # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs
@@ -405,15 +469,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     _sub_required: bool = False  # pre-init so cascade block can read it if try block skips
     if all_drivers and ride.get("service_area_id"):
         try:
-            _disp_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
             # Finding F: child areas (airport sub-regions) inherit subscription_required
             # from their parent so airport pickups in a required city don't bypass the gate.
-            _sub_required = bool(_disp_area and _disp_area.get("subscription_required"))
-            if not _sub_required and _disp_area and _disp_area.get("parent_service_area_id"):
-                _parent_area = await _deps.db_supabase.find_one(
-                    "service_areas", {"id": _disp_area["parent_service_area_id"]}
-                )
-                _sub_required = bool(_parent_area and _parent_area.get("subscription_required"))
+            _sub_required = bool(_ride_area.get("subscription_required"))
+            if not _sub_required and _ride_area.get("parent_service_area_id"):
+                _sub_required = bool((await _parent_area()).get("subscription_required"))
             if _sub_required:
                 _candidate_ids = [d["id"] for d in all_drivers]
                 _active_subs = await _deps.db_supabase.get_rows(
@@ -446,7 +506,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     _plan_areas = {p["id"]: p.get("service_areas") for p in (_plans or [])}
                 _ride_service_area = ride["service_area_id"]
                 # A plan scoped to the parent area is valid for child (e.g. airport) areas.
-                _ride_parent_area_id = (_disp_area or {}).get("parent_service_area_id")
+                _ride_parent_area_id = _ride_area.get("parent_service_area_id")
                 _subscribed_ids = set()
                 for _s in _valid_subs:
                     _allowed = _plan_areas.get(_s.get("plan_id"))
@@ -489,9 +549,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     if all_drivers and ride.get("service_area_id"):
         try:
             try:
-                from ...utils.spinr_pass import area_timezone, exhausted_driver_ids
+                from ...utils.spinr_pass import exhausted_driver_ids
             except ImportError:
-                from utils.spinr_pass import area_timezone, exhausted_driver_ids  # type: ignore
+                from utils.spinr_pass import exhausted_driver_ids  # type: ignore
 
             _q_ids = [d["id"] for d in all_drivers]
             _q_subs = await _deps.db_supabase.get_rows(
@@ -501,7 +561,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 limit=len(_q_ids),
             )
             if _q_subs:
-                _q_tz = await area_timezone(ride["service_area_id"])
+                # area_timezone() would re-read the row we already hold; it is
+                # a plain `.get("timezone")` on exactly this row.
+                _q_tz = _ride_area.get("timezone")
                 _q_exhausted = await exhausted_driver_ids(_q_subs, tz=_q_tz)
                 if _q_exhausted:
                     _q_before = len(all_drivers)
@@ -543,15 +605,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # This runs after all other filters so only genuinely-available
         # upgrade drivers are offered the ride.
         try:
-            _casc_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
-            _casc_map: list = (_casc_area or {}).get("vehicle_cascade_map") or []
+            _casc_map: list = _ride_area.get("vehicle_cascade_map") or []
             # Fix 6: child areas (airport sub-regions) inherit parent's cascade map
             # when the child row has none configured — mirrors subscription_required inheritance.
-            if not _casc_map and (_casc_area or {}).get("parent_service_area_id"):
-                _casc_parent = await _deps.db_supabase.find_one(
-                    "service_areas", {"id": _casc_area["parent_service_area_id"]}
-                )
-                _casc_map = (_casc_parent or {}).get("vehicle_cascade_map") or []
+            if not _casc_map and _ride_area.get("parent_service_area_id"):
+                _casc_map = (await _parent_area()).get("vehicle_cascade_map") or []
             _casc_to: list = next(
                 (rule.get("to") or [] for rule in _casc_map if rule.get("from") == ride["vehicle_type_id"]),
                 [],
@@ -642,7 +700,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             )
                             _casc_plan_areas = {p["id"]: p.get("service_areas") for p in (_casc_plans or [])}
                         _casc_sa_id = ride["service_area_id"]
-                        _casc_parent_sa_id = (_casc_area or {}).get("parent_service_area_id")
+                        _casc_parent_sa_id = _ride_area.get("parent_service_area_id")
                         _casc_subscribed: set = set()
                         for _cs in _casc_valid_subs:
                             _cs_allowed = _casc_plan_areas.get(_cs.get("plan_id"))
@@ -826,15 +884,16 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             return [], 0.0
 
     async def _fetch_service_area_polygon() -> Optional[list]:
-        sa_id = ride.get("service_area_id")
-        if not sa_id:
+        # Reads the row already fetched at the top of the attempt rather than
+        # re-issuing a fifth `SELECT *` for it (the polygon JSONB is the
+        # heaviest column on that row, so this was the most expensive repeat).
+        if not ride.get("service_area_id"):
             return None
         try:
-            sa = await _deps.db_supabase.find_one("service_areas", {"id": sa_id})
-            poly = get_service_area_polygon(sa or {})
+            poly = get_service_area_polygon(_ride_area)
             return poly or None
         except Exception as e:
-            logger.error("[DISPATCH] service_area polygon fetch failed: %s", e, exc_info=True)
+            logger.error("[DISPATCH] service_area polygon parse failed: %s", e, exc_info=True)
             return None
 
     rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(

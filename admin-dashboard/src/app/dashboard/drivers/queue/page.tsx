@@ -137,16 +137,18 @@ export default function ApprovalQueuePage() {
         new_applicants: 0,
         resubmissions: 0,
         photo_review: 0,
+        incomplete_profiles: 0,
     };
-
-    const incompleteCount = useMemo(() => items.filter((it) => it.profile_completeness_score != null && it.profile_completeness_score < 100).length, [items]);
 
     const tabCounts: Record<QueueTab, number> = {
         all: stats.total_pending,
         new: stats.new_applicants,
         resubmitted: stats.resubmissions,
         photo: stats.photo_review,
-        incomplete: incompleteCount,
+        // From `stats`, like its neighbours, not counted off `items`: the
+        // response trims items to `limit`, so a client-side count would quietly
+        // undercount against the other three once the queue outgrows a page.
+        incomplete: stats.incomplete_profiles,
     };
 
     const visibleItems = useMemo(

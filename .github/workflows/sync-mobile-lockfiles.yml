@@ -16,7 +16,7 @@ name: Sync mobile lockfiles
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
     paths:
       - rider-app/package.json
       - driver-app/package.json

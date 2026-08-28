@@ -24,7 +24,7 @@ name: Mobile Bundle Smoke Test
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
     paths:
       - "rider-app/**"
       - "driver-app/**"

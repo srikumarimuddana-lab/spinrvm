@@ -2,7 +2,7 @@ name: Mobile Dependency Health
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
     paths:
       - 'rider-app/package.json'
       - 'rider-app/yarn.lock'

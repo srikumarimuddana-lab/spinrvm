@@ -282,6 +282,8 @@ export {
     adminValidateRiderImport,
     adminCommitRiderImport,
     adminRegenerateImportedSnapshots,
+    adminValidateSinDobBackfill,
+    adminCommitSinDobBackfill,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -320,6 +322,12 @@ export type {
     RiderImportReport,
     RiderImportCommitResult,
     SnapshotRegenerateResult,
+    SinDobBackfillReportItem,
+    SinDobBackfillCounts,
+    SinDobBackfillReport,
+    SinDobBackfillCommitResult,
+    SinDobBackfillFiles,
+    SinDobBackfillOptions,
 } from "./api/imports";
 export {
     getCloudMessages,

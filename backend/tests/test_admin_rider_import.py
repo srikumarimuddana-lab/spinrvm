@@ -280,6 +280,73 @@ def test_commit_stamps_provenance_on_updated_user_without_clobbering_other_metad
     assert meta["rider_csv_import"]["source"] == "legacy_rider_csv_import"
 
 
+def test_commit_preserves_ratings_temp_email_timezone_as_history(test_client, super_admin_override):
+    """ratings/temp_email/timezone have no live `users` column (checked:
+    only `service_areas`/corporate tables have `timezone`, only `drivers`
+    has a ratings-shaped column) -- they must not be silently parsed and
+    dropped. Preserved read-only under legacy_import_metadata.rider_csv_import,
+    same "history, not a live field" pattern as driver_import_service.py's
+    was_deleted_in_source/was_blocked_in_source."""
+    header = "phone,email,customer_id,gender,ratings,temp_email,timezone,name"
+    row = "3065551234,jane@example.com,cus_abc123,female,5,old@example.com,America/Regina,Jane Doe"
+    csv_bytes = f"{header}\n{row}\n".encode()
+    store = _fresh_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post(
+            "/api/admin/riders/import/commit",
+            files={"riders_csv": ("riders.csv", csv_bytes, "text/csv")},
+            data={"batch": "batch-1"},
+        )
+    assert resp.status_code == 200, resp.text
+    created = store["users"][0]
+    meta = created["legacy_import_metadata"]["rider_csv_import"]
+    assert meta["ratings_raw"] == "5"
+    assert meta["temp_email"] == "old@example.com"
+    assert meta["timezone"] == "America/Regina"
+    # Never promoted to a live column -- no such column exists on `users`.
+    assert "ratings" not in created
+    assert "timezone" not in created
+    assert "temp_email" not in created
+
+
+def test_commit_update_triggers_on_history_only_change(test_client, super_admin_override):
+    """An existing user with everything else already set (email present,
+    already a rider, no customer_id change) would otherwise have nothing to
+    update -- but new temp_email/timezone history is still real information
+    worth recording, not silently dropped just because no live field moved."""
+    # gender/ratings left BLANK -- gender, if present, always lands in
+    # update_fields regardless of whether it changed (see build_plan), which
+    # would trigger an update on its own and defeat the point of this test.
+    header = "phone,email,customer_id,gender,ratings,temp_email,timezone,name"
+    row = "3065551234,jane@example.com,cus_abc123,,,old@example.com,America/Regina,Jane Doe"
+    csv_bytes = f"{header}\n{row}\n".encode()
+    store = _fresh_store()
+    store["users"].append(
+        {
+            "id": "existing-1",
+            "phone": "+13065551234",
+            "email": "jane@example.com",
+            "is_rider": True,
+            "is_driver": False,
+            "stripe_customer_id": "cus_abc123",
+            "legacy_import_metadata": {},
+        }
+    )
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post(
+            "/api/admin/riders/import/commit",
+            files={"riders_csv": ("riders.csv", csv_bytes, "text/csv")},
+            data={"batch": "batch-1"},
+        )
+    assert resp.status_code == 200, resp.text
+    meta = store["users"][0]["legacy_import_metadata"]["rider_csv_import"]
+    assert meta["temp_email"] == "old@example.com"
+    assert meta["timezone"] == "America/Regina"
+    assert "ratings_raw" not in meta  # blank in the CSV -- not written
+
+
 def test_validate_skips_pii_update_for_pending_deletion_account(test_client, super_admin_override):
     """P0-C (docs/audit/2026-08-11-driver-rider-migration-audit.md): a
     phone-matched account mid-PIPEDA-deletion must not have its falsy

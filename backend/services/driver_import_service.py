@@ -201,6 +201,22 @@ def read_mongo_export_csv(path: Path) -> list[dict[str, str]]:
         return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
 
 
+def read_mongo_export_csv_text(text: str) -> list[dict[str, str]]:
+    """``read_mongo_export_csv``'s raw-preservation logic, for an admin
+    upload's in-memory CSV content instead of a filesystem ``Path``.
+
+    Deliberately does NOT call ``read_csv_text``/``parse_csv_rows`` -- same
+    reason as the file-path reader above: ``normalize_header`` corrupts a
+    raw Mongo export's own column names (``_id`` -> ``id``, most critically).
+    An admin-upload endpoint for this CSV must use this function, not
+    ``read_csv_text``.
+    """
+    if text.startswith("﻿"):
+        text = text[1:]
+    reader = csv.DictReader(io.StringIO(text))
+    return [{k: (v or "").strip() for k, v in row.items()} for row in reader]
+
+
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig") as f:
         return parse_csv_rows(csv.DictReader(f))
@@ -506,8 +522,14 @@ def _prefetch_existing(
     users_by_email: dict[str, dict[str, Any]] = {}
     drivers_by_phone: dict[str, dict[str, Any]] = {}
 
+    # is_driver/legacy_import_metadata are unused by build_plan() above (it
+    # only needs a match/no-match signal) but are required by
+    # build_mongo_driver_import_plan()'s existing-match linking (below) --
+    # fetched here for both callers rather than adding a second query, since
+    # extra unused columns are free for the Saskatoon path.
+    user_cols = "id,phone,email,is_driver,legacy_import_metadata"
     if phones:
-        for u in _select_in("users", "id,phone,email", "phone", phones):
+        for u in _select_in("users", user_cols, "phone", phones):
             key = u.get("phone")
             if key is not None and key not in users_by_phone:
                 users_by_phone[key] = u
@@ -520,7 +542,7 @@ def _prefetch_existing(
             if key is not None and key not in drivers_by_phone:
                 drivers_by_phone[key] = d
     if emails:
-        for u in _select_in("users", "id,phone,email", "email", emails):
+        for u in _select_in("users", user_cols, "email", emails):
             key = (u.get("email") or "").strip().lower()
             if key and key not in users_by_email:
                 users_by_email[key] = u
@@ -962,9 +984,17 @@ def print_report(plan: ImportPlan, *, dry_run: bool) -> None:
 # session's user decision before changing that scope.
 #
 # Safety rules, all enforced below:
-#   - only touches drivers already carrying this module's own
-#     ``IMPORT_SOURCE`` in ``legacy_import_metadata`` — a phone-number
+#   - only touches drivers already carrying one of this module's own known
+#     legacy-import sources in ``legacy_import_metadata`` — a phone-number
 #     coincidence can never touch an organic (non-legacy) driver's SIN/DOB.
+#     Covers all three shapes ``build_mongo_driver_import_plan`` can
+#     produce (see its module-level comment below): a driver directly
+#     created or linked by either importer carries its own top-level
+#     ``source in (IMPORT_SOURCE, MONGO_IMPORT_SOURCE)``; a driver only
+#     ENRICHED by the Mongo importer (``drivers_to_enrich``) keeps its
+#     original top-level ``source`` unchanged, so ``_has_mongo_driver_
+#     history_entry`` checks its additive ``mongo_driver_history`` list for
+#     this row's own ``old_driver_id`` instead.
 #   - never clobbers an existing ``sin`` or ``date_of_birth`` — if the
 #     driver already has one on file (self-entered or from an earlier
 #     backfill), that value wins.
@@ -976,6 +1006,24 @@ def print_report(plan: ImportPlan, *, dry_run: bool) -> None:
 #     as everywhere else in this module — never a raw phone, SIN, or DOB.
 
 LEGACY_BANK_SIN_DOB_SOURCE = "legacy_mongo_banks_sin_dob_import"
+
+
+def _has_mongo_driver_history_entry(meta: dict[str, Any], old_id: str) -> bool:
+    """True if ``old_id`` (a Mongo ``drivers.csv`` ``_id``) appears in this
+    driver/user's additive ``mongo_driver_history`` list -- the enriched-
+    driver shape ``build_mongo_driver_import_plan``'s ``drivers_to_enrich``
+    produces (see that function's module-level comment), where the driver's
+    own top-level ``legacy_import_metadata.source`` stays whatever
+    ORIGINALLY created it (e.g. ``IMPORT_SOURCE``, or nothing at all for an
+    organic driver) rather than being overwritten to ``MONGO_IMPORT_SOURCE``.
+    Used by both backfills below so an enriched driver's Mongo-side history
+    isn't silently invisible to them. Deliberately independent of (not a
+    call-through to) ``_mongo_driver_already_linked`` below, which serves a
+    different purpose (the Mongo importer's own resume/idempotency check,
+    including its top-level-source branch) -- kept separate so this change
+    cannot alter that already-shipped, tested behavior.
+    """
+    return any(str(h.get("old_driver_id")) == old_id for h in (meta.get("mongo_driver_history") or []))
 
 
 @dataclass
@@ -1053,7 +1101,9 @@ def plan_legacy_sin_dob_import(
             continue
 
         meta = driver.get("legacy_import_metadata") or {}
-        if meta.get("source") != IMPORT_SOURCE:
+        if meta.get("source") not in (IMPORT_SOURCE, MONGO_IMPORT_SOURCE) and not _has_mongo_driver_history_entry(
+            meta, old_id
+        ):
             plan.warnings.append(
                 ImportErrorItem(
                     old_id, "legacy_import_metadata", "matched driver is not a known legacy-imported driver; skipped"
@@ -1324,9 +1374,11 @@ def print_sin_dob_report(plan: SinDobImportPlan, *, dry_run: bool) -> None:
 # prior value (``None`` for the first-ever row).
 #
 # Safety rules:
-#   - only touches drivers already tagged with this module's own
-#     ``IMPORT_SOURCE`` in ``legacy_import_metadata`` -- same phone-coincidence
-#     guard as the SIN/DOB backfill.
+#   - only touches drivers already tagged with one of this module's own known
+#     legacy-import sources in ``legacy_import_metadata`` -- same phone-
+#     coincidence guard, and the same ``source in (IMPORT_SOURCE,
+#     MONGO_IMPORT_SOURCE)`` OR ``_has_mongo_driver_history_entry`` check,
+#     as the SIN/DOB backfill above.
 #   - append-only, matching the target table's own invariant (migration 157's
 #     comment: "rows are inserted, never updated/deleted") -- this backfill
 #     never touches an existing driver_vehicle_history row, only ever adds
@@ -1465,7 +1517,9 @@ def plan_legacy_vehicle_history_backfill(
             continue
 
         meta = driver.get("legacy_import_metadata") or {}
-        if meta.get("source") != IMPORT_SOURCE:
+        if meta.get("source") not in (IMPORT_SOURCE, MONGO_IMPORT_SOURCE) and not _has_mongo_driver_history_entry(
+            meta, old_id
+        ):
             plan.warnings.append(
                 ImportErrorItem(
                     old_id, "legacy_import_metadata", "matched driver is not a known legacy-imported driver; skipped"
@@ -1569,6 +1623,413 @@ def print_vehicle_history_report(plan: VehicleHistoryBackfillPlan, *, dry_run: b
     print(f"  skipped (no matching driver): {plan.skipped_unmatched}")
     print(f"  skipped (not a known legacy driver): {plan.skipped_not_legacy_driver}")
     print(f"  skipped (already backfilled): {plan.skipped_already_backfilled}")
+    print(f"  warnings: {len(plan.warnings)}")
+    print(f"  errors: {len(plan.errors)}")
+    for item in plan.warnings[:50]:
+        print(f"WARNING old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+    for item in plan.errors[:100]:
+        print(f"ERROR old_driver_id={item.old_driver_id} field={item.field}: {item.message}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Legacy Mongo driver-profile import (drivers.csv from the raw Mongo export)
+#
+# ACTION_ITEMS.md / docs/migration/2026-08-27-legacy-data-full-migration-
+# approach.md Phase 1: `drivers.csv` (Mongo ObjectId-keyed, ~900 rows) is a
+# THIRD driver population, distinct from both the numeric-ID Saskatoon CSV
+# this module's build_plan() above already imports (IMPORT_SOURCE) and any
+# already-organic Spinr driver. It is the population `bookings.driver_id`/
+# `rides.legacy_import_metadata->old_driver_id` (booking_import_service.py)
+# actually references -- see docs/audit/2026-08-19-full-mongodb-export-
+# collection-inventory.md finding #2. No importer existed for it before this
+# section; without it, a legacy ride whose driver never happened to already
+# have a Spinr account imports with a NULL driver_id -- history exists on the
+# ride, but nothing shows under that driver's own activity/earnings screen.
+#
+# Deliberately separate build_*_plan()/commit_*_plan() functions rather than
+# extending build_plan() above: the two CSVs share almost no column names
+# (raw Mongo export vs. a bespoke recruitment sheet) and this module's own
+# read_mongo_export_csv() docstring already documents why the two must never
+# share a header-normalization pass. Helpers that ARE generic over any
+# phone/email-keyed row list (`_prefetch_existing`, `_select_in`,
+# `normalize_phone`, `split_name`, `_parse_legacy_epoch_ms`, `encrypt_pii`,
+# `generate_driver_code`, `get_service_area`) are reused directly, not
+# duplicated -- unlike the cross-module duplication convention documented on
+# `_parse_legacy_epoch_ms`, this is reuse *within* the same module.
+#
+# Safety rules, mirroring build_plan()'s own (see its docstring above) where
+# still applicable:
+#   - a CSV row whose phone/email already matches an EXISTING user or driver
+#     is LINKED, not rejected (decided 2026-08-27, see docs/migration/
+#     2026-08-27-legacy-driver-blank-name-root-cause.md §3/§6 -- this
+#     replaces the original build_plan()-mirrored "always an error" rule,
+#     which turned out to block 35.6% of the real export once checked
+#     against production). Two shapes, both additive-only, never a silent
+#     mutation of a live driver's own fields:
+#       * matches an existing DRIVER -> enrich that driver's
+#         `legacy_import_metadata.mongo_driver_history` (append-only list),
+#         never create a competing needs_review row.
+#       * matches an existing account with no driver yet (almost always a
+#         rider resolved by booking_import_service.py's own phone matching)
+#         -> create the new driver row as normal, but point it at that
+#         EXISTING user_id and set `is_driver=True` on it, instead of
+#         creating a duplicate user (`users.phone` is UNIQUE).
+#     A driver/account match already recorded by a PREVIOUS run of this
+#     importer for the same old_driver_id (`_mongo_driver_already_linked`)
+#     is a resume, not new work either way -- same idempotency guarantee
+#     the original rule had, just checked against a list now instead of a
+#     single top-level field.
+#   - every created driver lands `status='needs_review'`, `is_verified=
+#     False`, `is_online=False`, `is_available=False`, unconditionally. The
+#     export's own `documents` field is filenames only (no image bytes,
+#     confirmed in the audit doc) -- there is no way to verify a document
+#     was actually approved, so unlike build_plan() above (which can reach
+#     `status='active'` when the CSV says approved AND a live approved
+#     document row exists), no CSV field can ever promote a row past
+#     needs_review here. No driver_documents rows are created either, for
+#     the same reason -- nothing here is verifiable evidence.
+#   - vehicle fields are left at their table defaults/NULL. `vehicle_
+#     details.csv` (Phase 2) is a separate crosswalk keyed off this same
+#     `drivers.csv`'s `_id`/phone -- creating the driver row here is the
+#     dependency that crosswalk needs, not a place to guess at vehicle data.
+#   - old-app `status` ("online"/"offline", a live runtime toggle) and
+#     `is_block`/`is_deleted` are never trusted as durable profile facts --
+#     every imported driver starts offline/unavailable regardless, and
+#     block/delete state is preserved only as read-only history in
+#     `legacy_import_metadata` (`was_blocked_in_source`/
+#     `was_deleted_in_source`) for whoever reviews the needs_review queue,
+#     never as an import-time rejection. A driver whose old-app account was
+#     deleted may still be the correct historical driver on a real completed
+#     ride, which is exactly the gap this section closes.
+#   - a blank `name` is a WARNING, not a row-level error (decided 2026-08-27,
+#     see docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md):
+#     confirmed against the real export that every blank-name row is an
+#     abandoned onboarding (set_up_profile=false, never referenced by any
+#     booking's driver_id), not a data-quality bug. The row still imports,
+#     with a synthetic `"Unnamed Legacy Driver {old_id[-6:]}"` name and
+#     `legacy_import_metadata.incomplete_profile_in_source=true`, so these
+#     ~63%-of-rows don't block the whole batch's commit. needs_review/
+#     unverified/offline already keeps them out of dispatch either way.
+#
+# Follow-up closed 2026-08-28 (docs/change-log/2026-08-28-legacy-backfill-
+#   mongo-import-source.md): the SIN/DOB backfill (plan_legacy_sin_dob_import,
+#   above) and the vehicle-history backfill (plan_legacy_vehicle_history_
+#   backfill, above) now also match a driver created/linked/enriched by this
+#   section -- see `_has_mongo_driver_history_entry` and each function's own
+#   safety-rule comment for the three-shapes reasoning (directly-created and
+#   linked drivers carry their own top-level `source == MONGO_IMPORT_SOURCE`;
+#   an enriched driver's Mongo lineage lives only in its additive
+#   `mongo_driver_history` list, since enrichment never overwrites the
+#   driver's original top-level `source`).
+
+MONGO_IMPORT_SOURCE = "legacy_mongo_driver_import"
+
+REQUIRED_MONGO_DRIVER_COLUMNS = {"_id", "name", "phone"}
+
+
+@dataclass
+class MongoDriverImportPlan:
+    users_to_insert: list[dict[str, Any]] = field(default_factory=list)
+    drivers_to_insert: list[dict[str, Any]] = field(default_factory=list)
+    # Existing-match linking (decided 2026-08-27, see the root-cause doc's
+    # Finding 2): users_to_update carries {"id", "is_driver"?, "legacy_
+    # import_metadata"} for an existing account a new driver row gets linked
+    # to (sub-population 1); drivers_to_enrich carries {"id", "legacy_
+    # import_metadata"} for an existing driver whose history gets an
+    # additive entry instead of a competing duplicate row (sub-population
+    # 2). Both mirror rider_import_service.py's own users_to_update shape.
+    users_to_update: list[dict[str, Any]] = field(default_factory=list)
+    drivers_to_enrich: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[ImportErrorItem] = field(default_factory=list)
+    errors: list[ImportErrorItem] = field(default_factory=list)
+
+
+def _mongo_driver_already_linked(existing_meta: dict[str, Any], old_id: str) -> bool:
+    """True if ``old_id`` is already recorded against this account/driver by
+    a previous run of this importer -- either as the row that directly
+    CREATED it (top-level ``source``/``old_driver_id``, the drivers_to_
+    insert shape) or as a prior link/enrichment (``mongo_driver_history``
+    list, the users_to_update/drivers_to_enrich shape below). Checked before
+    treating a match as new work so re-running the same CSV is a no-op, not
+    a duplicate history entry or a repeated ``is_driver`` flip.
+    """
+    if existing_meta.get("source") == MONGO_IMPORT_SOURCE and str(existing_meta.get("old_driver_id")) == old_id:
+        return True
+    return any(str(h.get("old_driver_id")) == old_id for h in (existing_meta.get("mongo_driver_history") or []))
+
+
+def validate_required_mongo_driver_columns(rows: list[dict[str, str]], plan: MongoDriverImportPlan) -> None:
+    if not rows:
+        plan.errors.append(ImportErrorItem("<file>", "drivers_csv", "drivers CSV is empty"))
+        return
+    missing = REQUIRED_MONGO_DRIVER_COLUMNS - set(rows[0].keys())
+    for col in sorted(missing):
+        plan.errors.append(ImportErrorItem("<file>", col, "drivers CSV is missing required column"))
+
+
+def build_mongo_driver_import_plan(
+    driver_rows: list[dict[str, str]],
+    *,
+    service_area: dict[str, Any],
+    import_batch: str,
+) -> MongoDriverImportPlan:
+    """Validate raw Mongo-export ``drivers.csv`` rows into a
+    ``MongoDriverImportPlan``. ``driver_rows`` must come from
+    ``read_mongo_export_csv`` (or an admin-upload equivalent preserving raw
+    Mongo column names) -- never ``read_csv``/``parse_csv_rows``, whose
+    header normalization corrupts ``_id`` (see that function's docstring).
+
+    Unlike build_plan() above, every row is scoped to the single
+    ``service_area`` the caller passes -- the raw export has no per-row
+    service-area column to check against (it predates Spinr's multi-city
+    service-area concept entirely).
+    """
+    plan = MongoDriverImportPlan()
+    validate_required_mongo_driver_columns(driver_rows, plan)
+    if plan.errors:
+        return plan
+
+    users_by_phone, users_by_email, drivers_by_phone = _prefetch_existing(driver_rows)
+    seen_old_ids: set[str] = set()
+
+    for row in driver_rows:
+        old_id = (row.get("_id") or "").strip()
+        if not old_id:
+            plan.errors.append(ImportErrorItem("<missing>", "_id", "row has no _id"))
+            continue
+        if old_id in seen_old_ids:
+            plan.errors.append(ImportErrorItem(old_id, "_id", "duplicate _id"))
+            continue
+        seen_old_ids.add(old_id)
+
+        phone = normalize_phone(row.get("phone", ""))
+        if not _PHONE_RE.match(phone):
+            plan.errors.append(ImportErrorItem(old_id, "phone", "phone is not a valid 10-digit North American number"))
+            continue
+
+        # Root cause (confirmed 2026-08-27 against the real export, not
+        # guessed at): a blank name is not a data-quality/export bug -- it is
+        # a 1:1 signal for an abandoned onboarding attempt. Every blank-name
+        # row has set_up_profile=false (the driver verified their phone via
+        # OTP and never finished the in-app profile step), and zero of them
+        # are ever referenced by any booking's driver_id -- these accounts
+        # never drove a trip. Rejecting the whole batch over rows with no
+        # historical-ride linkage would block the ~63% of rows that DO have
+        # a name and DO need importing, so this is a warning + a clearly
+        # synthetic placeholder name, not a row-level error. needs_review/
+        # unverified/offline below already keeps every one of these out of
+        # dispatch regardless of name.
+        name = (row.get("name") or "").strip()
+        incomplete_profile_in_source = parse_bool(row.get("set_up_profile", "")) is False
+        if not name:
+            name = f"Unnamed Legacy Driver {old_id[-6:]}"
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id,
+                    "name",
+                    "row has no name (abandoned onboarding in source app, set_up_profile=false; "
+                    "never linked to any ride); imported with placeholder name, forced needs_review",
+                )
+            )
+        first_name, last_name = split_name(name)
+
+        # A malformed email is common in this export (unlike the curated
+        # Saskatoon sheet) and isn't required for anything -- the app is
+        # phone/OTP-auth, not email-auth. Drop it with a warning rather than
+        # reject a row that is otherwise perfectly good, historical-ride-
+        # linkage-wise.
+        email_raw = (row.get("email") or "").strip().lower()
+        email: str | None = email_raw or None
+        if email and not _EMAIL_RE.match(email):
+            plan.warnings.append(ImportErrorItem(old_id, "email", "email is not a valid format; imported without it"))
+            email = None
+
+        matched_user = users_by_phone.get(phone) or (users_by_email.get(email) if email else None)
+        matched_driver = drivers_by_phone.get(phone)
+        create_new_user = True
+
+        if matched_driver or matched_user:
+            driver_meta = (matched_driver.get("legacy_import_metadata") or {}) if matched_driver else {}
+            user_meta = (matched_user.get("legacy_import_metadata") or {}) if matched_user else {}
+            already_linked = (matched_driver is not None and _mongo_driver_already_linked(driver_meta, old_id)) or (
+                matched_user is not None and _mongo_driver_already_linked(user_meta, old_id)
+            )
+            if already_linked:
+                plan.warnings.append(
+                    ImportErrorItem(old_id, "resume", "already imported/linked by a previous run of this importer")
+                )
+                continue
+
+            # Decided 2026-08-27 (see docs/migration/2026-08-27-legacy-
+            # driver-blank-name-root-cause.md §3/§6): an existing-account
+            # match is no longer a hard error. A read-only production query
+            # found it happens at real scale (35.6% of the real export) --
+            # almost always the SAME person, already resolved to a Spinr
+            # account by booking_import_service.py's own phone matching
+            # during the ride import. Rejecting the whole batch over that
+            # would have made this importer permanently uncommittable
+            # against production, the same shape of problem as the
+            # blank-name finding. history_entry is additive-only, appended
+            # under a namespaced `mongo_driver_history` key -- mirrors the
+            # existing `stripe_migration`/`rider_csv_import` additive-merge
+            # convention already used elsewhere in this codebase (stripe_
+            # mapping_import_service.py, rider_import_service.py) rather
+            # than inventing a new one.
+            history_entry = {
+                "batch": import_batch,
+                "old_driver_id": old_id,
+                "source": MONGO_IMPORT_SOURCE,
+                "was_deleted_in_source": parse_bool(row.get("is_deleted", "")) is True,
+                "was_blocked_in_source": parse_bool(row.get("is_block", "")) is True,
+                "incomplete_profile_in_source": incomplete_profile_in_source,
+                "linked_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            if matched_driver:
+                # Sub-population 2: this phone is already a REAL Spinr
+                # driver. Enrich that driver's history -- never create a
+                # competing needs_review duplicate, and never touch the
+                # live driver's own name/phone/status/vehicle/rating/
+                # is_verified/is_online/is_available.
+                history = list(driver_meta.get("mongo_driver_history") or [])
+                history.append(history_entry)
+                plan.drivers_to_enrich.append(
+                    {
+                        "id": matched_driver["id"],
+                        "legacy_import_metadata": {**driver_meta, "mongo_driver_history": history},
+                    }
+                )
+                plan.warnings.append(
+                    ImportErrorItem(
+                        old_id,
+                        "phone",
+                        f"matches existing driver {matched_driver['id']}; enriched history, no new row created",
+                    )
+                )
+                continue
+
+            # Sub-population 1: phone matches an existing account (almost
+            # always a rider) with no driver row yet. Link a NEW driver
+            # profile to that EXISTING user instead of creating a duplicate
+            # account (users.phone is UNIQUE) -- is_driver/is_rider is
+            # already a real, load-bearing dual-role flag pair elsewhere in
+            # this codebase (backend/routes/auth.py's FCM-token-on-logout
+            # handling), not a pattern invented here.
+            history = list(user_meta.get("mongo_driver_history") or [])
+            history.append(history_entry)
+            user_update: dict[str, Any] = {
+                "id": matched_user["id"],
+                "legacy_import_metadata": {**user_meta, "mongo_driver_history": history},
+            }
+            if not matched_user.get("is_driver"):
+                user_update["is_driver"] = True
+            plan.users_to_update.append(user_update)
+            plan.warnings.append(
+                ImportErrorItem(
+                    old_id, "phone", f"matches existing account {matched_user['id']}; linking new driver profile to it"
+                )
+            )
+            user_id = matched_user["id"]
+            create_new_user = False
+        else:
+            user_id = str(uuid.uuid4())
+
+        driver_id = str(uuid.uuid4())
+        created_at = _parse_legacy_epoch_ms(row.get("created_at", "")) or datetime.now(timezone.utc).isoformat()
+
+        rating: float | None = None
+        try:
+            rating_raw = float(row.get("ratings") or 0)
+            if 1.0 <= rating_raw <= 5.0:
+                rating = rating_raw
+        except ValueError:
+            pass
+
+        if create_new_user:
+            plan.users_to_insert.append(
+                {
+                    "id": user_id,
+                    "phone": phone,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "email": email,
+                    "role": "driver",
+                    "is_driver": True,
+                    "profile_complete": True,
+                    "created_at": created_at,
+                }
+            )
+        driver_row: dict[str, Any] = {
+            "id": driver_id,
+            "user_id": user_id,
+            "driver_code": generate_driver_code(),
+            "name": name,
+            "first_name": first_name,
+            "last_name": last_name,
+            "phone": phone,
+            "service_area_id": service_area["id"],
+            "status": "needs_review",
+            "is_verified": False,
+            "is_online": False,
+            "is_available": False,
+            "_plain_license_number": (row.get("license_number") or "").strip() or None,
+            "legacy_import_metadata": {
+                "batch": import_batch,
+                "old_driver_id": old_id,
+                "source": MONGO_IMPORT_SOURCE,
+                "was_deleted_in_source": parse_bool(row.get("is_deleted", "")) is True,
+                "was_blocked_in_source": parse_bool(row.get("is_block", "")) is True,
+                "incomplete_profile_in_source": incomplete_profile_in_source,
+            },
+            "created_at": created_at,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if rating is not None:
+            driver_row["rating"] = rating
+        plan.drivers_to_insert.append(driver_row)
+
+    return plan
+
+
+def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
+    if plan.errors:
+        raise RuntimeError("refusing to commit with validation errors")
+    if plan.users_to_insert:
+        supabase.table("users").insert(plan.users_to_insert).execute()
+    # users_to_update / drivers_to_enrich are additive-only updates to
+    # EXISTING rows (never touched by the insert calls above/below) -- same
+    # pop-id-then-update shape as rider_import_service.commit_plan's own
+    # users_to_update loop.
+    for upd in plan.users_to_update:
+        upd = dict(upd)
+        user_id = upd.pop("id")
+        if not upd:
+            continue
+        upd["updated_at"] = datetime.now(timezone.utc).isoformat()
+        supabase.table("users").update(upd).eq("id", user_id).execute()
+    drivers = []
+    for driver in plan.drivers_to_insert:
+        copied = dict(driver)
+        copied["license_number"] = encrypt_pii(copied.pop("_plain_license_number", None))
+        drivers.append(copied)
+    if drivers:
+        supabase.table("drivers").insert(drivers).execute()
+    for enrich in plan.drivers_to_enrich:
+        enrich = dict(enrich)
+        driver_id = enrich.pop("id")
+        if not enrich:
+            continue
+        enrich["updated_at"] = datetime.now(timezone.utc).isoformat()
+        supabase.table("drivers").update(enrich).eq("id", driver_id).execute()
+
+
+def print_mongo_driver_import_report(plan: MongoDriverImportPlan, *, dry_run: bool) -> None:
+    mode = "DRY RUN" if dry_run else "COMMIT"
+    print(f"{mode} report -- legacy Mongo driver-profile import")
+    print(f"  users planned (new): {len(plan.users_to_insert)}")
+    print(f"  drivers planned (new): {len(plan.drivers_to_insert)}")
+    print(f"  existing accounts to link a new driver to: {len(plan.users_to_update)}")
+    print(f"  existing drivers to enrich (history only, no new row): {len(plan.drivers_to_enrich)}")
     print(f"  warnings: {len(plan.warnings)}")
     print(f"  errors: {len(plan.errors)}")
     for item in plan.warnings[:50]:

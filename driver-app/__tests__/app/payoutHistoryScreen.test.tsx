@@ -1,13 +1,18 @@
 /**
  * app/driver/payout-history.tsx — driver payout history with a status
- * filter and a "previous app" (legacy Stripe-sync transfers) footer
- * section. Pins:
+ * filter and a "previous app" footer section. Pins:
  *  - fetchPayoutHistory fires on mount
  *  - the status filter pills narrow the list (default 'all')
  *  - the list sorts newest-first regardless of the store's raw order
- *  - `payout_type: 'stripe_sync'` rows are excluded from the main list
- *    and rendered in the "Previous app" footer section instead — never
- *    interleaved
+ *  - `payout_type` rows for all three previous-app types — 'stripe_sync'
+ *    (legacy Stripe-sync transfers), 'legacy_import' (the booking
+ *    importer's offsetting payout), and 'legacy_outstanding_correction'
+ *    (legacy_payout_correction_service.py) — are excluded from the main
+ *    list and rendered in the "Previous app" footer section instead —
+ *    never interleaved. The latter two were found missing from this
+ *    grouping 2026-08-27 (docs/change-log/2026-08-27-payout-history-
+ *    previous-app-grouping.md) — they were previously falling through
+ *    into the regular Spinr list.
  *  - the empty state renders only when both the main list AND the
  *    previous-app section are empty
  *  - a payout's optional fields (bank_name, account_last4, processed_at,
@@ -68,6 +73,14 @@ const PAYOUT_2 = {
 const LEGACY_PAYOUT = {
   id: 'p3', amount: 10, status: 'completed', created_at: '2025-06-01T00:00:00Z',
   payout_type: 'stripe_sync',
+};
+const LEGACY_IMPORT_OFFSET_PAYOUT = {
+  id: 'p4', amount: 25, status: 'completed', created_at: '2025-07-01T00:00:00Z',
+  payout_type: 'legacy_import',
+};
+const LEGACY_OUTSTANDING_CORRECTION_PAYOUT = {
+  id: 'p5', amount: 15, status: 'completed', created_at: '2025-07-02T00:00:00Z',
+  payout_type: 'legacy_outstanding_correction',
 };
 
 let renderer: TestRenderer.ReactTestRenderer | null = null;
@@ -140,6 +153,36 @@ describe('PayoutHistoryScreen', () => {
     mockDriverState.payoutHistory = [PAYOUT_1, LEGACY_PAYOUT];
     const r = await renderScreen();
     expect(allText(r)).toContain('Previous app');
+  });
+
+  it('separates legacy_import offset payouts into the Previous App footer too', async () => {
+    mockDriverState.payoutHistory = [PAYOUT_1, LEGACY_IMPORT_OFFSET_PAYOUT];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Previous app');
+    expect(allText(r)).toContain('25.00');
+  });
+
+  it('separates legacy_outstanding_correction payouts into the Previous App footer too', async () => {
+    mockDriverState.payoutHistory = [PAYOUT_1, LEGACY_OUTSTANDING_CORRECTION_PAYOUT];
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Previous app');
+    expect(allText(r)).toContain('15.00');
+  });
+
+  it('groups all three previous-app payout types together, none leaking into the regular list', async () => {
+    mockDriverState.payoutHistory = [
+      PAYOUT_1,
+      LEGACY_PAYOUT,
+      LEGACY_IMPORT_OFFSET_PAYOUT,
+      LEGACY_OUTSTANDING_CORRECTION_PAYOUT,
+    ];
+    const r = await renderScreen();
+    // Only one "Previous app" section header should render, covering all
+    // three legacy types together, not three separate footers.
+    const headerCount = r.root.findAllByType(Text).filter(
+      (t) => JSON.stringify(t.props.children) === JSON.stringify('Previous app'),
+    ).length;
+    expect(headerCount).toBe(1);
   });
 
   it('shows the empty state only when both sections are empty', async () => {

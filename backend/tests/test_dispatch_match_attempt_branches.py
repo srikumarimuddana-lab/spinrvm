@@ -399,3 +399,112 @@ async def test_cascade_lookup_outer_exception_is_non_fatal():
 
     assert result is None
     mock_retry.assert_called_once()
+
+
+async def test_service_area_row_is_read_once_per_attempt():
+    """P2-B1: the ride's own service_areas row is fetched exactly once.
+
+    It used to be read 4-5× per dispatch attempt — resolve_matching_config,
+    the subscription gate, the quota timezone, the vehicle cascade, and the
+    offer-card polygon each issued their own `SELECT *` for the identical row,
+    every one of them carrying the heavy `polygon` JSONB. Dispatch has a
+    P95 < 2 s SLA and re-runs on every retry, so this pins the de-duplication:
+    a new consumer must take the already-fetched row, not add a sixth read.
+
+    Counts `find_one` rather than mocking a specific call site so it stays
+    honest if a future read is added through a different helper.
+    """
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride(vehicle_type_id="vt-suv")
+    area_row = {
+        "id": "area-1",
+        "parent_service_area_id": None,
+        "subscription_required": False,
+        "vehicle_cascade_map": [],
+        "timezone": "America/Regina",
+    }
+    area_lookups: list = []
+
+    async def _find_one(table, filters=None, **kwargs):
+        if table == "service_areas":
+            area_lookups.append((filters or {}).get("id"))
+            return dict(area_row)
+        return None
+
+    # A candidate driver AND an active subscription are both required for the
+    # test to have teeth: they are what carry execution past the subscription
+    # gate and into the daily-quota filter, two of the sites that each used to
+    # issue their own read. With an empty driver pool only the cascade read is
+    # reached and the pre-fix code would look identical.
+    driver = _make_driver("drv-1", vehicle_type_id="vt-suv")
+    subs = [{"driver_id": "drv-1", "started_at": None, "expires_at": None, "rides_per_day": None}]
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[])),
+        patch("backend.routes.rides.matching._dispatch_retry", AsyncMock()),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+        patch("backend.utils.spinr_pass.area_timezone", AsyncMock(return_value=None)) as mock_area_tz,
+    ):
+        mock_db.get_rows = AsyncMock(side_effect=_rows_by_table(drivers=[driver], subscriptions=subs))
+        mock_db.find_one = AsyncMock(side_effect=_find_one)
+        # Losing the claim stops the attempt just short of the notify phase.
+        # That is deliberate: the gate and quota reads are already behind us,
+        # and the notify phase needs the whole offer/WS/push apparatus mocked
+        # for one more read's worth of signal.
+        mock_db.claim_driver_atomic = AsyncMock(return_value=False)
+
+        await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    assert area_lookups == ["area-1"], f"service_areas row read {len(area_lookups)}× — expected exactly 1"
+    # area_timezone() reads the same row through utils.spinr_pass's own db
+    # handle — invisible to the counter above, which is exactly why it is
+    # asserted separately. The timezone is a plain field on the row we hold.
+    mock_area_tz.assert_not_called()
+
+
+async def test_area_lookup_failure_still_reaches_resolve_matching_config():
+    """A failed area read must NOT quietly dispatch on global defaults.
+
+    The de-duplication above hoists the read above resolve_matching_config, so
+    on failure the row is left empty and `area=None` is passed through — the
+    config resolver re-attempts the same read and raises exactly as it did
+    before the hoist. Dispatching with an unknown search_radius_km /
+    min_driver_rating would silently ignore the area's overrides.
+    """
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride()
+    seen_kwargs: dict = {}
+
+    async def _resolve(_ride, **kwargs):
+        seen_kwargs.update(kwargs)
+        raise RuntimeError("service_areas lookup failed")
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(side_effect=_resolve),
+        ),
+        patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=[])
+        mock_db.find_one = AsyncMock(side_effect=RuntimeError("service_areas lookup failed"))
+
+        with pytest.raises(RuntimeError):
+            await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    assert "area" in seen_kwargs, "the already-fetched area row must be threaded through, not re-read"
+    assert seen_kwargs["area"] is None, "a failed area read must not be passed off as an empty area"

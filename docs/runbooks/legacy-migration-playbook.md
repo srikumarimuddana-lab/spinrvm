@@ -546,6 +546,37 @@ rushed).
     > header that survives normalization untouched. No fix needed. Full writeup:
     > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md` §5/§6 (also updated
     > 2026-08-28).
+    >
+    > **[2026-08-28 — LIST-ROW BADGE "GAP" CORRECTED, NOT A GAP.]** This item's own earlier text
+    > (via §6 of the migration approach doc, not reproduced verbatim here) had flagged rider-app/
+    > driver-app ride-*list*-row UI wiring for `show_legacy_badge` as an open remaining step once the
+    > backend started returning it. It isn't: a 2026-08-13 product decision
+    > (`docs/change-log/2026-08-13-blended-lifetime-earnings.md`) deliberately removed the ride-card
+    > badge from both apps' Activity list rows once driver-app moved to a blended lifetime-earnings
+    > figure, pinned by a driver-app regression test. Discovered when two parallel sub-agents tasked
+    > with building it independently hit the conflict and stopped before committing; confirmed with
+    > the user the 08-13 decision stands. Ride-*detail* screens are unaffected — always showed the
+    > badge, still do. See the migration approach doc's §6 for the full correction.
+    >
+    > **[2026-08-28 — PHASE 2 (SIN/DOB + VEHICLE-HISTORY) ADMIN ROUTE + UI BUILT.]** The CLI-only
+    > backfill scripts referenced in the migration approach doc's §4 Phase 2 now also have an admin
+    > HTTP route + admin-dashboard page each, mirroring this item's own Phase 1 admin-route pattern
+    > for a two-CSV-upload flow: `routes/admin/legacy_sin_dob_backfill.py` (`banks.csv`+
+    > `drivers.csv`) and `routes/admin/legacy_vehicle_history_backfill.py`
+    > (`vehicle_details.csv`+`drivers.csv`), each `POST .../validate` and `.../commit`, same
+    > `require_module("drivers")` gate and commit-token/rate-limit posture as Phase 1 — the token's
+    > single `csv_sha256` binds to a combined hash of both uploaded files so swapping either one
+    > between validate and commit still invalidates it. Admin-dashboard pages at
+    > `dashboard/drivers/legacy-{sin-dob,vehicle-history}-backfill/`. Built as two parallel isolated
+    > worktree tracks (zero file overlap by design — each a full backend+frontend vertical slice);
+    > one small de-duplication cleanup was needed post-merge (both tracks' worktrees were based on a
+    > stale snapshot predating Phase 1's `read_mongo_export_csv_text`, so each had independently
+    > reimplemented that CSV parser locally — both flagged this themselves; swapped for the real
+    > shared function once merged onto a branch that had it, no behavior change). 28/28 backend
+    > tests, 370/370 admin-dashboard tests, real `npm run build` all pass. Not yet run against
+    > production — same "code ready, execution is not this item's job" posture as Phase 1 above.
+    > See `docs/change-log/2026-08-28-legacy-sin-dob-backfill-admin-route.md` and
+    > `docs/change-log/2026-08-28-legacy-vehicle-history-backfill-admin-route.md`.
 
 ## What this playbook is not
 

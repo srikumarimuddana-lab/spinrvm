@@ -134,6 +134,22 @@ audits, and today there's no historical answer for legacy rides.
 **Recommendation:** high priority, do right after Phase 1 (needs the driver linkage from
 Phase 1 to attach correctly).
 
+**Status (2026-08-28): CLI scripts (`backfill_legacy_driver_sin_dob.py`,
+`backfill_legacy_vehicle_history.py`) already existed from an earlier session; both now also
+have an admin HTTP route + admin-dashboard UI page, mirroring Phase 1's validate/commit-token
+pattern for a two-CSV-upload flow (`banks.csv`+`drivers.csv` for SIN/DOB,
+`vehicle_details.csv`+`drivers.csv` for vehicle history) — see
+`backend/routes/admin/legacy_sin_dob_backfill.py`,
+`backend/routes/admin/legacy_vehicle_history_backfill.py`, and the admin-dashboard pages under
+`dashboard/drivers/legacy-{sin-dob,vehicle-history}-backfill/`. Built as two parallel isolated
+worktree tracks (zero file overlap by design), each a full backend-route + admin-UI vertical
+slice; merged back with one small cleanup after merge — both tracks independently had to
+reimplement the shared raw-Mongo-CSV-text parser locally, since their worktrees were based on a
+stale snapshot that predated Phase 1's `read_mongo_export_csv_text`; both local copies were
+removed post-merge in favor of the real shared function once merged onto a branch that had it.
+Not yet run against production — same status as the CLI scripts before this: built and tested,
+awaiting a human go-ahead per batch (see the recommended-sequencing note in §7).
+
 ### Phase 3 — `driverlocationlogs` → tighten insurance-period accuracy (optional enhancement)
 
 **What:** 7,948 real GPS-phase segments (idle/going_to_pickup/on_ride) keyed by ride, 100%

@@ -19,6 +19,7 @@
  */
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { CheckCircle2, AlertTriangle, Loader2, Info, Upload } from "lucide-react";
 import {
     adminValidateVehicleHistoryBackfill,
@@ -234,7 +235,11 @@ export default function LegacyVehicleHistoryBackfillPage() {
                 <p className="text-sm text-muted-foreground">
                     Backfill <span className="font-mono">driver_vehicle_history</span> (the 7-year
                     regulatory driver/vehicle-linkage record) from the previous app&apos;s raw Mongo
-                    export. This is append-only — it never mutates or deletes an existing history row,
+                    export, for drivers already created by the{" "}
+                    <Link href="/dashboard/drivers/legacy-import" className="underline">
+                        Legacy Driver Import
+                    </Link>
+                    . This is append-only — it never mutates or deletes an existing history row,
                     and it never touches a live driver or vehicle field.
                 </p>
             </div>

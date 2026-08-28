@@ -258,7 +258,16 @@ export default function LegacyDriverImportPage() {
                     for that one. Every newly-created driver here is forced{" "}
                     <span className="font-mono">needs_review</span>, unverified, and offline
                     regardless of what the export says — no document files are imported (the
-                    export only has filenames, no images).
+                    export only has filenames, no images). Once a driver exists here, backfill
+                    their{" "}
+                    <Link href="/dashboard/drivers/legacy-sin-dob-backfill" className="underline">
+                        SIN/DOB
+                    </Link>{" "}
+                    or{" "}
+                    <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
+                        vehicle history
+                    </Link>{" "}
+                    from the same export.
                 </p>
             </div>
 

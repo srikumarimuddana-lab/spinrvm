@@ -107,10 +107,12 @@ new document-verification-state risk.
 **Recommendation:** build this before anything else in this phase — it's the dependency
 every other driver-activity item below needs.
 
-**Status (2026-08-27): core service + CLI built and both real-export findings resolved**
-(`build_mongo_driver_import_plan`/`commit_mongo_driver_import_plan` in
+**Status (2026-08-27): core service + CLI + admin route built, both real-export findings
+resolved** (`build_mongo_driver_import_plan`/`commit_mongo_driver_import_plan` in
 `backend/services/driver_import_service.py`, `backend/scripts/import_legacy_mongo_drivers.py`,
-25 tests), not yet run against production and no admin route wired up yet. Full writeup in
+`routes/admin/legacy_driver_import.py` — `POST /api/admin/legacy-drivers/import/{validate,commit}`,
+gated on `require_module("drivers")`, mirroring `driver_import.py`'s validate/commit-token/rate-
+limit pattern exactly — 35 tests), not yet run against production. Full writeup in
 `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`. Finding 1: 63.6% of rows
 had a blank `name` — confirmed as abandoned-onboarding rows with zero ride linkage, not a
 data bug; imports with a warning + placeholder name instead of blocking the batch. Finding 2:

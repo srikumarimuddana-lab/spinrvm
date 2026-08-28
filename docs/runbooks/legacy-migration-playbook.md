@@ -459,6 +459,18 @@ rushed).
     > 25 tests. Full root-cause writeup:
     > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`.
     >
+    > **[SAME DAY — ADMIN ROUTE BUILT.]** `routes/admin/legacy_driver_import.py`:
+    > `POST /api/admin/legacy-drivers/import/validate` and `.../commit`, mirroring
+    > `routes/admin/driver_import.py`'s existing validate/commit-token/rate-limit pattern
+    > exactly (gated on `require_module("drivers")`; commit requires a signed token proving
+    > `/validate` ran against this exact CSV/batch/admin first; `10/hour` commit rate limit,
+    > its own dedicated bucket, not shared with the Saskatoon importer's). New
+    > `read_mongo_export_csv_text()` in the service layer for the admin-upload path (the
+    > existing `read_csv_text()` would corrupt `_id` the same way the file-path reader's own
+    > docstring already documents). 10 HTTP-layer tests. This is the first point in Phase 1
+    > where the importer becomes actually reachable by an admin — CLI-only until now. See
+    > `docs/change-log/2026-08-27-legacy-driver-admin-route.md` for the full Change Impact Log.
+    >
     > **Finding A (resolved):** 588/925 rows (63.6%) have a blank `name` — confirmed, not assumed,
     > to be abandoned onboarding (100% correlated with `set_up_profile=false`, 0/588 ever referenced
     > by a `bookings.driver_id`) rather than a data-quality/export bug. Fixed as a warning +

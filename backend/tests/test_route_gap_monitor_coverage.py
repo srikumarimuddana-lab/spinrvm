@@ -170,6 +170,10 @@ async def test_loop_records_a_bgloop_error_metric_and_keeps_running_after_a_tick
     monkeypatch.setattr(route_gap_monitor, "_record_heartbeat", lambda _name: None)
     monkeypatch.setattr(route_gap_monitor, "_metric_inc", lambda name, *args: metrics.append((name, args)))
     monkeypatch.setattr(route_gap_monitor.asyncio, "sleep", fake_sleep)
+    # Always win the leader lock: these tests drive ticks back to back with
+    # sleep mocked out, so no wall-clock passes and the real lock's TTL would
+    # not expire between them. Lock election is covered separately.
+    monkeypatch.setattr(route_gap_monitor, "try_acquire_leader_lock", AsyncMock(return_value=True))
 
     with pytest.raises(asyncio.CancelledError):
         await route_gap_monitor.route_gap_monitor_loop(interval_seconds=15)

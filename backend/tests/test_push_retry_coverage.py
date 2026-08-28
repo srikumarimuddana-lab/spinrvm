@@ -120,6 +120,10 @@ class TestPushRetryLoop:
 
         tick = AsyncMock(side_effect=RuntimeError("boom"))
         monkeypatch.setattr(push_retry, "_tick", tick)
+        # Always win the leader lock: these tests drive ticks back to back with
+        # sleep mocked out, so no wall-clock passes and the real lock's TTL would
+        # not expire between them. Lock election is covered separately.
+        monkeypatch.setattr(push_retry, "try_acquire_leader_lock", AsyncMock(return_value=True))
 
         sleep_calls = []
 

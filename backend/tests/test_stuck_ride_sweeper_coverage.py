@@ -337,6 +337,10 @@ class TestStuckRideSweeperLoop:
 
         monkeypatch.setattr(sweeper.asyncio, "sleep", fake_sleep)
         monkeypatch.setattr(sweeper.random, "uniform", lambda a, b: 0)
+        # Always win the leader lock: these tests drive ticks back to back with
+        # sleep mocked out, so no wall-clock passes and the real lock's TTL would
+        # not expire between them. Lock election is covered separately.
+        monkeypatch.setattr(sweeper, "try_acquire_leader_lock", AsyncMock(return_value=True))
 
         with pytest.raises(asyncio.CancelledError):
             await sweeper.stuck_ride_sweeper_loop()
@@ -356,6 +360,10 @@ class TestStuckRideSweeperLoop:
         metric_inc = MagicMock()
         monkeypatch.setattr(sweeper, "_metric_inc", metric_inc)
         monkeypatch.setattr(sweeper.random, "uniform", lambda a, b: 0)
+        # Always win the leader lock: these tests drive ticks back to back with
+        # sleep mocked out, so no wall-clock passes and the real lock's TTL would
+        # not expire between them. Lock election is covered separately.
+        monkeypatch.setattr(sweeper, "try_acquire_leader_lock", AsyncMock(return_value=True))
 
         sleep_calls = []
 
@@ -381,6 +389,10 @@ class TestStuckRideSweeperLoop:
         metric_inc = MagicMock()
         monkeypatch.setattr(sweeper, "_metric_inc", metric_inc)
         monkeypatch.setattr(sweeper.random, "uniform", lambda a, b: 0)
+        # Always win the leader lock: these tests drive ticks back to back with
+        # sleep mocked out, so no wall-clock passes and the real lock's TTL would
+        # not expire between them. Lock election is covered separately.
+        monkeypatch.setattr(sweeper, "try_acquire_leader_lock", AsyncMock(return_value=True))
 
         async def fake_sleep(secs):
             pass  # only the startup jitter sleep should run before cancellation
@@ -398,6 +410,10 @@ class TestStuckRideSweeperLoop:
         monkeypatch.setattr(sweeper, "_sweep", sweep)
         monkeypatch.setattr(sweeper, "_record_heartbeat", MagicMock())
         monkeypatch.setattr(sweeper.random, "uniform", lambda a, b: 0)
+        # Always win the leader lock: these tests drive ticks back to back with
+        # sleep mocked out, so no wall-clock passes and the real lock's TTL would
+        # not expire between them. Lock election is covered separately.
+        monkeypatch.setattr(sweeper, "try_acquire_leader_lock", AsyncMock(return_value=True))
 
         sleep_calls = []
 

@@ -20,6 +20,7 @@ try:
     from .loop_monitor import record_heartbeat as _record_heartbeat
     from .metrics import inc as _metric_inc
     from .metrics import set_gauge as _metric_gauge
+    from .redis_client import try_acquire_leader_lock
 except ImportError:  # pragma: no cover - supports running backend modules top-level
     import db_supabase  # type: ignore
     import socket_manager  # type: ignore
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover - supports running backend modules top-l
     from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import set_gauge as _metric_gauge  # type: ignore
+    from utils.redis_client import try_acquire_leader_lock  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -332,6 +334,18 @@ async def route_gap_monitor_tick() -> dict[str, int]:
 async def route_gap_monitor_loop(interval_seconds: int = ROUTE_GAP_MONITOR_INTERVAL_SECONDS) -> None:
     """Replay-safe active-trip GPS-gap monitor. Runs every 15 seconds."""
     while True:
+        # Leader lock: LOAD shedding only, not correctness. This loop is
+        # already replay-safe, so N replicas running it is correct — just N×
+        # the DB work at a 15s cadence, which the 2026-08-26 audit
+        # measured among the top query sources. Same rationale
+        # dispute_evidence_reminder.py already states for its own lock.
+        # Fails OPEN, so a Redis blip restores exactly today's behaviour.
+        # TTL < the minimum sleep below, or a pod finds its own key alive and
+        # halves the cadence.
+        if not await try_acquire_leader_lock("route_gap_monitor", int(interval_seconds * 0.85), logger_=logger):
+            _record_heartbeat("route_gap_monitor (15s)")
+            await asyncio.sleep(interval_seconds)
+            continue
         try:
             await route_gap_monitor_tick()
             _record_heartbeat("route_gap_monitor (15s)")

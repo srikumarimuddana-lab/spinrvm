@@ -78,8 +78,6 @@ def test_gap_monitor_tick_opens_one_idempotent_event_without_coordinates(monkeyp
             return [
                 {"id": "ride_1", "driver_id": "driver_1", "ride_started_at": (NOW - timedelta(minutes=4)).isoformat()}
             ]
-        if table == "driver_location_history":
-            return [{"captured_at": (NOW - timedelta(seconds=45)).isoformat()}]
         if table == "ride_location_gap_events":
             return []  # no open events for the orphan-closure pass
         raise AssertionError(f"unexpected table {table}")
@@ -91,7 +89,13 @@ def test_gap_monitor_tick_opens_one_idempotent_event_without_coordinates(monkeyp
     async def update_one(*_args, **_kwargs):
         raise AssertionError("a current capture gap must not be resolved")
 
+    async def rpc(_name, _params):
+        # One batched call for the whole tick (migration 371) replaces the
+        # per-ride driver_location_history reads.
+        return {"ride_1": (NOW - timedelta(seconds=45)).isoformat()}
+
     monkeypatch.setattr(route_gap_monitor.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(route_gap_monitor.db_supabase, "rpc", rpc)
     monkeypatch.setattr(route_gap_monitor.db_supabase, "insert_many_ignore_conflicts", insert_many_ignore_conflicts)
     monkeypatch.setattr(route_gap_monitor.db_supabase, "update_one", update_one)
     monkeypatch.setattr(route_gap_monitor, "get_app_settings", lambda: _settings(30))
@@ -125,17 +129,20 @@ def test_gap_monitor_tick_resolves_an_open_event_after_capture_resumes(monkeypat
             return [
                 {"id": "ride_1", "driver_id": "driver_1", "ride_started_at": (NOW - timedelta(minutes=4)).isoformat()}
             ]
-        if table == "driver_location_history":
-            return [{"captured_at": (NOW - timedelta(seconds=5)).isoformat()}]
         if table == "ride_location_gap_events":
             return []  # no open events for the orphan-closure pass
         raise AssertionError(f"unexpected table {table}")
+
+    async def rpc(_name, _params):
+        # One batched call for the whole tick (migration 371).
+        return {"ride_1": (NOW - timedelta(seconds=5)).isoformat()}
 
     async def update_one(*args, **kwargs):
         updates.append((args, kwargs))
         return {"id": "event_1"}
 
     monkeypatch.setattr(route_gap_monitor.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(route_gap_monitor.db_supabase, "rpc", rpc)
     monkeypatch.setattr(route_gap_monitor.db_supabase, "update_one", update_one)
     monkeypatch.setattr(
         route_gap_monitor.db_supabase, "insert_many_ignore_conflicts", lambda *_args: _unexpected_insert()
@@ -254,36 +261,64 @@ def test_nudge_swallows_send_failure():
 # --- NULL captured_at blindness + orphaned open events (SPR-PE7TTB) -----------
 
 
-def test_latest_capture_ignores_null_captured_at_rows():
-    """ORDER BY captured_at DESC puts NULLs first in Postgres. One legacy WS
-    breadcrumb row (captured_at NULL) blinded the monitor for the whole ride:
-    every tick saw None, opened a phantom gap-since-trip-start, and the real
-    mid-trip blackout was never distinguishable (ride SPR-PE7TTB)."""
-    calls: list[dict] = []
+def test_latest_captures_is_one_call_for_the_whole_batch():
+    """P2-B7: one RPC per tick, not 1-2 queries per ride.
 
-    async def get_rows(table, filters, **_kwargs):
-        assert table == "driver_location_history"
-        calls.append(filters)
-        return [{"captured_at": (NOW - timedelta(seconds=5)).isoformat()}]
+    This was 1-2 serial driver_location_history reads for each of up to
+    MAX_ACTIVE_RIDES_PER_TICK rides, every 15s, on every replica.
 
-    with patch.object(route_gap_monitor.db_supabase, "get_rows", get_rows):
-        result = _run(route_gap_monitor._latest_capture_time("ride_1"))
+    The NULL-captured_at filtering and the legacy-timestamp fallback moved
+    into SQL with the batching (migration 371) — ORDER BY captured_at DESC
+    puts NULLs FIRST in Postgres, and one legacy WS breadcrumb used to blind
+    the monitor for a whole ride (SPR-PE7TTB: an 11-minute mid-trip blackout
+    went undetected). That precedence is verified in the migration against
+    production data, not here; what is pinned here is that this stays ONE
+    call and that its payload maps back to the right rides.
+    """
+    calls: list[tuple] = []
 
-    assert result == NOW - timedelta(seconds=5)
-    assert calls[0]["captured_at"] == {"$notnull": True}
+    async def rpc(name, params):
+        calls.append((name, params))
+        return {
+            "ride_1": (NOW - timedelta(seconds=5)).isoformat(),
+            "ride_2": (NOW - timedelta(seconds=8)).isoformat(),
+        }
+
+    with patch.object(route_gap_monitor.db_supabase, "rpc", rpc):
+        result = _run(route_gap_monitor._latest_capture_times(["ride_1", "ride_2"]))
+
+    assert len(calls) == 1, f"expected one batched call, got {len(calls)}"
+    assert calls[0][0] == "route_gap_latest_captures"
+    assert calls[0][1] == {"p_ride_ids": ["ride_1", "ride_2"]}
+    assert result == {
+        "ride_1": NOW - timedelta(seconds=5),
+        "ride_2": NOW - timedelta(seconds=8),
+    }
 
 
-def test_latest_capture_falls_back_to_legacy_timestamp_column():
-    async def get_rows(_table, filters, **_kwargs):
-        if "captured_at" in filters:
-            return []  # all rows are v1-shaped: captured_at NULL everywhere
-        assert filters["timestamp"] == {"$notnull": True}
-        return [{"timestamp": (NOW - timedelta(seconds=8)).isoformat()}]
+def test_latest_captures_maps_absent_rides_to_none():
+    """A ride the RPC does not mention has no usable capture at all — the same
+    None the old per-ride "no rows" path returned. It must not be dropped from
+    the dict, or the caller would read a KeyError-shaped hole as a healthy
+    ride."""
 
-    with patch.object(route_gap_monitor.db_supabase, "get_rows", get_rows):
-        result = _run(route_gap_monitor._latest_capture_time("ride_1"))
+    async def rpc(_name, _params):
+        return {"ride_1": (NOW - timedelta(seconds=5)).isoformat()}
 
-    assert result == NOW - timedelta(seconds=8)
+    with patch.object(route_gap_monitor.db_supabase, "rpc", rpc):
+        result = _run(route_gap_monitor._latest_capture_times(["ride_1", "ride_2"]))
+
+    assert result == {"ride_1": NOW - timedelta(seconds=5), "ride_2": None}
+
+
+def test_latest_captures_short_circuits_on_empty_input():
+    """No active rides means no call at all."""
+
+    async def rpc(_name, _params):
+        raise AssertionError("must not query for an empty ride list")
+
+    with patch.object(route_gap_monitor.db_supabase, "rpc", rpc):
+        assert _run(route_gap_monitor._latest_capture_times([])) == {}
 
 
 def test_orphaned_open_events_close_terminally_when_ride_no_longer_active():
@@ -324,3 +359,30 @@ def test_orphaned_open_events_close_terminally_when_ride_no_longer_active():
             {"status": "unresolved_at_completion"},
         )
     ]
+
+
+def test_single_ride_helper_delegates_to_the_batched_one():
+    """utils/stale_p3_closer.py imports _latest_capture_time by name.
+
+    Renaming it to the batched form without leaving this wrapper broke that
+    import — and because stale_p3_closer's tests patch the symbol by string,
+    the failure surfaced as 11 unrelated-looking AttributeErrors rather than
+    as anything pointing at route_gap_monitor. Pinned so the cross-module
+    caller cannot be silently orphaned again.
+
+    It delegates rather than re-querying, so the NULL-captured_at filtering
+    and legacy-timestamp precedence stay defined in exactly one place.
+    """
+    calls: list = []
+
+    async def rpc(name, params):
+        calls.append(params)
+        return {"ride_1": (NOW - timedelta(seconds=5)).isoformat()}
+
+    with patch.object(route_gap_monitor.db_supabase, "rpc", rpc):
+        result = _run(route_gap_monitor._latest_capture_time("ride_1"))
+        missing = _run(route_gap_monitor._latest_capture_time("ride_404"))
+
+    assert result == NOW - timedelta(seconds=5)
+    assert missing is None
+    assert calls == [{"p_ride_ids": ["ride_1"]}, {"p_ride_ids": ["ride_404"]}]

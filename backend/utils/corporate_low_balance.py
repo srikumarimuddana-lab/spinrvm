@@ -24,16 +24,16 @@ except ImportError:
 
 try:
     from ..db_supabase import (  # type: ignore
+        claim_low_balance_notification,
         get_corporate_account_by_id,
         list_wallets_low_balance_no_autotopup,
-        mark_low_balance_notified,
     )
     from ..features import send_email  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
+        claim_low_balance_notification,
         get_corporate_account_by_id,
         list_wallets_low_balance_no_autotopup,
-        mark_low_balance_notified,
     )
     from features import send_email  # type: ignore
 
@@ -70,6 +70,10 @@ async def run_low_balance_tick() -> None:
         logger.warning("low-balance: app_settings lookup failed (%s), proceeding as enabled", settings_err)
 
     wallets = await list_wallets_low_balance_no_autotopup()
+    # The rate-limit boundary, computed once so every wallet in this tick
+    # claims against the same instant. Also the value the atomic claim below
+    # compares against server-side.
+    _cutoff_iso = (datetime.now(timezone.utc) - _RATE_LIMIT).isoformat()
     for w in wallets:
         last = w.get("low_balance_notified_at")
         if last:
@@ -90,12 +94,12 @@ async def run_low_balance_tick() -> None:
             if last_dt and datetime.now(timezone.utc) - last_dt < _RATE_LIMIT:
                 continue
         try:
-            await _notify_one(w)
+            await _notify_one(w, not_notified_since_iso=_cutoff_iso)
         except Exception:
             logger.exception("low-balance notify failed for wallet %s", w.get("id"))
 
 
-async def _notify_one(wallet: dict) -> None:
+async def _notify_one(wallet: dict, *, not_notified_since_iso: str) -> None:
     company = await get_corporate_account_by_id(wallet["company_id"])
     if not company or not company.get("billing_email"):
         return
@@ -113,8 +117,23 @@ async def _notify_one(wallet: dict) -> None:
         f"Top up from the admin portal to avoid ride interruptions.\n\n"
         f"— Spinr Business"
     )
+    # Claim BEFORE sending, not after. This loop runs on every replica with no
+    # leader lock, so the old read-then-send-then-stamp order let two replicas
+    # both clear the rate-limit window and both email the same billing contact.
+    # The claim is a conditional update on the very column the window reads, so
+    # the DB decides the winner.
+    #
+    # Ordering trade-off, taken deliberately: if send_email fails after a won
+    # claim, the wallet is marked notified without an email and the nudge waits
+    # for the next window. That is strictly better than emailing a customer
+    # twice, and the caller already logs the send failure.
+    if not await claim_low_balance_notification(wallet_id=wallet["id"], not_notified_since_iso=not_notified_since_iso):
+        logger.info(
+            "low-balance: wallet %s already claimed by another replica this window — skipping",
+            wallet["id"],
+        )
+        return
     await send_email(to=company["billing_email"], subject=subject, body=body)
-    await mark_low_balance_notified(wallet_id=wallet["id"])
 
 
 async def corporate_low_balance_loop() -> None:

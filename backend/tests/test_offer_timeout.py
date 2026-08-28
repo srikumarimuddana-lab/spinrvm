@@ -264,16 +264,15 @@ class TestDispatchHardening:
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
             ),
             patch("backend.routes.rides._deps.db_supabase.match_and_claim_driver", AsyncMock(return_value=None)),
-            patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
-            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch(
-                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
-                # claim_driver_atomic only guards id + is_available; the
-                # freshly-read row is then revalidated against the full
+                "backend.routes.rides._deps.db_supabase.claim_driver_atomic",
+                # claim_driver_atomic guards id + is_available and RETURNS the
+                # claimed row; that row is then revalidated against the full
                 # eligibility set (is_online + is_verified + status=='active')
                 # before the driver is actually claimed for an offer.
                 AsyncMock(return_value={**self._DRIVER, "is_online": True, "is_verified": True, "status": "active"}),
             ),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch(
                 "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"}),

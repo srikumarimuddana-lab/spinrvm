@@ -5,6 +5,7 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
 from datetime import timedelta
+from typing import Any, Dict
 
 try:
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
@@ -66,6 +67,13 @@ _MAX_DISPATCH_ATTEMPTS = 30
 # The healthy no-drivers re-poll stays at 10s — that path is waiting for supply,
 # not for a dependency to recover.
 _DISPATCH_ERROR_BACKOFF = (10, 30, 60)
+
+# Row cap on the batched quest-progress lookup for an offer batch. Sized well
+# above max_simultaneous_offers (hard-capped at 10) times a generous number of
+# concurrently-active quests per driver, so a driver holding several never gets
+# their banner silently dropped by truncation. Only decorative offer-card data
+# rides on this, so the cap bounds the read rather than gating correctness.
+_QUEST_HINT_ROW_CAP = 200
 
 
 def _dispatch_error_delay(attempt: int) -> int:
@@ -219,9 +227,72 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # value, which drifted when admin changed the setting mid-session.
     offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
 
+    # ── One service_areas read per attempt ────────────────────────
+    # This same row used to be fetched 4-5 times per dispatch attempt, each an
+    # independent `SELECT *` carrying the `polygon` JSONB: once in
+    # resolve_matching_config, again for the subscription gate, again for the
+    # quota timezone, again for the vehicle cascade, and again for the polygon
+    # in the notify phase. They all want the row this ride is dispatching in.
+    #
+    # Fetched here rather than cached with a TTL deliberately: a cached area
+    # would go stale against an admin editing search_radius_km /
+    # subscription_required / vehicle_cascade_map mid-session — the exact drift
+    # the offer-timeout comment above records having been burned by. One read
+    # per attempt keeps every consumer on the same snapshot AND keeps admin
+    # edits landing on the very next attempt or retry.
+    #
+    # Failure semantics are preserved exactly, which is why this is not a bare
+    # await: on error the row is left empty AND `area=None` is passed below, so
+    # resolve_matching_config re-attempts the same read and raises just as it
+    # does today — dispatch must never quietly fall back to the global radius
+    # and rating floor when the area's overrides are unknown. The consumers
+    # further down (cascade, polygon, quota) keep their existing fail-open
+    # behaviour against the empty row for the same reason they had it before:
+    # a missing cascade map means no cascade, not a dead dispatch.
+    _ride_area: Dict[str, Any] = {}
+    _area_lookup_failed = False
+    if ride.get("service_area_id"):
+        try:
+            _ride_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}) or {}
+        except Exception:
+            _area_lookup_failed = True
+            logger.error(
+                "[DISPATCH] service-area lookup failed for ride_id=%s area=%s — "
+                "re-raising via resolve_matching_config rather than dispatching on global defaults",
+                ride_id,
+                ride.get("service_area_id"),
+                exc_info=True,
+            )
+
+    _parent_area_box: Dict[str, Any] = {}
+
+    async def _parent_area() -> Dict[str, Any]:
+        """The ride area's parent row, fetched at most once per attempt.
+
+        Lazy on purpose: the subscription gate only needs the parent when the
+        child row does not already set the flag, so an eager fetch would ADD a
+        query for the common case. Fails open (returns {}) exactly as the two
+        call sites it replaces did.
+        """
+        if "row" in _parent_area_box:
+            return _parent_area_box["row"]
+        _pid = _ride_area.get("parent_service_area_id")
+        row: Dict[str, Any] = {}
+        if _pid:
+            try:
+                row = await _deps.db_supabase.find_one("service_areas", {"id": _pid}) or {}
+            except Exception:
+                logger.error(
+                    "[DISPATCH] parent service-area lookup failed for area=%s — treating as unset",
+                    ride.get("service_area_id"),
+                    exc_info=True,
+                )
+        _parent_area_box["row"] = row
+        return row
+
     # Algorithm + radius + rating floor + batch config (area overrides app settings).
     algorithm, min_rating, search_radius, max_offers, use_eta = await _shared.dispatch.resolve_matching_config(
-        ride, app_settings=app_settings
+        ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
     )
 
     # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs
@@ -403,25 +474,32 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # query — no N+1 per driver.  Fails open on DB error so a transient fault
     # cannot halt dispatch entirely; the accept_ride guard is the backstop.
     _sub_required: bool = False  # pre-init so cascade block can read it if try block skips
+    # Raw driver_subscriptions rows, when the gate below fetched them. The daily
+    # quota filter further down wants the same rows from the same table with the
+    # same filter, so it reuses these instead of issuing a second identical
+    # query. None (not []) means "the gate did not run", which is a different
+    # thing from "it ran and found nothing" — only the latter lets the quota
+    # filter skip its own read.
+    _gate_subs: Optional[list] = None
     if all_drivers and ride.get("service_area_id"):
         try:
-            _disp_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
             # Finding F: child areas (airport sub-regions) inherit subscription_required
             # from their parent so airport pickups in a required city don't bypass the gate.
-            _sub_required = bool(_disp_area and _disp_area.get("subscription_required"))
-            if not _sub_required and _disp_area and _disp_area.get("parent_service_area_id"):
-                _parent_area = await _deps.db_supabase.find_one(
-                    "service_areas", {"id": _disp_area["parent_service_area_id"]}
-                )
-                _sub_required = bool(_parent_area and _parent_area.get("subscription_required"))
+            _sub_required = bool(_ride_area.get("subscription_required"))
+            if not _sub_required and _ride_area.get("parent_service_area_id"):
+                _sub_required = bool((await _parent_area()).get("subscription_required"))
             if _sub_required:
                 _candidate_ids = [d["id"] for d in all_drivers]
                 _active_subs = await _deps.db_supabase.get_rows(
                     "driver_subscriptions",
                     {"driver_id": {"$in": _candidate_ids}, "status": "active"},
-                    columns="driver_id,expires_at,plan_id",
+                    # started_at/rides_per_day are not read here — they are the
+                    # two extra columns the daily-quota filter needs, carried on
+                    # this query so that filter can skip a second identical read.
+                    columns="driver_id,started_at,expires_at,plan_id,rides_per_day",
                     limit=len(_candidate_ids),
                 )
+                _gate_subs = list(_active_subs or [])
                 _now_utc = datetime.now(timezone.utc)
                 # Filter by expiry; guard None from parse_iso_utc so one malformed
                 # row can't zero out all candidates via TypeError → except → all_drivers=[].
@@ -446,7 +524,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     _plan_areas = {p["id"]: p.get("service_areas") for p in (_plans or [])}
                 _ride_service_area = ride["service_area_id"]
                 # A plan scoped to the parent area is valid for child (e.g. airport) areas.
-                _ride_parent_area_id = (_disp_area or {}).get("parent_service_area_id")
+                _ride_parent_area_id = _ride_area.get("parent_service_area_id")
                 _subscribed_ids = set()
                 for _s in _valid_subs:
                     _allowed = _plan_areas.get(_s.get("plan_id"))
@@ -489,19 +567,38 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     if all_drivers and ride.get("service_area_id"):
         try:
             try:
-                from ...utils.spinr_pass import area_timezone, exhausted_driver_ids
+                from ...utils.spinr_pass import exhausted_driver_ids
             except ImportError:
-                from utils.spinr_pass import area_timezone, exhausted_driver_ids  # type: ignore
+                from utils.spinr_pass import exhausted_driver_ids  # type: ignore
 
             _q_ids = [d["id"] for d in all_drivers]
-            _q_subs = await _deps.db_supabase.get_rows(
-                "driver_subscriptions",
-                {"driver_id": {"$in": _q_ids}, "status": "active"},
-                columns="driver_id,started_at,expires_at,rides_per_day",
-                limit=len(_q_ids),
-            )
+            if _gate_subs is not None:
+                # The subscription gate already fetched these exact rows — same
+                # table, same {driver_id IN …, status: active} filter — over a
+                # superset of this pool (it ran before the gate narrowed
+                # all_drivers). Narrowing it here is what a fresh query would
+                # return, so re-issuing one is a pure duplicate round-trip on
+                # the P95 < 2 s dispatch path.
+                #
+                # The RAW gate rows are reused, not its expiry-filtered
+                # _valid_subs: the quota query never filtered on expiry either,
+                # because exhausted_driver_ids does its own window handling.
+                _q_id_set = set(_q_ids)
+                _q_subs = [_s for _s in _gate_subs if _s.get("driver_id") in _q_id_set]
+            else:
+                # Free area: the gate never ran, so this is the only read. There
+                # is no area-level "has finite passes" flag to short-circuit on,
+                # and discovering one would cost the very query it would save.
+                _q_subs = await _deps.db_supabase.get_rows(
+                    "driver_subscriptions",
+                    {"driver_id": {"$in": _q_ids}, "status": "active"},
+                    columns="driver_id,started_at,expires_at,rides_per_day",
+                    limit=len(_q_ids),
+                )
             if _q_subs:
-                _q_tz = await area_timezone(ride["service_area_id"])
+                # area_timezone() would re-read the row we already hold; it is
+                # a plain `.get("timezone")` on exactly this row.
+                _q_tz = _ride_area.get("timezone")
                 _q_exhausted = await exhausted_driver_ids(_q_subs, tz=_q_tz)
                 if _q_exhausted:
                     _q_before = len(all_drivers)
@@ -543,15 +640,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # This runs after all other filters so only genuinely-available
         # upgrade drivers are offered the ride.
         try:
-            _casc_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
-            _casc_map: list = (_casc_area or {}).get("vehicle_cascade_map") or []
+            _casc_map: list = _ride_area.get("vehicle_cascade_map") or []
             # Fix 6: child areas (airport sub-regions) inherit parent's cascade map
             # when the child row has none configured — mirrors subscription_required inheritance.
-            if not _casc_map and (_casc_area or {}).get("parent_service_area_id"):
-                _casc_parent = await _deps.db_supabase.find_one(
-                    "service_areas", {"id": _casc_area["parent_service_area_id"]}
-                )
-                _casc_map = (_casc_parent or {}).get("vehicle_cascade_map") or []
+            if not _casc_map and _ride_area.get("parent_service_area_id"):
+                _casc_map = (await _parent_area()).get("vehicle_cascade_map") or []
             _casc_to: list = next(
                 (rule.get("to") or [] for rule in _casc_map if rule.get("from") == ride["vehicle_type_id"]),
                 [],
@@ -642,7 +735,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             )
                             _casc_plan_areas = {p["id"]: p.get("service_areas") for p in (_casc_plans or [])}
                         _casc_sa_id = ride["service_area_id"]
-                        _casc_parent_sa_id = (_casc_area or {}).get("parent_service_area_id")
+                        _casc_parent_sa_id = _ride_area.get("parent_service_area_id")
                         _casc_subscribed: set = set()
                         for _cs in _casc_valid_subs:
                             _cs_allowed = _casc_plan_areas.get(_cs.get("plan_id"))
@@ -725,15 +818,20 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     for driver, eta_sec, _ in ranked:
         if len(claimed_drivers) >= max_offers:
             break
-        if await _deps.db_supabase.claim_driver_atomic(driver["id"]):
-            fresh = await _deps.db_supabase.get_driver_by_id(driver["id"])
+        fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+        if fresh:
+            # The claim's own UPDATE returns the post-claim row, so no follow-up
+            # get_driver_by_id is needed — and that read was guaranteed uncached
+            # anyway, because claim_driver_atomic invalidates the cache entry on
+            # both sides of the update. Up to max_offers of those per attempt.
+            #
             # Revalidate the FULL eligibility set on the freshly-read row, not
             # just is_online. claim_driver_atomic only guards id + is_available,
             # so an admin who suspended the driver or flipped them back to
             # needs_review between the candidate read and the claim would
             # otherwise still get offered — the exact stale-status case the
             # candidate filter (is_verified + status='active') is meant to stop.
-            if fresh and fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
+            if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
                 claimed_drivers.append((fresh, eta_sec))
             else:
                 await _deps.db_supabase.set_driver_available(driver["id"], True)
@@ -826,15 +924,16 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             return [], 0.0
 
     async def _fetch_service_area_polygon() -> Optional[list]:
-        sa_id = ride.get("service_area_id")
-        if not sa_id:
+        # Reads the row already fetched at the top of the attempt rather than
+        # re-issuing a fifth `SELECT *` for it (the polygon JSONB is the
+        # heaviest column on that row, so this was the most expensive repeat).
+        if not ride.get("service_area_id"):
             return None
         try:
-            sa = await _deps.db_supabase.find_one("service_areas", {"id": sa_id})
-            poly = get_service_area_polygon(sa or {})
+            poly = get_service_area_polygon(_ride_area)
             return poly or None
         except Exception as e:
-            logger.error("[DISPATCH] service_area polygon fetch failed: %s", e, exc_info=True)
+            logger.error("[DISPATCH] service_area polygon parse failed: %s", e, exc_info=True)
             return None
 
     rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
@@ -850,35 +949,55 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
     _surge_mult = float(ride.get("surge_multiplier") or 1.0)
 
+    # Quest progress for every claimed driver, in ONE query.
+    #
+    # This used to be a serial embedded-join query *inside* the notify loop —
+    # up to max_offers (10) round-trips, one per driver, on the dispatch
+    # offer→notification path that carries a P95 < 2 s SLA. The data is a
+    # cosmetic progress banner on the offer card, so it was paying latency on
+    # the most timing-sensitive path in the product for decoration.
+    #
+    # Semantics are unchanged: the per-driver query had `.limit(1)` with no
+    # ORDER BY, i.e. "any one active quest", so first-row-wins per driver here
+    # is the same contract. The batch is bounded by _QUEST_HINT_ROW_CAP because
+    # a driver may hold several active quests at once, so len(uids) could
+    # truncate and silently drop a driver's banner.
+    #
+    # Fails open as one unit rather than per driver: on error nobody gets a
+    # banner and the offer still goes out. That trades N failure points for 1
+    # on data that is decorative by definition.
+    _quest_by_uid: Dict[str, Dict[str, Any]] = {}
+    _quest_uids = [d.get("user_id") for d, _ in claimed_drivers if d.get("user_id")]
+    if _quest_uids:
+        try:
+            _qr = await _deps.db_supabase.run_sync(
+                _deps.db_supabase.supabase.table("quest_progress")
+                .select("driver_id, current_value, status, quest:quests(title, target_value, reward_amount)")
+                .in_("driver_id", _quest_uids)
+                .eq("status", "active")
+                .limit(_QUEST_HINT_ROW_CAP)
+                .execute
+            )
+            for _qp in _qr.data or []:
+                _uid = _qp.get("driver_id")
+                if not _uid or _uid in _quest_by_uid:
+                    continue
+                _q = _qp.get("quest") or {}
+                _tv = float(_q.get("target_value") or 1)
+                _cv = float(_qp.get("current_value") or 0)
+                _quest_by_uid[_uid] = {
+                    "title": _q.get("title", ""),
+                    "current_value": _cv,
+                    "target_value": _tv,
+                    "progress_pct": round(min(_cv / _tv, 1.0) * 100, 1) if _tv else 0,
+                    "reward_amount": float(_q.get("reward_amount") or 0),
+                }
+        except Exception as e:
+            logger.error(f"Failed to fetch quest progress for {len(_quest_uids)} claimed driver(s): {e}", exc_info=True)
+
     # ── Notify each claimed driver ────────────────────────────────
     for driver, _eta in claimed_drivers:
-        # Per-driver quest progress
-        _quest_hint = None
-        try:
-            driver_uid = driver.get("user_id")
-            if driver_uid:
-                qr = await _deps.db_supabase.run_sync(
-                    _deps.db_supabase.supabase.table("quest_progress")
-                    .select("current_value, status, quest:quests(title, target_value, reward_amount)")
-                    .eq("driver_id", driver_uid)
-                    .eq("status", "active")
-                    .limit(1)
-                    .execute
-                )
-                if qr.data:
-                    qp = qr.data[0]
-                    q = qp.get("quest") or {}
-                    tv = float(q.get("target_value") or 1)
-                    cv = float(qp.get("current_value") or 0)
-                    _quest_hint = {
-                        "title": q.get("title", ""),
-                        "current_value": cv,
-                        "target_value": tv,
-                        "progress_pct": round(min(cv / tv, 1.0) * 100, 1) if tv else 0,
-                        "reward_amount": float(q.get("reward_amount") or 0),
-                    }
-        except Exception as e:
-            logger.error(f"Failed to fetch quest progress for driver {driver['id']}: {e}", exc_info=True)
+        _quest_hint = _quest_by_uid.get(driver.get("user_id"))
 
         # Per-driver signed URL for the notification's BigPicture fare banner.
         # Bound to this ride + driver and short-lived; rendered on demand by

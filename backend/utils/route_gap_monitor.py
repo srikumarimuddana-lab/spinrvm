@@ -20,6 +20,7 @@ try:
     from .loop_monitor import record_heartbeat as _record_heartbeat
     from .metrics import inc as _metric_inc
     from .metrics import set_gauge as _metric_gauge
+    from .redis_client import try_acquire_leader_lock
 except ImportError:  # pragma: no cover - supports running backend modules top-level
     import db_supabase  # type: ignore
     import socket_manager  # type: ignore
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover - supports running backend modules top-l
     from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import set_gauge as _metric_gauge  # type: ignore
+    from utils.redis_client import try_acquire_leader_lock  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -91,8 +93,8 @@ def _configured_threshold_seconds(settings: dict) -> int:
     return threshold
 
 
-async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
-    """Newest accepted capture time for the ride, ignoring NULL captured_at.
+async def _latest_capture_times(ride_ids: list[str]) -> dict[str, Optional[datetime]]:
+    """Newest accepted capture time for EVERY given ride, in one call.
 
     ``ORDER BY captured_at DESC`` puts NULLs FIRST in Postgres, so a single
     legacy WS-path breadcrumb (v1 fields, no captured_at) permanently blinded
@@ -100,28 +102,43 @@ async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
     to None, and concluded "no captures yet" — the phantom gap-since-trip-start
     was opened once and never resolved, and any REAL later blackout could not
     be distinguished (ride SPR-PE7TTB: 2 of 51 rows NULL, an 11-minute
-    mid-trip outage went undetected). Filter NULLs out, then fall back to the
-    legacy "timestamp" column for rides whose points are all v1-shaped.
+    mid-trip outage went undetected). NULLs are filtered out, then the legacy
+    "timestamp" column answers rides whose points are all v1-shaped.
+
+    This used to be per-ride: 1-2 serial queries for each of up to
+    MAX_ACTIVE_RIDES_PER_TICK rides, every 15s, on every replica — ~1000
+    round-trips a tick to answer one question per ride.
+
+    An RPC rather than a batched ``ride_id IN (...)``: the question is "newest
+    row PER ride", which PostgREST cannot express, and a batched query ordered
+    by captured_at DESC under a row cap would let busy rides fill the cap and
+    push a quiet ride's newest row out of the result — reintroducing exactly
+    the blindness described above, in a form that looks like a clean batch.
+    ``DISTINCT ON`` answers it exactly (migration 371).
+
+    A ride absent from the RPC result has no usable capture at all and maps to
+    None, the same value the old "no rows" path returned.
     """
-    rows = await db_supabase.get_rows(
-        "driver_location_history",
-        {"ride_id": ride_id, "captured_at": {"$notnull": True}},
-        order="captured_at",
-        desc=True,
-        limit=1,
-        columns="captured_at",
-    )
-    if rows:
-        return parse_iso_utc(rows[0].get("captured_at"))
-    rows = await db_supabase.get_rows(
-        "driver_location_history",
-        {"ride_id": ride_id, "timestamp": {"$notnull": True}},
-        order="timestamp",
-        desc=True,
-        limit=1,
-        columns="timestamp",
-    )
-    return parse_iso_utc(rows[0].get("timestamp")) if rows else None
+    if not ride_ids:
+        return {}
+    rows = await db_supabase.rpc("route_gap_latest_captures", {"p_ride_ids": ride_ids})
+    payload = rows[0] if isinstance(rows, list) and rows else rows
+    if not isinstance(payload, dict):
+        payload = {}
+    return {rid: parse_iso_utc(payload.get(rid)) for rid in ride_ids}
+
+
+async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
+    """Single-ride form of :func:`_latest_capture_times`.
+
+    Kept because utils/stale_p3_closer.py asks this question one ride at a
+    time, from a 15-minute loop where batching buys nothing — unlike the
+    15-second gap monitor, which is why the batched form exists at all.
+
+    It delegates rather than duplicating the query, so the NULL-captured_at
+    filtering and legacy-timestamp precedence can only ever be defined once.
+    """
+    return (await _latest_capture_times([ride_id])).get(ride_id)
 
 
 async def _open_gap_event(ride: dict, decision: GapDecision, threshold_seconds: int, now: datetime) -> bool:
@@ -285,6 +302,10 @@ async def route_gap_monitor_tick() -> dict[str, int]:
     result["orphaned_closed"] = await _close_orphaned_open_events(now)
     current_open_gaps = 0
 
+    # One RPC for the whole tick instead of 1-2 queries per ride. Fetched up
+    # front so every ride in this tick is assessed against the same snapshot.
+    latest_captures = await _latest_capture_times([str(r["id"]) for r in rides if r.get("id")])
+
     for ride in rides:
         ride_id = ride.get("id")
         if not ride_id:
@@ -294,7 +315,7 @@ async def route_gap_monitor_tick() -> dict[str, int]:
         decision = assess_location_gap(
             now=now,
             trip_started_at=parse_iso_utc(ride.get("ride_started_at")),
-            last_captured_at=await _latest_capture_time(str(ride_id)),
+            last_captured_at=latest_captures.get(str(ride_id)),
             threshold_seconds=threshold_seconds,
         )
         if decision.state == "unknown":
@@ -326,6 +347,18 @@ async def route_gap_monitor_tick() -> dict[str, int]:
 async def route_gap_monitor_loop(interval_seconds: int = ROUTE_GAP_MONITOR_INTERVAL_SECONDS) -> None:
     """Replay-safe active-trip GPS-gap monitor. Runs every 15 seconds."""
     while True:
+        # Leader lock: LOAD shedding only, not correctness. This loop is
+        # already replay-safe, so N replicas running it is correct — just N×
+        # the DB work at a 15s cadence, which the 2026-08-26 audit
+        # measured among the top query sources. Same rationale
+        # dispute_evidence_reminder.py already states for its own lock.
+        # Fails OPEN, so a Redis blip restores exactly today's behaviour.
+        # TTL < the minimum sleep below, or a pod finds its own key alive and
+        # halves the cadence.
+        if not await try_acquire_leader_lock("route_gap_monitor", int(interval_seconds * 0.85), logger_=logger):
+            _record_heartbeat("route_gap_monitor (15s)")
+            await asyncio.sleep(interval_seconds)
+            continue
         try:
             await route_gap_monitor_tick()
             _record_heartbeat("route_gap_monitor (15s)")

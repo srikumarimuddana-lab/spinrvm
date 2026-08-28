@@ -393,24 +393,32 @@ class TestInvalidateUserCache:
 
 
 class TestAtomicClaims:
-    def test_claim_driver_returns_bool(self):
+    def test_claim_driver_returns_the_claimed_row(self):
+        # Patch target is repositories.driver_repo, NOT backend.db_supabase:
+        # db_supabase only re-exports, so the function reads driver_repo's
+        # globals (see conftest.py's note). The old spelling here silently had
+        # no effect — the assertion passed off the mock_supabase_client's
+        # MagicMock rather than the patched value.
         from backend.db_supabase import claim_driver_atomic
 
         with (
-            patch("backend.db_supabase.run_sync", AsyncMock(return_value=True)),
-            patch("backend.db_supabase.invalidate_driver_cache", AsyncMock()),
+            patch("backend.repositories.driver_repo.run_sync", AsyncMock(return_value={"id": "driver_1"})),
+            patch("backend.repositories.driver_repo.invalidate_driver_cache", AsyncMock()),
         ):
             result = asyncio.run(claim_driver_atomic("driver_1"))
 
-        assert isinstance(result, bool)
+        assert result == {"id": "driver_1"}
 
-    def test_claim_driver_returns_false_when_no_rows(self):
+    def test_claim_driver_returns_none_when_no_rows(self):
         from backend.db_supabase import claim_driver_atomic
 
-        with patch("backend.db_supabase.run_sync", AsyncMock(return_value=False)):
+        with (
+            patch("backend.repositories.driver_repo.run_sync", AsyncMock(return_value=None)),
+            patch("backend.repositories.driver_repo.invalidate_driver_cache", AsyncMock()),
+        ):
             result = asyncio.run(claim_driver_atomic("driver_1"))
 
-        assert result is False
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

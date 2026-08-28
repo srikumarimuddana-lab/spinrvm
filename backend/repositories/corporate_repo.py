@@ -479,6 +479,39 @@ async def mark_low_balance_notified(*, wallet_id: str) -> None:
     await run_sync(_fn)
 
 
+async def claim_low_balance_notification(*, wallet_id: str, not_notified_since_iso: str) -> bool:
+    """Atomically claim the right to send this wallet's low-balance email.
+
+    Returns True if THIS caller won the claim, False if another replica
+    already holds it. The low-balance loop runs on every replica with no
+    leader lock, and the read-then-write it used to do (read
+    low_balance_notified_at, decide, send, stamp) let two replicas both pass
+    the rate-limit window and both email the same billing contact.
+
+    Conditional update on the same column the rate limit reads, so the DB
+    decides the winner: only a row still NULL or still older than the caller's
+    cutoff matches. Zero rows back means someone else got there first — the
+    same shape as claim_driver_atomic and the ride-acceptance guard, and the
+    atomic-claim pattern .claude/skills/spinr-background-loop prefers over a
+    Redis leader lock.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _fn():
+        res = (
+            supabase.table("corporate_wallets")
+            .update({"low_balance_notified_at": now_iso})
+            .eq("id", wallet_id)
+            .or_(
+                f"low_balance_notified_at.is.null,low_balance_notified_at.lt.{not_notified_since_iso}",
+            )
+            .execute()
+        )
+        return bool(getattr(res, "data", None))
+
+    return await run_sync(_fn)
+
+
 async def list_wallet_risk_portfolio() -> List[Dict[str, Any]]:
     """Every corporate wallet annotated with risk flags, for the admin
     portfolio-risk view (Corporate + admin portal review, round 2: "no
@@ -1227,14 +1260,31 @@ async def list_companies_needing_kyb_reverification(*, reviewed_before_iso: str)
     return _rows_from_res(await run_sync(_fn))
 
 
-async def mark_kyb_reverify_flagged(*, company_id: str) -> None:
-    """Replay-safety claim flag only (migration 283) — not the source of
-    truth for staleness, which the admin filter computes live from
-    kyb_reviewed_at."""
+async def mark_kyb_reverify_flagged(*, company_id: str, not_flagged_since_iso: str) -> bool:
+    """Atomically claim the KYB re-verification flag for this company.
+
+    Replay-safety claim flag only (migration 283) — not the source of truth
+    for staleness, which the admin filter computes live from kyb_reviewed_at.
+
+    Returns True if THIS caller won the claim. The write used to be
+    unconditional, so with the loop running on every replica two of them could
+    both pass the re-flag cooldown, both stamp the row, and both count a
+    "newly flagged" company — inflating
+    spinr_corporate_kyb_reverification_due_total and double-logging the
+    compliance event. Conditional on the same column the cooldown reads, so
+    the DB picks the winner.
+    """
 
     def _fn():
-        supabase.table("corporate_accounts").update(
-            {"kyb_reverify_flagged_at": datetime.now(timezone.utc).isoformat()}
-        ).eq("id", company_id).execute()
+        res = (
+            supabase.table("corporate_accounts")
+            .update({"kyb_reverify_flagged_at": datetime.now(timezone.utc).isoformat()})
+            .eq("id", company_id)
+            .or_(
+                f"kyb_reverify_flagged_at.is.null,kyb_reverify_flagged_at.lt.{not_flagged_since_iso}",
+            )
+            .execute()
+        )
+        return bool(getattr(res, "data", None))
 
-    await run_sync(_fn)
+    return await run_sync(_fn)

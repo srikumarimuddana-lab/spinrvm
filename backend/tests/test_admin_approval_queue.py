@@ -206,3 +206,53 @@ async def test_service_area_filter_propagates_to_photo_fetch():
     assert [it["driver_id"] for it in result["items"]] == ["driver-1"]
     photo_call = next(c for c in get_rows.await_args_list if c.args[0] == "drivers" and "user_id" in (c.args[1] or {}))
     assert photo_call.args[1]["service_area_id"] == "area-1"
+
+
+@pytest.mark.asyncio
+async def test_incomplete_profiles_stat_counts_the_full_set_not_the_page():
+    """`stats.incomplete_profiles` must span every queue row, not just `items`.
+
+    The response trims `items` to `limit`; the other three segment counts are
+    computed before that trim, so this one has to be too or the tab badge
+    silently disagrees with its neighbours once the queue outgrows a page.
+    """
+    drivers = [_driver(did=f"driver-{i}", uid=f"user-{i}") for i in range(5)]
+    users = [_user(uid=f"user-{i}", phone=f"+1555000000{i}") for i in range(5)]
+    # One driver has a complete profile; the other four do not.
+    drivers[0].update(
+        {
+            "vehicle_make": "Toyota",
+            "vehicle_model": "Camry",
+            "vehicle_year": 2022,
+            "vehicle_color": "Blue",
+            "license_plate": "ABC1234",
+            "stripe_account_id": "acct_123",
+        }
+    )
+    fake = _make_fake_get_rows(drivers=drivers, users=users)
+
+    result, _ = await _run_queue(fake, limit=2)
+
+    assert len(result["items"]) == 2, "page should be trimmed to the limit"
+    assert result["stats"]["total_pending"] == 5
+    assert result["stats"]["incomplete_profiles"] == 4
+    assert sum(1 for it in result["items"] if it["profile_completeness_score"] < 100) < 4
+
+
+@pytest.mark.asyncio
+async def test_queue_item_scores_a_complete_profile_at_100():
+    """Guards the schema-agreement bug at the route layer, not just the utility."""
+    driver = _driver(
+        vehicle_make="Toyota",
+        vehicle_model="Camry",
+        vehicle_year=2022,
+        vehicle_color="Blue",
+        license_plate="ABC1234",
+        stripe_account_id="acct_123",
+    )
+    fake = _make_fake_get_rows(drivers=[driver], users=[_user(phone="+15551234567")])
+
+    result, _ = await _run_queue(fake)
+
+    assert result["items"][0]["profile_completeness_score"] == 100
+    assert result["stats"]["incomplete_profiles"] == 0

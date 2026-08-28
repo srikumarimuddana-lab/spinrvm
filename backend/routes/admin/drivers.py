@@ -68,7 +68,14 @@ router = APIRouter()
 
 
 def _enrich_with_completeness(drivers: list, users_by_id: dict) -> None:
-    """Bulk-attach profile completeness score and missing count to driver dicts."""
+    """Bulk-attach profile completeness score and missing count to driver dicts.
+
+    Call this on the COMPOSED response rows, not the raw `drivers` rows. The
+    composed row has already resolved identity against the linked account
+    (account name wins, the legacy "Driver" placeholder is dropped), so scoring
+    it guarantees the badge agrees with the name rendered beside it instead of
+    the two paths merely happening to agree.
+    """
     for d in drivers:
         user = users_by_id.get(d.get("user_id")) if isinstance(d, dict) else None
         result = compute_profile_completeness(d, user)
@@ -566,8 +573,6 @@ async def admin_get_drivers(
             logger.warning(f"admin_get_drivers: subscription enrichment failed: {_sub_err}")
     _sub_now = datetime.now(timezone.utc)
 
-    _enrich_with_completeness(deduped, users_map)
-
     out = []
     for d in deduped:
         u = users_map.get(d.get("user_id"))
@@ -601,6 +606,10 @@ async def admin_get_drivers(
                 "account_deleted": bool(d.get("deleted_at")),
             }
         )
+
+    # After the loop, deliberately: score what the row actually renders, not the
+    # raw `drivers` mirrors it was built from. See _enrich_with_completeness.
+    _enrich_with_completeness(out, users_map)
     return out
 
 
@@ -1138,6 +1147,11 @@ async def admin_get_approval_queue(
             "new_applicants": sum(1 for it in items if it["is_new_applicant"]),
             "resubmissions": sum(1 for it in items if it["is_resubmission"]),
             "photo_review": sum(1 for it in items if it["has_pending_photo"]),
+            # Counted here, over the full result set, for the same reason the
+            # other segment counts are: `items` is trimmed to `limit` below, so
+            # a client-side count of the returned page would silently disagree
+            # with its neighbours once the queue outgrows one page.
+            "incomplete_profiles": sum(1 for it in items if (it.get("profile_completeness_score") or 0) < 100),
         },
         "items": items[:limit],
     }
@@ -4006,12 +4020,19 @@ async def generate_decal_pdf_endpoint(
     )
 
 
-@router.get("/completeness")
+@router.get("/drivers/{driver_id}/completeness")
 async def get_driver_completeness(
-    driver_id: str = Query(..., description="Driver ID"),
+    driver_id: str,
     admin: dict = Depends(get_admin_user),
 ):
-    """Return profile completeness score and missing fields for a driver."""
+    """Return profile completeness score and missing fields for a driver.
+
+    Path, not `/completeness`: this router carries no prefix of its own and is
+    mounted on `admin_router` (prefix `/admin`, itself mounted at `/api`), so a
+    bare `/completeness` resolves to `/api/admin/completeness` — outside the
+    `/drivers/...` namespace every other route in this file uses, and generic
+    enough to collide with a future non-driver completeness endpoint.
+    """
     driver_rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
     if not driver_rows:
         raise HTTPException(status_code=404, detail="Driver not found")

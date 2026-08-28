@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
@@ -149,9 +149,12 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
 
     // Route lookup happens inside the position effect via a ref so a route
     // refresh (live-route poll returns a new array every ~20 s) re-snaps the
-    // NEXT fix without re-firing the effect mid-glide.
+    // NEXT fix without re-firing the effect mid-glide. Synced in its own
+    // effect, declared BEFORE the consumers so it runs first each commit.
     const routeRef = useRef(routeCoordinates);
-    routeRef.current = routeCoordinates;
+    useEffect(() => {
+        routeRef.current = routeCoordinates;
+    }, [routeCoordinates]);
 
     // Continuously-accumulated rotation (can exceed 0–360 so shortest-arc
     // tweens never spin the long way round). Driven imperatively — no
@@ -170,20 +173,24 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         heading != null && Number.isFinite(heading) && heading >= 0,
     );
 
-    const animateRotationTo = (bearing: number, duration: number) => {
-        const target = shortestArcRotationTarget(rotationValueRef.current, bearing);
-        if (target === rotationValueRef.current) return;
-        rotationValueRef.current = target;
-        hasBearingRef.current = true;
-        Animated.timing(rotationAnim, {
-            toValue: target,
-            duration: Math.min(duration, MAX_ROTATE_MS),
-            // Marker rotation is a non-style native prop — JS driver only.
-            useNativeDriver: false,
-        }).start();
-    };
-    const animateRotationRef = useRef(animateRotationTo);
-    animateRotationRef.current = animateRotationTo;
+    // Stable by construction — reads only refs and the stable Animated value.
+    const animateRotationTo = useCallback(
+        (bearing: number, duration: number) => {
+            const target = shortestArcRotationTarget(rotationValueRef.current, bearing);
+            if (target === rotationValueRef.current) return;
+            rotationValueRef.current = target;
+            hasBearingRef.current = true;
+            Animated.timing(rotationAnim, {
+                toValue: target,
+                duration: Math.min(duration, MAX_ROTATE_MS),
+                // Marker rotation is a non-style native prop — JS driver only.
+                useNativeDriver: false,
+            }).start();
+        },
+        // rotationAnim is a stable ref value.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [],
+    );
 
     const headingValid = heading != null && Number.isFinite(heading) && heading >= 0;
 
@@ -225,7 +232,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             bearing = bearingDegrees(from.latitude, from.longitude, target.latitude, target.longitude);
         }
         prevTargetRef.current = target;
-        if (bearing != null) animateRotationRef.current(bearing, duration);
+        if (bearing != null) animateRotationTo(bearing, duration);
 
         animatedRegion
             .timing({
@@ -247,8 +254,8 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         if (!headingValid) return;
         const onRoute = !!snapToRoute(prevTargetRef.current, routeRef.current, MAX_ROUTE_SNAP_M);
         if (onRoute && hasBearingRef.current) return;
-        animateRotationRef.current(heading as number, MAX_ROTATE_MS);
-        // animateRotation/route refs are stable.
+        animateRotationTo(heading as number, MAX_ROTATE_MS);
+        // animateRotationTo and the route ref are stable.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [heading, headingValid]);
 

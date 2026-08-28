@@ -255,8 +255,12 @@ DRIVER_EMAIL_ITEMS = [
                 "Upload your driver's licence, vehicle insurance, vehicle inspection, and background "
                 f"check in the {SAMPLE_APP} driver app if you haven't already — we'll notify you "
                 "as soon as they've been reviewed.",
+                "Take a few minutes to complete driver training at training.spinr.ca before your first "
+                "ride — it covers pickups, safety, and rider communication.",
                 f"{SAMPLE_APP} takes 0% commission — every dollar of the fare goes to you, the "
                 "driver. No per-trip cut, ever.",
+                "Check the Subscription screen in the driver app for your area's current Spinr Pass "
+                "status — some areas have no subscription fee right now.",
                 "While you wait, finish your vehicle details in the app so there's nothing left to do "
                 "once you're approved.",
                 f"Questions any time: {SAMPLE_SUPPORT}",
@@ -287,7 +291,11 @@ _STATUS_EMAIL_COPY = [
         "driver_suspended",
         "suspended",
         "Account Suspended ⚠️",
-        "Your account has been suspended. Reason: Expired vehicle insurance. Contact support for details.",
+        # _with_reason() appends "Reason: {reason}" when a reason is given (always
+        # true for this action — routes/admin/drivers.py requires it) and ONLY
+        # appends "Contact support for details." in the no-reason branch, which
+        # the primary suspend action can never hit. The two never appear together.
+        "Your account has been suspended. Reason: Expired vehicle insurance.",
         f"You won't be able to go online while your account is suspended. Contact {SAMPLE_SUPPORT} "
         "if you have questions or want to appeal.",
     ),

@@ -267,14 +267,18 @@ export default function DriversPage() {
         if (statusFilter === "online") opts.is_online = true;
         else if (statusFilter === "photos_pending") opts.photo_status = "pending_review";
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
-        getDrivers(opts)
+        // Returns the rendered page so a caller that just mutated a driver can
+        // re-sync the open detail sheet from the refreshed server rows.
+        return getDrivers(opts)
             .then((rows) => {
-                if (reqId !== reqIdRef.current) return;
+                if (reqId !== reqIdRef.current) return [] as any[];
                 const arr = Array.isArray(rows) ? rows : [];
                 setHasNextPage(arr.length > PAGE_SIZE);
-                setDrivers(arr.slice(0, PAGE_SIZE));
+                const pageRows = arr.slice(0, PAGE_SIZE);
+                setDrivers(pageRows);
+                return pageRows;
             })
-            .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } })
+            .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } return [] as any[]; })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
     }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, sortKey, sortDir]);
 
@@ -549,6 +553,16 @@ export default function DriversPage() {
             const updated = merge(selected);
             setSelected(updated);
             setDrivers(prev => prev.map(d => d.id === selected.id ? merge(d) : d));
+            // The completeness score/missing-fields are derived server-side from
+            // the row, so the local merge above cannot refresh them: an admin who
+            // just filled in a field this very panel flagged as missing would keep
+            // seeing it flagged. Refetch and re-sync the open sheet from the
+            // server row, which is authoritative once the save has landed.
+            const savedId = selected.id;
+            loadDrivers().then((rows) => {
+                const fresh = (rows || []).find((r: any) => r.id === savedId);
+                if (fresh) setSelected((cur: any) => (cur?.id === savedId ? fresh : cur));
+            });
             if ("license_number" in changes) {
                 const last4 = String(changes.license_number).slice(-4);
                 setLiveStats(prev => prev ? { ...prev, license_number_last4: last4, license_number_on_file: true } : prev);
@@ -910,7 +924,13 @@ export default function DriversPage() {
                                 <TableHead className="h-11 pl-5 w-20"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Actions</span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")} tabIndex={0} role="columnheader" aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("name"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")} tabIndex={0} role="columnheader" aria-sort={sortKey === "status" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("status"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("profile_completeness_score")} tabIndex={0} role="columnheader" aria-sort={sortKey === "profile_completeness_score" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("profile_completeness_score"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Profile<SortIcon col="profile_completeness_score" /></span></TableHead>
+                                {/* Deliberately NOT sortable. Every other header here sorts at the
+                                    DB over the whole table (sort_by -> _DRIVER_SORT_COLUMNS), but the
+                                    completeness score is computed per-request from row data and is not
+                                    a column — the backend would silently ignore the key and reorder by
+                                    created_at while aria-sort announced a state the table was not in.
+                                    Sorting this needs the score persisted first. */}
+                                <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Profile</span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("is_online")} tabIndex={0} role="columnheader" aria-sort={sortKey === "is_online" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("is_online"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Online<SortIcon col="is_online" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_type")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_type" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_type"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle Type<SortIcon col="vehicle_type" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_make" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_make"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
@@ -1193,8 +1213,10 @@ export default function DriversPage() {
                                                             <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1"><CheckCircle className="h-3 w-3" />All required fields complete</p>
                                                         ) : selected.profile_missing_fields && selected.profile_missing_fields.length > 0 ? (
                                                             <div className="mt-1.5 flex flex-wrap gap-1">
-                                                                {selected.profile_missing_fields.map((field: string) => (
-                                                                    <span key={field} className="text-[10px] text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">{field.replace(/_/g, ' ')}</span>
+                                                                {/* Already display labels ("License Plate"), not field
+                                                                    names — the backend sends m["label"]. No un-snaking. */}
+                                                                {selected.profile_missing_fields.map((label: string) => (
+                                                                    <span key={label} className="text-[10px] text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">{label}</span>
                                                                 ))}
                                                             </div>
                                                         ) : null}

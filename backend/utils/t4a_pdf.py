@@ -65,6 +65,14 @@ def _payer_identity() -> "tuple[str, str, str]":
         details = load_company_details_cached()
     except Exception:  # pragma: no cover - defensive; a slip must still render
         details = None
+
+    # Lazy import, same reason as generate_t4a_pdf's: a function-scope
+    # `from . import report_branding` there is invisible here.
+    try:
+        from . import report_branding
+    except ImportError:  # pragma: no cover - direct module imports in tests
+        from utils import report_branding  # type: ignore
+
     if details is None:
         return report_branding.COMPANY_LINE, "", "support@spinr.ca"
     safe = report_branding.pdf_safe

@@ -20,6 +20,7 @@ from utils.company_details import CompanyDetails
 from utils.email_layout import (
     BRAND_RED,
     BRAND_RED_CONTRAST,
+    LINK_BLUE,
     RenderedEmail,
     render_email,
     render_text,

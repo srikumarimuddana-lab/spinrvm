@@ -223,6 +223,38 @@ def test_list_users_projects_legacy_import_metadata(test_client, admin_override)
     assert "legacy_import_metadata" in kwargs["columns"]
 
 
+class TestListUsersLegacyImportFilter:
+    """`legacy_import_metadata` is JSONB NOT NULL DEFAULT '{}'::jsonb, not
+    nullable -- "not imported" is the default-value row, not NULL. These
+    assert `legacy_import=true/false` compiles to the $eq/$ne-against-`{}`
+    filter shape (the same trap EXCLUDE_LEGACY_RIDES in utils/legacy_rides.py
+    exists to avoid), not a bare {col: None}."""
+
+    def test_omitted_applies_no_filter(self, test_client, admin_override):
+        get_rows = AsyncMock(return_value=[])
+        with patch(f"{MOD}.db_supabase.get_rows", get_rows):
+            resp = test_client.get("/api/admin/users")
+        assert resp.status_code == 200, resp.text
+        filters = get_rows.call_args[0][1]
+        assert "legacy_import_metadata" not in filters
+
+    def test_true_filters_to_imported_only(self, test_client, admin_override):
+        get_rows = AsyncMock(return_value=[])
+        with patch(f"{MOD}.db_supabase.get_rows", get_rows):
+            resp = test_client.get("/api/admin/users", params={"legacy_import": "true"})
+        assert resp.status_code == 200, resp.text
+        filters = get_rows.call_args[0][1]
+        assert filters["legacy_import_metadata"] == {"$ne": {}}
+
+    def test_false_filters_to_not_imported_only(self, test_client, admin_override):
+        get_rows = AsyncMock(return_value=[])
+        with patch(f"{MOD}.db_supabase.get_rows", get_rows):
+            resp = test_client.get("/api/admin/users", params={"legacy_import": "false"})
+        assert resp.status_code == 200, resp.text
+        filters = get_rows.call_args[0][1]
+        assert filters["legacy_import_metadata"] == {"$eq": {}}
+
+
 # ---------- GET /users/{id} ----------
 
 

@@ -40,7 +40,7 @@ import {
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift } from "lucide-react";
+import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift, Upload } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal, backfillStripeCustomerEmails } from "@/lib/api";
@@ -59,6 +59,9 @@ export default function UsersPage() {
     const [search, setSearch] = useState("");
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
     const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver" | "both">("all");
+    // Legacy-import filter — "imported"/"not_imported" map to the
+    // legacy_import=true/false query param; "all" sends no filter.
+    const [legacyFilter, setLegacyFilter] = useState<"all" | "imported" | "not_imported">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
     // Full detail for the open user (real ride count, recent rides, saved cards),
     // loaded on demand — the list row carries none of this.
@@ -153,6 +156,7 @@ export default function UsersPage() {
                 search: search.trim() || undefined,
                 limit: PAGE_SIZE + 1,
                 offset: page * PAGE_SIZE,
+                legacy_import: legacyFilter === "all" ? undefined : legacyFilter === "imported",
             });
             if (reqId !== reqIdRef.current) return;
             const arr = Array.isArray(data) ? data : [];
@@ -217,7 +221,7 @@ export default function UsersPage() {
         }, 300);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [search, roleFilter]);
+    }, [search, roleFilter, legacyFilter]);
 
     // Re-fetch when page changes.
     useEffect(() => {
@@ -462,13 +466,27 @@ export default function UsersPage() {
                         <SelectItem value="both">Dual-role</SelectItem>
                     </SelectContent>
                 </Select>
-                {(search || roleFilter !== "all") && (
+                <div className="flex items-center gap-1.5">
+                    <Upload className="h-4 w-4 text-muted-foreground" />
+                    <Select value={legacyFilter} onValueChange={(v) => setLegacyFilter(v as "all" | "imported" | "not_imported")}>
+                        <SelectTrigger className="w-40" aria-label="Filter by legacy import status">
+                            <SelectValue placeholder="All Users" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Users</SelectItem>
+                            <SelectItem value="imported">Imported only</SelectItem>
+                            <SelectItem value="not_imported">Not imported</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                {(search || roleFilter !== "all" || legacyFilter !== "all") && (
                     <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => {
                             setSearch("");
                             setRoleFilter("all");
+                            setLegacyFilter("all");
                         }}
                     >
                         Clear filters

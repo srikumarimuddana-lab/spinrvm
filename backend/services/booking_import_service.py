@@ -77,6 +77,7 @@ import io
 import json
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -1358,6 +1359,10 @@ def print_report(plan: BookingImportPlan, *, dry_run: bool) -> None:
 
 DURATION_ESTIMATED_BACKFILL_MARKER = "legacy_duration_estimated_backfill"
 
+# Bounded worker count for apply_duration_estimated_backfill()'s concurrent
+# per-row apply below — same value as driver_import_service._COMMIT_POOL_WORKERS.
+_APPLY_POOL_WORKERS = 20
+
 
 @dataclass
 class DurationEstimatedBackfillItem:
@@ -1483,13 +1488,12 @@ def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, ba
         return []
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    conflicts: list[str] = []
-    for item in plan.updates:
+
+    def _apply_one(item: DurationEstimatedBackfillItem) -> str | None:
         existing = supabase.table("rides").select("legacy_import_metadata").eq("id", item.id).execute().data
         read_meta = dict((existing[0].get("legacy_import_metadata") or {}) if existing else {})
         if "duration_estimated" in read_meta or DURATION_ESTIMATED_BACKFILL_MARKER in read_meta:
-            conflicts.append(item.id)
-            continue
+            return item.id
 
         meta = dict(read_meta)
         meta["duration_estimated"] = item.duration_estimated
@@ -1503,10 +1507,20 @@ def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, ba
             .filter("legacy_import_metadata", "eq", json.dumps(read_meta, sort_keys=True, default=str))
             .execute()
         )
-        if not res.data:
-            conflicts.append(item.id)
+        return item.id if not res.data else None
 
-    return conflicts
+    # Bounded concurrency: each row is an independent read-then-guarded-write
+    # against its own ride id, so this only changes how long the apply takes,
+    # not what gets written or the optimistic-concurrency guard semantics —
+    # same pattern and worker count as
+    # driver_import_service.apply_legacy_sin_dob_import's fix (preempting the
+    # same sequential-per-row commit-timeout bug class found there).
+    with ThreadPoolExecutor(
+        max_workers=_APPLY_POOL_WORKERS, thread_name_prefix="duration-estimated-backfill-apply"
+    ) as pool:
+        results = [fut.result() for fut in [pool.submit(_apply_one, item) for item in plan.updates]]
+
+    return [old_id for old_id in results if old_id is not None]
 
 
 def print_duration_estimated_backfill_report(plan: DurationEstimatedBackfillPlan, *, dry_run: bool) -> None:

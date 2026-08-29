@@ -188,6 +188,20 @@ export interface BookingImportCounts {
     sum_offset_payouts: number;
     sum_tips: number;
     sum_tax: number;
+    // --- cancelled/failed path (added 2026-08-20, A41) --- rides_planned
+    // above is completed-only and predates this path; these are the fields
+    // that account for the rest of what commit actually writes to `rides`.
+    cancelled_target_rows: number;
+    failed_target_rows: number;
+    cancelled_failed_rides_planned: number;
+    cancelled_failed_skipped_already_imported: number;
+    cancelled_failed_skipped_unmatched_both: number;
+    cancelled_failed_zero_fare_completed: number;
+    cancelled_failed_skipped_missing_coordinates: number;
+    cancelled_failed_unmatched_riders: number;
+    cancelled_failed_unmatched_drivers: number;
+    total_rides_planned: number;
+    insurance_periods_planned: number;
 }
 export interface BookingImportReport {
     batch: string;

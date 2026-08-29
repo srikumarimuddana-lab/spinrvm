@@ -10,6 +10,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { otaVersionLabel } from '@shared/utils/otaVersion';
 import type { ThemeColors } from '@shared/theme/index';
 import { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
 import {
@@ -202,7 +203,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.version}>Spinr v1.0.2 · {user?.phone || ''}</Text>
+        <Text style={styles.version}>Spinr v1.0.2 · {user?.phone || ''} · {otaVersionLabel()}</Text>
       </ScrollView>
       {/* Language Picker Modal */}
       <Modal visible={showLangModal} animationType="slide" transparent onRequestClose={() => setShowLangModal(false)}>

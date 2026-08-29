@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
+import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
 import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,6 +39,7 @@ import {
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
+import { bearingDegrees, destinationPoint } from '@shared/utils/vehicleTracking';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -547,30 +548,62 @@ function DriverDashboard() {
     return () => sub.remove();
   }, []);
 
-  // ── Idle follow-car camera with speed-adaptive zoom ──
+  // ── Idle follow-car camera: speed-adaptive zoom + course-up rotation ──
   // While online without a ride the camera tracks the car: zoomed in near
   // intersections/stops (street names, one-ways, turn restrictions render on
   // the vector map at ≥17 — zero extra API calls), zoomed out while cruising.
-  // Panning hands control to the driver; the recenter button resumes follow.
+  // With course-up on (default), the map rotates so the direction of travel
+  // points to the top of the screen and the car sits in the lower third —
+  // the universal navigation-app framing ("driving bottom→up", live-testing
+  // ask 2026-08-31). The compass button toggles back to north-up. Panning
+  // hands control to the driver; the recenter button resumes follow.
   // Active-ride phases keep their deliberate route-overview framing — turn-by
   //-turn/lane detail comes from the Google Maps/Waze handoff, not this map.
   const followRef = useRef(true);
   const followZoomTierRef = useRef<number | null>(null);
+  const [courseUp, setCourseUp] = useState(true);
+  // Camera bearing derives from actual movement between camera ticks — the
+  // reported GPS heading is a placeholder 0 on Android when course is
+  // unknown (see @shared/utils/vehicleTracking selectBearing), so it must
+  // never rotate the map on its own. Holds the last value while stopped so
+  // the map doesn't spin back to north at a red light.
+  const camPrevRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const camBearingRef = useRef<number | null>(null);
   useEffect(() => {
     if (rideState !== 'idle' || !followRef.current) return;
     const c = location?.coords;
     if (!c || !mapRef.current) return;
     const tier = zoomTierForSpeed(c.speed, followZoomTierRef.current);
     followZoomTierRef.current = tier;
+    const zoom = FOLLOW_ZOOM_TIERS[tier].zoom;
+
+    const prev = camPrevRef.current;
+    if (prev && haversineMeters(prev.latitude, prev.longitude, c.latitude, c.longitude) >= 8) {
+      camBearingRef.current = bearingDegrees(
+        prev.latitude, prev.longitude, c.latitude, c.longitude,
+      );
+    }
+    camPrevRef.current = { latitude: c.latitude, longitude: c.longitude };
+
+    const mapHeading = courseUp && camBearingRef.current != null ? camBearingRef.current : 0;
+    // Pin the car low: shift the center ahead of the car along the travel
+    // bearing by ~18% of the visible map height (WebMercator meters-per-
+    // pixel at this zoom/latitude), so the road ahead fills the screen.
+    let center: { latitude: number; longitude: number } = {
+      latitude: c.latitude, longitude: c.longitude,
+    };
+    if (mapHeading !== 0 || (courseUp && camBearingRef.current != null)) {
+      const metersPerPx =
+        (156543.03392 * Math.cos((c.latitude * Math.PI) / 180)) / Math.pow(2, zoom);
+      const aheadM = metersPerPx * Dimensions.get('window').height * 0.18;
+      center = destinationPoint(center, mapHeading, aheadM);
+    }
     mapRef.current.animateCamera?.(
-      {
-        center: { latitude: c.latitude, longitude: c.longitude },
-        zoom: FOLLOW_ZOOM_TIERS[tier].zoom,
-      },
+      { center, zoom, heading: mapHeading },
       { duration: 700 },
     );
     // mapRef is a stable useRef object from useDriverDashboard().
-  }, [location, rideState, mapRef]);
+  }, [location, rideState, mapRef, courseUp]);
   useEffect(() => {
     if (!pendingRecenterRef.current) return;
     if (!location?.coords || !mapRef.current) return;
@@ -1008,6 +1041,16 @@ function DriverDashboard() {
           followRef.current = true;
           followZoomTierRef.current = null;
           return refreshLocation(false);
+        }}
+        courseUpEnabled={courseUp}
+        onToggleCourseUp={() => {
+          setCourseUp((prev) => {
+            const next = !prev;
+            // Returning to north-up should straighten the map immediately,
+            // not on the next GPS tick.
+            if (!next) mapRef.current?.animateCamera?.({ heading: 0 }, { duration: 400 });
+            return next;
+          });
         }}
       />
 

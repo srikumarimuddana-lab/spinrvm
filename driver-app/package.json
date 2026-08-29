@@ -63,7 +63,7 @@
     "firebase": "^12.17.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-native": "0.86.2",
+    "react-native": "0.86.3",
     "react-native-confirmation-code-field": "^8.0.1",
     "react-native-dotenv": "^3.4.11",
     "react-native-fbsdk-next": "^13.4.1",

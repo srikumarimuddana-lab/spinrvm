@@ -8,6 +8,13 @@ import {
     snapToRoute,
     type TrackingLatLng,
 } from '@shared/utils/vehicleTracking';
+import {
+    PLAYBACK_DELAY_MS,
+    playbackPosition,
+    pushFix,
+    shouldResetBuffer,
+    type PlaybackFix,
+} from '@shared/utils/markerPlayback';
 
 const CAR_IMAGES = {
     standard: require('../assets/images/car_marker.png'),
@@ -55,12 +62,9 @@ interface CarMarkerProps {
     routeCoordinates?: readonly TrackingLatLng[] | null;
 }
 
-// Position updates land every 1.5-10 s depending on ride phase (see
-// LOCATION_CONFIGS in useDriverDashboard). Glide between fixes over the
-// observed gap so the car moves smoothly instead of teleporting, clamped so a
-// delayed fix doesn't produce a minutes-long crawl.
-const MIN_ANIM_MS = 300;
-const MAX_ANIM_MS = 3000;
+// Playback tick: the marker re-targets its position animation this often,
+// stepping through the playback buffer (see @shared/utils/markerPlayback).
+const TICK_MS = 500;
 // Beyond this jump (stale fix after backgrounding) snap instantly.
 const SNAP_DISTANCE_M = 500;
 // Ignore sub-3m jitter when deriving the fallback bearing from movement.
@@ -71,17 +75,6 @@ const MAX_ROUTE_SNAP_M = 35;
 // Cap on the rotation tween so the car visibly turns rather than snapping,
 // without lagging a full position animation behind sharp turns.
 const MAX_ROTATE_MS = 600;
-
-// Module-level (not component-scope) so react-hooks/purity doesn't treat
-// this Date.now() read as an impure call "during render" — the lazy ref
-// initializer below only calls it once, on first render, but the compiler
-// still flags a bare Date.now() at that call site even inside the
-// conditional guard. Wrapping it in a plain module-level function sidesteps
-// the check without changing behavior (still one Date.now() read, at the
-// same point in time).
-function nowMs(): number {
-    return Date.now();
-}
 
 /**
  * Top-down car marker with configurable size.
@@ -104,20 +97,19 @@ function nowMs(): number {
  * RN 0.85 Bridgeless that triggered a native cast crash (ReactViewGroup
  * cannot be cast to com.rnmaps.maps.i onLayoutChange).
  *
- * Movement: position changes animate via AnimatedRegion.timing on BOTH
- * platforms. The previous split (AnimatedRegion on iOS,
- * animateMarkerToCoordinate on Android) left the Android AnimatedRegion
- * frozen at the mount coordinate — any re-render re-applied that stale
- * coordinate to the native marker, snapping the car back to where it first
- * appeared before the next animation pulled it forward ("teleporting").
+ * Movement: PLAYBACK BUFFER (the Lyft technique). Incoming fixes are queued
+ * with timestamps and the marker renders the car PLAYBACK_DELAY_MS in the
+ * past, stepping through the queue every TICK_MS via AnimatedRegion.timing —
+ * continuous motion instead of "arrive, park, leap" between fixes; capped
+ * dead reckoning covers short network gaps. Engine + reasoning:
+ * @shared/utils/markerPlayback. AnimatedRegion is driven on BOTH platforms
+ * (an earlier Android-only animateMarkerToCoordinate path left the region
+ * stale and re-renders snapped the car back to its mount position).
  *
- * Rotation: animated through an Animated.Value along the shortest arc, so
- * the car turns smoothly instead of snapping its angle. Bearing source
- * priority: route-segment direction (when `routeCoordinates` is provided and
- * the fix snaps onto the route) → direction of travel between fixes → the
- * reported GPS heading, used only until movement has established a bearing.
- * Movement deliberately outranks the reported heading; see the position
- * effect for why a reported heading of 0 cannot be trusted on Android.
+ * Rotation: animated through an Animated.Value along the shortest arc.
+ * Bearing priority: route segment → direction of travel → reported GPS
+ * heading (cold start only) — see selectBearing() for why movement outranks
+ * the reported heading (Android's placeholder 0).
  */
 export const CarMarker: React.FC<CarMarkerProps> = ({
     coordinate,
@@ -150,7 +142,15 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
     // Where the marker was last animated TO (snapped when on-route) — the
     // travel-bearing fallback measures from here, not the raw prev fix.
     const prevTargetRef = useRef<TrackingLatLng>(coordinate);
-    const lastFixTsRef = useRef(nowMs());
+    // Timestamped fix queue the playback ticker consumes. Seeded lazily on
+    // first ingest so the initializer stays pure.
+    const bufferRef = useRef<PlaybackFix[]>([]);
+    // Latest heading prop, read by the ticker (which must not re-fire per
+    // heading change). Synced in an effect, never during render.
+    const headingRef = useRef<number | null | undefined>(heading);
+    useEffect(() => {
+        headingRef.current = heading;
+    }, [heading]);
 
     // Route lookup happens inside the position effect via a ref so a route
     // refresh (new array identity) re-snaps the NEXT fix without re-firing
@@ -202,79 +202,81 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
         [],
     );
 
-    const headingValid = heading != null && Number.isFinite(heading) && heading >= 0;
-
+    // ── Fix ingest: every coordinate prop change lands in the playback
+    // buffer. A jump past SNAP_DISTANCE_M (stale fix after backgrounding)
+    // resets the buffer so the marker snaps once instead of gliding across
+    // the city; it also clears the movement-bearing latch, since the old
+    // direction says nothing about the new location.
     useEffect(() => {
         const prev = prevCoordRef.current;
+        const now = Date.now();
         if (
+            bufferRef.current.length > 0 &&
             prev.latitude === coordinate.latitude &&
             prev.longitude === coordinate.longitude
         ) {
             return;
         }
-        const now = Date.now();
-        const movedM = distanceMeters(
-            prev.latitude, prev.longitude,
-            coordinate.latitude, coordinate.longitude,
-        );
-        const duration =
-            movedM > SNAP_DISTANCE_M
-                ? 1
-                : Math.min(Math.max(now - lastFixTsRef.current, MIN_ANIM_MS), MAX_ANIM_MS);
         prevCoordRef.current = coordinate;
-        lastFixTsRef.current = now;
-
-        // Snap onto the route when one is provided and the fix is close
-        // enough; otherwise render the raw fix (off-route/detour honesty).
-        const snap = snapToRoute(coordinate, routeRef.current, MAX_ROUTE_SNAP_M);
-        const target = snap?.coordinate ?? coordinate;
-
-        // Bearing priority: route segment → direction of travel → reported
-        // GPS heading. See selectBearing() for why movement outranks the
-        // reported heading (Android's placeholder 0).
-        const { bearing, source } = selectBearing({
-            snap,
-            movedMeters: movedM,
-            from: prevTargetRef.current,
-            to: target,
-            heading,
-            hasMovementBearing: hasMovementBearingRef.current,
-            minMoveMeters: MIN_BEARING_MOVE_M,
-        });
-        prevTargetRef.current = target;
-        if (bearing != null) {
-            if (source === 'route' || source === 'travel') hasMovementBearingRef.current = true;
-            animateRotationTo(bearing, duration);
+        if (shouldResetBuffer(bufferRef.current, coordinate, SNAP_DISTANCE_M)) {
+            bufferRef.current.length = 0;
+            hasMovementBearingRef.current = false;
         }
+        pushFix(bufferRef.current, { ...coordinate, timestampMs: now }, now);
+    }, [coordinate.latitude, coordinate.longitude, coordinate]);
 
-        animatedRegion
-            .timing({
-                latitude: target.latitude,
-                longitude: target.longitude,
-                duration,
-                useNativeDriver: false,
-            } as any)
-            .start();
-        // animatedRegion is a stable ref; heading is read fresh but must not
-        // re-fire the position animation on its own (handled below).
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [coordinate.latitude, coordinate.longitude]);
-
-    // Heading-only updates (turning in place, or the first valid heading
-    // before any movement) still orient the car — but never fight a
-    // route-segment bearing once one has been applied for this position.
+    // ── Playback ticker: every TICK_MS, place the marker where the buffer
+    // says the car was PLAYBACK_DELAY_MS ago and glide there over one tick.
+    // Cheap when idle: a held position that hasn't moved re-targets nothing.
     useEffect(() => {
-        if (!headingValid) return;
-        // Never let a reported heading override a bearing already derived from
-        // real movement — on Android that value may be a placeholder 0 (see
-        // the priority note in the position effect).
-        if (hasMovementBearingRef.current) return;
-        const onRoute = !!snapToRoute(prevTargetRef.current, routeRef.current, MAX_ROUTE_SNAP_M);
-        if (onRoute && hasBearingRef.current) return;
-        animateRotationTo(heading as number, MAX_ROTATE_MS);
-        // animateRotationTo and the route ref are stable.
+        const id = setInterval(() => {
+            const p = playbackPosition(bufferRef.current, Date.now() - PLAYBACK_DELAY_MS);
+            if (!p) return;
+
+            // Snap the played-back position onto the route when close enough;
+            // otherwise render it raw (off-route/detour honesty).
+            const snap = snapToRoute(p.coordinate, routeRef.current, MAX_ROUTE_SNAP_M);
+            const target = snap?.coordinate ?? p.coordinate;
+
+            const from = prevTargetRef.current;
+            const movedM = distanceMeters(
+                from.latitude, from.longitude, target.latitude, target.longitude,
+            );
+            if (movedM < 0.5 && p.mode !== 'interpolating' && p.mode !== 'extrapolating') {
+                return; // parked — no animation churn, no rotation churn
+            }
+
+            // Bearing priority: route segment → direction of travel → reported
+            // GPS heading (cold start only). See selectBearing() for why
+            // movement outranks the reported heading (Android's placeholder 0).
+            const { bearing, source } = selectBearing({
+                snap,
+                movedMeters: movedM,
+                from,
+                to: target,
+                heading: headingRef.current,
+                hasMovementBearing: hasMovementBearingRef.current,
+                minMoveMeters: MIN_BEARING_MOVE_M,
+            });
+            prevTargetRef.current = target;
+            if (bearing != null) {
+                if (source === 'route' || source === 'travel') hasMovementBearingRef.current = true;
+                animateRotationTo(bearing, TICK_MS);
+            }
+
+            animatedRegion
+                .timing({
+                    latitude: target.latitude,
+                    longitude: target.longitude,
+                    duration: TICK_MS,
+                    useNativeDriver: false,
+                } as any)
+                .start();
+        }, TICK_MS);
+        return () => clearInterval(id);
+        // All inputs are stable refs; the ticker itself must never restart.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [heading, headingValid]);
+    }, []);
 
     const [tracksViewChanges, setTracksViewChanges] = useState(true);
     const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

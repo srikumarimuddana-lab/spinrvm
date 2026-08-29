@@ -279,7 +279,9 @@ describe('SettingsScreen', () => {
   it('shows an empty phone segment when the user has no phone on file', async () => {
     mockAuthUser = null;
     const r = await renderScreen();
-    expect(allText(r)).toContain('["Spinr v1.0.2 · ",""]');
+    // The version row now also carries the OTA bundle label (jest-expo's
+    // expo-updates mock reports updateId "mock" → "OTA mock").
+    expect(allText(r)).toContain('["Spinr v1.0.2 · ",""," · ","OTA mock"]');
   });
 
   it('navigates to /privacy-settings', async () => {

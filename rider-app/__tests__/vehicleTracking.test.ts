@@ -180,3 +180,29 @@ describe('selectBearing — bearing source priority', () => {
     expect(r.source).toBe('none');
   });
 });
+
+describe('destinationPoint', () => {
+  const { destinationPoint } = require('@shared/utils/vehicleTracking');
+  const origin = { latitude: 50.4383, longitude: -104.62 };
+
+  it('east by 100m moves longitude only, by ~100m', () => {
+    const d = destinationPoint(origin, 90, 100);
+    expect(d.latitude).toBeCloseTo(origin.latitude, 5);
+    expect(distanceMeters(origin.latitude, origin.longitude, d.latitude, d.longitude)).toBeCloseTo(100, 0);
+    expect(d.longitude).toBeGreaterThan(origin.longitude);
+  });
+
+  it('north by 250m moves latitude only, by ~250m', () => {
+    const d = destinationPoint(origin, 0, 250);
+    expect(d.longitude).toBeCloseTo(origin.longitude, 6);
+    expect(distanceMeters(origin.latitude, origin.longitude, d.latitude, d.longitude)).toBeCloseTo(250, 0);
+    expect(d.latitude).toBeGreaterThan(origin.latitude);
+  });
+
+  it('round-trips: forward then back lands at the origin', () => {
+    const out = destinationPoint(origin, 237, 400);
+    const back = destinationPoint(out, (237 + 180) % 360, 400);
+    expect(back.latitude).toBeCloseTo(origin.latitude, 6);
+    expect(back.longitude).toBeCloseTo(origin.longitude, 6);
+  });
+});

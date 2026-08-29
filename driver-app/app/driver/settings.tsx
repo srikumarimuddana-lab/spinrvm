@@ -32,6 +32,7 @@ import {
 import { showToast } from '../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { otaVersionLabel } from '@shared/utils/otaVersion';
 
 export default function SettingsScreen() {
     const router = useRouter();
@@ -486,6 +487,9 @@ export default function SettingsScreen() {
 
                 {/* App Version */}
                 <Text style={styles.version}>{t('settings.version')}</Text>
+                {/* OTA bundle identity — road tests must know which JS bundle
+                    is running (updates apply on the SECOND launch). */}
+                <Text style={styles.version}>{otaVersionLabel()}</Text>
             </ScrollView>
 
             {/* Language Modal */}

@@ -17,6 +17,9 @@ interface MapControlsProps {
   location: LocationLike | null;
   currentRegionRef: React.RefObject<{ latitudeDelta: number; longitudeDelta: number }>;
   onRecenter?: () => Promise<LocationLike | null | void> | LocationLike | null | void;
+  /** When set, renders a compass toggle for course-up map rotation. */
+  courseUpEnabled?: boolean;
+  onToggleCourseUp?: () => void;
 }
 
 export const MapControls: React.FC<MapControlsProps> = ({
@@ -24,6 +27,8 @@ export const MapControls: React.FC<MapControlsProps> = ({
   location,
   currentRegionRef,
   onRecenter,
+  courseUpEnabled,
+  onToggleCourseUp,
 }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -85,6 +90,28 @@ export const MapControls: React.FC<MapControlsProps> = ({
           </TouchableOpacity>
         </SafeBlurView>
       </View>
+
+      {/* Course-up / North-up toggle */}
+      {onToggleCourseUp && (
+        <View style={[styles.shadowWrapper, { marginTop: 12 }]}>
+          <SafeBlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={[styles.blurContainer, styles.myLocationBtn]}>
+            <TouchableOpacity
+              style={styles.btnInner}
+              onPress={onToggleCourseUp}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityState={{ selected: !!courseUpEnabled }}
+              accessibilityLabel={courseUpEnabled ? 'Switch map to north-up' : 'Switch map to course-up (rotate with travel direction)'}
+            >
+              <Ionicons
+                name={courseUpEnabled ? 'navigate' : 'compass-outline'}
+                size={24}
+                color={courseUpEnabled ? colors.primary : colors.text}
+              />
+            </TouchableOpacity>
+          </SafeBlurView>
+        </View>
+      )}
 
       {/* My Location Button */}
       <View style={[styles.shadowWrapper, { marginTop: 12 }]}>

@@ -134,7 +134,9 @@ export function LegacyBookingImport() {
 
     const [files, setFiles] = useState<FileState>({});
     const [serviceAreaName, setServiceAreaName] = useState("Saskatoon");
+    const [serviceAreaId, setServiceAreaId] = useState("");
     const [vehicleTypeName, setVehicleTypeName] = useState("Economy");
+    const [vehicleTypeId, setVehicleTypeId] = useState("");
     const [report, setReport] = useState<BookingImportReport | null>(null);
     const [committed, setCommitted] = useState<BookingImportCommitResult | null>(null);
     const [confirmText, setConfirmText] = useState("");
@@ -159,6 +161,11 @@ export function LegacyBookingImport() {
     const opts = () => ({
         serviceAreaName: serviceAreaName.trim() || "Saskatoon",
         vehicleTypeName: vehicleTypeName.trim() || "Economy",
+        // IDs win over name matching on the backend (services/booking_import_service.py's
+        // get_service_area/get_vehicle_type) -- needed once name matching is
+        // ambiguous, e.g. "Saskatoon" also matching "Saskatoon Airport".
+        ...(serviceAreaId.trim() ? { serviceAreaId: serviceAreaId.trim() } : {}),
+        ...(vehicleTypeId.trim() ? { vehicleTypeId: vehicleTypeId.trim() } : {}),
         // Reuse the validated batch so offset payout IDs stay deterministic
         // across a validate -> commit pair and any later resume.
         ...(report?.batch ? { batch: report.batch } : {}),
@@ -296,6 +303,30 @@ export function LegacyBookingImport() {
                                 id="booking-import-vehicle"
                                 value={vehicleTypeName}
                                 onChange={(e) => setVehicleTypeName(e.target.value)}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label htmlFor="booking-import-area-id" className="text-xs">
+                                Service area ID (only if the name above matches more than one)
+                            </Label>
+                            <Input
+                                id="booking-import-area-id"
+                                value={serviceAreaId}
+                                onChange={(e) => setServiceAreaId(e.target.value)}
+                                placeholder="uuid — takes priority over the name above"
+                                className="font-mono text-xs"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label htmlFor="booking-import-vehicle-id" className="text-xs">
+                                Vehicle type ID (only if the name above matches more than one)
+                            </Label>
+                            <Input
+                                id="booking-import-vehicle-id"
+                                value={vehicleTypeId}
+                                onChange={(e) => setVehicleTypeId(e.target.value)}
+                                placeholder="uuid — takes priority over the name above"
+                                className="font-mono text-xs"
                             />
                         </div>
                     </div>

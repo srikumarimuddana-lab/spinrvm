@@ -16,6 +16,12 @@ import {
     updateWalletConfig,
     walletAdjust,
 } from "@/lib/api";
+import {
+    MAX_SINGLE_ADJUSTMENT,
+    isAdjustmentAmountValid,
+    isAdjustmentAmountWithinLimit,
+    isAdjustmentNoteValid,
+} from "@/lib/walletAdjustmentSchema";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -193,18 +199,16 @@ export default function CompanyDetailPage() {
         }
     }, [company?.status, loadWallet]);
 
-    const MAX_SINGLE_ADJUSTMENT = 10000; // $10,000 CAD safety cap
-
     const handleAdjust = async () => {
         if (!id) return;
         const raw = window.prompt("Adjustment amount (signed CAD):");
         if (!raw) return;
         const adjustmentAmount = parseFloat(raw);
-        if (isNaN(adjustmentAmount) || adjustmentAmount === 0) {
+        if (!isAdjustmentAmountValid(adjustmentAmount)) {
             toast({ title: "Invalid amount", description: "Adjustment amount cannot be zero", variant: "destructive" });
             return;
         }
-        if (Math.abs(adjustmentAmount) > MAX_SINGLE_ADJUSTMENT) {
+        if (!isAdjustmentAmountWithinLimit(adjustmentAmount)) {
             toast({
                 title: "Amount exceeds limit",
                 description: `Single adjustment cannot exceed $${MAX_SINGLE_ADJUSTMENT.toFixed(2)}`,
@@ -213,7 +217,7 @@ export default function CompanyDetailPage() {
             return;
         }
         const notes = window.prompt("Reason (required):") ?? "";
-        if (!notes.trim()) return;
+        if (!isAdjustmentNoteValid(notes)) return;
         setWalletBusy(true);
         try {
             await walletAdjust(id, { amount: adjustmentAmount, notes: notes.trim() });

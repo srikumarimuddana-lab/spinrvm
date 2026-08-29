@@ -11197,6 +11197,60 @@ record of what was assumed vs. what was actually true</summary>
   ADR/migration-order doc written yet; `rider-app/app/login.tsx` is now
   considered resolved for this item (checked, nothing worth extracting —
   see above), not merely deferred. Checkbox stays `[ ]`.
+- **2026-08-29 update — step 8 done: `corporate-accounts/[id]/page.tsx`'s
+  wallet-adjustment form — the exact "wallet adjustments" form this item's
+  own "Still open" text names by name.** Checked the other two forms named
+  in the same note first, per this item's own "highest-risk first"
+  ordering: `subscription/page.tsx`'s plan assignment has no inline
+  validation to extract (`handleAssign` is only gated on `!selectedPlan`,
+  a plain truthy check with no rule behind it — same "nothing worth
+  extracting" call as `rider-app/login.tsx` in step 7); `kyb-queue/page.tsx`'s
+  reject-note field is explicitly optional
+  (`note: rejectNote.trim() || undefined`), so there is no accept/reject
+  rule to pin either. Moved to `corporate-accounts/[id]/page.tsx`'s
+  `handleAdjust` instead — a real three-rule inline check
+  (`isNaN(amount) || amount === 0`, `Math.abs(amount) >
+  MAX_SINGLE_ADJUSTMENT`, `!notes.trim()`) gating a POST straight to
+  `/api/admin/corporate-accounts/{id}/wallet/adjust`
+  (`corporate_wallet_apply_delta`-backed), the highest-risk unmigrated
+  admin-dashboard form remaining.
+
+  New colocated `admin-dashboard/src/lib/walletAdjustmentSchema.ts`
+  (`isAdjustmentAmountValid`, `isAdjustmentAmountWithinLimit`,
+  `isAdjustmentNoteValid`, plus a combined `isAdjustmentAmountFullyValid`
+  and the hoisted `MAX_SINGLE_ADJUSTMENT` constant) reproduces
+  `handleAdjust`'s three checks as byte-for-byte equivalent predicates.
+  Kept as three separate functions rather than one aggregate boolean —
+  same reasoning as step 3's GST/SIN split — because the call site shows
+  a different toast per failing check (amount invalid vs. amount over
+  limit), so collapsing them into one boolean would have lost which
+  message to show. `MAX_SINGLE_ADJUSTMENT` moved from a local `const`
+  inside the component to the schema file (still `10000`, unchanged
+  value) so the page's own "$10,000.00" toast copy and the validation
+  limit can't drift apart from a single source. New
+  `admin-dashboard/src/lib/__tests__/walletAdjustmentSchema.test.ts` (18
+  accept/reject cases, including the ±cap boundary and whitespace-only
+  notes). Verification: 18/18 new tests pass; full admin-dashboard suite
+  388/388 tests, 38/38 files, exit 0 (`npm run test:coverage`, the exact
+  CI invocation — coverage-threshold gate unaffected, same as every prior
+  step); `npx tsc --noEmit` clean; `npx eslint` on touched files: 0
+  errors, 2 pre-existing warnings on unrelated lines (`react-hooks/set-state-in-effect`
+  on two `useEffect` calls untouched by this diff — confirmed via `git
+  diff` that neither line is in this change); **real production build**
+  (`npm run build`) completed successfully, exit code 0, full route
+  manifest generated, not just `tsc`/dev server, per CLAUDE.md's explicit
+  requirement; blast-radius grep confirmed `handleAdjust` and
+  `MAX_SINGLE_ADJUSTMENT` have no other callers/duplicates anywhere in
+  `admin-dashboard/src`. Full Change Impact Log:
+  `docs/change-log/2026-08-29-b39-admin-wallet-adjustment-zod-step8.md`.
+  **Still open:** `subscriptions/page.tsx` (top-level subscriptions list,
+  distinct from the per-company `subscription/page.tsx` already checked
+  above — not yet inspected) and every other admin-dashboard
+  corporate/billing form not yet named remain unmigrated; no
+  ADR/migration-order doc written yet; the per-company subscription
+  assignment and KYB reject-note fields are now considered resolved for
+  this item (checked, nothing worth extracting), not merely deferred.
+  Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

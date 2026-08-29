@@ -3557,6 +3557,12 @@ async def admin_close_payout_period(
 
 # ── Imported ride snapshot regeneration ──────────────────────────────────
 
+# Bounded concurrency for admin_regenerate_imported_snapshots()'s per-ride
+# render/upload/DB-write work. Modest on purpose -- each ride fans out a
+# real call to the Google Static Maps API; see the call site's own comment
+# for the incident this preempts.
+_SNAPSHOT_CONCURRENCY = 8
+
 
 class RegenerateSnapshotsRequest(BaseModel):
     force: bool = False
@@ -3629,82 +3635,101 @@ async def admin_regenerate_imported_snapshots(
     failed = 0
     errors: list[dict] = []
 
-    for ride in rides:
-        ride_id = ride["id"]
-        pickup_lat = ride.get("pickup_lat")
-        pickup_lng = ride.get("pickup_lng")
-        dropoff_lat = ride.get("dropoff_lat")
-        dropoff_lng = ride.get("dropoff_lng")
+    # Bounded concurrency, not full sequential -- found live 2026-08-29: a
+    # 62-ride run (well under the 500 cap) stalled at 50/62 with zero
+    # progress for 13+ minutes, matching the exact sequential-per-item
+    # request-timeout pattern found and fixed three times already this
+    # session in the CSV importers (each ride here awaits a real Google
+    # Static Maps call, a storage upload, and a DB write in turn). Unlike
+    # those fixes this route makes native async HTTP/storage calls (no
+    # sync DB client to wrap in a thread pool), so the fix is an
+    # asyncio.Semaphore bounding concurrent rides instead of
+    # ThreadPoolExecutor. _SNAPSHOT_CONCURRENCY is deliberately modest
+    # (not the CSV importers' 20) -- this fans out real calls to the
+    # Google Static Maps API, and the per-ride 0.3s pacing below is kept
+    # to avoid hammering it.
+    semaphore = asyncio.Semaphore(_SNAPSHOT_CONCURRENCY)
 
-        if not all(isinstance(v, (int, float)) for v in [pickup_lat, pickup_lng, dropoff_lat, dropoff_lng]):
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": "missing coordinates"})
-            continue
+    async def _process_one(ride: dict) -> None:
+        nonlocal success, failed
+        async with semaphore:
+            ride_id = ride["id"]
+            pickup_lat = ride.get("pickup_lat")
+            pickup_lng = ride.get("pickup_lng")
+            dropoff_lat = ride.get("dropoff_lat")
+            dropoff_lng = ride.get("dropoff_lng")
 
-        route_polyline = normalize_polyline_points(ride.get("planned_route_polyline"))
+            if not all(isinstance(v, (int, float)) for v in [pickup_lat, pickup_lng, dropoff_lat, dropoff_lng]):
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": "missing coordinates"})
+                return
 
-        png_bytes = None
-        if gmap_key:
-            try:
-                png_bytes = await render_ride_snapshot_google(
-                    api_key=gmap_key,
-                    pickup_lat=float(pickup_lat),
-                    pickup_lng=float(pickup_lng),
-                    dropoff_lat=float(dropoff_lat),
-                    dropoff_lng=float(dropoff_lng),
-                    route_polyline=route_polyline,
-                )
-            except Exception as exc:
-                logger.error("Google render failed for ride %s: %s", ride_id, exc)
+            route_polyline = normalize_polyline_points(ride.get("planned_route_polyline"))
 
-        if not png_bytes:
-            try:
-                png_bytes = await loop.run_in_executor(
-                    None,
-                    functools.partial(
-                        render_ride_snapshot,
+            png_bytes = None
+            if gmap_key:
+                try:
+                    png_bytes = await render_ride_snapshot_google(
+                        api_key=gmap_key,
                         pickup_lat=float(pickup_lat),
                         pickup_lng=float(pickup_lng),
                         dropoff_lat=float(dropoff_lat),
                         dropoff_lng=float(dropoff_lng),
                         route_polyline=route_polyline,
+                    )
+                except Exception as exc:
+                    logger.error("Google render failed for ride %s: %s", ride_id, exc)
+
+            if not png_bytes:
+                try:
+                    png_bytes = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            render_ride_snapshot,
+                            pickup_lat=float(pickup_lat),
+                            pickup_lng=float(pickup_lng),
+                            dropoff_lat=float(dropoff_lat),
+                            dropoff_lng=float(dropoff_lng),
+                            route_polyline=route_polyline,
+                        ),
+                    )
+                except Exception as exc:
+                    logger.error("OSM render failed for ride %s: %s", ride_id, exc)
+
+            if not png_bytes:
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": "render returned None"})
+                return
+
+            storage_path = f"ride_{ride_id}.png"
+            try:
+                await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        sb.storage.from_("ride-snapshots").upload,
+                        path=storage_path,
+                        file=png_bytes,
+                        file_options={"content-type": "image/png", "upsert": "true", "cache-control": "31536000"},
                     ),
                 )
             except Exception as exc:
-                logger.error("OSM render failed for ride %s: %s", ride_id, exc)
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": f"upload: {exc}"})
+                return
 
-        if not png_bytes:
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": "render returned None"})
-            continue
+            digest = hashlib.sha256(png_bytes).hexdigest()[:12]
+            url = f"{base_url}/storage/v1/object/public/ride-snapshots/{storage_path}?v={digest}"
+            try:
+                await db.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+            except Exception as exc:
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": f"db update: {exc}"})
+                return
 
-        storage_path = f"ride_{ride_id}.png"
-        try:
-            await loop.run_in_executor(
-                None,
-                functools.partial(
-                    sb.storage.from_("ride-snapshots").upload,
-                    path=storage_path,
-                    file=png_bytes,
-                    file_options={"content-type": "image/png", "upsert": "true", "cache-control": "31536000"},
-                ),
-            )
-        except Exception as exc:
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": f"upload: {exc}"})
-            continue
+            success += 1
+            await asyncio.sleep(0.3)
 
-        digest = hashlib.sha256(png_bytes).hexdigest()[:12]
-        url = f"{base_url}/storage/v1/object/public/ride-snapshots/{storage_path}?v={digest}"
-        try:
-            await db.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
-        except Exception as exc:
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": f"db update: {exc}"})
-            continue
-
-        success += 1
-        await asyncio.sleep(0.3)
+    await asyncio.gather(*(_process_one(r) for r in rides))
 
     logger.info(
         "Imported ride snapshot regeneration by admin %s: %d ok, %d failed of %d",

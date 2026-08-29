@@ -13,6 +13,7 @@ established in tests/test_admin_business_logic.py.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -730,6 +731,69 @@ class TestAdminRegenerateImportedSnapshots:
         audit_mock.assert_awaited_once()
         assert audit_mock.call_args[0][1] == "ride_snapshots_regenerated"
         assert audit_mock.call_args[0][4]["total"] == 1
+
+    def test_regenerate_processes_rides_concurrently_not_sequentially(self, client, as_super_admin):
+        """Regression test for a real 2026-08-29 production stall: a 62-ride
+        run got stuck at 50/62 with zero progress for 13+ minutes -- the
+        exact sequential-per-item request-timeout pattern found and fixed
+        three times already this session in the CSV importers. Proves the
+        fix (asyncio.Semaphore-bounded concurrency) by tracking the actual
+        max number of rides in flight at once, not by racing a wall clock.
+        """
+        rides = [
+            {
+                "id": f"ride-{i}",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": None,
+            }
+            for i in range(16)
+        ]
+        in_flight = 0
+        max_in_flight = 0
+
+        async def _fake_render(**_kwargs):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0)  # real cooperative yield -- lets other rides' tasks run
+            in_flight -= 1
+            return b"png-bytes"
+
+        fake_storage = MagicMock()
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            # A real (non-empty) key is required to reach the Google path at
+            # all -- otherwise "if gmap_key:" skips straight to the OSM
+            # fallback, which runs in a thread-pool executor rather than
+            # natively on the event loop and isn't what this test exercises.
+            patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"google_maps_api_key": "fake-key"})),
+            patch("utils.route_snapshot.render_ride_snapshot_google", _fake_render),
+            patch("supabase_client.supabase", MagicMock(storage=fake_storage)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-3")),
+            # Deliberately NOT patching asyncio.sleep here (unlike the other
+            # tests in this class): an AsyncMock's awaited return resolves
+            # without a real event-loop suspension, which would silently
+            # defeat the very interleaving this test needs to observe. A
+            # real asyncio.sleep(0) is a documented, guaranteed yield point.
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-snapshots", json={"limit": 500})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 16
+        assert body["success"] == 16
+        assert body["failed"] == 0
+        # The real bug (fully sequential) caps this at 1. Bounded concurrency
+        # should reach the configured concurrency limit exactly.
+        from routes.admin.rides import _SNAPSHOT_CONCURRENCY
+
+        assert max_in_flight == _SNAPSHOT_CONCURRENCY, (
+            f"expected {_SNAPSHOT_CONCURRENCY} rides in flight at once, saw {max_in_flight} "
+            "-- rides are being processed sequentially again"
+        )
 
 
 # ---------------------------------------------------------------------------

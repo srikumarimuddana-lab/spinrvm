@@ -137,6 +137,11 @@ export function LegacyBookingImport() {
     const [serviceAreaId, setServiceAreaId] = useState("");
     const [vehicleTypeName, setVehicleTypeName] = useState("Economy");
     const [vehicleTypeId, setVehicleTypeId] = useState("");
+    // Defaults to the standing 2026-08-20 decision (include cancelled/failed
+    // bookings) -- this is a per-run scope toggle, not a change to that
+    // default. See docs/change-log/2026-08-20-legacy-cancelled-failed-
+    // booking-import.md.
+    const [includeCancelledFailed, setIncludeCancelledFailed] = useState(true);
     const [report, setReport] = useState<BookingImportReport | null>(null);
     const [committed, setCommitted] = useState<BookingImportCommitResult | null>(null);
     const [confirmText, setConfirmText] = useState("");
@@ -166,6 +171,7 @@ export function LegacyBookingImport() {
         // ambiguous, e.g. "Saskatoon" also matching "Saskatoon Airport".
         ...(serviceAreaId.trim() ? { serviceAreaId: serviceAreaId.trim() } : {}),
         ...(vehicleTypeId.trim() ? { vehicleTypeId: vehicleTypeId.trim() } : {}),
+        includeCancelledFailed,
         // Reuse the validated batch so offset payout IDs stay deterministic
         // across a validate -> commit pair and any later resume.
         ...(report?.batch ? { batch: report.batch } : {}),
@@ -330,6 +336,23 @@ export function LegacyBookingImport() {
                             />
                         </div>
                     </div>
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={includeCancelledFailed}
+                            onChange={(e) => {
+                                setIncludeCancelledFailed(e.target.checked);
+                                // Changes what a commit means -- same rule as
+                                // changing a file: the prior report no longer
+                                // describes what would actually be written.
+                                setReport(null);
+                                setCommitted(null);
+                                setConfirmText("");
+                            }}
+                            className="rounded border-input"
+                        />
+                        Include cancelled/failed bookings (unchecking imports completed rides only for this run)
+                    </label>
                 </div>
 
                 {/* 2. Validate */}
@@ -377,12 +400,23 @@ export function LegacyBookingImport() {
                             Read {c.bookings_read} booking(s); {c.skipped_not_completed} not
                             completed/cancelled/failed, {c.skipped_test_account} test account(s)
                             (completed path), {c.skipped_unmatched_both} completed rows with
-                            neither party matched. Cancelled/failed: {c.cancelled_target_rows}{" "}
-                            cancelled + {c.failed_target_rows} failed candidates,{" "}
-                            {c.cancelled_failed_skipped_unmatched_both} with neither party
-                            matched,{" "}
-                            {c.cancelled_failed_skipped_missing_coordinates} with missing
-                            coordinates. Batch <span className="font-mono">{report.batch}</span>.
+                            neither party matched.{" "}
+                            {c.skipped_cancelled_failed_excluded_by_scope > 0 ? (
+                                <>
+                                    {c.skipped_cancelled_failed_excluded_by_scope} cancelled/failed
+                                    booking(s) excluded by the scope checkbox above (completed-only
+                                    this run).
+                                </>
+                            ) : (
+                                <>
+                                    Cancelled/failed: {c.cancelled_target_rows} cancelled +{" "}
+                                    {c.failed_target_rows} failed candidates,{" "}
+                                    {c.cancelled_failed_skipped_unmatched_both} with neither party
+                                    matched, {c.cancelled_failed_skipped_missing_coordinates} with
+                                    missing coordinates.
+                                </>
+                            )}{" "}
+                            Batch <span className="font-mono">{report.batch}</span>.
                         </p>
 
                         {report.errors.length > 0 ? (

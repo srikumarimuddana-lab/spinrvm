@@ -62,6 +62,11 @@ jobs:
             --quiet
 
       - name: Commit canonical requirements.txt (if changed)
+        env:
+          # github.head_ref is attacker-influenced on fork PRs; route it
+          # through env instead of interpolating into the script
+          # (semgrep run-shell-injection).
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -70,5 +75,5 @@ jobs:
           else
             git add backend/requirements.txt
             git commit -m "chore(backend): regenerate requirements.txt with canonical pip-compile flags"
-            git push origin HEAD:"${{ github.head_ref }}"
+            git push origin HEAD:"$HEAD_REF"
           fi

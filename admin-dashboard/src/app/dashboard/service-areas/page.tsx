@@ -19,6 +19,7 @@ import { TUNING_PLAYBOOK, tuningWarnings, warningsFor } from "@/lib/heatmap-tuni
 import { parseAllowlistIds } from "@/lib/allowlist-ids";
 import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { needsSurgeJustification, isSurgeJustificationValid } from "@/lib/surgeJustificationSchema";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -669,7 +670,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
   const [saved, setSaved] = useState(false);
 
   const surgeValue = parseFloat(String(form.surge_multiplier)) || 1.0;
-  const needsJustification = form.surge_enabled && surgeValue > 2.5;
+  const needsJustification = needsSurgeJustification(form.surge_enabled, surgeValue);
 
   const handleSave = async () => {
     // Did the operator actually change surge since load? Unrelated saves
@@ -682,7 +683,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     // Only require (and only block on) justification when the operator is
     // actually applying an above-cap surge — not when saving an unrelated
     // field on an already-justified above-cap area.
-    if (surgeTouched && needsJustification && !form.surge_justification.trim()) {
+    if (surgeTouched && needsJustification && !isSurgeJustificationValid(form.surge_justification)) {
       alert("A written justification is required for surge multipliers above 2.5× (regulatory + reputational risk).");
       return;
     }

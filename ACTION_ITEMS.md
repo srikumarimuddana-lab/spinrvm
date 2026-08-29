@@ -11288,6 +11288,67 @@ record of what was assumed vs. what was actually true</summary>
   `subscriptions/page.tsx` is now considered resolved for this item (its
   one real validation form migrated, its other tabs checked and have
   nothing to extract), not merely deferred. Checkbox stays `[ ]`.
+- **2026-08-29 update — KYB queue re-checked, nothing to migrate; step 10
+  done on `service-areas/page.tsx`'s surge-justification gate instead.**
+  Re-inspected `kyb-queue/page.tsx` (the "KYB queue's other fields"
+  candidate named at the end of step 9) field by field: `approve`/`reject`
+  are plain action buttons with no input; the document-preview link has no
+  input; the reject dialog's `rejectNote` textarea is explicitly optional
+  (`note: rejectNote.trim() || undefined` — an empty note is a *valid*
+  value, not a rejected one). Also checked
+  `corporate-accounts/[id]/page.tsx`'s "KYB Verification" section — pure
+  read-only display (review date, reviewer, submitted date, note,
+  document-preview link), no form fields at all. Confirms step 8's
+  "nothing worth extracting" note rather than turning up new work — a zod
+  wrapper around "any string, including empty, is valid" would be a
+  no-op, not a real extraction. KYB queue is now fully resolved for this
+  item, not merely deferred.
+
+  Moved instead to `service-areas/page.tsx`'s `GeneralTabForm.handleSave`
+  — the surge-override justification gate implementing CLAUDE.md's own
+  documented rule ("Admin manual override accepts 1.0–10.0 but any value
+  \> 2.5 requires documented justification (regulatory + reputational
+  risk)"). The inline check
+  (`surgeTouched && needsJustification && !form.surge_justification.trim()`,
+  where `needsJustification = form.surge_enabled && surgeValue > 2.5`)
+  gates the `alert()` blocking save — the one real accept/reject rule
+  found in this file (every other field is a plain numeric/text input
+  with no inline `if` guard, just HTML `min`/`max`/`step` attributes and
+  `parseFloat(...) || <default>` fallbacks, same "nothing to extract"
+  shape as `TaxConfigModal` in step 9).
+
+  New colocated `admin-dashboard/src/lib/surgeJustificationSchema.ts`
+  (`SURGE_JUSTIFICATION_THRESHOLD` = 2.5, mirroring
+  `backend/utils/surge_engine.py`'s `SURGE_CAP`; `needsSurgeJustification`,
+  `isSurgeJustificationValid`) reproduces the gate as byte-for-byte
+  equivalent predicates. This is a **UX gate only** — the server-side
+  clamp to `SURGE_CAP` at every fare-calc call site (`fare_service.py`,
+  `routes/fares.py`, `features.py`) is untouched by this change; a blank
+  justification still can't reach `onSave` (the network call), exactly as
+  before. New
+  `admin-dashboard/src/lib/__tests__/surgeJustificationSchema.test.ts` (9
+  accept/reject cases: above/at/under the threshold, surge-disabled,
+  trimmed/whitespace-only justification). Verification: 9/9 new tests
+  pass; full admin-dashboard suite 404/404 tests, 40/40 files, exit 0
+  (`npm run test:coverage`, the exact CI invocation); `npx tsc --noEmit`
+  clean; `npx eslint` on touched files: 0 errors, 65 pre-existing warnings
+  on unrelated lines in this large file (confirmed via `git diff` that
+  none fall on the 3 lines this diff touches: the import line and the two
+  one-line predicate-call swaps); **real production build**
+  (`npm run build`) completed successfully, exit code 0, full route
+  manifest generated including `/dashboard/service-areas`, not just
+  `tsc`/dev server; blast-radius grep confirmed
+  `surge_justification`/`needsJustification`/`surgeValue`/`surgeTouched`
+  appear nowhere else in `admin-dashboard/src`. Full Change Impact Log:
+  `docs/change-log/2026-08-29-b39-admin-surge-justification-zod-step10.md`.
+  **Still open:** `staff/page.tsx` and every other admin-dashboard
+  corporate/billing form not yet named remain unmigrated; no
+  ADR/migration-order doc written yet. `service-areas/page.tsx` is not
+  fully resolved — only its one surge-justification rule was migrated;
+  the rest of this large multi-tab file (fees, incentives, heatmap
+  config, Spinr Pass area toggles, etc.) was not audited field-by-field
+  for other inline rules and stays open for a future pass if one turns
+  up. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

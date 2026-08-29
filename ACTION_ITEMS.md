@@ -11251,6 +11251,43 @@ record of what was assumed vs. what was actually true</summary>
   assignment and KYB reject-note fields are now considered resolved for
   this item (checked, nothing worth extracting), not merely deferred.
   Checkbox stays `[ ]`.
+- **2026-08-29 update — step 9 done: `subscriptions/page.tsx`'s Plan
+  create/edit form (`PlanModal.handleSubmit`)** — the top-level
+  subscriptions-list candidate flagged unchecked at the end of step 8.
+  `handleSubmit` gated a plan create/update with two inline checks
+  (`!form.name.trim()`, `form.price < 0`), each showing a distinct error
+  message. The page's other three tabs were inspected and have nothing to
+  extract: `TaxConfigModal.handleSave` has no JS-level validation at all
+  (only HTML `min`/`max` attributes on the rate inputs, no inline check
+  gating the save call — nothing to pin); the Driver Subscriptions and
+  Transactions tabs are read-only views with no form.
+
+  New colocated `admin-dashboard/src/lib/subscriptionPlanSchema.ts`
+  (`isPlanNameValid`, `isPlanPriceValid`) reproduces the two checks as
+  byte-for-byte equivalent predicates, kept separate — same reasoning as
+  steps 3 and 8 — because the call site shows a different error message
+  per failing check. New
+  `admin-dashboard/src/lib/__tests__/subscriptionPlanSchema.test.ts` (7
+  accept/reject cases: trimmed/whitespace-only name, zero/negative/positive
+  price). Verification: 7/7 new tests pass; full admin-dashboard suite
+  395/395 tests, 39/39 files, exit 0 (`npm run test:coverage`, the exact CI
+  invocation); `npx tsc --noEmit` clean; `npx eslint` on touched files: 0
+  errors, 5 pre-existing warnings on unrelated lines
+  (`react-hooks/set-state-in-effect` on three `useEffect` calls untouched
+  by this diff — confirmed via `git diff` that none of those lines are in
+  this change); **real production build** (`npm run build`) completed
+  successfully, exit code 0, full route manifest generated including
+  `/dashboard/subscriptions`, not just `tsc`/dev server; blast-radius grep
+  confirmed the two error message strings ("Plan name is required.",
+  "Price must be ≥ 0.") appear nowhere else in `admin-dashboard/src`. Full
+  Change Impact Log:
+  `docs/change-log/2026-08-29-b39-admin-subscription-plan-zod-step9.md`.
+  **Still open:** every other admin-dashboard corporate/billing form not
+  yet named remains unmigrated (KYB queue's other fields, service-areas,
+  staff, etc.); no ADR/migration-order doc written yet.
+  `subscriptions/page.tsx` is now considered resolved for this item (its
+  one real validation form migrated, its other tabs checked and have
+  nothing to extract), not merely deferred. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

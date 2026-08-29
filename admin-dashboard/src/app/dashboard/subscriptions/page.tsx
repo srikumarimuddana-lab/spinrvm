@@ -39,6 +39,7 @@ import {
     updateSubscriptionTaxConfig,
     getServiceAreas,
 } from "@/lib/api";
+import { isPlanNameValid, isPlanPriceValid } from "@/lib/subscriptionPlanSchema";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -172,8 +173,8 @@ function PlanModal({ open, plan, onClose, onSave }: PlanModalProps) {
     }, [plan, open]);
 
     const handleSubmit = async () => {
-        if (!form.name.trim()) { setError("Plan name is required."); return; }
-        if (form.price < 0) { setError("Price must be ≥ 0."); return; }
+        if (!isPlanNameValid(form.name)) { setError("Plan name is required."); return; }
+        if (!isPlanPriceValid(form.price)) { setError("Price must be ≥ 0."); return; }
         setSaving(true);
         try {
             await onSave({

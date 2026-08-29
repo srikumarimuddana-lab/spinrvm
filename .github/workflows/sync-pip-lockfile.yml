@@ -1,0 +1,74 @@
+name: Sync pip lockfile
+
+# Why this exists
+# ---------------
+# The `requirements.txt up to date` gate (pip-compile-check.yml) demands the
+# canonical pip-compile format: --strip-extras --no-header --annotation-style
+# line. Dependabot regenerates backend/requirements.txt with pip-compile's
+# DEFAULTS (multi-line annotations, header, extras kept), so every Dependabot
+# pip PR rewrites the whole file out of format and correctly fails the gate
+# (first observed 2026-08-29 across all five weekly pip PRs). This workflow
+# heals that drift ON THE PR — same pattern as sync-mobile-lockfiles.yml —
+# by regenerating requirements.txt canonically and committing it back.
+#
+# It triggers only on requirements.in changes; the requirements.txt-only
+# commit it pushes does not match the path filter, so it can't retrigger
+# itself. Fork PRs can't be pushed to, so they're skipped (pip-compile-check
+# still surfaces the drift as a red check there).
+
+on:
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - backend/requirements.in
+      - .github/workflows/sync-pip-lockfile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    # Only same-repo PRs (and manual runs) can be pushed to; forks lack write.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          # Must match pip-compile-check.yml's python-version — resolution can
+          # differ across Python versions via environment markers.
+          python-version: '3.12'
+
+      - name: Install pip-tools
+        run: pip install pip-tools
+
+      - name: Regenerate requirements.txt (canonical flags)
+        working-directory: backend
+        # Exactly the flags pip-compile-check.yml verifies against.
+        run: |
+          pip-compile requirements.in \
+            --output-file requirements.txt \
+            --strip-extras \
+            --no-header \
+            --annotation-style line \
+            --no-upgrade \
+            --quiet
+
+      - name: Commit canonical requirements.txt (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- backend/requirements.txt; then
+            echo "requirements.txt already canonical — nothing to commit."
+          else
+            git add backend/requirements.txt
+            git commit -m "chore(backend): regenerate requirements.txt with canonical pip-compile flags"
+            git push origin HEAD:"${{ github.head_ref }}"
+          fi

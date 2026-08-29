@@ -137,6 +137,7 @@ async def _build_plan(
     vehicle_type_id: Optional[str],
     vehicle_type_name: Optional[str],
     batch: str,
+    include_cancelled_failed: bool = True,
 ) -> Any:
     """Resolve service area + vehicle type and build the plan off the request thread.
 
@@ -167,6 +168,7 @@ async def _build_plan(
         service_area=service_area,
         vehicle_type=vehicle_type,
         batch=batch,
+        include_cancelled_failed=include_cancelled_failed,
     )
 
 
@@ -208,13 +210,16 @@ async def validate_booking_import(
     vehicle_type_id: Optional[str] = Form(None),
     vehicle_type_name: Optional[str] = Form(None),
     batch: Optional[str] = Form(None),
+    include_cancelled_failed: bool = Form(True),
     admin: dict = Depends(get_admin_user),
 ):
     """Dry-run: parse + validate the four CSVs and return the report. No writes."""
     _require_super_admin(admin)
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     files = await _read_all(bookings_csv, customers_csv, drivers_csv, earnings_csv)
-    plan = await _build_plan(files, service_area_id, service_area_name, vehicle_type_id, vehicle_type_name, batch)
+    plan = await _build_plan(
+        files, service_area_id, service_area_name, vehicle_type_id, vehicle_type_name, batch, include_cancelled_failed
+    )
     return _report(plan, batch)
 
 
@@ -231,13 +236,16 @@ async def commit_booking_import(
     vehicle_type_id: Optional[str] = Form(None),
     vehicle_type_name: Optional[str] = Form(None),
     batch: Optional[str] = Form(None),
+    include_cancelled_failed: bool = Form(True),
     admin: dict = Depends(get_admin_user),
 ):
     """Re-validate the CSVs and, only if clean, insert rides + offset payouts."""
     _require_super_admin(admin)
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     files = await _read_all(bookings_csv, customers_csv, drivers_csv, earnings_csv)
-    plan = await _build_plan(files, service_area_id, service_area_name, vehicle_type_id, vehicle_type_name, batch)
+    plan = await _build_plan(
+        files, service_area_id, service_area_name, vehicle_type_id, vehicle_type_name, batch, include_cancelled_failed
+    )
 
     report = _report(plan, batch)
     if not report["can_commit"]:

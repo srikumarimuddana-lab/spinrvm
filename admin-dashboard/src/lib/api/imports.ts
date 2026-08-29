@@ -172,6 +172,7 @@ export interface BookingImportCounts {
     bookings_read: number;
     skipped_not_completed: number;
     skipped_test_account: number;
+    skipped_cancelled_failed_excluded_by_scope: number;
     target_rows: number;
     skipped_already_imported: number;
     skipped_unmatched_both: number;
@@ -188,6 +189,20 @@ export interface BookingImportCounts {
     sum_offset_payouts: number;
     sum_tips: number;
     sum_tax: number;
+    // --- cancelled/failed path (added 2026-08-20, A41) --- rides_planned
+    // above is completed-only and predates this path; these are the fields
+    // that account for the rest of what commit actually writes to `rides`.
+    cancelled_target_rows: number;
+    failed_target_rows: number;
+    cancelled_failed_rides_planned: number;
+    cancelled_failed_skipped_already_imported: number;
+    cancelled_failed_skipped_unmatched_both: number;
+    cancelled_failed_zero_fare_completed: number;
+    cancelled_failed_skipped_missing_coordinates: number;
+    cancelled_failed_unmatched_riders: number;
+    cancelled_failed_unmatched_drivers: number;
+    total_rides_planned: number;
+    insurance_periods_planned: number;
 }
 export interface BookingImportReport {
     batch: string;
@@ -220,6 +235,11 @@ export interface BookingImportOptions {
     vehicleTypeId?: string;
     vehicleTypeName?: string;
     batch?: string;
+    // Per-run scope, not a re-litigation of the 2026-08-20 decision to
+    // support cancelled/failed bookings -- that decision stands and the
+    // backend still defaults to true. Lets one commit be scoped down
+    // without changing the default for the next.
+    includeCancelledFailed?: boolean;
 }
 
 function bookingImportFormData(files: BookingImportFiles, opts?: BookingImportOptions): FormData {
@@ -233,6 +253,9 @@ function bookingImportFormData(files: BookingImportFiles, opts?: BookingImportOp
     if (opts?.vehicleTypeId) fd.append("vehicle_type_id", opts.vehicleTypeId);
     if (opts?.vehicleTypeName) fd.append("vehicle_type_name", opts.vehicleTypeName);
     if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.includeCancelledFailed !== undefined) {
+        fd.append("include_cancelled_failed", String(opts.includeCancelledFailed));
+    }
     return fd;
 }
 

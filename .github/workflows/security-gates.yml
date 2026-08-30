@@ -456,7 +456,18 @@ jobs:
             # for the scoped allowlist and full rationale.
             yarn audit --level high --json > /tmp/yarn-audit.json || true
             python3 "${GITHUB_WORKSPACE}/scripts/security/check_yarn_audit_allowlist.py" /tmp/yarn-audit.json
-          elif [ -f package-lock.json ]; then npm audit --audit-level=high
+          elif [ -f package-lock.json ]; then
+            # admin-dashboard is the only module on this leg (npm, not
+            # yarn). Same image-size advisory, reached via the Storybook
+            # devDependency instead of Metro — see G4c below and
+            # scripts/security/check_npm_audit_allowlist.py for the full
+            # rationale. This leg was missed when that allowlist was first
+            # added (only G4c, the dedicated npm-audit-admin job, was
+            # patched) — found because this leg still ran the bare
+            # `npm audit --audit-level=high` and failed on exactly the
+            # same allowlisted advisory G4c already tolerates.
+            npm audit --audit-level=high --json > /tmp/npm-audit-admin.json || true
+            python3 "${GITHUB_WORKSPACE}/scripts/security/check_npm_audit_allowlist.py" /tmp/npm-audit-admin.json
           else echo "No lockfile in ${{ matrix.module }}"
           fi
 
@@ -487,7 +498,18 @@ jobs:
         run: npm ci
       - name: Audit for HIGH+ CVEs
         working-directory: admin-dashboard
-        run: npm audit --audit-level=high
+        # Same image-size / GHSA-w3rx-r6r6-pgpr / GHSA-5p2g-fcmc-qvqq advisory
+        # already allowlisted for mobile's yarn-audit gate (CR #4548) — now
+        # also reached via the Storybook devDependency added for component
+        # development (@storybook/nextjs-vite -> vite-plugin-storybook-nextjs
+        # -> image-size), a dev-tooling-only path, never in the shipped
+        # bundle. No patched image-size version exists. See
+        # scripts/security/check_npm_audit_allowlist.py for the full
+        # rationale and the narrow scope of what it allows through — any
+        # other HIGH/CRITICAL finding still fails this step.
+        run: |
+          npm audit --audit-level=high --json > /tmp/npm-audit-admin.json || true
+          python3 "${GITHUB_WORKSPACE}/scripts/security/check_npm_audit_allowlist.py" /tmp/npm-audit-admin.json
 
   # G5 — Secret scanning (git history)
   gitleaks:

@@ -29,6 +29,15 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ back: mockBack, push: mockPush }),
 }));
 
+jest.mock('expo-router/react-navigation', () => {
+  const ReactActual = require('react');
+  return {
+    useFocusEffect: (cb: () => void | (() => void)) => {
+      ReactActual.useEffect(() => cb(), []);
+    },
+  };
+});
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'LinearGradient' }));
 jest.mock('react-native-safe-area-context', () => ({

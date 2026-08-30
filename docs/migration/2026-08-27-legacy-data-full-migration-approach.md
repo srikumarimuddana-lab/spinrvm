@@ -218,17 +218,54 @@ charges or double-collect from a real customer.
 **Recommendation:** explicitly deferred. Needs live Stripe access this session doesn't have,
 and a fresh (not 07-26/08-22 vintage) export per the original audit's own caveat.
 
-### Phase 6 — Legacy wallet balances — deferred, needs new infrastructure
+### Phase 6 — Legacy wallet balances — built and live (PRs #4473/#4477/#4480); fixed 2026-08-30; ready for a scoped run
 
 **What:** `wallets.csv` — real money: $900 rider wallet credit + $60 driver referral credit
 across 13 rows.
-**Risk:** high — this is real money, and a plain `INSERT` into `wallets`/`wallet_transactions`
-is exactly the kind of race-unsafe write CLAUDE.md's money-path rules exist to prevent. It
-needs the same row-locked-RPC pattern `corporate_wallet_apply_delta` already established for
-corporate wallets — that pattern doesn't yet exist for consumer wallets and would need to be
-built (not a big build, but it's new code, not a data script).
-**Recommendation:** small in row-count, but do not rush it. Build the RPC, dry-run it,
-reconcile the $960 by hand before any write.
+**Status, corrected 2026-08-30:** this section previously said the row-locked RPC pattern
+"doesn't yet exist for consumer wallets and would need to be built" — that was wrong even at
+the time this doc was written. `wallet_apply_credit` (migration 196, credit-only) already
+existed; `wallet_apply_delta` (migration 249, signed delta, credit+debit) shipped soon after,
+and the full three-CSV importer (`services/wallet_import_service.py` +
+`routes/admin/wallet_import.py`, super_admin-gated, + the admin-dashboard "Legacy Wallet
+Import" tool under Bulk Operations) was built and merged to `main` on 2026-08-24
+(`docs/change-log/2026-08-24-wallet-import-service-built.md`, PRs #4473/#4477/#4480) — before
+this doc's Phase 6 section was last edited to say "deferred, needs new infrastructure."
+**Bug found and fixed 2026-08-30:** the importer's own docstring flagged that its expected
+CSV column names were inferred from sibling exports, never confirmed against a real
+`wallets.csv` header. Checked against the real 07-26 export: the legacy type column is named
+`wallet_type`, not `type` as guessed — every real `/validate` call would have failed with a
+missing-column error, blocking every commit. Fixed
+(`docs/change-log/2026-08-30-wallet-import-wallet-type-column-fix.md`).
+
+**Pre-launch cutoff added 2026-08-30 (owner-confirmed launch date 2026-03-30):** any legacy
+wallet entry dated before Spinr's public launch is pre-launch build/test data, never money
+actually owed — this reframes the whole $900/$60 figure this section originally cited. Of the
+13 rows in the real export, 10 are pre-launch (all 8 rider-owned rows — the entire ~$900 —
+plus 2 of the 4 matched driver rows, Tristan and Kiran, $10 each). Only 3 rows are genuinely
+post-launch: Gurpreet's $40 credit and Aakash Arora's $40 add/$40 deduct pair that nets to $0.
+The importer now enforces this cutoff in code (`LAUNCH_DATE`,
+`docs/change-log/2026-08-30-wallet-import-pre-launch-cutoff.md`) rather than relying on manual
+CSV editing before each run. A dry-run of `build_plan` against the real
+`wallets.csv`/`customers.csv`/`drivers.csv` (with production's actual phone matches) now
+credits **$40, to one driver (Gurpreet) only** — not $60/3 drivers as this section previously
+said before the cutoff was added.
+
+**Recommendation:** ready for the operator to run for real via the existing admin-dashboard
+"Legacy Wallet Import" tool (Bulk Operations → Legacy Wallet Import), Preview first — it will
+show exactly the $40/1-driver result above. The pre-launch $900 rider portion and the $20
+across Tristan/Kiran are not part of this run at all now (correctly excluded by the launch
+cutoff, independent of the earlier finding that the rider portion was also unmatched) — this
+data stays in `wallets.csv` untouched by this tool, a candidate for the broader pre-launch
+cleanup pass raised below rather than for migration.
+
+**Broader pre-launch question raised 2026-08-30, investigation pending:** the same 2026-03-30
+cutoff plausibly applies to every other legacy importer used in this migration effort (rider
+CSV import, driver CSV import, SIN/DOB backfill, vehicle-history backfill, saved-address
+backfill, insurance-period corrections) — some already merged and run against production. This
+section only fixes the wallet importer, which had not yet been run. Whether any
+already-imported record traces back to pre-launch legacy data, and what (if anything) should
+be cleaned up before go-live, is a separate investigation — not yet done as of this edit.
 
 ## 5. Two former legal/product blockers — both actioned 2026-08-27
 

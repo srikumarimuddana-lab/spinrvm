@@ -16,12 +16,15 @@ export const getUsersPaginated = (opts: {
     search?: string;
     limit?: number;
     offset?: number;
+    /** true = legacy-imported profiles only, false = non-imported only, omitted = no filter. */
+    legacy_import?: boolean;
 } = {}) => {
     const sp = new URLSearchParams();
     sp.set("role", opts.role ?? "all");
     if (opts.search) sp.set("search", opts.search);
     if (opts.limit != null) sp.set("limit", String(opts.limit));
     if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.legacy_import != null) sp.set("legacy_import", String(opts.legacy_import));
     return request<any[]>(`/api/admin/users?${sp.toString()}`);
 };
 

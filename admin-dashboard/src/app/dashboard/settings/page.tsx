@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound, getAiCatalog, getEmailDeliverability, type AiCatalogProvider } from "@/lib/api";
 import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -150,25 +151,23 @@ export default function SettingsPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Configure platform-wide settings.
-                    </p>
-                </div>
-                <Button onClick={handleSave} disabled={saving}>
-                    {saved ? (
-                        <>
-                            <Check className="mr-2 h-4 w-4" /> Saved!
-                        </>
-                    ) : (
-                        <>
-                            <Save className="mr-2 h-4 w-4" /> {saving ? "Saving..." : "Save Changes"}
-                        </>
-                    )}
-                </Button>
-            </div>
+            <PageHeader
+                title="Settings"
+                description="Configure platform-wide settings."
+                actions={
+                    <Button onClick={handleSave} disabled={saving}>
+                        {saved ? (
+                            <>
+                                <Check className="mr-2 h-4 w-4" /> Saved!
+                            </>
+                        ) : (
+                            <>
+                                <Save className="mr-2 h-4 w-4" /> {saving ? "Saving..." : "Save Changes"}
+                            </>
+                        )}
+                    </Button>
+                }
+            />
 
             {settings && (
                 <Tabs defaultValue="integrations" className="space-y-6">
@@ -1114,6 +1113,21 @@ export default function SettingsPage() {
                                     id="admin_theme_v2_enabled"
                                     checked={settings.admin_theme_v2_enabled ?? false}
                                     onCheckedChange={(v) => update("admin_theme_v2_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="admin_command_palette_enabled">Enable command palette (Cmd+K)</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Lets staff press Cmd+K / Ctrl+K anywhere in the dashboard to fuzzy-jump to any
+                                        page they have access to. Off by default — takes effect for all staff within
+                                        about a minute of toggling, no redeploy.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="admin_command_palette_enabled"
+                                    checked={settings.admin_command_palette_enabled ?? false}
+                                    onCheckedChange={(v) => update("admin_command_palette_enabled", v)}
                                 />
                             </div>
                         </CardContent>

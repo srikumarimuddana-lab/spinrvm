@@ -24,7 +24,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, TextInput, Image, BackHandler, Platform, Modal } from 'react-native';
+import { TouchableOpacity, Text, TextInput, Image, BackHandler, Platform, Modal, StyleSheet } from 'react-native';
 import RNMapView from 'react-native-maps';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
@@ -58,7 +58,7 @@ jest.mock('expo-router', () => ({
 }));
 
 const COLORS = {
-  primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB',
+  primary: '#EF4444', background: '#FFFFFF', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB',
 };
 jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
 
@@ -514,6 +514,34 @@ describe('RideCompletedScreen', () => {
     act(() => { customInput.props.onChangeText('7'); });
     const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
     expect(JSON.stringify(submitBtn.findAllByType(Text)[0].props.children)).toContain('22.00');
+  });
+
+  // The custom-tip box fills itself with colors.text as soon as it holds a
+  // value (styles.tipCustomActive). Its contents therefore have to flip to the
+  // contrasting colors.background, or the rider types a tip they cannot read.
+  const customTipParts = (r: TestRenderer.ReactTestRenderer) => ({
+    input: r.root.findAllByType(TextInput).find((n) => n.props.placeholder === 'Other')!,
+    // Only the standalone prefix has a bare '$' string child — the preset
+    // pills and the fare total render arrays like ['$', 3].
+    dollar: r.root.findAllByType(Text).find((t) => t.props.children === '$')!,
+  });
+
+  it('flips the custom tip text to the contrasting colour once the box is filled', async () => {
+    const r = await renderScreen();
+    act(() => { customTipParts(r).input.props.onChangeText('7'); });
+
+    const { input, dollar } = customTipParts(r);
+    expect(StyleSheet.flatten(input.props.style).color).toBe(COLORS.background);
+    expect(input.props.selectionColor).toBe(COLORS.background);
+    expect(StyleSheet.flatten(dollar.props.style).color).toBe(COLORS.background);
+  });
+
+  it('keeps the empty custom tip box on the plain surface palette', async () => {
+    const r = await renderScreen();
+    const { input, dollar } = customTipParts(r);
+    expect(StyleSheet.flatten(input.props.style).color).toBe(COLORS.text);
+    expect(input.props.placeholderTextColor).toBe(COLORS.textDim);
+    expect(StyleSheet.flatten(dollar.props.style).color).toBe(COLORS.textDim);
   });
 
   it('pressing "Message Driver" navigates to the driver chat for this ride', async () => {

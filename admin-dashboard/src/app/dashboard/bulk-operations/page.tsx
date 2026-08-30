@@ -37,6 +37,7 @@ import {
     adminValidateRiderImport,
     adminCommitRiderImport,
     adminRegenerateImportedSnapshots,
+    adminRegenerateImportedRoutes,
     type StripeImportKind,
     type StripeImportReport,
     type StripeImportReportItem,
@@ -46,6 +47,7 @@ import {
     type RiderImportReportItem,
     type RiderImportDuplicate,
     type SnapshotRegenerateResult,
+    type RouteRegenerateResult,
 } from "@/lib/api";
 import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
@@ -778,6 +780,12 @@ export default function BulkOperationsPage() {
             <SnapshotRegenerateSection />
 
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <MapPin className="h-4 w-4" />
+                Imported Ride Routes — backfill road-following routes (OSRM/Google Directions)
+            </div>
+            <RouteRegenerateSection />
+
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <Upload className="h-4 w-4" />
                 Legacy Booking Import — bring completed rides from the previous app into rider
                 and driver trip history
@@ -872,6 +880,106 @@ function SnapshotRegenerateSection() {
                             <span className="text-muted-foreground">
                                 Renderer: {result.renderer}
                             </span>
+                        </div>
+                        {result.errors.length > 0 && (
+                            <details className="text-sm">
+                                <summary className="cursor-pointer text-muted-foreground">
+                                    Error details ({result.errors.length})
+                                </summary>
+                                <ul className="mt-2 space-y-1 text-xs font-mono">
+                                    {result.errors.map((e, i) => (
+                                        <li key={i}>
+                                            {e.ride_id.slice(0, 8)}… — {e.error}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </details>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+function RouteRegenerateSection() {
+    const { toast } = useToast();
+    const [running, setRunning] = useState(false);
+    const [force, setForce] = useState(false);
+    const [result, setResult] = useState<RouteRegenerateResult | null>(null);
+
+    const handleRegenerate = async () => {
+        setRunning(true);
+        setResult(null);
+        try {
+            const res = await adminRegenerateImportedRoutes(force, 200);
+            setResult(res);
+            toast({
+                title: `Routes regenerated`,
+                description: `${res.success} succeeded, ${res.failed} failed`,
+            });
+        } catch (err: unknown) {
+            toast({
+                title: "Route generation failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Route Backfill</CardTitle>
+                <CardDescription>
+                    Compute road-following routes (OSRM, falling back to Google Directions) for
+                    imported rides missing a real <code>planned_route_polyline</code>, and update
+                    each ride&apos;s <code>distance_km</code> to match.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={force}
+                            onChange={(e) => setForce(e.target.checked)}
+                            className="rounded border-input"
+                        />
+                        Re-generate all (including rides that already have a route)
+                    </label>
+                </div>
+                <Button onClick={handleRegenerate} disabled={running}>
+                    {running ? (
+                        <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Generating routes...
+                        </>
+                    ) : (
+                        <>
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Regenerate Routes
+                        </>
+                    )}
+                </Button>
+                {result && (
+                    <div className="rounded-md border p-4 space-y-2">
+                        <div className="flex gap-4 text-sm">
+                            <span className="flex items-center gap-1">
+                                <CheckCircle2 className="h-4 w-4 text-success" />
+                                {result.success} succeeded
+                            </span>
+                            {result.failed > 0 && (
+                                <span className="flex items-center gap-1">
+                                    <AlertTriangle className="h-4 w-4 text-warning" />
+                                    {result.failed} failed
+                                </span>
+                            )}
+                            {result.message && (
+                                <span className="text-muted-foreground">{result.message}</span>
+                            )}
                         </div>
                         {result.errors.length > 0 && (
                             <details className="text-sm">

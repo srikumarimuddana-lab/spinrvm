@@ -662,6 +662,26 @@ export const adminRegenerateImportedSnapshots = (force: boolean, limit: number =
         headers: { "Content-Type": "application/json" },
     });
 
+/* ── Imported Ride Road-Route Regeneration ───────────── */
+// Admin-dashboard equivalent of scripts/backfill_imported_ride_routes.py --
+// that CLI script needs shell access to the backend; this lets an operator
+// run the same backfill safely through the browser like every other
+// legacy-migration tool on this page.
+export interface RouteRegenerateResult {
+    total: number;
+    success: number;
+    failed: number;
+    message?: string;
+    errors: { ride_id: string; error: string }[];
+}
+
+export const adminRegenerateImportedRoutes = (force: boolean, limit: number = 200) =>
+    request<RouteRegenerateResult>("/api/admin/rides/regenerate-imported-routes", {
+        method: "POST",
+        body: JSON.stringify({ force, limit }),
+        headers: { "Content-Type": "application/json" },
+    });
+
 /* ── Legacy Vehicle-History Backfill (2 CSVs) ── */
 // Super-admin/drivers-module-gated (backend/routes/admin/legacy_vehicle_history_backfill.py).
 // Phase 2 of the 2026-08-27 migration plan: backfills append-only

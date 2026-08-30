@@ -3557,6 +3557,12 @@ async def admin_close_payout_period(
 
 # ── Imported ride snapshot regeneration ──────────────────────────────────
 
+# Bounded concurrency for admin_regenerate_imported_snapshots()'s per-ride
+# render/upload/DB-write work. Modest on purpose -- each ride fans out a
+# real call to the Google Static Maps API; see the call site's own comment
+# for the incident this preempts.
+_SNAPSHOT_CONCURRENCY = 8
+
 
 class RegenerateSnapshotsRequest(BaseModel):
     force: bool = False
@@ -3629,82 +3635,101 @@ async def admin_regenerate_imported_snapshots(
     failed = 0
     errors: list[dict] = []
 
-    for ride in rides:
-        ride_id = ride["id"]
-        pickup_lat = ride.get("pickup_lat")
-        pickup_lng = ride.get("pickup_lng")
-        dropoff_lat = ride.get("dropoff_lat")
-        dropoff_lng = ride.get("dropoff_lng")
+    # Bounded concurrency, not full sequential -- found live 2026-08-29: a
+    # 62-ride run (well under the 500 cap) stalled at 50/62 with zero
+    # progress for 13+ minutes, matching the exact sequential-per-item
+    # request-timeout pattern found and fixed three times already this
+    # session in the CSV importers (each ride here awaits a real Google
+    # Static Maps call, a storage upload, and a DB write in turn). Unlike
+    # those fixes this route makes native async HTTP/storage calls (no
+    # sync DB client to wrap in a thread pool), so the fix is an
+    # asyncio.Semaphore bounding concurrent rides instead of
+    # ThreadPoolExecutor. _SNAPSHOT_CONCURRENCY is deliberately modest
+    # (not the CSV importers' 20) -- this fans out real calls to the
+    # Google Static Maps API, and the per-ride 0.3s pacing below is kept
+    # to avoid hammering it.
+    semaphore = asyncio.Semaphore(_SNAPSHOT_CONCURRENCY)
 
-        if not all(isinstance(v, (int, float)) for v in [pickup_lat, pickup_lng, dropoff_lat, dropoff_lng]):
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": "missing coordinates"})
-            continue
+    async def _process_one(ride: dict) -> None:
+        nonlocal success, failed
+        async with semaphore:
+            ride_id = ride["id"]
+            pickup_lat = ride.get("pickup_lat")
+            pickup_lng = ride.get("pickup_lng")
+            dropoff_lat = ride.get("dropoff_lat")
+            dropoff_lng = ride.get("dropoff_lng")
 
-        route_polyline = normalize_polyline_points(ride.get("planned_route_polyline"))
+            if not all(isinstance(v, (int, float)) for v in [pickup_lat, pickup_lng, dropoff_lat, dropoff_lng]):
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": "missing coordinates"})
+                return
 
-        png_bytes = None
-        if gmap_key:
-            try:
-                png_bytes = await render_ride_snapshot_google(
-                    api_key=gmap_key,
-                    pickup_lat=float(pickup_lat),
-                    pickup_lng=float(pickup_lng),
-                    dropoff_lat=float(dropoff_lat),
-                    dropoff_lng=float(dropoff_lng),
-                    route_polyline=route_polyline,
-                )
-            except Exception as exc:
-                logger.error("Google render failed for ride %s: %s", ride_id, exc)
+            route_polyline = normalize_polyline_points(ride.get("planned_route_polyline"))
 
-        if not png_bytes:
-            try:
-                png_bytes = await loop.run_in_executor(
-                    None,
-                    functools.partial(
-                        render_ride_snapshot,
+            png_bytes = None
+            if gmap_key:
+                try:
+                    png_bytes = await render_ride_snapshot_google(
+                        api_key=gmap_key,
                         pickup_lat=float(pickup_lat),
                         pickup_lng=float(pickup_lng),
                         dropoff_lat=float(dropoff_lat),
                         dropoff_lng=float(dropoff_lng),
                         route_polyline=route_polyline,
+                    )
+                except Exception as exc:
+                    logger.error("Google render failed for ride %s: %s", ride_id, exc)
+
+            if not png_bytes:
+                try:
+                    png_bytes = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            render_ride_snapshot,
+                            pickup_lat=float(pickup_lat),
+                            pickup_lng=float(pickup_lng),
+                            dropoff_lat=float(dropoff_lat),
+                            dropoff_lng=float(dropoff_lng),
+                            route_polyline=route_polyline,
+                        ),
+                    )
+                except Exception as exc:
+                    logger.error("OSM render failed for ride %s: %s", ride_id, exc)
+
+            if not png_bytes:
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": "render returned None"})
+                return
+
+            storage_path = f"ride_{ride_id}.png"
+            try:
+                await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        sb.storage.from_("ride-snapshots").upload,
+                        path=storage_path,
+                        file=png_bytes,
+                        file_options={"content-type": "image/png", "upsert": "true", "cache-control": "31536000"},
                     ),
                 )
             except Exception as exc:
-                logger.error("OSM render failed for ride %s: %s", ride_id, exc)
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": f"upload: {exc}"})
+                return
 
-        if not png_bytes:
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": "render returned None"})
-            continue
+            digest = hashlib.sha256(png_bytes).hexdigest()[:12]
+            url = f"{base_url}/storage/v1/object/public/ride-snapshots/{storage_path}?v={digest}"
+            try:
+                await db.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+            except Exception as exc:
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": f"db update: {exc}"})
+                return
 
-        storage_path = f"ride_{ride_id}.png"
-        try:
-            await loop.run_in_executor(
-                None,
-                functools.partial(
-                    sb.storage.from_("ride-snapshots").upload,
-                    path=storage_path,
-                    file=png_bytes,
-                    file_options={"content-type": "image/png", "upsert": "true", "cache-control": "31536000"},
-                ),
-            )
-        except Exception as exc:
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": f"upload: {exc}"})
-            continue
+            success += 1
+            await asyncio.sleep(0.3)
 
-        digest = hashlib.sha256(png_bytes).hexdigest()[:12]
-        url = f"{base_url}/storage/v1/object/public/ride-snapshots/{storage_path}?v={digest}"
-        try:
-            await db.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
-        except Exception as exc:
-            failed += 1
-            errors.append({"ride_id": ride_id, "error": f"db update: {exc}"})
-            continue
-
-        success += 1
-        await asyncio.sleep(0.3)
+    await asyncio.gather(*(_process_one(r) for r in rides))
 
     logger.info(
         "Imported ride snapshot regeneration by admin %s: %d ok, %d failed of %d",
@@ -3725,5 +3750,143 @@ async def admin_regenerate_imported_snapshots(
         "success": success,
         "failed": failed,
         "renderer": "google" if gmap_key else "osm",
+        "errors": errors[:20],
+    }
+
+
+# ── Imported ride road-route backfill ────────────────────────────────────
+
+# Bounded concurrency, same rationale as _SNAPSHOT_CONCURRENCY above: each
+# ride fans out a real network call (OSRM, or Google Directions as fallback).
+_ROUTE_CONCURRENCY = 8
+
+
+class RegenerateRoutesRequest(BaseModel):
+    force: bool = False
+    limit: int = Field(200, ge=1, le=500)
+
+
+@router.post("/rides/regenerate-imported-routes")
+async def admin_regenerate_imported_routes(
+    body: RegenerateRoutesRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Backfill the road-following route (planned_route_polyline + distance_km)
+    for imported rides that only have a straight-line/placeholder route.
+
+    Admin-dashboard equivalent of scripts/backfill_imported_ride_routes.py --
+    that CLI script needs shell access to the backend with OSRM_URL/
+    SUPABASE_SERVICE_ROLE_KEY configured; this route reuses
+    utils.route_distance.compute_route() (the same OSRM-first,
+    Google-Directions-fallback function the live trip map uses), so it
+    needs no OSRM config of its own and lets an operator run the backfill
+    safely through the browser like every other legacy-migration tool on
+    this page.
+
+    Bounded concurrency throughout -- built alongside
+    admin_regenerate_imported_snapshots's own fix for the exact same bug
+    class (a per-item sequential loop making real outbound network calls
+    inside one HTTP request; see that function's comment for the
+    2026-08-29 production incident this preempts before it could recur
+    here too).
+
+    Super_admin only, matching every other bulk-write tool on this page.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="role_required:super_admin")
+
+    import asyncio
+
+    try:
+        from ...utils.route_distance import compute_route
+    except ImportError:
+        from utils.route_distance import compute_route  # type: ignore
+
+    rides = await db.get_rows(
+        "rides",
+        {"legacy_import_metadata": {"$notnull": True}},
+        columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,planned_route_polyline",
+        limit=500,
+    )
+    if not rides:
+        return {"total": 0, "success": 0, "failed": 0, "message": "No imported rides found"}
+
+    def _needs_route(r: Dict[str, Any]) -> bool:
+        if body.force:
+            return True
+        poly = r.get("planned_route_polyline")
+        # A real road route always has >1 point; a never-backfilled row's
+        # placeholder is empty or a single straight-line endpoint.
+        return not poly or len(poly) <= 1
+
+    targets = [r for r in rides if _needs_route(r)][: body.limit]
+    if not targets:
+        return {"total": 0, "success": 0, "failed": 0, "message": "No rides need a route backfill"}
+
+    semaphore = asyncio.Semaphore(_ROUTE_CONCURRENCY)
+    success = 0
+    failed = 0
+    errors: list[dict] = []
+
+    async def _process_one(ride: Dict[str, Any]) -> None:
+        nonlocal success, failed
+        async with semaphore:
+            ride_id = ride["id"]
+            pickup_lat = ride.get("pickup_lat")
+            pickup_lng = ride.get("pickup_lng")
+            dropoff_lat = ride.get("dropoff_lat")
+            dropoff_lng = ride.get("dropoff_lng")
+
+            if not all(isinstance(v, (int, float)) for v in [pickup_lat, pickup_lng, dropoff_lat, dropoff_lng]):
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": "missing coordinates"})
+                return
+
+            try:
+                result = await compute_route(
+                    float(pickup_lat), float(pickup_lng), float(dropoff_lat), float(dropoff_lng)
+                )
+            except Exception as exc:
+                logger.error("compute_route failed for ride %s: %s", ride_id, exc)
+                result = None
+
+            if result is None:
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": "no route from OSRM or Google Directions"})
+                return
+
+            try:
+                await db.update_one(
+                    "rides",
+                    {"id": ride_id},
+                    {"planned_route_polyline": result["polyline"], "distance_km": result["distance_km"]},
+                )
+            except Exception as exc:
+                failed += 1
+                errors.append({"ride_id": ride_id, "error": f"db update: {exc}"})
+                return
+
+            success += 1
+
+    await asyncio.gather(*(_process_one(r) for r in targets))
+
+    logger.info(
+        "Imported ride route regeneration by admin %s: %d ok, %d failed of %d",
+        admin.get("id"),
+        success,
+        failed,
+        len(targets),
+    )
+    await log_admin_action(
+        admin,
+        "imported_ride_routes_regenerated",
+        "rides",
+        "bulk",
+        {"total": len(targets), "success": success, "failed": failed, "force": body.force},
+    )
+    return {
+        "total": len(targets),
+        "success": success,
+        "failed": failed,
         "errors": errors[:20],
     }

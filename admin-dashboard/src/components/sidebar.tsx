@@ -9,7 +9,7 @@ import {
     Menu, X,
     Shield, ShieldAlert, Cloud, Trophy, Activity,
     Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
-    PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap,
+    PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap, CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
@@ -113,6 +113,12 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Finance",
         items: [
             { href: "/dashboard/earnings", label: "Earnings", icon: DollarSign, module: "earnings" },
+            // Was reachable only by typing the URL — no sidebar entry existed
+            // at all (IA audit, design/UX review 2026-08-28). Gated on
+            // "earnings" to match the backend mount exactly: subscriptions_router
+            // is require_module("earnings") in routes/admin/__init__.py, so this
+            // can't show a link a grant can't back.
+            { href: "/dashboard/subscriptions", label: "Subscriptions", icon: CreditCard, module: "earnings" },
             { href: "/dashboard/corporate-accounts", label: "Corporate", icon: Building2, module: "corporate_accounts" },
         ],
     },
@@ -146,7 +152,15 @@ const NAV_GROUPS: NavGroup[] = [
             },
             {
                 href: "/dashboard/support-tickets",
-                label: "Help Desk",
+                // "Help Desk" alone sat next to "Support & Issues" with no
+                // legible line between them (design/UX review 2026-08-28) —
+                // an admin had to already know this one is the Zoho
+                // integration and the other is internal tickets/disputes/
+                // complaints/etc. Matches the label staff/page.tsx's role
+                // picker already uses for this exact module ("support_tickets"
+                // → "Help Desk (Zoho)"), so this is adopting an existing
+                // naming precedent, not inventing a new one.
+                label: "Help Desk (Zoho)",
                 icon: Headphones,
                 module: "support_tickets",
                 children: [

@@ -101,6 +101,7 @@ from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
 from .monitoring import router as monitoring_router
+from .pre_launch_flag import router as pre_launch_flag_router
 from .promotions import router as promotions_router
 from .rider_import import router as rider_import_router
 from .rides import router as rides_router
@@ -236,6 +237,11 @@ admin_router.include_router(booking_import_router, dependencies=[Depends(require
 # credit -> wallet_apply_delta). Same require_super_admin boundary as the
 # booking importer, for the same reason: it applies real money deltas.
 admin_router.include_router(wallet_import_router, dependencies=[Depends(require_super_admin)])
+# Pre-launch legacy data flagging (2026-08-30) -- additive-only, flags
+# dormant pre-launch driver/ride rows in legacy_import_metadata. Bulk write
+# across core drivers/rides tables, same require_super_admin boundary as
+# the importers above.
+admin_router.include_router(pre_launch_flag_router, dependencies=[Depends(require_super_admin)])
 # Bulk driver tax-ID import (SIN + GST BN migration for drivers who predate
 # in-app collection). Writes Vault-encrypted SINs, so it takes the reveal-sin
 # posture: require_super_admin at the mount AND re-checked in each handler.

@@ -20,6 +20,7 @@ import { parseAllowlistIds } from "@/lib/allowlist-ids";
 import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { needsSurgeJustification, isSurgeJustificationValid } from "@/lib/surgeJustificationSchema";
+import { isTaxJustificationValid } from "@/lib/taxJustificationSchema";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -209,7 +210,7 @@ export default function ServiceAreasPage() {
       const payload: Record<string, any> = { [field]: value };
       if (TAX_FIELDS.has(field)) {
         const justification = window.prompt("Reason for this tax-configuration change (required):")?.trim();
-        if (!justification) return;
+        if (!isTaxJustificationValid(justification)) return;
         payload.tax_justification = justification;
       }
       await updateServiceArea(areaId, payload);

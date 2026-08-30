@@ -40,7 +40,7 @@ import {
 } from '../../../hooks/liveRouteShared';
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
-import { bearingDegrees, destinationPoint } from '@shared/utils/vehicleTracking';
+import { bearingDegrees, destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -623,6 +623,39 @@ function DriverDashboard() {
     // mapRef is a stable useRef object from useDriverDashboard() — adding it
     // doesn't change when this effect fires.
   }, [location, rideState, mapRef]);
+
+  // ── Route-deviation detection ──
+  // Three consecutive displayed fixes farther than 60 m from the active
+  // route polyline (~10 s of genuinely being elsewhere — GPS scatter and the
+  // odd wide corner don't trigger) surface a quiet heads-up. Detection only:
+  // no auto-reroute (navigating_to_pickup already refreshes Directions on
+  // movement; trip_in_progress renders the planned line). Also the
+  // client-side groundwork for rider-facing off-route safety alerts.
+  const OFF_ROUTE_M = 60;
+  const offRouteStreakRef = useRef(0);
+  const offRouteToastMsRef = useRef(0);
+  useEffect(() => {
+    const onRouteState = rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress';
+    if (!onRouteState || routeCoords.length < 2 || !location?.coords) {
+      offRouteStreakRef.current = 0;
+      return;
+    }
+    const c = location.coords;
+    const snapped = snapToRoute(
+      { latitude: c.latitude, longitude: c.longitude },
+      routeCoords,
+      OFF_ROUTE_M,
+    );
+    if (snapped) {
+      offRouteStreakRef.current = 0;
+      return;
+    }
+    offRouteStreakRef.current += 1;
+    if (offRouteStreakRef.current >= 3 && Date.now() - offRouteToastMsRef.current > 60_000) {
+      offRouteToastMsRef.current = Date.now();
+      showToast('info', 'Off Route', 'You have left the planned route.');
+    }
+  }, [location, rideState, routeCoords]);
 
   // ── Arrival geofence auto-detect ──
   // When navigating to pickup, two consecutive displayed fixes inside the

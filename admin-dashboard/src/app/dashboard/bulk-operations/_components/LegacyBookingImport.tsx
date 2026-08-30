@@ -134,7 +134,14 @@ export function LegacyBookingImport() {
 
     const [files, setFiles] = useState<FileState>({});
     const [serviceAreaName, setServiceAreaName] = useState("Saskatoon");
+    const [serviceAreaId, setServiceAreaId] = useState("");
     const [vehicleTypeName, setVehicleTypeName] = useState("Economy");
+    const [vehicleTypeId, setVehicleTypeId] = useState("");
+    // Defaults to the standing 2026-08-20 decision (include cancelled/failed
+    // bookings) -- this is a per-run scope toggle, not a change to that
+    // default. See docs/change-log/2026-08-20-legacy-cancelled-failed-
+    // booking-import.md.
+    const [includeCancelledFailed, setIncludeCancelledFailed] = useState(true);
     const [report, setReport] = useState<BookingImportReport | null>(null);
     const [committed, setCommitted] = useState<BookingImportCommitResult | null>(null);
     const [confirmText, setConfirmText] = useState("");
@@ -159,6 +166,12 @@ export function LegacyBookingImport() {
     const opts = () => ({
         serviceAreaName: serviceAreaName.trim() || "Saskatoon",
         vehicleTypeName: vehicleTypeName.trim() || "Economy",
+        // IDs win over name matching on the backend (services/booking_import_service.py's
+        // get_service_area/get_vehicle_type) -- needed once name matching is
+        // ambiguous, e.g. "Saskatoon" also matching "Saskatoon Airport".
+        ...(serviceAreaId.trim() ? { serviceAreaId: serviceAreaId.trim() } : {}),
+        ...(vehicleTypeId.trim() ? { vehicleTypeId: vehicleTypeId.trim() } : {}),
+        includeCancelledFailed,
         // Reuse the validated batch so offset payout IDs stay deterministic
         // across a validate -> commit pair and any later resume.
         ...(report?.batch ? { batch: report.batch } : {}),
@@ -298,7 +311,48 @@ export function LegacyBookingImport() {
                                 onChange={(e) => setVehicleTypeName(e.target.value)}
                             />
                         </div>
+                        <div className="space-y-1">
+                            <Label htmlFor="booking-import-area-id" className="text-xs">
+                                Service area ID (only if the name above matches more than one)
+                            </Label>
+                            <Input
+                                id="booking-import-area-id"
+                                value={serviceAreaId}
+                                onChange={(e) => setServiceAreaId(e.target.value)}
+                                placeholder="uuid — takes priority over the name above"
+                                className="font-mono text-xs"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <Label htmlFor="booking-import-vehicle-id" className="text-xs">
+                                Vehicle type ID (only if the name above matches more than one)
+                            </Label>
+                            <Input
+                                id="booking-import-vehicle-id"
+                                value={vehicleTypeId}
+                                onChange={(e) => setVehicleTypeId(e.target.value)}
+                                placeholder="uuid — takes priority over the name above"
+                                className="font-mono text-xs"
+                            />
+                        </div>
                     </div>
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={includeCancelledFailed}
+                            onChange={(e) => {
+                                setIncludeCancelledFailed(e.target.checked);
+                                // Changes what a commit means -- same rule as
+                                // changing a file: the prior report no longer
+                                // describes what would actually be written.
+                                setReport(null);
+                                setCommitted(null);
+                                setConfirmText("");
+                            }}
+                            className="rounded border-input"
+                        />
+                        Include cancelled/failed bookings (unchecking imports completed rides only for this run)
+                    </label>
                 </div>
 
                 {/* 2. Validate */}
@@ -327,21 +381,42 @@ export function LegacyBookingImport() {
                         <h3 className="text-sm font-medium">3. Review and commit</h3>
 
                         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                            <Stat label="Rides to import" value={c.rides_planned} />
+                            <Stat label="TOTAL rides to import" value={c.total_rides_planned} />
+                            <Stat label="— completed" value={c.rides_planned} />
+                            <Stat label="— cancelled/failed" value={c.cancelled_failed_rides_planned} />
                             <Stat label="Offset payouts" value={c.payouts_planned} />
-                            <Stat label="Unmatched riders" value={c.unmatched_riders} tone="warn" />
-                            <Stat label="Unmatched drivers" value={c.unmatched_drivers} tone="warn" />
+                            <Stat label="Unmatched riders" value={c.unmatched_riders + c.cancelled_failed_unmatched_riders} tone="warn" />
+                            <Stat label="Unmatched drivers" value={c.unmatched_drivers + c.cancelled_failed_unmatched_drivers} tone="warn" />
                             <Stat label="Rider paid (total)" value={c.sum_rider_paid} money />
                             <Stat label="Driver earnings" value={c.sum_driver_total} money />
                             <Stat label="Offset total" value={c.sum_offset_payouts} money />
-                            <Stat label="Already imported" value={c.skipped_already_imported} />
+                            <Stat
+                                label="Already imported"
+                                value={c.skipped_already_imported + c.cancelled_failed_skipped_already_imported}
+                            />
                         </div>
 
                         <p className="text-xs text-muted-foreground">
                             Read {c.bookings_read} booking(s); {c.skipped_not_completed} not
-                            completed, {c.skipped_test_account} test account(s),{" "}
-                            {c.skipped_unmatched_both} with neither party matched. Batch{" "}
-                            <span className="font-mono">{report.batch}</span>.
+                            completed/cancelled/failed, {c.skipped_test_account} test account(s)
+                            (completed path), {c.skipped_unmatched_both} completed rows with
+                            neither party matched.{" "}
+                            {c.skipped_cancelled_failed_excluded_by_scope > 0 ? (
+                                <>
+                                    {c.skipped_cancelled_failed_excluded_by_scope} cancelled/failed
+                                    booking(s) excluded by the scope checkbox above (completed-only
+                                    this run).
+                                </>
+                            ) : (
+                                <>
+                                    Cancelled/failed: {c.cancelled_target_rows} cancelled +{" "}
+                                    {c.failed_target_rows} failed candidates,{" "}
+                                    {c.cancelled_failed_skipped_unmatched_both} with neither party
+                                    matched, {c.cancelled_failed_skipped_missing_coordinates} with
+                                    missing coordinates.
+                                </>
+                            )}{" "}
+                            Batch <span className="font-mono">{report.batch}</span>.
                         </p>
 
                         {report.errors.length > 0 ? (
@@ -391,10 +466,11 @@ export function LegacyBookingImport() {
                         ) : report.can_commit ? (
                             <div className="space-y-2 rounded-md border p-3">
                                 <Label htmlFor="booking-import-confirm" className="text-xs">
-                                    This writes {c.rides_planned} ride(s) and {c.payouts_planned}{" "}
-                                    payout record(s) to live data and cannot be undone from here.
-                                    Type <span className="font-mono">{CONFIRM_PHRASE}</span> to
-                                    enable.
+                                    This writes {c.total_rides_planned} ride(s) ({c.rides_planned}{" "}
+                                    completed + {c.cancelled_failed_rides_planned} cancelled/failed)
+                                    and {c.payouts_planned} payout record(s) to live data and cannot
+                                    be undone from here. Type{" "}
+                                    <span className="font-mono">{CONFIRM_PHRASE}</span> to enable.
                                 </Label>
                                 <div className="flex gap-2">
                                     <Input

@@ -446,6 +446,7 @@ async def admin_get_drivers(
     vehicle_type_id: Optional[str] = None,
     photo_status: Optional[str] = None,
     missing_license: bool = False,
+    legacy_import: Optional[bool] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = None,
 ):
@@ -474,6 +475,14 @@ async def admin_get_drivers(
         filters["service_area_id"] = service_area_id
     if vehicle_type_id:
         filters["vehicle_type_id"] = vehicle_type_id
+
+    # `legacy_import_metadata` is JSONB NOT NULL DEFAULT '{}'::jsonb, not
+    # nullable -- "not migrated" is the default-value row, not a NULL one, so
+    # this must use $eq/$ne against `{}` (same trap EXCLUDE_LEGACY_RIDES in
+    # utils/legacy_rides.py exists to avoid; a bare `{col: None}` here would
+    # silently match zero rows instead of "not imported").
+    if legacy_import is not None:
+        filters["legacy_import_metadata"] = {"$ne": {}} if legacy_import else {"$eq": {}}
 
     # See the "Driver search" block above the route for the two-query design.
     if search:

@@ -317,6 +317,71 @@ def test_existing_user_match_does_not_reflip_is_driver_if_already_true(monkeypat
     assert "legacy_import_metadata" in upd  # history is still recorded
 
 
+class _FailingInsertQuery(_FakeQuery):
+    """Same as _FakeQuery, but raises on .execute() for a bulk insert --
+    simulates the drivers-insert bulk statement failing partway through a
+    real commit (a UNIQUE(phone) violation, an encryption RPC error,
+    anything). Reads/updates on other tables are untouched."""
+
+    def execute(self):
+        if self._insert is not None:
+            raise RuntimeError("simulated drivers insert failure")
+        return super().execute()
+
+
+class _FailingDriversInsertSupabase(_FakeSupabase):
+    def table(self, name):
+        if name == "drivers":
+            return _FailingInsertQuery(name, self.store)
+        return super().table(name)
+
+
+def test_commit_never_flags_existing_account_as_driver_if_drivers_insert_fails(monkeypatch):
+    """The exact production bug found 2026-08-29 (692 real rows): sub-
+    population 1 (existing account, no driver row yet) must never end up
+    with is_driver=True unless its new drivers row actually landed. Before
+    the fix, plan.users_to_update ran BEFORE the drivers insert, so a
+    failure here would have durably left is_driver=True with no driver."""
+    fake = _FailingDriversInsertSupabase(
+        store={"users": [{"id": "u-organic", "phone": "+13065551234", "email": None, "is_driver": False}]}
+    )
+    monkeypatch.setattr(svc, "supabase", fake)
+    plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
+    assert not plan.errors
+    assert len(plan.users_to_update) == 1
+
+    try:
+        svc.commit_mongo_driver_import_plan(plan)
+        raise AssertionError("expected the simulated drivers-insert failure to propagate")
+    except RuntimeError as exc:
+        assert "simulated drivers insert failure" in str(exc)
+
+    stored_user = next(u for u in fake.store["users"] if u["id"] == "u-organic")
+    assert stored_user["is_driver"] is False  # never flipped -- driver row never landed
+    assert fake.store.get("drivers", []) == []
+
+
+def test_commit_never_flags_new_user_as_driver_if_drivers_insert_fails(monkeypatch):
+    """Same invariant for the brand-new-user population: the user row may
+    still get created (harmless -- a plain account), but is_driver must
+    stay False until its driver row is confirmed written."""
+    fake = _FailingDriversInsertSupabase()
+    monkeypatch.setattr(svc, "supabase", fake)
+    plan = svc.build_mongo_driver_import_plan([_mongo_row()], service_area=SERVICE_AREA, import_batch="b1")
+    assert not plan.errors
+    assert len(plan.users_to_insert) == 1
+
+    try:
+        svc.commit_mongo_driver_import_plan(plan)
+        raise AssertionError("expected the simulated drivers-insert failure to propagate")
+    except RuntimeError as exc:
+        assert "simulated drivers insert failure" in str(exc)
+
+    assert fake.store.get("drivers", []) == []
+    users = fake.store.get("users", [])
+    assert all(u.get("is_driver") is not True for u in users)
+
+
 def test_existing_driver_match_enriches_history_no_new_row(monkeypatch):
     """Sub-population 2: phone matches an existing REAL driver -- enrich
     that driver's history, never create a competing needs_review row."""
@@ -513,6 +578,173 @@ def test_commit_with_no_license_number_encrypts_none(monkeypatch):
 
     inserted_driver = fake.store["drivers"][0]
     assert inserted_driver["license_number"] is None
+
+
+# ── orphaned-driver backfill (2026-08-29 data-repair) ───────────────────
+
+_ORPHAN_HISTORY = [
+    {
+        "batch": "20260828205731",
+        "old_driver_id": "697cb9d28cd7f3775ff4fe6e",
+        "source": MONGO_IMPORT_SOURCE,
+        "was_deleted_in_source": False,
+        "was_blocked_in_source": False,
+        "incomplete_profile_in_source": True,
+        "linked_at": "2026-08-28T20:57:37.794441+00:00",
+    }
+]
+
+
+def test_find_orphaned_returns_only_history_users_missing_a_driver_row(monkeypatch):
+    _install(
+        monkeypatch,
+        store={
+            "users": [
+                # Orphan: is_driver + history, no drivers row for u-1.
+                {
+                    "id": "u-1",
+                    "first_name": "Unnamed",
+                    "last_name": "Legacy Driver fe6e",
+                    "phone": "+16393188526",
+                    "is_driver": True,
+                    "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
+                },
+                # Not an orphan: has history, but a drivers row exists.
+                {
+                    "id": "u-2",
+                    "first_name": "Real",
+                    "last_name": "Driver",
+                    "phone": "+13065551111",
+                    "is_driver": True,
+                    "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
+                },
+                # Not an orphan: is_driver=True but no mongo_driver_history at all
+                # (an ordinary, unrelated driver -- never touched by this import).
+                {
+                    "id": "u-3",
+                    "first_name": "Ordinary",
+                    "last_name": "Driver",
+                    "phone": "+13065552222",
+                    "is_driver": True,
+                    "legacy_import_metadata": {},
+                },
+            ],
+            "drivers": [{"id": "d-2", "user_id": "u-2"}],
+        },
+    )
+    orphans = svc.find_orphaned_legacy_driver_users()
+    assert [u["id"] for u in orphans] == ["u-1"]
+
+
+class _RejectLargeInQuery(_FakeQuery):
+    """Fails any .in_() call carrying more values than a single PostgREST
+    request should reasonably take -- simulating the URL-length limit an
+    unchunked .in_() over hundreds of UUIDs can hit in production."""
+
+    def in_(self, col, vals):
+        if len(vals) > 200:
+            raise RuntimeError(f"simulated URL-too-long rejection: {len(vals)} values in .in_({col!r})")
+        return super().in_(col, vals)
+
+
+class _RejectLargeInSupabase(_FakeSupabase):
+    def table(self, name):
+        return _RejectLargeInQuery(name, self.store)
+
+
+def test_find_orphaned_batches_in_query_at_production_scale(monkeypatch):
+    """2026-08-30 production incident: find_orphaned_legacy_driver_users()
+    ran its drivers lookup as one raw .in_("user_id", candidate_ids) instead
+    of this file's own established _select_in(chunk=200) convention (used by
+    every other .in_() lookup here -- see _prefetch_existing). At real scale
+    (697 orphan candidates the first time this path ever ran against
+    production), that surfaced to the operator as "Scan failed: an
+    unexpected error occurred" with no useful detail. Reproduces at 250
+    candidates against a fake that rejects any .in_() over 200 values."""
+    users = [
+        {
+            "id": f"u-{i}",
+            "first_name": "Legacy",
+            "last_name": f"Driver {i}",
+            "phone": f"+1306555{i:04d}",
+            "is_driver": True,
+            "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
+        }
+        for i in range(250)
+    ]
+    fake = _RejectLargeInSupabase(store={"users": users, "drivers": []})
+    monkeypatch.setattr(svc, "supabase", fake)
+
+    orphans = svc.find_orphaned_legacy_driver_users()
+    assert len(orphans) == 250
+
+
+def test_backfill_dry_run_reports_without_writing(monkeypatch):
+    fake = _install(
+        monkeypatch,
+        store={
+            "users": [
+                {
+                    "id": "u-1",
+                    "first_name": "Unnamed",
+                    "last_name": "Legacy Driver fe6e",
+                    "phone": "+16393188526",
+                    "is_driver": True,
+                    "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
+                }
+            ]
+        },
+    )
+    result = svc.backfill_orphaned_legacy_driver_rows(service_area=SERVICE_AREA, apply=False)
+    assert result == {"scanned": 1, "applied": False, "fixed": 1}
+    assert fake.store.get("drivers", []) == []  # nothing written
+
+
+def test_backfill_apply_writes_driver_row_from_history(monkeypatch):
+    fake = _install(
+        monkeypatch,
+        store={
+            "users": [
+                {
+                    "id": "u-1",
+                    "first_name": "Unnamed",
+                    "last_name": "Legacy Driver fe6e",
+                    "phone": "+16393188526",
+                    "is_driver": True,
+                    "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
+                }
+            ]
+        },
+    )
+    result = svc.backfill_orphaned_legacy_driver_rows(service_area=SERVICE_AREA, apply=True)
+    assert result == {"scanned": 1, "applied": True, "fixed": 1}
+
+    assert len(fake.store["drivers"]) == 1
+    driver = fake.store["drivers"][0]
+    assert driver["user_id"] == "u-1"
+    assert driver["phone"] == "+16393188526"
+    assert driver["name"] == "Unnamed Legacy Driver fe6e"
+    assert driver["service_area_id"] == "sa-1"
+    # Never promoted past the safety floor, same as a normal import row.
+    assert driver["status"] == "needs_review"
+    assert driver["is_verified"] is False
+    assert driver["is_online"] is False
+    assert driver["is_available"] is False
+    # No license_number/rating fields -- never recoverable, not fabricated.
+    assert "license_number" not in driver
+    assert "rating" not in driver
+    meta = driver["legacy_import_metadata"]
+    assert meta["old_driver_id"] == "697cb9d28cd7f3775ff4fe6e"
+    assert meta["source"] == MONGO_IMPORT_SOURCE
+    assert meta["incomplete_profile_in_source"] is True
+    assert meta["backfill_reason"] == "orphaned_by_2026-08-29_commit_atomicity_bug"
+    assert "backfilled_at" in meta
+
+
+def test_backfill_no_orphans_returns_zero_without_error(monkeypatch):
+    _install(monkeypatch, store={"users": []})
+    result = svc.backfill_orphaned_legacy_driver_rows(service_area=SERVICE_AREA, apply=True)
+    assert result == {"scanned": 0, "applied": True, "fixed": 0}
 
 
 # ── print_mongo_driver_import_report ────────────────────────────────────

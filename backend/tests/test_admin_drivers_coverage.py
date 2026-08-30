@@ -2314,3 +2314,58 @@ class TestFleetWidePayoutTools:
         assert resp.status_code == 200, resp.text
         assert captured["apply"] is False
         assert resp.json()["applied"] is False
+
+
+# ---------------------------------------------------------------------------
+# GET /drivers -- legacy_import filter
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetDriversLegacyImportFilter:
+    """`legacy_import_metadata` is JSONB NOT NULL DEFAULT '{}'::jsonb, not
+    nullable -- "not imported" is the default-value row, not NULL. These
+    assert the endpoint compiles `legacy_import=true/false` to the $eq/$ne-
+    against-`{}` filter shape (the same trap EXCLUDE_LEGACY_RIDES in
+    utils/legacy_rides.py exists to avoid), not a bare {col: None}."""
+
+    def test_omitted_applies_no_filter(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers")
+        assert resp.status_code == 200, resp.text
+        assert "legacy_import_metadata" not in captured["filters"]
+
+    def test_true_filters_to_imported_only(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers", params={"legacy_import": "true"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["legacy_import_metadata"] == {"$ne": {}}
+
+    def test_false_filters_to_not_imported_only(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers", params={"legacy_import": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["legacy_import_metadata"] == {"$eq": {}}

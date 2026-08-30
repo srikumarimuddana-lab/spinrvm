@@ -129,6 +129,9 @@ export default function DriversPage() {
     // Vehicle-type filter on the drivers list (client-side — same
     // shape as serviceAreaId, "" means no filter).
     const [vehicleTypeFilter, setVehicleTypeFilter] = useState<string>("");
+    // Legacy-import filter — "imported"/"not_imported" map to the
+    // legacy_import=true/false query param; "all" sends no filter.
+    const [legacyFilter, setLegacyFilter] = useState<"all" | "imported" | "not_imported">("all");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
@@ -267,6 +270,8 @@ export default function DriversPage() {
         if (statusFilter === "online") opts.is_online = true;
         else if (statusFilter === "photos_pending") opts.photo_status = "pending_review";
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
+        if (legacyFilter === "imported") opts.legacy_import = true;
+        else if (legacyFilter === "not_imported") opts.legacy_import = false;
         // Returns the rendered page so a caller that just mutated a driver can
         // re-sync the open detail sheet from the refreshed server rows.
         return getDrivers(opts)
@@ -280,7 +285,7 @@ export default function DriversPage() {
             })
             .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } return [] as any[]; })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
-    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, sortKey, sortDir]);
+    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, sortKey, sortDir]);
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { loadDrivers(); }, [loadDrivers]);
@@ -292,7 +297,7 @@ export default function DriversPage() {
     // Reset to first page whenever anything that changes the result set or its
     // ordering changes — otherwise a new search/sort could land you on a page
     // that no longer exists.
-    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, sortKey, sortDir]);
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, legacyFilter, sortKey, sortDir]);
     // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
     // unioned from BOTH pricing stores because admins can configure
     // vehicles for an area either way:
@@ -876,12 +881,23 @@ export default function DriversPage() {
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <Upload className="h-4 w-4 text-muted-foreground" />
+                        <Select value={legacyFilter} onValueChange={(v) => setLegacyFilter(v as "all" | "imported" | "not_imported")}>
+                            <SelectTrigger className="h-9 text-xs w-[150px]" aria-label="Filter by legacy import status"><SelectValue placeholder="All Drivers" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Drivers</SelectItem>
+                                <SelectItem value="imported">Imported only</SelectItem>
+                                <SelectItem value="not_imported">Not imported</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <CalendarRange className="h-4 w-4 text-muted-foreground" />
                         <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter from date" />
                         <span className="text-xs text-muted-foreground">to</span>
                         <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
                     </div>
-                    {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
+                    {(serviceAreaId || vehicleTypeFilter || legacyFilter !== "all" || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setLegacyFilter("all"); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
                     {/* Fleet-wide money tools are super_admin server-side —
                         hide them for lower roles instead of surfacing buttons

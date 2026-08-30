@@ -39,6 +39,7 @@ import {
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
+import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { bearingDegrees, destinationPoint } from '@shared/utils/vehicleTracking';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -714,6 +715,9 @@ function DriverDashboard() {
         style={styles.map}
         provider={MAP_PROVIDER}
         userInterfaceStyle={isDark ? "dark" : "light"}
+        // userInterfaceStyle only darkens Apple Maps; Google (Android) needs
+        // an explicit night style or the map stays daylight-white after dark.
+        customMapStyle={isDark ? (DARK_MAP_STYLE as any) : undefined}
         initialRegion={{
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,

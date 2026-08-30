@@ -21,6 +21,7 @@ import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { needsSurgeJustification, isSurgeJustificationValid } from "@/lib/surgeJustificationSchema";
 import { isTaxJustificationValid } from "@/lib/taxJustificationSchema";
+import { isSpinrPassPlanNameValid, isSpinrPassPlanPriceValid } from "@/lib/spinrPassAreaPlanSchema";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -1651,7 +1652,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
   const resetForm = () => { setShowForm(false); setEditingId(null); setForm({ name: "", price: "", duration_days: 30, rides_per_day: -1, description: "", features: "", is_active: true }); };
 
   const handleSubmit = async () => {
-    if (!form.name || !form.price) return;
+    if (!isSpinrPassPlanNameValid(form.name) || !isSpinrPassPlanPriceValid(form.price)) return;
     const data = {
       name: form.name, price: parseFloat(form.price), duration_days: form.duration_days,
       rides_per_day: form.rides_per_day, description: form.description,

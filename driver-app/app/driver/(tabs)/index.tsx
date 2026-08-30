@@ -13,6 +13,8 @@ import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import {
   DriverTopBar,
   DriverIdlePanel,
+  HUD_EXPANDED_HEIGHT_DP,
+  HUD_COLLAPSED_HEIGHT_DP,
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
@@ -236,15 +238,29 @@ function DriverDashboard() {
   // native layer fully drops leftover polyline overlays and the CarMarker
   // re-snapshots cleanly. Without this, after rating/Done the driver sees
   // a ghost polyline near the destination and a blank car marker.
+  //
+  // Also bumped on going back ONLINE (offline→online), which turned out to
+  // be the same failure class: live-testing report 2026-08-30 — after going
+  // offline then online again, tapping recenter correctly moved the camera
+  // (it reads the raw location fix directly) but the car icon itself never
+  // reappeared. The camera and the marker are separate native pipelines;
+  // Android's Google Maps view can leave the marker's underlying native
+  // reference stale across a foreground GPS-services interruption the same
+  // way it does across a ride ending, and the existing remount-on-idle fix
+  // above doesn't cover this transition since rideState stays 'idle' the
+  // whole time a driver goes offline and back online.
   const [mapKey, setMapKey] = useState(0);
   const prevRideStateRef = useRef(rideState);
+  const prevIsOnlineRef = useRef(isOnline);
   useEffect(() => {
-    const prev = prevRideStateRef.current;
-    if (rideState === 'idle' && prev !== 'idle') {
+    const prevRideState = prevRideStateRef.current;
+    const prevOnline = prevIsOnlineRef.current;
+    if ((rideState === 'idle' && prevRideState !== 'idle') || (isOnline && !prevOnline)) {
       setMapKey((k) => k + 1);
     }
     prevRideStateRef.current = rideState;
-  }, [rideState]);
+    prevIsOnlineRef.current = isOnline;
+  }, [rideState, isOnline]);
 
   // Live ETA from Google Directions — refreshed every 60s, with a stationary
   // skip so a parked driver doesn't burn API calls when nothing has changed.
@@ -576,16 +592,16 @@ function DriverDashboard() {
   const followRef = useRef(true);
   const followZoomTierRef = useRef<number | null>(null);
   const [courseUp, setCourseUp] = useState(true);
-  // DriverIdlePanel's own content height (hudArea's vehicle/online pills +
-  // the 100dp GO/STOP button + its internal margins) — excludes
-  // insets.bottom, which is added separately below since it's already
-  // available here. Approximated from DriverIdlePanel.tsx's styles;
-  // deliberately generous rather than exact — this only needs to keep the
-  // map's own "center" concept out from under the panel, not pixel-match
-  // it. Kept as a local constant (not exported) since only this follow
-  // effect and the MapView's mapPadding prop below need it, and moving it
-  // to DriverIdlePanel would create a cross-file coupling for one number.
-  const IDLE_PANEL_HEIGHT_DP = 230;
+  // DriverIdlePanel's own content height, minus its collapsible hud block
+  // (the GO/STOP button + its container margins/padding) — the hud itself
+  // now auto-collapses ~2s after going online (round 7), reported back via
+  // onExpandedChange below so mapPadding can shrink accordingly instead of
+  // always reserving the full expanded height. Approximated from
+  // DriverIdlePanel.tsx's styles; deliberately generous rather than exact —
+  // this only needs to keep the map's own "center" concept out from under
+  // the panel, not pixel-match it.
+  const IDLE_PANEL_BASE_HEIGHT_DP = 140;
+  const [idleHudExpanded, setIdleHudExpanded] = useState(true);
   // ActiveRidePanel's draggable sheet reports its own open/collapsed state
   // (see onExpandedChange below) so mapPadding can track it instead of
   // guessing — without this, extending the follow camera's "pin the car
@@ -839,7 +855,13 @@ function DriverDashboard() {
         // ride state keeps its existing route-overview framing unpadded.
         mapPadding={
           rideState === 'idle'
-            ? { top: 0, right: 0, left: 0, bottom: IDLE_PANEL_HEIGHT_DP + insets.bottom }
+            ? {
+                top: 0, right: 0, left: 0,
+                bottom:
+                  IDLE_PANEL_BASE_HEIGHT_DP +
+                  (idleHudExpanded ? HUD_EXPANDED_HEIGHT_DP : HUD_COLLAPSED_HEIGHT_DP) +
+                  insets.bottom,
+              }
             : rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress'
             ? {
                 top: 0, right: 0, left: 0,
@@ -1211,6 +1233,7 @@ function DriverDashboard() {
           isOnline={isOnline}
           onToggleOnline={toggleOnline}
           pulseAnim={pulseAnim}
+          onExpandedChange={setIdleHudExpanded}
         />
       )}
       {rideState === 'ride_offered' && incomingRide && (

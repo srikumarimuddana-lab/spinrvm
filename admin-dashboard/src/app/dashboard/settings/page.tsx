@@ -1116,6 +1116,21 @@ export default function SettingsPage() {
                                     onCheckedChange={(v) => update("admin_theme_v2_enabled", v)}
                                 />
                             </div>
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="admin_command_palette_enabled">Enable command palette (Cmd+K)</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Lets staff press Cmd+K / Ctrl+K anywhere in the dashboard to fuzzy-jump to any
+                                        page they have access to. Off by default — takes effect for all staff within
+                                        about a minute of toggling, no redeploy.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="admin_command_palette_enabled"
+                                    checked={settings.admin_command_palette_enabled ?? false}
+                                    onCheckedChange={(v) => update("admin_command_palette_enabled", v)}
+                                />
+                            </div>
                         </CardContent>
                     </Card>
                 </TabsContent>

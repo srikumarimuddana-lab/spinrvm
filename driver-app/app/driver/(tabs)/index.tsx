@@ -624,6 +624,44 @@ function DriverDashboard() {
     // doesn't change when this effect fires.
   }, [location, rideState, mapRef]);
 
+  // ── Arrival geofence auto-detect ──
+  // When navigating to pickup, two consecutive displayed fixes inside the
+  // geofence (~6-8 s dwell at the 3-3.5 s render cadence — a drive-past
+  // doesn't trigger) auto-mark arrival via the SAME arriveAtPickup action as
+  // the manual button, so the store's pickup-radius guard and the backend
+  // state machine still validate the transition. Removes a tap made in
+  // traffic and starts honest wait-time from actual arrival. One attempt per
+  // ride: a rejection (e.g. server-side radius disagreement) leaves the
+  // manual button as the path, never a retry loop.
+  const ARRIVAL_GEOFENCE_M = 60;
+  const arrivalAttemptedRideRef = useRef<string | null>(null);
+  const arrivalDwellRef = useRef(0);
+  useEffect(() => {
+    if (rideState !== 'navigating_to_pickup') {
+      arrivalDwellRef.current = 0;
+      return;
+    }
+    const rid = activeRide?.ride?.id;
+    const c = location?.coords;
+    const pLat = activeRide?.ride?.pickup_lat;
+    const pLng = activeRide?.ride?.pickup_lng;
+    if (!rid || !c || pLat == null || pLng == null) return;
+    if (arrivalAttemptedRideRef.current === rid) return;
+    if (haversineMeters(c.latitude, c.longitude, pLat, pLng) <= ARRIVAL_GEOFENCE_M) {
+      arrivalDwellRef.current += 1;
+      if (arrivalDwellRef.current >= 2) {
+        arrivalAttemptedRideRef.current = rid;
+        arriveAtPickup(rid, c.latitude, c.longitude).then((res) => {
+          if (res.success) {
+            showToast('success', "You've Arrived", 'Marked as arrived at the pickup spot.');
+          }
+        });
+      }
+    } else {
+      arrivalDwellRef.current = 0;
+    }
+  }, [location, rideState, activeRide, arriveAtPickup]);
+
   // Error handling. `error` is destructured from the top-level useDriverStore()
   // call above (full-store subscription, not a selector), so this component
   // already re-renders on every store mutation including `error` — reading it

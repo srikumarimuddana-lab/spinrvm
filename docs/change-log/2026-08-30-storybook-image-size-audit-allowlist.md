@@ -67,6 +67,9 @@ internal-admin-facing behavior changes.
 |---|---|---|
 | `scripts/security/check_npm_audit_allowlist.py` | New | Scoped allowlist for the same image-size advisory, npm-audit-shaped |
 | `.github/workflows/security-gates.yml` | G4c step now pipes through the allowlist script instead of bare `npm audit --audit-level=high` | Storybook's addition would otherwise permanently fail this blocking gate |
+| `.github/workflows/security-gates.yml` | **Follow-up (same day):** the `yarn-audit` matrix job's `elif [ -f package-lock.json ]` branch (admin-dashboard is the only leg on that path) *also* ran a bare `npm audit --audit-level=high` — missed in the original pass, which only checked for other `npm audit` invocations and found G4c but not this one. It failed on the PR that added this allowlist itself once real CI ran (G4b · yarn audit (JS deps) (admin-dashboard), confirmed via job log). Now routed through the same allowlist script. | The gate stays enforced for everything else; same fix, second call site |
+
+**Correction to this entry's own earlier verification**: the original "Risk & impact" section below claimed "Grepped `.github/workflows/` for every `npm audit` call — this is the only one." That grep was for the literal call site pattern and missed that G4b's shared matrix step reaches `npm audit` too, just inside an `elif` branch keyed on lockfile presence rather than a separate named step. Caught only because the actual CI run for the PR that introduced this failed on it — a lesson in verifying against a real CI run, not a static grep, per this repo's own established practice (see e.g. `docs/change-log/2026-07-30-secret-scanning-gate-was-vacuous.md`'s "verifying a gate now means canary-testing it, not reading its output").
 
 ## Before/after snippet
 

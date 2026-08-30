@@ -53,6 +53,10 @@ interface DriverLocation {
 
 interface ActiveRidePanelProps {
   rideState: 'navigating_to_pickup' | 'arrived_at_pickup' | 'trip_in_progress';
+  // Reports the sheet's open/collapsed state so the map (index.tsx) can
+  // reserve enough mapPadding to keep the follow-camera's car marker from
+  // rendering underneath it — see the follow-camera effect's comment there.
+  onExpandedChange?: (expanded: boolean) => void;
   ride: Ride | null;
   rider: Rider | null;
   driverLocation?: DriverLocation | null;
@@ -87,6 +91,7 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 
 export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   rideState,
+  onExpandedChange,
   ride,
   rider,
   driverLocation,
@@ -155,6 +160,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     insetsBottomRef.current = insets.bottom;
   }, [insets.bottom]);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  // Tell the map (index.tsx) whenever the sheet's open/collapsed state
+  // settles, so its mapPadding can track the sheet instead of assuming the
+  // worst case at all times.
+  useEffect(() => {
+    onExpandedChange?.(!isCollapsed);
+  }, [isCollapsed, onExpandedChange]);
 
   const collapsedOffsetRef = useRef(() =>
     Math.max(0, sheetHeightRef.current - grabHeightRef.current - insetsBottomRef.current),

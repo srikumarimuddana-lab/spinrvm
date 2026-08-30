@@ -236,15 +236,29 @@ function DriverDashboard() {
   // native layer fully drops leftover polyline overlays and the CarMarker
   // re-snapshots cleanly. Without this, after rating/Done the driver sees
   // a ghost polyline near the destination and a blank car marker.
+  //
+  // Also bumped on going back ONLINE (offline→online), which turned out to
+  // be the same failure class: live-testing report 2026-08-30 — after going
+  // offline then online again, tapping recenter correctly moved the camera
+  // (it reads the raw location fix directly) but the car icon itself never
+  // reappeared. The camera and the marker are separate native pipelines;
+  // Android's Google Maps view can leave the marker's underlying native
+  // reference stale across a foreground GPS-services interruption the same
+  // way it does across a ride ending, and the existing remount-on-idle fix
+  // above doesn't cover this transition since rideState stays 'idle' the
+  // whole time a driver goes offline and back online.
   const [mapKey, setMapKey] = useState(0);
   const prevRideStateRef = useRef(rideState);
+  const prevIsOnlineRef = useRef(isOnline);
   useEffect(() => {
-    const prev = prevRideStateRef.current;
-    if (rideState === 'idle' && prev !== 'idle') {
+    const prevRideState = prevRideStateRef.current;
+    const prevOnline = prevIsOnlineRef.current;
+    if ((rideState === 'idle' && prevRideState !== 'idle') || (isOnline && !prevOnline)) {
       setMapKey((k) => k + 1);
     }
     prevRideStateRef.current = rideState;
-  }, [rideState]);
+    prevIsOnlineRef.current = isOnline;
+  }, [rideState, isOnline]);
 
   // Live ETA from Google Directions — refreshed every 60s, with a stationary
   // skip so a parked driver doesn't burn API calls when nothing has changed.

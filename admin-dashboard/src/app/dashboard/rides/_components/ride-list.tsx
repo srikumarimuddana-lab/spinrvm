@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
-import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX } from "lucide-react";
+import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX, Tag } from "lucide-react";
 import { getStatusBadge, fmtTime, fmtKm, rideDistances } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 
@@ -32,6 +32,10 @@ interface RideListProps {
     onStatusChange: (v: string) => void;
     areaFilter: string;
     onAreaChange: (v: string) => void;
+    /** "all" | "hide" | "only" -- maps to the pre_launch=false/true query
+     * param (services/pre_launch_flag_service.py). "all" = no filter. */
+    preLaunchFilter: "all" | "hide" | "only";
+    onPreLaunchChange: (v: "all" | "hide" | "only") => void;
     dateFrom: string;
     onDateFromChange: (v: string) => void;
     dateTo: string;
@@ -52,7 +56,7 @@ interface RideListProps {
 export default function RideList({
     rides, totalCount, areas, loading, selectedId,
     search, onSearchChange, statusFilter, onStatusChange,
-    areaFilter, onAreaChange, dateFrom, onDateFromChange, dateTo, onDateToChange,
+    areaFilter, onAreaChange, preLaunchFilter, onPreLaunchChange, dateFrom, onDateFromChange, dateTo, onDateToChange,
     onSelect, page, pageSize, pageSizes, onPageSizeChange, totalPages, onPageChange,
     sortBy, sortDir, onSortChange, onExport,
 }: RideListProps) {
@@ -126,6 +130,16 @@ export default function RideList({
                                 className="text-xs font-medium border rounded-lg px-2.5 py-1.5 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 transition">
                                 <option value="all">All Areas</option>
                                 {areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            <Tag className="h-3.5 w-3.5 text-muted-foreground" />
+                            <select value={preLaunchFilter} onChange={e => onPreLaunchChange(e.target.value as "all" | "hide" | "only")}
+                                aria-label="Filter by pre-launch flag"
+                                className="text-xs font-medium border rounded-lg px-2.5 py-1.5 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 transition">
+                                <option value="all">All Rides</option>
+                                <option value="hide">Hide pre-launch test</option>
+                                <option value="only">Pre-launch test only</option>
                             </select>
                         </div>
                         <button

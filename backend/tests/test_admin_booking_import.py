@@ -256,6 +256,29 @@ def test_validate_clean_export_reports_without_writing(test_client, super_admin_
     assert store["payouts"] == []
 
 
+def test_validate_scopes_out_cancelled_failed_when_toggled_off(test_client, super_admin_override):
+    """include_cancelled_failed=false is a per-run operator scope, not a
+    change to the standing 2026-08-20 default (which stays True)."""
+    store = _fresh_store()
+    cancelled = dict(BOOKING, _id="bk-2", booking_id="CBCANCEL", booking_status="cancelled")
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _post(
+            test_client,
+            "/api/admin/bookings/import/validate",
+            files=_files(bookings=[cancelled]),
+            data={
+                "service_area_name": "Saskatoon",
+                "vehicle_type_name": "Economy",
+                "include_cancelled_failed": "false",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["counts"]["total_rides_planned"] == 0
+    assert body["counts"]["skipped_cancelled_failed_excluded_by_scope"] == 1
+
+
 def test_validate_report_carries_no_pii(test_client, super_admin_override):
     """Report items expose row_num/booking_code only — never names or phones."""
     bad = {**BOOKING, "total_amount": "1.00"}  # residual goes negative -> error

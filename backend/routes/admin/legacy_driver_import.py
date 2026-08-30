@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 
 try:
     from ...dependencies import get_admin_user
@@ -242,3 +243,80 @@ async def commit_legacy_driver_import(
         "enriched_drivers": enriched_drivers,
         "warnings": _serialize_items(plan.warnings),
     }
+
+
+class BackfillOrphanedDriversRequest(BaseModel):
+    service_area_id: Optional[str] = None
+    service_area_name: Optional[str] = None
+    # Default False — a preview-only pass. The operator must explicitly
+    # ask for a write, matching this admin surface's existing dry-run-first
+    # convention (see /legacy-drivers/import/validate above).
+    apply: bool = False
+
+
+@router.post("/legacy-drivers/backfill-orphaned")
+async def backfill_orphaned_legacy_drivers(
+    body: BackfillOrphanedDriversRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-time data repair for the 2026-08-29 production incident: two
+    commits made before commit_mongo_driver_import_plan's atomicity fix
+    left users flagged is_driver=True via the existing-account-link path
+    with no matching drivers row at all. Finds every such user and (only
+    if apply=True) creates the missing drivers row from that user's own
+    surviving mongo_driver_history entry. See
+    docs/change-log/2026-08-29-legacy-driver-import-orphan-fix.md.
+
+    Idempotent: a user only shows up if it still has no drivers row, so
+    re-running this after a partial apply only touches what's still
+    missing, never a duplicate.
+    """
+    try:
+        service_area = await asyncio.to_thread(
+            import_svc.get_service_area, body.service_area_id, body.service_area_name or "Saskatoon"
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    result = await asyncio.to_thread(
+        import_svc.backfill_orphaned_legacy_driver_rows, service_area=service_area, apply=body.apply
+    )
+    if body.apply and result["fixed"]:
+        await log_admin_action(
+            admin,
+            "legacy_driver_orphan_backfill",
+            "drivers",
+            "bulk",
+            {"scanned": result["scanned"], "fixed": result["fixed"], "service_area_id": service_area["id"]},
+        )
+    return result
+
+
+class BackfillDriverCreatedAtRequest(BaseModel):
+    apply: bool = False
+
+
+@router.post("/legacy-drivers/backfill-created-at")
+async def backfill_driver_created_at(
+    body: BackfillDriverCreatedAtRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-time repair (2026-08-30): backfill_orphaned_legacy_driver_rows()
+    stamps the repaired drivers row's `created_at` as the repair run's own
+    time, but the driver's real join date already sits correctly on their
+    linked `users.created_at`. Finds (and, if apply=True, fixes) every
+    backfilled drivers row whose `created_at` doesn't already match its
+    user's. See docs/change-log/2026-08-30-rider-created-at-legacy-date-fix.md.
+    """
+    mismatches = await asyncio.to_thread(import_svc.find_backfilled_driver_created_at_mismatches)
+    result = {"scanned": len(mismatches), "applied": body.apply, "fixed": len(mismatches)}
+    if body.apply and mismatches:
+        await asyncio.to_thread(import_svc.apply_driver_created_at_corrections, mismatches)
+        await log_admin_action(
+            admin,
+            "driver_created_at_backfill",
+            "drivers",
+            "bulk",
+            {"fixed": len(mismatches)},
+        )
+    return result

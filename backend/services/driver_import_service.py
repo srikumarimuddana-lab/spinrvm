@@ -2116,29 +2116,48 @@ def _update_driver_row(enrich: dict) -> None:
 def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
     if plan.errors:
         raise RuntimeError("refusing to commit with validation errors")
+
+    # Write order matters here -- found 2026-08-29 against real production
+    # data: an earlier version of this function set is_driver=True (both on
+    # the brand-new-user insert below, and via plan.users_to_update's
+    # existing-account links) BEFORE the drivers insert ran. The drivers
+    # insert is one bulk statement -- when it failed partway through a real
+    # commit (e.g. a single bad row), it aborted this function with an
+    # error, but the user-side writes issued before it had ALREADY
+    # committed durably (each is its own independent request). That left
+    # 692 real production users flagged is_driver=True with no matching
+    # drivers row at all -- "phantom drivers": a placeholder "Unnamed
+    # Legacy Driver ..." name, an is_driver flag, but nothing behind it, so
+    # they could never appear on the Drivers page, get verified, or go
+    # online. The failed commits also left no audit_logs row, since
+    # log_admin_action (in the calling route) only runs after this
+    # function returns. See
+    # docs/change-log/2026-08-29-legacy-driver-import-orphan-fix.md.
+    #
+    # Fix: never write is_driver=True for any user until the matching
+    # drivers row has been durably inserted. New users are inserted with
+    # is_driver=False first; the existing-account links in
+    # plan.users_to_update (which already carries is_driver=True where it
+    # applies) are deferred to run only after the drivers insert succeeds.
+    # If the drivers insert fails, this function raises before either kind
+    # of user is ever flagged as a driver -- a failed commit leaves nothing
+    # to clean up and is safe to simply retry as-is.
     if plan.users_to_insert:
-        supabase.table("users").insert(plan.users_to_insert).execute()
-    # users_to_update / drivers_to_enrich are additive-only updates to
-    # EXISTING rows (never touched by the insert calls above/below) -- same
-    # pop-id-then-update shape as rider_import_service.commit_plan's own
-    # users_to_update loop. Each row updates a different id with no
-    # cross-row dependency, so running them concurrently changes nothing
-    # about *what* gets written, only how long it takes -- issuing these
-    # (and the license-number encryption RPCs below) one HTTP round-trip at
-    # a time made a real-scale commit (924-row Phase 1 batch: 114 + 215
-    # sequential UPDATEs, ~120 sequential encrypt RPCs) take long enough to
-    # trip the request's upstream proxy timeout, surfacing to the operator
-    # as a raw "Internal Server Error" with NO write applied (confirmed via
-    # a zero-row check against production) rather than this function's own
-    # error handling ever getting a chance to run -- found 2026-08-28
-    # running the real batch.
-    _run_concurrently(plan.users_to_update, _update_user_row)
+        new_user_rows = [{**row, "is_driver": False} for row in plan.users_to_insert]
+        supabase.table("users").insert(new_user_rows).execute()
 
     def _prepare_driver_insert(driver: dict) -> dict:
         copied = dict(driver)
         copied["license_number"] = encrypt_pii(copied.pop("_plain_license_number", None))
         return copied
 
+    # Each row updates/prepares a different id with no cross-row
+    # dependency, so running them concurrently changes nothing about *what*
+    # gets written, only how long it takes -- issuing these one HTTP
+    # round-trip at a time made a real-scale commit (924-row Phase 1 batch:
+    # 114 + 215 sequential UPDATEs, ~120 sequential encrypt RPCs) take long
+    # enough to trip the request's upstream proxy timeout -- found
+    # 2026-08-28 running the real batch.
     drivers: list = [None] * len(plan.drivers_to_insert)  # preserve original row order
     if plan.drivers_to_insert:
         with ThreadPoolExecutor(max_workers=_COMMIT_POOL_WORKERS, thread_name_prefix="legacy-import-commit") as pool:
@@ -2149,7 +2168,118 @@ def commit_mongo_driver_import_plan(plan: MongoDriverImportPlan) -> None:
                 drivers[i] = fut.result()
     if drivers:
         supabase.table("drivers").insert(drivers).execute()
+
+    # Only now, with every planned driver row durably written, is it safe
+    # to flag any user as a driver.
+    new_user_ids = [row["id"] for row in plan.users_to_insert]
+    if new_user_ids:
+        supabase.table("users").update({"is_driver": True}).in_("id", new_user_ids).execute()
+    _run_concurrently(plan.users_to_update, _update_user_row)
+
     _run_concurrently(plan.drivers_to_enrich, _update_driver_row)
+
+
+# ── Orphaned-driver backfill (data repair for the 2026-08-29 incident) ─────
+#
+# One-time repair, not a normal import path: two production commits
+# (batches 20260828205641/20260828205731, run before the atomicity fix
+# above) left 692 real users flagged is_driver=True via the existing-
+# account-link path (Sub-population 1) with no matching drivers row at all.
+# Every candidate's own mongo_driver_history[0] entry (the only surviving
+# record of the original, incomplete link attempt) has everything needed to
+# build the missing row EXCEPT license_number/rating -- those were never
+# persisted anywhere outside the original CSV, so a backfilled row always
+# comes back with neither, same as any other Phase 1 row with no vehicle/
+# license data on file. Every production row this tool has ever written
+# used the Saskatoon service area (confirmed via a direct production
+# query) -- callers should default to that, but a different area can be
+# passed if ever needed.
+
+
+def find_orphaned_legacy_driver_users() -> list[dict[str, Any]]:
+    """Read-only: users flagged is_driver=True via this import's existing-
+    account-link path whose companion drivers row was never written."""
+    users = (
+        supabase.table("users")
+        .select("id,first_name,last_name,phone,legacy_import_metadata")
+        .eq("is_driver", True)
+        .execute()
+        .data
+        or []
+    )
+    candidates = [u for u in users if (u.get("legacy_import_metadata") or {}).get("mongo_driver_history")]
+    if not candidates:
+        return []
+    candidate_ids = [u["id"] for u in candidates]
+    # Batched via _select_in (this file's own established convention for
+    # every other .in_() lookup here -- see _prefetch_existing et al.) rather
+    # than one raw .in_() call. This function's own real production scale
+    # (697 candidate UUIDs as of 2026-08-30) had never actually been
+    # exercised before -- the one prior attempt failed earlier, at
+    # get_service_area(), before reaching this query at all. An unchunked
+    # .in_() with ~700 UUIDs risks a URL-length rejection from the
+    # PostgREST layer, surfacing to the operator as a generic "Scan failed:
+    # an unexpected error occurred" with no useful detail.
+    linked = _select_in("drivers", "user_id", "user_id", candidate_ids)
+    linked_ids = {d["user_id"] for d in linked}
+    return [u for u in candidates if u["id"] not in linked_ids]
+
+
+def backfill_orphaned_legacy_driver_rows(*, service_area: dict[str, Any], apply: bool) -> dict[str, Any]:
+    """Builds (and, if apply=True, writes) the missing drivers row for every
+    user find_orphaned_legacy_driver_users() finds. apply=False (the
+    default callers should use first) only reports what would be created."""
+    orphans = find_orphaned_legacy_driver_users()
+    result: dict[str, Any] = {"scanned": len(orphans), "applied": apply, "fixed": 0}
+    if not orphans:
+        return result
+
+    now = datetime.now(timezone.utc).isoformat()
+    driver_rows = []
+    for u in orphans:
+        history = (u.get("legacy_import_metadata") or {}).get("mongo_driver_history") or []
+        if not history:
+            continue
+        origin = history[0]  # the original, still-incomplete link attempt
+        first_name = u.get("first_name") or ""
+        last_name = u.get("last_name") or ""
+        name = f"{first_name} {last_name}".strip() or "Unnamed Legacy Driver"
+        driver_rows.append(
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": u["id"],
+                "driver_code": generate_driver_code(),
+                "name": name,
+                "first_name": first_name or None,
+                "last_name": last_name or None,
+                "phone": u.get("phone"),
+                "service_area_id": service_area["id"],
+                "status": "needs_review",
+                "is_verified": False,
+                "is_online": False,
+                "is_available": False,
+                "legacy_import_metadata": {
+                    "batch": origin.get("batch"),
+                    "old_driver_id": origin.get("old_driver_id"),
+                    "source": origin.get("source", MONGO_IMPORT_SOURCE),
+                    "was_deleted_in_source": origin.get("was_deleted_in_source", False),
+                    "was_blocked_in_source": origin.get("was_blocked_in_source", False),
+                    "incomplete_profile_in_source": origin.get("incomplete_profile_in_source", False),
+                    # Marks this row as a repair, not a normal at-import-time
+                    # write -- distinct from every other row this import ever
+                    # writes, so it's always identifiable later.
+                    "backfilled_at": now,
+                    "backfill_reason": "orphaned_by_2026-08-29_commit_atomicity_bug",
+                },
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    result["fixed"] = len(driver_rows)
+    if apply and driver_rows:
+        supabase.table("drivers").insert(driver_rows).execute()
+    return result
 
 
 def print_mongo_driver_import_report(plan: MongoDriverImportPlan, *, dry_run: bool) -> None:

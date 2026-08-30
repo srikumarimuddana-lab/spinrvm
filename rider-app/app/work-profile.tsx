@@ -105,6 +105,11 @@ export default function WorkProfileScreen() {
   useEffect(() => {
     if (activeCompanyId) {
       fetchBalance();
+      // Same deliberate pattern as the mount effect above (see that comment
+      // and the C20 round-3 note): the sync setState here is the loading
+      // flag for the fetch this effect owns, left as-is pending the human
+      // decision on merging the two effects.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRidesLoading(true);
       api.get<WorkRide[]>(`/rider/work-profile/${activeCompanyId}/rides`)
         .then(r => setRides((r.data || []).slice(0, 5)))

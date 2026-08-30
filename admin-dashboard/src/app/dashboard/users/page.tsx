@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -338,44 +339,44 @@ export default function UsersPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         {/* eslint-disable-next-line no-restricted-syntax -- decorative page-header icon tint (#2816) */}
                         <Users className="h-8 w-8 text-sky-500" />
                         Users
-                    </h1>
-                    <p className="text-muted-foreground mt-1">
-                        View and manage registered riders.
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading} aria-label="Refresh">
-                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => {
-                        const next = !showPii;
-                        setShowPii(next);
-                        if (next) logPiiReveal("users", "page_toggle").catch(() => {});
-                    }}>
-                        {showPii ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
-                        {showPii ? "Hide PII" : "Show PII"}
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBackfillStripeEmails}
-                        disabled={stripeEmailSyncRunning}
-                        title="Attach riders' emails to their Stripe customers so they can be found by address in the Stripe dashboard. Previews the count before writing (super admin)."
-                    >
-                        <CreditCard className="mr-2 h-4 w-4" />
-                        {stripeEmailSyncRunning ? "Syncing…" : "Sync Stripe emails"}
-                    </Button>
-                    <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
-                        <Download className="mr-2 h-4 w-4" /> Export
-                    </Button>
-                </div>
-            </div>
+                    </span>
+                }
+                description="View and manage registered riders."
+                actions={
+                    <div className="flex gap-2">
+                        <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading} aria-label="Refresh">
+                            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => {
+                            const next = !showPii;
+                            setShowPii(next);
+                            if (next) logPiiReveal("users", "page_toggle").catch(() => {});
+                        }}>
+                            {showPii ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
+                            {showPii ? "Hide PII" : "Show PII"}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBackfillStripeEmails}
+                            disabled={stripeEmailSyncRunning}
+                            title="Attach riders' emails to their Stripe customers so they can be found by address in the Stripe dashboard. Previews the count before writing (super admin)."
+                        >
+                            <CreditCard className="mr-2 h-4 w-4" />
+                            {stripeEmailSyncRunning ? "Syncing…" : "Sync Stripe emails"}
+                        </Button>
+                        <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
+                            <Download className="mr-2 h-4 w-4" /> Export
+                        </Button>
+                    </div>
+                }
+            />
 
             {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

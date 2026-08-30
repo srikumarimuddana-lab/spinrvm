@@ -8,6 +8,8 @@ import {
     Banknote, Gift, Receipt, Ticket, Landmark, TrendingUp, TrendingDown, Coins,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useTheme } from "next-themes";
+import { chartColors } from "@/components/analytics/chart-palette";
 
 const PERIODS: { value: RideFinancialsPeriod; label: string }[] = [
     { value: "today", label: "Today" },
@@ -179,6 +181,8 @@ export default function RideStatsCards() {
 
 export function RidesChart() {
     const [stats, setStats] = useState<any>(null);
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
 
     useEffect(() => {
         getRideTrend(14).then(setStats).catch(() => {});
@@ -215,13 +219,7 @@ export function RidesChart() {
                         tickLine={false}
                     />
                     <Tooltip
-                        contentStyle={{
-                            fontSize: 12,
-                            borderRadius: 10,
-                            border: '1px solid hsl(var(--border))',
-                            background: 'hsl(var(--card))',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                        }}
+                        contentStyle={c.tooltip}
                         labelStyle={{ fontWeight: 600 }}
                         cursor={{ fill: 'hsl(var(--muted))', radius: 4 }}
                     />

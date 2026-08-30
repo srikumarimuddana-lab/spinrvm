@@ -21,6 +21,8 @@ import {
   CheckCircle, XCircle, Clock, Send, Search, ChevronLeft, ChevronRight, X, BarChart3,
 } from "lucide-react";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { useTheme } from "next-themes";
+import { chartColors } from "./chart-palette";
 import { getDriverOfferStats, getDriverOfferTrends } from "@/lib/api";
 
 const PAGE_SIZE = 15;
@@ -65,6 +67,9 @@ export function DriverOffersPanel({
   const [trend, setTrend] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const { resolvedTheme } = useTheme();
+  const c = chartColors(resolvedTheme === "dark");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -153,12 +158,12 @@ export function DriverOffersPanel({
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis dataKey="date" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10, border: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }} cursor={{ fill: "hsl(var(--muted))" }} />
+                <Tooltip contentStyle={c.tooltip} cursor={{ fill: "hsl(var(--muted))" }} />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="accepted" stackId="o" fill="#10b981" name="Accepted" radius={[0, 0, 0, 0]} />
-                <Bar dataKey="declined" stackId="o" fill="#ef4444" name="Declined" />
-                <Bar dataKey="ignored" stackId="o" fill="#f59e0b" name="Ignored" />
-                <Bar dataKey="preempted" stackId="o" fill="#3b82f6" name="Preempted" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="accepted" stackId="o" fill={c.good} name="Accepted" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="declined" stackId="o" fill={c.bad} name="Declined" />
+                <Bar dataKey="ignored" stackId="o" fill={c.warn} name="Ignored" />
+                <Bar dataKey="preempted" stackId="o" fill={c.neutral} name="Preempted" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}

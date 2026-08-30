@@ -2211,7 +2211,16 @@ def find_orphaned_legacy_driver_users() -> list[dict[str, Any]]:
     if not candidates:
         return []
     candidate_ids = [u["id"] for u in candidates]
-    linked = supabase.table("drivers").select("user_id").in_("user_id", candidate_ids).execute().data or []
+    # Batched via _select_in (this file's own established convention for
+    # every other .in_() lookup here -- see _prefetch_existing et al.) rather
+    # than one raw .in_() call. This function's own real production scale
+    # (697 candidate UUIDs as of 2026-08-30) had never actually been
+    # exercised before -- the one prior attempt failed earlier, at
+    # get_service_area(), before reaching this query at all. An unchunked
+    # .in_() with ~700 UUIDs risks a URL-length rejection from the
+    # PostgREST layer, surfacing to the operator as a generic "Scan failed:
+    # an unexpected error occurred" with no useful detail.
+    linked = _select_in("drivers", "user_id", "user_id", candidate_ids)
     linked_ids = {d["user_id"] for d in linked}
     return [u for u in candidates if u["id"] not in linked_ids]
 

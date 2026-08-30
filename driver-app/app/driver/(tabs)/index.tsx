@@ -39,7 +39,8 @@ import {
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
-import { bearingDegrees, destinationPoint } from '@shared/utils/vehicleTracking';
+import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
+import { bearingDegrees, destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -155,6 +156,7 @@ function DriverDashboard() {
     isOnline,
     connectionState,
     location,
+    markerFixFeed,
     locationStatus,
     otpInput,
     setOtpInput,
@@ -622,6 +624,77 @@ function DriverDashboard() {
     // doesn't change when this effect fires.
   }, [location, rideState, mapRef]);
 
+  // ── Route-deviation detection ──
+  // Three consecutive displayed fixes farther than 60 m from the active
+  // route polyline (~10 s of genuinely being elsewhere — GPS scatter and the
+  // odd wide corner don't trigger) surface a quiet heads-up. Detection only:
+  // no auto-reroute (navigating_to_pickup already refreshes Directions on
+  // movement; trip_in_progress renders the planned line). Also the
+  // client-side groundwork for rider-facing off-route safety alerts.
+  const OFF_ROUTE_M = 60;
+  const offRouteStreakRef = useRef(0);
+  const offRouteToastMsRef = useRef(0);
+  useEffect(() => {
+    const onRouteState = rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress';
+    if (!onRouteState || routeCoords.length < 2 || !location?.coords) {
+      offRouteStreakRef.current = 0;
+      return;
+    }
+    const c = location.coords;
+    const snapped = snapToRoute(
+      { latitude: c.latitude, longitude: c.longitude },
+      routeCoords,
+      OFF_ROUTE_M,
+    );
+    if (snapped) {
+      offRouteStreakRef.current = 0;
+      return;
+    }
+    offRouteStreakRef.current += 1;
+    if (offRouteStreakRef.current >= 3 && Date.now() - offRouteToastMsRef.current > 60_000) {
+      offRouteToastMsRef.current = Date.now();
+      showToast('info', 'Off Route', 'You have left the planned route.');
+    }
+  }, [location, rideState, routeCoords]);
+
+  // ── Arrival geofence auto-detect ──
+  // When navigating to pickup, two consecutive displayed fixes inside the
+  // geofence (~6-8 s dwell at the 3-3.5 s render cadence — a drive-past
+  // doesn't trigger) auto-mark arrival via the SAME arriveAtPickup action as
+  // the manual button, so the store's pickup-radius guard and the backend
+  // state machine still validate the transition. Removes a tap made in
+  // traffic and starts honest wait-time from actual arrival. One attempt per
+  // ride: a rejection (e.g. server-side radius disagreement) leaves the
+  // manual button as the path, never a retry loop.
+  const ARRIVAL_GEOFENCE_M = 60;
+  const arrivalAttemptedRideRef = useRef<string | null>(null);
+  const arrivalDwellRef = useRef(0);
+  useEffect(() => {
+    if (rideState !== 'navigating_to_pickup') {
+      arrivalDwellRef.current = 0;
+      return;
+    }
+    const rid = activeRide?.ride?.id;
+    const c = location?.coords;
+    const pLat = activeRide?.ride?.pickup_lat;
+    const pLng = activeRide?.ride?.pickup_lng;
+    if (!rid || !c || pLat == null || pLng == null) return;
+    if (arrivalAttemptedRideRef.current === rid) return;
+    if (haversineMeters(c.latitude, c.longitude, pLat, pLng) <= ARRIVAL_GEOFENCE_M) {
+      arrivalDwellRef.current += 1;
+      if (arrivalDwellRef.current >= 2) {
+        arrivalAttemptedRideRef.current = rid;
+        arriveAtPickup(rid, c.latitude, c.longitude).then((res) => {
+          if (res.success) {
+            showToast('success', "You've Arrived", 'Marked as arrived at the pickup spot.');
+          }
+        });
+      }
+    } else {
+      arrivalDwellRef.current = 0;
+    }
+  }, [location, rideState, activeRide, arriveAtPickup]);
+
   // Error handling. `error` is destructured from the top-level useDriverStore()
   // call above (full-store subscription, not a selector), so this component
   // already re-renders on every store mutation including `error` — reading it
@@ -713,6 +786,9 @@ function DriverDashboard() {
         style={styles.map}
         provider={MAP_PROVIDER}
         userInterfaceStyle={isDark ? "dark" : "light"}
+        // userInterfaceStyle only darkens Apple Maps; Google (Android) needs
+        // an explicit night style or the map stays daylight-white after dark.
+        customMapStyle={isDark ? (DARK_MAP_STYLE as any) : undefined}
         initialRegion={{
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
@@ -741,6 +817,8 @@ function DriverDashboard() {
               longitude: location.coords.longitude,
             }}
             heading={location.coords.heading}
+            fixTimestampMs={location.timestamp}
+            fixFeed={markerFixFeed}
             isOnline={isOnline}
             variant={markerVariant}
             imageUri={markerImageUri}
@@ -1032,6 +1110,18 @@ function DriverDashboard() {
         )
       )}
 
+      {/* Current speed — GPS-derived (coords.speed, m/s), shown while
+          online and actually moving. Throttled location state is fine for a
+          readout; hidden when stationary to keep the map minimal. */}
+      {isOnline && (location.coords.speed ?? 0) >= 1.5 && (
+        <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
+          <Text style={styles.speedChipValue} allowFontScaling={false}>
+            {Math.round((location.coords.speed ?? 0) * 3.6)}
+          </Text>
+          <Text style={styles.speedChipUnit} allowFontScaling={false}>km/h</Text>
+        </View>
+      )}
+
       {/* Map Controls */}
       <MapControls
         mapRef={mapRef}
@@ -1171,6 +1261,32 @@ function DriverDashboard() {
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
+    speedChip: {
+      position: 'absolute',
+      left: 16,
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: 24,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 10,
+      elevation: 6,
+    },
+    speedChipValue: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+      lineHeight: 20,
+    },
+    speedChipUnit: {
+      fontSize: 10,
+      color: colors.textDim,
+    },
     container: {
       flex: 1,
       backgroundColor: colors.background,

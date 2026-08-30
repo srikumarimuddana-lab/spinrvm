@@ -11349,6 +11349,48 @@ record of what was assumed vs. what was actually true</summary>
   config, Spinr Pass area toggles, etc.) was not audited field-by-field
   for other inline rules and stays open for a future pass if one turns
   up. Checkbox stays `[ ]`.
+- **2026-08-30 update — step 11 done: `staff/page.tsx`'s
+  create/edit-staff form.** `handleSubmit` gated staff-account
+  create/update with two inline checks
+  (`!form.email || !form.first_name || !form.last_name`, and
+  `!form.password` on the create-only path) with no dedicated test
+  coverage. Staff accounts are the admin RBAC surface
+  (`AVAILABLE_MODULES`/`ROLE_PRESETS` in
+  `backend/routes/admin/staff.py`), so a validation gap here has real
+  access-control consequence, not just a UX bug.
+
+  New colocated `admin-dashboard/src/lib/staffFormSchema.ts`
+  (`isStaffRequiredFieldsValid`, `isStaffPasswordValid`) reproduces both
+  checks as byte-for-byte equivalent predicates — plain truthy checks on
+  the raw field, no `.trim()` added, since that would be a
+  validation-rule change rather than a pure extraction. New
+  `admin-dashboard/src/lib/__tests__/staffFormSchema.test.ts` (7
+  accept/reject cases). Verification: 7/7 new tests pass; full
+  admin-dashboard suite 411/411 tests, 41/41 files, exit 0
+  (`npm run test:coverage`, the exact CI invocation); `npx tsc --noEmit`
+  clean; `npx eslint` on touched files: 0 errors, 3 pre-existing warnings
+  on unrelated lines (confirmed via `git diff` that none fall on the 3
+  lines this diff touches: the import line and the two guard swaps);
+  **real production build** (`npm run build`) completed successfully,
+  exit code 0, full route manifest generated including
+  `/dashboard/staff`; blast-radius grep confirmed
+  `form.email`/`form.first_name`/`form.last_name`/`form.password` appear
+  nowhere else in `admin-dashboard/src` outside this page's own form (a
+  different, unrelated form on `support-tickets/tickets/page.tsx` also
+  has a field literally named `form.email` — confirmed unrelated, not a
+  shared definition). Full Change Impact Log:
+  `docs/change-log/2026-08-30-b39-admin-staff-form-zod-step11.md`.
+  **Still open:** while re-scanning `service-areas/page.tsx` for other
+  inline rules (per the "not fully resolved" note above), found one more:
+  `handleFieldUpdate`'s tax-configuration justification prompt
+  (`if (!justification) return;`, gating GST/PST/HST field changes,
+  mirroring the surge-justification pattern per its own A29 comment) —
+  picked up next as step 12. The rest of `service-areas/page.tsx` (fees,
+  incentives, Spinr Pass area toggles, the heatmap numeric-field
+  clamps — those are inline `parseFloat`/`NaN` sanitization with no
+  user-facing error message, same "nothing to extract" shape as prior
+  steps' numeric fallbacks, not a new candidate) remains unaudited beyond
+  what's named here. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

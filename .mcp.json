@@ -49,6 +49,15 @@
       "env": {
         "GOOGLE_APPLICATION_CREDENTIALS": "${SPINR_FIREBASE_MCP_SERVICE_ACCOUNT_PATH}"
       }
+    },
+
+    "context7": {
+      "$comment": "Upstash, open-source (MIT), read-only doc lookup — no Spinr credentials, no write access, nothing to sandbox. Fetches current version-specific docs/examples for a library (e.g. Next.js App Router, Tailwind v4, Supabase JS) so responses don't rely on stale training data. Works with no API key at low rate limits; optionally set CONTEXT7_API_KEY (from context7.com/dashboard) for a higher limit.",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY:-}"
+      }
     }
   }
 }

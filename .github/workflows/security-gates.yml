@@ -487,7 +487,18 @@ jobs:
         run: npm ci
       - name: Audit for HIGH+ CVEs
         working-directory: admin-dashboard
-        run: npm audit --audit-level=high
+        # Same image-size / GHSA-w3rx-r6r6-pgpr / GHSA-5p2g-fcmc-qvqq advisory
+        # already allowlisted for mobile's yarn-audit gate (CR #4548) — now
+        # also reached via the Storybook devDependency added for component
+        # development (@storybook/nextjs-vite -> vite-plugin-storybook-nextjs
+        # -> image-size), a dev-tooling-only path, never in the shipped
+        # bundle. No patched image-size version exists. See
+        # scripts/security/check_npm_audit_allowlist.py for the full
+        # rationale and the narrow scope of what it allows through — any
+        # other HIGH/CRITICAL finding still fails this step.
+        run: |
+          npm audit --audit-level=high --json > /tmp/npm-audit-admin.json || true
+          python3 "${GITHUB_WORKSPACE}/scripts/security/check_npm_audit_allowlist.py" /tmp/npm-audit-admin.json
 
   # G5 — Secret scanning (git history)
   gitleaks:

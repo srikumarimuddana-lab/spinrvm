@@ -15,6 +15,7 @@ import {
     shouldResetBuffer,
     type PlaybackFix,
 } from '@shared/utils/markerPlayback';
+import type { FixFeed, MarkerFix } from '@shared/utils/fixFeed';
 
 const CAR_IMAGES = {
     standard: require('../assets/images/car_marker.png'),
@@ -67,6 +68,12 @@ interface CarMarkerProps {
      * source provides one.
      */
     fixTimestampMs?: number | null;
+    /**
+     * Un-throttled fix stream (see utils/fixFeed). When provided, it is the
+     * primary ingest path — the `coordinate` prop then only seeds/anchors —
+     * so an upstream render throttle can never starve the playback buffer.
+     */
+    fixFeed?: FixFeed | null;
     /**
      * Accepted for compatibility with the dashboard call site; rendering no
      * longer varies by it (historically we avoided re-snapshotting on its
@@ -157,6 +164,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
     heading,
     fixTimestampMs,
+    fixFeed,
     size = 40,
     zIndex = 1,
     identifier,
@@ -264,6 +272,37 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
+    // Single ingest path used by both the feed subscription and the prop
+    // effect. Reads only refs — stable by construction.
+    const ingestFix = useCallback((fix: MarkerFix) => {
+        const now = Date.now();
+        const coord = { latitude: fix.latitude, longitude: fix.longitude };
+        if (shouldResetBuffer(bufferRef.current, coord, SNAP_DISTANCE_M)) {
+            bufferRef.current.length = 0;
+            hasMovementBearingRef.current = false;
+            if (Platform.OS === 'android') {
+                setAndroidCoord(coord);
+                prevTargetRef.current = coord;
+            }
+        }
+        const ts =
+            Number.isFinite(fix.timestampMs) && Math.abs(now - fix.timestampMs) < 60_000
+                ? fix.timestampMs
+                : now;
+        pushFix(bufferRef.current, { ...coord, timestampMs: ts }, now);
+    }, []);
+
+    // Un-throttled feed subscription — the primary ingest when provided.
+    const hasFeedRef = useRef(!!fixFeed);
+    useEffect(() => {
+        hasFeedRef.current = !!fixFeed;
+        if (!fixFeed) return;
+        return fixFeed.subscribe((fix) => {
+            if (fix.heading != null) headingRef.current = fix.heading;
+            ingestFix(fix);
+        });
+    }, [fixFeed, ingestFix]);
+
     // ── Fix ingest: every coordinate prop change lands in the playback
     // buffer. A jump past SNAP_DISTANCE_M (stale fix after backgrounding,
     // ride handoff) resets the buffer so the marker snaps once instead of
@@ -280,29 +319,16 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             return;
         }
         prevCoordRef.current = coordinate;
-        if (shouldResetBuffer(bufferRef.current, coordinate, SNAP_DISTANCE_M)) {
-            bufferRef.current.length = 0;
-            hasMovementBearingRef.current = false;
-            if (Platform.OS === 'android') {
-                // Deliberate one-time snap (stale fix after backgrounding) —
-                // move the native marker immediately rather than gliding.
-                // eslint-disable-next-line react-hooks/set-state-in-effect
-                setAndroidCoord(coordinate);
-                prevTargetRef.current = coordinate;
-            }
-        }
+        // With a live feed the prop stream is the throttled/stale echo of the
+        // same fixes — ingesting both would inject arrival-time duplicates.
+        // The prop then only seeds an empty buffer (mount, post-reset).
+        if (hasFeedRef.current && bufferRef.current.length > 0) return;
         // Stamp with the real measurement time when the source provides one —
         // arrival time is distorted by upstream batching/throttling (a fix
         // held 3 s by a render throttle would otherwise read as 3 s of extra
-        // travel time, halving the played-back speed). Guard: a nonsense
-        // device clock / stale timestamp falls back to arrival time.
-        const ts =
-            fixTimestampMs != null &&
-            Number.isFinite(fixTimestampMs) &&
-            Math.abs(now - fixTimestampMs) < 60_000
-                ? fixTimestampMs
-                : now;
-        pushFix(bufferRef.current, { ...coordinate, timestampMs: ts }, now);
+        // travel time, halving the played-back speed). ingestFix guards a
+        // nonsense device clock by falling back to arrival time.
+        ingestFix({ ...coordinate, timestampMs: fixTimestampMs ?? now });
         // fixTimestampMs intentionally not a dep: it describes this coordinate.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [coordinate.latitude, coordinate.longitude, coordinate]);
@@ -471,6 +497,7 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.coordinate.longitude === next.coordinate.longitude &&
         prev.heading === next.heading &&
         prev.fixTimestampMs === next.fixTimestampMs &&
+        prev.fixFeed === next.fixFeed &&
         prev.size === next.size &&
         prev.zIndex === next.zIndex &&
         prev.identifier === next.identifier &&

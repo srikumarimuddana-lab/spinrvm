@@ -25,7 +25,7 @@ async function mockDashboardAPIs(page: any) {
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ authenticated: true, user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }),
+        body: JSON.stringify({ authenticated: true, user: { id: '1', email: 'admin@spinr.ca', role: 'super_admin' } }),
       });
     }
 

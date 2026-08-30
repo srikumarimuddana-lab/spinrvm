@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getDashboardOverview, getServiceAreas } from "@/lib/api";
 import { getStuckEventCount } from "@/lib/api/stripe-events";
+import { PageHeader } from "@/components/page-header";
 import { formatCurrency } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
 import {
@@ -70,21 +71,17 @@ export default function DashboardPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-start justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground">
-                        {greeting()}, {user?.first_name || "Admin"}
-                    </h1>
-                    <p className="text-sm text-muted-foreground mt-1">
-                        {rangeLabel}{areaId ? ` · ${areas.find((a) => a.id === areaId)?.name ?? "Area"}` : " · All areas"}
-                    </p>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full">
-                    <Clock className="h-3 w-3" />
-                    {new Date().toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" })}
-                </div>
-            </div>
+            <PageHeader
+                className="flex items-start justify-between"
+                title={`${greeting()}, ${user?.first_name || "Admin"}`}
+                description={`${rangeLabel}${areaId ? ` · ${areas.find((a) => a.id === areaId)?.name ?? "Area"}` : " · All areas"}`}
+                actions={
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full">
+                        <Clock className="h-3 w-3" />
+                        {new Date().toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" })}
+                    </div>
+                }
+            />
 
             {/* Filters: time window + service area */}
             <div className="flex flex-col gap-3">

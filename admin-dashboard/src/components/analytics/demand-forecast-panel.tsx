@@ -16,6 +16,8 @@ import {
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
+import { useTheme } from "next-themes";
+import { chartColors } from "./chart-palette";
 import { TrendingUp, Clock, Zap, Sun, Activity } from "lucide-react";
 import { getDemandForecast, getDemandForecastSummary } from "@/lib/api";
 
@@ -60,6 +62,8 @@ export function DemandForecastPanel({
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<any>(null);
   const [forecast, setForecast] = useState<any[]>([]);
+  const { resolvedTheme } = useTheme();
+  const c = chartColors(resolvedTheme === "dark");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -174,8 +178,8 @@ export function DemandForecastPanel({
               <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="demandGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0.02} />
+                    <stop offset="5%" stopColor={c.accent} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={c.accent} stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -188,11 +192,11 @@ export function DemandForecastPanel({
                   height={60}
                 />
                 <YAxis fontSize={11} />
-                <Tooltip />
+                <Tooltip contentStyle={c.tooltip} />
                 <Area
                   type="monotone"
                   dataKey="rides"
-                  stroke="#8B5CF6"
+                  stroke={c.accent}
                   strokeWidth={2}
                   fill="url(#demandGradient)"
                   name="Predicted Rides"

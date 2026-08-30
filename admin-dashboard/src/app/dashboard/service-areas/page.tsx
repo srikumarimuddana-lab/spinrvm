@@ -3,6 +3,7 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
+import { PageHeader } from "@/components/page-header";
 import { useCrudToast } from "@/components/ui/use-crud-toast";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -19,6 +20,11 @@ import { TUNING_PLAYBOOK, tuningWarnings, warningsFor } from "@/lib/heatmap-tuni
 import { parseAllowlistIds } from "@/lib/allowlist-ids";
 import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { useTheme } from "next-themes";
+import { chartColors } from "@/components/analytics/chart-palette";
+import { needsSurgeJustification, isSurgeJustificationValid } from "@/lib/surgeJustificationSchema";
+import { isTaxJustificationValid } from "@/lib/taxJustificationSchema";
+import { isSpinrPassPlanNameValid, isSpinrPassPlanPriceValid } from "@/lib/spinrPassAreaPlanSchema";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -208,7 +214,7 @@ export default function ServiceAreasPage() {
       const payload: Record<string, any> = { [field]: value };
       if (TAX_FIELDS.has(field)) {
         const justification = window.prompt("Reason for this tax-configuration change (required):")?.trim();
-        if (!justification) return;
+        if (!isTaxJustificationValid(justification)) return;
         payload.tax_justification = justification;
       }
       await updateServiceArea(areaId, payload);
@@ -246,15 +252,16 @@ export default function ServiceAreasPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Service Areas</h1>
-          <p className="text-muted-foreground mt-1">Configure pricing, fees, taxes & subscriptions per area</p>
-        </div>
-        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-semibold hover:bg-primary/90">
-          <Plus className="h-5 w-5" /> New Area
-        </button>
-      </div>
+      <PageHeader
+        className="flex items-center justify-between mb-8"
+        title="Service Areas"
+        description="Configure pricing, fees, taxes & subscriptions per area"
+        actions={
+          <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-semibold hover:bg-primary/90">
+            <Plus className="h-5 w-5" /> New Area
+          </button>
+        }
+      />
 
       {/* Create Form */}
       {showCreate && (
@@ -669,7 +676,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
   const [saved, setSaved] = useState(false);
 
   const surgeValue = parseFloat(String(form.surge_multiplier)) || 1.0;
-  const needsJustification = form.surge_enabled && surgeValue > 2.5;
+  const needsJustification = needsSurgeJustification(form.surge_enabled, surgeValue);
 
   const handleSave = async () => {
     // Did the operator actually change surge since load? Unrelated saves
@@ -682,7 +689,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     // Only require (and only block on) justification when the operator is
     // actually applying an above-cap surge — not when saving an unrelated
     // field on an already-justified above-cap area.
-    if (surgeTouched && needsJustification && !form.surge_justification.trim()) {
+    if (surgeTouched && needsJustification && !isSurgeJustificationValid(form.surge_justification)) {
       alert("A written justification is required for surge multipliers above 2.5× (regulatory + reputational risk).");
       return;
     }
@@ -1649,7 +1656,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChan
   const resetForm = () => { setShowForm(false); setEditingId(null); setForm({ name: "", price: "", duration_days: 30, rides_per_day: -1, description: "", features: "", is_active: true }); };
 
   const handleSubmit = async () => {
-    if (!form.name || !form.price) return;
+    if (!isSpinrPassPlanNameValid(form.name) || !isSpinrPassPlanPriceValid(form.price)) return;
     const data = {
       name: form.name, price: parseFloat(form.price), duration_days: form.duration_days,
       rides_per_day: form.rides_per_day, description: form.description,
@@ -2286,12 +2293,8 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
     return () => { cancelled = true; };
   }, [areaId, hours]);
 
-  const surgeTooltipStyle = {
-    fontSize: 12, borderRadius: 10,
-    border: '1px solid hsl(var(--border))',
-    background: 'hsl(var(--card))',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-  };
+  const { resolvedTheme } = useTheme();
+  const c = chartColors(resolvedTheme === "dark");
 
   return (
     <div className="mt-6 pt-6 border-t">
@@ -2374,15 +2377,17 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
               />
               <YAxis fontSize={11} domain={[0.8, 'auto']} tickFormatter={v => `${v}×`} />
               <Tooltip
-                contentStyle={surgeTooltipStyle}
+                contentStyle={c.tooltip}
                 formatter={(value, name) => {
                   if (name === 'Multiplier') return [`${value}×`, name];
                   return [String(value), name];
                 }}
                 labelFormatter={(label) => label}
               />
+              {/* eslint-disable-next-line no-restricted-syntax -- neutral baseline marker, not part of the categorical/semantic palette (#2816) */}
               <ReferenceLine y={1.0} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1.0× (normal)', position: 'insideTopLeft', fontSize: 10, fill: '#94a3b8' }} />
-              <ReferenceLine y={2.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value: '2.5× (cap)', position: 'insideTopLeft', fontSize: 10, fill: '#ef4444' }} />
+              <ReferenceLine y={2.5} stroke={c.bad} strokeDasharray="4 4" label={{ value: '2.5× (cap)', position: 'insideTopLeft', fontSize: 10, fill: c.bad }} />
+              {/* eslint-disable-next-line no-restricted-syntax -- surge line keeps its own distinct orange, deliberately outside the categorical palette (#2816) */}
               <Area type="monotone" dataKey="multiplier" stroke="#F97316" strokeWidth={2}
                 fill={`url(#surgeGrad-${areaId})`} name="Multiplier" dot={false} />
             </AreaChart>

@@ -15,7 +15,11 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-4 p-8 text-center">
       <h2 className="text-2xl font-bold">Something went wrong</h2>
-      <p className="text-muted-foreground max-w-md">{error.message || "An unexpected error occurred. Please try again."}</p>
+      <p className="text-muted-foreground max-w-md">
+        {process.env.NODE_ENV !== "production"
+          ? error.message || "An unexpected error occurred. Please try again."
+          : "An unexpected error occurred. Please try again."}
+      </p>
       <Button onClick={reset}>Try again</Button>
     </div>
   );

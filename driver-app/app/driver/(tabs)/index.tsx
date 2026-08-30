@@ -54,6 +54,11 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
+// Ride states the follow-car camera (course-up rotation + speed-adaptive
+// zoom) actively drives. See the effect below for why the other ride
+// states are excluded.
+const COURSE_UP_RIDE_STATES = new Set(['idle', 'navigating_to_pickup', 'trip_in_progress']);
+
 // Distance in metres between two lat/lng pairs. Used by the Directions
 // refresh ticker to decide whether the driver has moved far enough to
 // warrant a new API call.
@@ -550,17 +555,24 @@ function DriverDashboard() {
     return () => sub.remove();
   }, []);
 
-  // ── Idle follow-car camera: speed-adaptive zoom + course-up rotation ──
-  // While online without a ride the camera tracks the car: zoomed in near
-  // intersections/stops (street names, one-ways, turn restrictions render on
-  // the vector map at ≥17 — zero extra API calls), zoomed out while cruising.
-  // With course-up on (default), the map rotates so the direction of travel
-  // points to the top of the screen and the car sits in the lower third —
-  // the universal navigation-app framing ("driving bottom→up", live-testing
-  // ask 2026-08-31). The compass button toggles back to north-up. Panning
-  // hands control to the driver; the recenter button resumes follow.
-  // Active-ride phases keep their deliberate route-overview framing — turn-by
-  //-turn/lane detail comes from the Google Maps/Waze handoff, not this map.
+  // ── Follow-car camera: speed-adaptive zoom + course-up rotation ──
+  // The camera tracks the car: zoomed in near intersections/stops (street
+  // names, one-ways, turn restrictions render on the vector map at ≥17 —
+  // zero extra API calls), zoomed out while cruising. With course-up on
+  // (default), the map rotates so the direction of travel points to the top
+  // of the screen and the car sits in the lower third — the universal
+  // navigation-app framing ("driving bottom→up", live-testing asks
+  // 2026-08-31 and 2026-08-30). The compass button toggles back to
+  // north-up. Panning hands control to the driver; the recenter button
+  // resumes follow.
+  //
+  // Runs in COURSE_UP_RIDE_STATES (module-level, below): online-idle
+  // (cruising, no ride) plus the two states where the driver is actually
+  // navigating — navigating_to_pickup and trip_in_progress.
+  // `arrived_at_pickup` (PIN entry, stationary) and
+  // `ride_offered`/`trip_completed` (brief, non-driving) keep their
+  // existing one-time route-overview fitToCoordinates instead — there's no
+  // ongoing travel direction to orient toward.
   const followRef = useRef(true);
   const followZoomTierRef = useRef<number | null>(null);
   const [courseUp, setCourseUp] = useState(true);
@@ -574,6 +586,22 @@ function DriverDashboard() {
   // effect and the MapView's mapPadding prop below need it, and moving it
   // to DriverIdlePanel would create a cross-file coupling for one number.
   const IDLE_PANEL_HEIGHT_DP = 230;
+  // ActiveRidePanel's draggable sheet reports its own open/collapsed state
+  // (see onExpandedChange below) so mapPadding can track it instead of
+  // guessing — without this, extending the follow camera's "pin the car
+  // low" framing to navigating_to_pickup/trip_in_progress would reproduce
+  // the exact idle-panel-hides-the-marker bug just fixed (2026-08-30), this
+  // time under the bigger active-ride sheet. Sheet always re-opens on a
+  // phase change (ActiveRidePanel's own effect), so default true here
+  // matches its real initial state.
+  const [activeSheetExpanded, setActiveSheetExpanded] = useState(true);
+  // Expanded: matches ActiveRidePanel's own `maxPanelHeight` cap for these
+  // two states exactly (0.65 * window height — see ActiveRidePanel.tsx;
+  // if that fraction ever changes for navigating_to_pickup/trip_in_progress
+  // it must change here too), so this is a real bound, not a guess.
+  // Collapsed: the peek is just the drag handle + status header row —
+  // generous estimate, same rigor as IDLE_PANEL_HEIGHT_DP above.
+  const ACTIVE_SHEET_COLLAPSED_HEIGHT_DP = 110;
   // Camera bearing derives from actual movement between camera ticks — the
   // reported GPS heading is a placeholder 0 on Android when course is
   // unknown (see @shared/utils/vehicleTracking selectBearing), so it must
@@ -582,7 +610,7 @@ function DriverDashboard() {
   const camPrevRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const camBearingRef = useRef<number | null>(null);
   useEffect(() => {
-    if (rideState !== 'idle' || !followRef.current) return;
+    if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
     if (!c || !mapRef.current) return;
     const tier = zoomTierForSpeed(c.speed, followZoomTierRef.current);
@@ -799,18 +827,27 @@ function DriverDashboard() {
         // userInterfaceStyle only darkens Apple Maps; Google (Android) needs
         // an explicit night style or the map stays daylight-white after dark.
         customMapStyle={isDark ? (DARK_MAP_STYLE as any) : undefined}
-        // Reserves the bottom strip DriverIdlePanel occupies (vehicle/online
-        // pills + GO/STOP button) so the SDK's own notion of "center" — what
+        // Reserves the bottom strip whichever bottom panel is showing
+        // occupies, so the SDK's own notion of "center" — what
         // animateCamera({center}) below actually renders in the middle of —
-        // excludes that strip. Without this the course-up follow camera's
-        // "pin the car low" framing pinned it directly under the panel
-        // (live-testing report 2026-08-30, screenshot: car hidden behind the
-        // "You're Online" pill and vehicle card). Scoped to 'idle' — the
-        // only state the panel renders in; other ride states keep their
-        // existing route-overview framing unpadded.
+        // excludes that strip. Without this the follow camera's "pin the
+        // car low" framing pins it directly under the panel (live-testing
+        // report 2026-08-30, screenshot: car hidden behind the "You're
+        // Online" pill and vehicle card — the same risk applies to
+        // ActiveRidePanel's bigger sheet during navigating_to_pickup/
+        // trip_in_progress, tracked via activeSheetExpanded). Every other
+        // ride state keeps its existing route-overview framing unpadded.
         mapPadding={
           rideState === 'idle'
             ? { top: 0, right: 0, left: 0, bottom: IDLE_PANEL_HEIGHT_DP + insets.bottom }
+            : rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress'
+            ? {
+                top: 0, right: 0, left: 0,
+                bottom:
+                  (activeSheetExpanded
+                    ? Dimensions.get('window').height * 0.65
+                    : ACTIVE_SHEET_COLLAPSED_HEIGHT_DP) + insets.bottom,
+              }
             : { top: 0, right: 0, left: 0, bottom: 0 }
         }
         initialRegion={{
@@ -1203,6 +1240,7 @@ function DriverDashboard() {
         rideState === 'trip_in_progress') && (
         <ActiveRidePanel
           rideState={rideState}
+          onExpandedChange={setActiveSheetExpanded}
           ride={activeRide?.ride as unknown as any || null}
           rider={activeRide?.rider || null}
           totalBonus={activeRide?.total_bonus ?? null}

@@ -185,6 +185,15 @@ describe('ActiveRidePanel', () => {
     expect(getByLabelText('Collapse ride details')).toBeTruthy();
   });
 
+  it('reports its expanded state to onExpandedChange so the map can reserve mapPadding', () => {
+    // index.tsx's follow-camera effect trusts this callback to know how much
+    // of the screen the sheet occupies (see its onExpandedChange comment) —
+    // pin that it fires true on mount (the sheet's real default state).
+    const onExpandedChange = jest.fn();
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} onExpandedChange={onExpandedChange} />);
+    expect(onExpandedChange).toHaveBeenCalledWith(true);
+  });
+
   it('renders nothing when ride is null', () => {
     // Render inside SafeAreaProvider (the panel calls useSafeAreaInsets before
     // its early-return); assert the panel produced no panel-specific output by

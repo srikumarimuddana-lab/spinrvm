@@ -44,12 +44,28 @@ export interface PlaybackPosition {
  * small enough that riders/drivers never perceive the lag (Uber/Lyft ship
  * comparable delays). */
 export const PLAYBACK_DELAY_MS = 5_000;
-/** Dead-reckoning cap — beyond this, predicting invents too much road. */
-export const MAX_EXTRAPOLATION_MS = 3_000;
+/** Dead-reckoning cap — beyond this, predicting invents too much road.
+ * Paired with the fix producer's stationary heartbeat (re-emits the last
+ * coordinate every ~2.5 s when no real fix arrives), so a genuine network
+ * gap is still covered while a driver who has actually stopped is corrected
+ * well within one cap window instead of drifting for a full 3 s. */
+export const MAX_EXTRAPOLATION_MS = 1_500;
 /** Ignore sub-jitter segments when deriving bearing or velocity. */
 const MIN_SEGMENT_MOVE_M = 2;
 /** A segment implying faster than this is a glitch, not driving (216 km/h). */
 const MAX_PLAUSIBLE_SPEED_MPS = 60;
+/**
+ * Below this speed, the last segment is "stopped or crawling" — extrapolating
+ * it forward invents motion a driver never made. This was the root cause of
+ * the car visibly driving through a red light it was stopped at, then
+ * snapping backward once a real (stationary) fix arrived: Android's
+ * distanceInterval-gated GPS goes quiet at a standstill, the buffer ran dry,
+ * and the last pre-stop segment's real velocity got projected forward for up
+ * to 3 s (live-testing report 2026-08-30, screenshots of the marker
+ * reversing at a signal). A car that was already slow/stopped when the gap
+ * began must hold, not coast.
+ */
+const MIN_EXTRAPOLATION_SPEED_MPS = 1.5;
 
 /**
  * Append a fix and prune entries no longer reachable by the render time.
@@ -204,7 +220,11 @@ export function playbackPosition(
     const segMs = newest.timestampMs - prev.timestampMs;
     const segM = distanceMeters(prev.latitude, prev.longitude, newest.latitude, newest.longitude);
     const speed = segMs > 0 ? (segM / segMs) * 1000 : 0;
-    if (segM >= MIN_SEGMENT_MOVE_M && speed <= MAX_PLAUSIBLE_SPEED_MPS) {
+    if (
+      segM >= MIN_SEGMENT_MOVE_M &&
+      speed <= MAX_PLAUSIBLE_SPEED_MPS &&
+      speed >= MIN_EXTRAPOLATION_SPEED_MPS
+    ) {
       // Continue the segment's own direction proportionally.
       const t = overshootMs / segMs;
       const coordinate = {

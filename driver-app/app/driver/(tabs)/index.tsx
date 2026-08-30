@@ -564,6 +564,16 @@ function DriverDashboard() {
   const followRef = useRef(true);
   const followZoomTierRef = useRef<number | null>(null);
   const [courseUp, setCourseUp] = useState(true);
+  // DriverIdlePanel's own content height (hudArea's vehicle/online pills +
+  // the 100dp GO/STOP button + its internal margins) — excludes
+  // insets.bottom, which is added separately below since it's already
+  // available here. Approximated from DriverIdlePanel.tsx's styles;
+  // deliberately generous rather than exact — this only needs to keep the
+  // map's own "center" concept out from under the panel, not pixel-match
+  // it. Kept as a local constant (not exported) since only this follow
+  // effect and the MapView's mapPadding prop below need it, and moving it
+  // to DriverIdlePanel would create a cross-file coupling for one number.
+  const IDLE_PANEL_HEIGHT_DP = 230;
   // Camera bearing derives from actual movement between camera ticks — the
   // reported GPS heading is a placeholder 0 on Android when course is
   // unknown (see @shared/utils/vehicleTracking selectBearing), so it must
@@ -789,6 +799,20 @@ function DriverDashboard() {
         // userInterfaceStyle only darkens Apple Maps; Google (Android) needs
         // an explicit night style or the map stays daylight-white after dark.
         customMapStyle={isDark ? (DARK_MAP_STYLE as any) : undefined}
+        // Reserves the bottom strip DriverIdlePanel occupies (vehicle/online
+        // pills + GO/STOP button) so the SDK's own notion of "center" — what
+        // animateCamera({center}) below actually renders in the middle of —
+        // excludes that strip. Without this the course-up follow camera's
+        // "pin the car low" framing pinned it directly under the panel
+        // (live-testing report 2026-08-30, screenshot: car hidden behind the
+        // "You're Online" pill and vehicle card). Scoped to 'idle' — the
+        // only state the panel renders in; other ride states keep their
+        // existing route-overview framing unpadded.
+        mapPadding={
+          rideState === 'idle'
+            ? { top: 0, right: 0, left: 0, bottom: IDLE_PANEL_HEIGHT_DP + insets.bottom }
+            : { top: 0, right: 0, left: 0, bottom: 0 }
+        }
         initialRegion={{
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,

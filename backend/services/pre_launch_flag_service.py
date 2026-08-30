@@ -171,6 +171,28 @@ def _fetch_pre_launch_ride_candidates() -> list[FlagCandidate]:
     ]
 
 
+def fetch_pre_launch_flagged_ids(table: str) -> set[str]:
+    """Every id in ``table`` currently flagged ``pre_launch_test = true``.
+    Read-only.
+
+    Shared (not duplicated) by the admin drivers/rides list filters
+    (``routes/admin/drivers.py``, ``routes/admin/rides.py``) so both apply
+    the exact same definition of "flagged" this module's own
+    ``apply_pre_launch_flags`` writes -- a hand-duplicated copy of the
+    ``PRE_LAUNCH_FLAG_KEY`` JSONB-path filter in each route risks drifting
+    from the writer's own definition.
+    """
+    rows = (
+        supabase.table(table)
+        .select("id")
+        .filter(f"legacy_import_metadata->>{PRE_LAUNCH_FLAG_KEY}", "eq", "true")
+        .execute()
+        .data
+        or []
+    )
+    return {r["id"] for r in rows if r.get("id")}
+
+
 def build_pre_launch_flag_plan() -> PreLaunchFlagPlan:
     """Read-only. Issues no writes."""
     plan = PreLaunchFlagPlan()

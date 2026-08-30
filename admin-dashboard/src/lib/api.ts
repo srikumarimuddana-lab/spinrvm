@@ -290,6 +290,8 @@ export {
     adminCommitSinDobBackfill,
     adminValidateVehicleHistoryBackfill,
     adminCommitVehicleHistoryBackfill,
+    adminValidateSavedAddressBackfill,
+    adminCommitSavedAddressBackfill,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -344,6 +346,12 @@ export type {
     VehicleHistoryBackfillCommitResult,
     VehicleHistoryBackfillFiles,
     VehicleHistoryBackfillOptions,
+    SavedAddressBackfillReportItem,
+    SavedAddressBackfillCounts,
+    SavedAddressBackfillReport,
+    SavedAddressBackfillCommitResult,
+    SavedAddressBackfillFiles,
+    SavedAddressBackfillOptions,
 } from "./api/imports";
 export {
     getCloudMessages,

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { getRides, exportRides, getServiceAreas, type RideListOpts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { PlusCircle } from "lucide-react";
 import RideStatsCards, { RidesChart } from "./_components/ride-stats-cards";
 import RideList from "./_components/ride-list";
@@ -228,19 +229,16 @@ export default function RidesPage() {
 
     return (
         <div className="space-y-6 pb-8">
-            {/* Page Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Rides</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Monitor and manage all ride activity across your platform.
-                    </p>
-                </div>
-                <Button onClick={() => setIsCreateModalOpen(true)} className="gap-2">
-                    <PlusCircle className="h-4 w-4" />
-                    Create Ride
-                </Button>
-            </div>
+            <PageHeader
+                title="Rides"
+                description="Monitor and manage all ride activity across your platform."
+                actions={
+                    <Button onClick={() => setIsCreateModalOpen(true)} className="gap-2">
+                        <PlusCircle className="h-4 w-4" />
+                        Create Ride
+                    </Button>
+                }
+            />
 
             {/* Stats Overview */}
             <RideStatsCards />

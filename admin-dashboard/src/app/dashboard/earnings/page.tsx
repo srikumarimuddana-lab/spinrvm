@@ -8,6 +8,7 @@ import {
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency, formatDate, statusColor } from "@/lib/utils";
 import ReferralsPanel from "@/components/referrals-panel";
+import { PageHeader } from "@/components/page-header";
 import AutoPayoutsPanel from "@/components/auto-payouts-panel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -55,12 +56,10 @@ export default function EarningsPage() {
     if (!allowed) return null;
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Earnings & Payouts</h1>
-                    <p className="text-muted-foreground mt-1">Platform revenue, subscriptions, and driver payouts</p>
-                </div>
-            </div>
+            <PageHeader
+                title="Earnings & Payouts"
+                description="Platform revenue, subscriptions, and driver payouts"
+            />
 
             {/* Tabs */}
             <div className="flex gap-1 bg-muted rounded-xl p-1 w-fit">

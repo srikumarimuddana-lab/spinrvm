@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound, getAiCatalog, getEmailDeliverability, type AiCatalogProvider } from "@/lib/api";
 import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -150,25 +151,23 @@ export default function SettingsPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Configure platform-wide settings.
-                    </p>
-                </div>
-                <Button onClick={handleSave} disabled={saving}>
-                    {saved ? (
-                        <>
-                            <Check className="mr-2 h-4 w-4" /> Saved!
-                        </>
-                    ) : (
-                        <>
-                            <Save className="mr-2 h-4 w-4" /> {saving ? "Saving..." : "Save Changes"}
-                        </>
-                    )}
-                </Button>
-            </div>
+            <PageHeader
+                title="Settings"
+                description="Configure platform-wide settings."
+                actions={
+                    <Button onClick={handleSave} disabled={saving}>
+                        {saved ? (
+                            <>
+                                <Check className="mr-2 h-4 w-4" /> Saved!
+                            </>
+                        ) : (
+                            <>
+                                <Save className="mr-2 h-4 w-4" /> {saving ? "Saving..." : "Save Changes"}
+                            </>
+                        )}
+                    </Button>
+                }
+            />
 
             {settings && (
                 <Tabs defaultValue="integrations" className="space-y-6">

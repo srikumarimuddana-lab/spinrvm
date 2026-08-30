@@ -87,6 +87,15 @@ export default function DriversPage() {
     const currentUserRole = useAuthStore((s) => s.user?.role);
     const isSuperAdmin = (currentUserRole || "").toLowerCase() === "super_admin";
     const canRevealSin = isSuperAdmin;
+    // The Documents tab / full-screen reviewer call getDriverDocuments,
+    // reviewDocument, downloadDriverDocument — all mounted behind the
+    // backend's require_module("documents") (routes/admin/__init__.py),
+    // a DIFFERENT grant from the "drivers" module this page itself is
+    // gated on above. A staff member can hold one without the other, so
+    // this is checked separately (same pattern as earnings/page.tsx's
+    // canSeeReferrals) rather than assuming "drivers" implies "documents".
+    const currentUserModules = useAuthStore((s) => s.user?.modules) ?? [];
+    const canReviewDocuments = isSuperAdmin || currentUserModules.includes("documents");
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -1745,6 +1754,8 @@ export default function DriversPage() {
                                                 size="sm"
                                                 variant="outline"
                                                 className="h-8"
+                                                disabled={!canReviewDocuments}
+                                                title={canReviewDocuments ? undefined : "Requires the \"Documents\" module — ask an admin to grant it"}
                                                 onClick={() => setOpenReviewerForDriver({ id: selected.id, name: selected.name || selected.email || selected.id })}
                                             >
                                                 <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
@@ -1958,6 +1969,7 @@ export default function DriversPage() {
                 driverName={openReviewerForDriver?.name}
                 onClose={() => setOpenReviewerForDriver(null)}
                 onAfterAction={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
+                canReview={canReviewDocuments}
             />
 
             <DocumentUploadDialog

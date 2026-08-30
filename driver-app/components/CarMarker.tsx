@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, View, Image } from 'react-native';
+import { Animated, Easing, Platform, Image } from 'react-native';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
     distanceMeters,
@@ -159,6 +159,18 @@ const MAX_ROTATE_MS = 600;
  * bearing. Movement deliberately outranks the reported heading; see
  * selectBearing() for why a reported heading of 0 cannot be trusted on
  * Android.
+ *
+ * Mount animation: a one-shot spring scale+opacity "pop in" plays every time
+ * this component mounts — first appearance, and any full remount (e.g. the
+ * mapKey remount in (tabs)/index.tsx used to recover a stale marker after
+ * offline->online). Deliberately NOT a looping/pulsing animation: a
+ * continuous animation would force Android's `tracksViewChanges` to stay
+ * true forever, re-snapshotting the marker every frame — the exact perf
+ * regression the settle-then-freeze lifecycle above exists to avoid. A
+ * short, one-shot spring (native-driven, cheap) avoids that: it finishes
+ * within the existing post-image-load settle window, so Android's own
+ * JS-driven rotation/position animations are unaffected and the native
+ * snapshot still freezes on schedule.
  */
 const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
@@ -442,6 +454,24 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
     };
 
+    // One-shot "pop in" on mount — see the class doc comment above for why
+    // this is a single spring rather than a loop. Native-driven: opacity and
+    // transform:scale both support the native driver, so this costs nothing
+    // on the JS thread and doesn't compete with the (JS-driven, non-style)
+    // rotation animation above.
+    // eslint-disable-next-line react-hooks/refs
+    const mountAnim = useRef(new Animated.Value(0)).current;
+    useEffect(() => {
+        Animated.spring(mountAnim, {
+            toValue: 1,
+            friction: 6,
+            tension: 80,
+            useNativeDriver: true,
+        }).start();
+        // mountAnim is a stable ref value; this must run once on mount only.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // Custom marker failed to load (offline + cold cache, dead URL) — fall
     // back to the bundled variant. Reset when the URL changes so a fixed
     // upload is retried.
@@ -453,6 +483,18 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // Android: plain Marker + native animator (see the teleport-guard note
     // above). iOS: Marker.Animated + AnimatedRegion, which is smooth there.
     const MarkerComponent: any = isAndroid ? Marker : Marker.Animated;
+
+    // Precomputed so the JSX below reads mountAnim only through a plain
+    // variable, not a fresh ref access at render/style-object time.
+    const mountAnimatedStyle = {
+        width: size,
+        height: size,
+        backgroundColor: 'transparent' as const,
+        alignItems: 'center' as const,
+        justifyContent: 'center' as const,
+        opacity: mountAnim,
+        transform: [{ scale: mountAnim }],
+    };
 
     return (
         <MarkerComponent
@@ -466,15 +508,8 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             identifier={identifier}
             style={{ backgroundColor: 'transparent' }}
         >
-            <View
-                style={{
-                    width: size,
-                    height: size,
-                    backgroundColor: 'transparent',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                }}
-            >
+            {/* eslint-disable-next-line react-hooks/refs -- mountAnimatedStyle is a plain object computed above from the stable mountAnim ref value, not a fresh ref read */}
+            <Animated.View style={mountAnimatedStyle}>
                 <Image
                     source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
                     onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
@@ -486,7 +521,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                         backgroundColor: 'transparent',
                     }}
                 />
-            </View>
+            </Animated.View>
         </MarkerComponent>
     );
 };

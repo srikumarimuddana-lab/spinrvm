@@ -28,13 +28,8 @@ import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
     ResponsiveContainer, CartesianGrid,
 } from "recharts";
-
-const tooltipStyle = {
-    fontSize: 12, borderRadius: 10,
-    border: '1px solid hsl(var(--border))',
-    background: 'hsl(var(--card))',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-};
+import { useTheme } from "next-themes";
+import { chartColors } from "@/components/analytics/chart-palette";
 
 export default function EarningsPage() {
     const { allowed } = useRequireModule("earnings");
@@ -202,6 +197,8 @@ function CeoMetricsHeader({
     const m = overview?.metrics;
     const cx = overview?.cancellation_breakdown;
     const fn = overview?.ride_funnel;
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
     return (
         <div className="space-y-4">
             <div className="flex items-end justify-between gap-3 flex-wrap">
@@ -303,7 +300,7 @@ function CeoMetricsHeader({
                                     tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
                                 />
                                 <Tooltip
-                                    contentStyle={tooltipStyle}
+                                    contentStyle={c.tooltip}
                                     formatter={(value, name) => {
                                         const n = Number(value ?? 0);
                                         if (name === "trips") return [fmtCount(n), "Trips"] as [string, string];
@@ -448,6 +445,8 @@ function PayoutsCeoHeader({
     serviceAreas: Array<{ id: string; name?: string }>;
 }) {
     const m = overview?.metrics;
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
     return (
         <div className="space-y-4">
             <div className="flex items-end justify-between gap-3 flex-wrap">
@@ -597,7 +596,7 @@ function PayoutsCeoHeader({
                                     tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
                                 />
                                 <Tooltip
-                                    contentStyle={tooltipStyle}
+                                    contentStyle={c.tooltip}
                                     formatter={(value, name) => {
                                         const n = Number(value ?? 0);
                                         const label =
@@ -1263,9 +1262,13 @@ function RideEarningsTab() {
 
 // ─── Spinr Pass Revenue Tab ───
 
-const COMPARE_COLORS = ["#10b981", "#8b5cf6", "#f59e0b", "#ef4444", "#3b82f6", "#ec4899"];
-
 function SpinrPassRevenueTab() {
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
+    // chart-palette's series never grows a 6th generated hue (by design), so
+    // the overflow bucket for a 6-area comparison stays a literal accent
+    // colour rather than pulling from the shared ramp.
+    const compareColors = [...c.series, "#ec4899"];
     const [data, setData] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [dateFrom, setDateFrom] = useState("");
@@ -1443,11 +1446,11 @@ function SpinrPassRevenueTab() {
                                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                                                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                                                 <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={v => `$${v}`} />
-                                                <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 600 }} formatter={(v: any) => formatCurrency(Number(v || 0))} />
+                                                <Tooltip contentStyle={c.tooltip} labelStyle={{ fontWeight: 600 }} formatter={(v: any) => formatCurrency(Number(v || 0))} />
                                                 <Legend />
                                                 {selectedAreas.map((areaId, i) => {
                                                     const name = serviceAreas.find(a => a.id === areaId)?.name || areaId.slice(0, 8);
-                                                    return <Line key={areaId} type="monotone" dataKey={name} stroke={COMPARE_COLORS[i % COMPARE_COLORS.length]} strokeWidth={2} dot={{ r: 2 }} />;
+                                                    return <Line key={areaId} type="monotone" dataKey={name} stroke={compareColors[i % compareColors.length]} strokeWidth={2} dot={{ r: 2 }} />;
                                                 })}
                                             </LineChart>
                                         </ResponsiveContainer>
@@ -1467,11 +1470,11 @@ function SpinrPassRevenueTab() {
                                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                                                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                                                 <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} axisLine={false} tickLine={false} />
-                                                <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 600 }} />
+                                                <Tooltip contentStyle={c.tooltip} labelStyle={{ fontWeight: 600 }} />
                                                 <Legend />
                                                 {selectedAreas.map((areaId, i) => {
                                                     const name = serviceAreas.find(a => a.id === areaId)?.name || areaId.slice(0, 8);
-                                                    return <Bar key={areaId} dataKey={name} fill={COMPARE_COLORS[i % COMPARE_COLORS.length]} radius={[3, 3, 0, 0]} />;
+                                                    return <Bar key={areaId} dataKey={name} fill={compareColors[i % compareColors.length]} radius={[3, 3, 0, 0]} />;
                                                 })}
                                             </BarChart>
                                         </ResponsiveContainer>
@@ -1500,7 +1503,7 @@ function SpinrPassRevenueTab() {
                                                     return (
                                                         <TableRow key={areaId}>
                                                             <TableCell className="font-semibold">
-                                                                <span className="inline-block w-3 h-3 rounded-full mr-2" style={{ backgroundColor: COMPARE_COLORS[i % COMPARE_COLORS.length] }} />
+                                                                <span className="inline-block w-3 h-3 rounded-full mr-2" style={{ backgroundColor: compareColors[i % compareColors.length] }} />
                                                                 {name}
                                                             </TableCell>
                                                             <TableCell className="text-right">{s?.total_subscribers || 0}</TableCell>
@@ -1535,8 +1538,8 @@ function SpinrPassRevenueTab() {
                                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                                                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                                                 <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={v => `$${v}`} />
-                                                <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 600 }} formatter={(v: any) => [formatCurrency(Number(v || 0)), "Revenue"]} />
-                                                <Line type="monotone" dataKey="amount" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                                                <Tooltip contentStyle={c.tooltip} labelStyle={{ fontWeight: 600 }} formatter={(v: any) => [formatCurrency(Number(v || 0)), "Revenue"]} />
+                                                <Line type="monotone" dataKey="amount" stroke={c.good} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                                             </LineChart>
                                         </ResponsiveContainer>
                                     ) : <p className="text-sm text-muted-foreground py-8 text-center">No revenue data in this range</p>}
@@ -1556,8 +1559,8 @@ function SpinrPassRevenueTab() {
                                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                                                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                                                 <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} axisLine={false} tickLine={false} />
-                                                <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 600 }} />
-                                                <Bar dataKey="count" name="Subscribers" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                                                <Tooltip contentStyle={c.tooltip} labelStyle={{ fontWeight: 600 }} />
+                                                <Bar dataKey="count" name="Subscribers" fill={c.accent} radius={[4, 4, 0, 0]} />
                                             </BarChart>
                                         </ResponsiveContainer>
                                     ) : <p className="text-sm text-muted-foreground py-8 text-center">No subscriber data in this range</p>}

@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 
 try:
     from ...dependencies import get_admin_user
@@ -242,3 +243,50 @@ async def commit_legacy_driver_import(
         "enriched_drivers": enriched_drivers,
         "warnings": _serialize_items(plan.warnings),
     }
+
+
+class BackfillOrphanedDriversRequest(BaseModel):
+    service_area_id: Optional[str] = None
+    service_area_name: Optional[str] = None
+    # Default False — a preview-only pass. The operator must explicitly
+    # ask for a write, matching this admin surface's existing dry-run-first
+    # convention (see /legacy-drivers/import/validate above).
+    apply: bool = False
+
+
+@router.post("/legacy-drivers/backfill-orphaned")
+async def backfill_orphaned_legacy_drivers(
+    body: BackfillOrphanedDriversRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-time data repair for the 2026-08-29 production incident: two
+    commits made before commit_mongo_driver_import_plan's atomicity fix
+    left users flagged is_driver=True via the existing-account-link path
+    with no matching drivers row at all. Finds every such user and (only
+    if apply=True) creates the missing drivers row from that user's own
+    surviving mongo_driver_history entry. See
+    docs/change-log/2026-08-29-legacy-driver-import-orphan-fix.md.
+
+    Idempotent: a user only shows up if it still has no drivers row, so
+    re-running this after a partial apply only touches what's still
+    missing, never a duplicate.
+    """
+    try:
+        service_area = await asyncio.to_thread(
+            import_svc.get_service_area, body.service_area_id, body.service_area_name or "Saskatoon"
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    result = await asyncio.to_thread(
+        import_svc.backfill_orphaned_legacy_driver_rows, service_area=service_area, apply=body.apply
+    )
+    if body.apply and result["fixed"]:
+        await log_admin_action(
+            admin,
+            "legacy_driver_orphan_backfill",
+            "drivers",
+            "bulk",
+            {"scanned": result["scanned"], "fixed": result["fixed"], "service_area_id": service_area["id"]},
+        )
+    return result

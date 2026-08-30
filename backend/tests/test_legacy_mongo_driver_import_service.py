@@ -636,6 +636,49 @@ def test_find_orphaned_returns_only_history_users_missing_a_driver_row(monkeypat
     assert [u["id"] for u in orphans] == ["u-1"]
 
 
+class _RejectLargeInQuery(_FakeQuery):
+    """Fails any .in_() call carrying more values than a single PostgREST
+    request should reasonably take -- simulating the URL-length limit an
+    unchunked .in_() over hundreds of UUIDs can hit in production."""
+
+    def in_(self, col, vals):
+        if len(vals) > 200:
+            raise RuntimeError(f"simulated URL-too-long rejection: {len(vals)} values in .in_({col!r})")
+        return super().in_(col, vals)
+
+
+class _RejectLargeInSupabase(_FakeSupabase):
+    def table(self, name):
+        return _RejectLargeInQuery(name, self.store)
+
+
+def test_find_orphaned_batches_in_query_at_production_scale(monkeypatch):
+    """2026-08-30 production incident: find_orphaned_legacy_driver_users()
+    ran its drivers lookup as one raw .in_("user_id", candidate_ids) instead
+    of this file's own established _select_in(chunk=200) convention (used by
+    every other .in_() lookup here -- see _prefetch_existing). At real scale
+    (697 orphan candidates the first time this path ever ran against
+    production), that surfaced to the operator as "Scan failed: an
+    unexpected error occurred" with no useful detail. Reproduces at 250
+    candidates against a fake that rejects any .in_() over 200 values."""
+    users = [
+        {
+            "id": f"u-{i}",
+            "first_name": "Legacy",
+            "last_name": f"Driver {i}",
+            "phone": f"+1306555{i:04d}",
+            "is_driver": True,
+            "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
+        }
+        for i in range(250)
+    ]
+    fake = _RejectLargeInSupabase(store={"users": users, "drivers": []})
+    monkeypatch.setattr(svc, "supabase", fake)
+
+    orphans = svc.find_orphaned_legacy_driver_users()
+    assert len(orphans) == 250
+
+
 def test_backfill_dry_run_reports_without_writing(monkeypatch):
     fake = _install(
         monkeypatch,

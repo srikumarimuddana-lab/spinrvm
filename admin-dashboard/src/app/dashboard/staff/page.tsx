@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { isStaffRequiredFieldsValid, isStaffPasswordValid } from "@/lib/staffFormSchema";
 
 // Must stay in step with AVAILABLE_MODULES in backend/routes/admin/staff.py.
 // The create/update handlers filter submitted modules against that list, so a
@@ -155,7 +156,7 @@ export default function StaffPage() {
   };
 
   const handleSubmit = async () => {
-    if (!form.email || !form.first_name || !form.last_name) return;
+    if (!isStaffRequiredFieldsValid(form.email, form.first_name, form.last_name)) return;
     try {
       if (editingId) {
         await updateStaff(editingId, {
@@ -165,7 +166,7 @@ export default function StaffPage() {
           modules: form.modules,
         });
       } else {
-        if (!form.password) return;
+        if (!isStaffPasswordValid(form.password)) return;
         await createStaff(form);
       }
       toast({ title: editingId ? "Staff member updated" : "Staff member created" });

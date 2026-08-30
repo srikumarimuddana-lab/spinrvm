@@ -518,7 +518,11 @@ export default function BulkOperationsPage() {
                     <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
                         vehicle-history
                     </Link>{" "}
-                    backfills for drivers created there.
+                    backfills for drivers created there. Riders get a{" "}
+                    <Link href="/dashboard/riders/legacy-saved-address-backfill" className="underline">
+                        saved-address
+                    </Link>{" "}
+                    backfill for riders created via Bulk Rider Import below.
                 </p>
             </div>
 

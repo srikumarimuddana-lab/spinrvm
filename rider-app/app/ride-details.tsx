@@ -271,14 +271,6 @@ export default function RideDetailsScreen() {
     ],
     [actualSections, hasActualRoute, isV2Route, plannedSegments, showPlannedUnderlay],
   );
-  const routeLabel = hasActualRoute
-    ? 'Actual route'
-    : isV2Route
-      ? (showPlannedUnderlay ? 'Booked route' : 'Actual route')
-      : 'Planned route';
-  const routeQuality = routeQualityLabel(ride?.route_quality);
-  const routeIsProcessing =
-    ride?.route_geometry_status === 'pending' || ride?.route_geometry_status === 'processing';
 
   useEffect(() => {
     if (!routeMapReady || mapCoordinates.length < 2) return;
@@ -422,19 +414,6 @@ export default function RideDetailsScreen() {
               />
             </MapView>
           </View>
-        )}
-        {isCompleted && (
-          <Text style={styles.routeQualityText}>
-            {isImported
-              ? 'Imported from the previous app — no GPS was recorded for this ride'
-              : hasActualRoute
-                ? `${routeLabel} · ${routeQuality}`
-                : isV2Route
-                  ? routeIsProcessing
-                    ? 'Actual route processing'
-                    : 'Actual route unavailable'
-                  : `${routeLabel} · Planned route preview`}
-          </Text>
         )}
 
         {/* Route Details */}
@@ -632,7 +611,6 @@ function createStyles(colors: ThemeColors) {
 
         mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: 16, backgroundColor: colors.border },
         map: { flex: 1 },
-        routeQualityText: { color: colors.textDim, fontSize: 12, marginTop: -10, marginBottom: 16 },
 
     routeCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
     routeRow: { flexDirection: 'row' },

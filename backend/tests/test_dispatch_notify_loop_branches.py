@@ -39,6 +39,9 @@ class _Chain:
     def or_(self, *a, **kw):
         return self
 
+    def is_(self, *a, **kw):
+        return self
+
     def limit(self, *a, **kw):
         return self
 

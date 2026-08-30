@@ -19,8 +19,10 @@ def test_get_active_ride_projects_rider_to_allowlist():
     from backend.routes.drivers import ride_reads
 
     driver = {"id": "drv-1", "user_id": "user-1"}
-    # driver_accepted (not driver_assigned) skips the incentive/quest lookups;
-    # service_area_id=None skips the polygon fetch — keeps the test hermetic.
+    # driver_accepted (not driver_assigned) skips the quest lookup — the
+    # incentive projection now runs for every active status, and fails
+    # non-fatally against the autouse mock client; service_area_id=None skips
+    # the polygon fetch. Neither touches the rider projection under test.
     ride = {
         "id": "ride-1",
         "status": "driver_accepted",

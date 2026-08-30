@@ -1205,6 +1205,7 @@ function DriverDashboard() {
           rideState={rideState}
           ride={activeRide?.ride as unknown as any || null}
           rider={activeRide?.rider || null}
+          totalBonus={activeRide?.total_bonus ?? null}
           driverLocation={location}
           isLoading={isCancellingRide}
           otpInput={otpInput}

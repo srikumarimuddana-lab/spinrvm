@@ -115,6 +115,9 @@ class _IncChain:
     def or_(self, *a, **kw):
         return self
 
+    def is_(self, *a, **kw):
+        return self
+
     def execute(self):
         return type("R", (), {"data": self._rows})()
 

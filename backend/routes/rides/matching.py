@@ -8,8 +8,13 @@ from datetime import timedelta
 from typing import Any, Dict
 
 try:
+    from ...services.incentive_service import incentive_display_payload, match_ride_incentives
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
 except ImportError:  # pragma: no cover - dual-import pattern
+    from services.incentive_service import (  # type: ignore
+        incentive_display_payload,
+        match_ride_incentives,
+    )
     from utils.service_area_scope import (  # type: ignore
         build_driver_area_filter,
         resolve_dispatch_area_scope,
@@ -891,34 +896,14 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             return None
 
     async def _fetch_incentives() -> tuple[list, float]:
+        # Shares the settlement matcher so the bonus quoted in the offer is
+        # the bonus completion will actually claim (see services/
+        # incentive_service.py). Still one query, so the offer→phone SLA is
+        # unchanged.
         try:
-            iq = (
-                _deps.db_supabase.supabase.table("ride_incentives")
-                .select(
-                    "id, name, bonus_amount, incentive_type, bonus_type, conditions, service_area_id, vehicle_type_id"
-                )
-                .eq("is_active", True)
+            return incentive_display_payload(
+                await match_ride_incentives(_deps.db_supabase, ride)
             )
-            sa_id = ride.get("service_area_id")
-            if sa_id:
-                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
-            ir = await _deps.db_supabase.run_sync(iq.execute)
-            vt_id = ride.get("vehicle_type_id")
-            incentives = []
-            total_bonus = 0.0
-            for inc in ir.data or []:
-                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
-                    continue
-                ba = float(inc.get("bonus_amount") or 0)
-                incentives.append(
-                    {
-                        "name": inc["name"],
-                        "bonus_amount": ba,
-                        "incentive_type": inc.get("incentive_type", "per_ride"),
-                    }
-                )
-                total_bonus += ba
-            return incentives, total_bonus
         except Exception as e:
             logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
             return [], 0.0

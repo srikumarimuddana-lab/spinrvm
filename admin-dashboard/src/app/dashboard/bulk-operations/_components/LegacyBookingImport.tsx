@@ -472,14 +472,20 @@ export function LegacyBookingImport() {
                             </div>
                         ) : report.can_commit ? (
                             <div className="space-y-2 rounded-md border p-3">
-                                <Label htmlFor="booking-import-confirm" className="text-xs">
+                                <p className="text-xs text-muted-foreground">
                                     This writes {c.total_rides_planned} ride(s) ({c.rides_planned}{" "}
                                     completed + {c.cancelled_failed_rides_planned} cancelled/failed)
                                     and {c.payouts_planned} payout record(s) to live data and cannot
-                                    be undone from here. Type{" "}
-                                    <span className="font-mono">{CONFIRM_PHRASE}</span> to enable.
-                                </Label>
-                                <div className="flex gap-2">
+                                    be undone from here.
+                                </p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Label
+                                        htmlFor="booking-import-confirm"
+                                        className="whitespace-nowrap text-xs"
+                                    >
+                                        Type <span className="font-mono">{CONFIRM_PHRASE}</span> to
+                                        enable:
+                                    </Label>
                                     <Input
                                         id="booking-import-confirm"
                                         value={confirmText}

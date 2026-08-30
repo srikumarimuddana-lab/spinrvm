@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshDriverStripePayouts, refreshAllDriverStripeKyc, refreshAllDriverStripePayouts, recomputeStatementTotals, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
+import { PageHeader } from "@/components/page-header";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -872,11 +873,11 @@ export default function DriversPage() {
 
     return (
         <div className="space-y-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold">Drivers</h1>
-                    <p className="text-sm text-muted-foreground">{data?.stats?.total ?? 0} drivers {serviceAreaId ? `in ${selectedAreaName}` : "overall"}</p>
-                </div>
+            <PageHeader
+                className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
+                title="Drivers"
+                description={`${data?.stats?.total ?? 0} drivers ${serviceAreaId ? `in ${selectedAreaName}` : "overall"}`}
+                actions={
                 <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center gap-1.5">
                         <MapPin className="h-4 w-4 text-muted-foreground" />
@@ -943,7 +944,8 @@ export default function DriversPage() {
                     )}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={sorted.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
-            </div>
+                }
+            />
 
             <DriverStatsCards stats={data?.stats || null} loading={loading} />
 

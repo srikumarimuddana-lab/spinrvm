@@ -408,6 +408,57 @@ export const adminCommitWalletImport = (files: WalletImportFiles, opts?: WalletI
         body: walletImportFormData(files, opts),
     });
 
+/* ── Pre-Launch Legacy Data Flagging (no files) ───── */
+// Super-admin-only (backend/routes/admin/pre_launch_flag.py). Unlike every
+// other tool on this page, this one has no CSV to upload — it operates
+// entirely on already-migrated production data (drivers/rides), flagging
+// dormant pre-launch driver profiles and pre-launch rides so admin views/
+// KPIs can filter them out. Additive only: sets
+// legacy_import_metadata.pre_launch_test = true. Never deletes anything.
+export interface PreLaunchFlagCounts {
+    driver_candidates: number;
+    ride_candidates: number;
+}
+export interface PreLaunchFlagReport {
+    batch: string;
+    counts: PreLaunchFlagCounts;
+    can_commit: boolean;
+}
+export interface PreLaunchFlagCommitResult extends PreLaunchFlagReport {
+    committed: boolean;
+    drivers_flagged?: number;
+    rides_flagged?: number;
+    driver_conflicts?: number;
+    ride_conflicts?: number;
+}
+export interface PreLaunchFlagOptions {
+    batch?: string;
+}
+
+function preLaunchFlagFormData(opts?: PreLaunchFlagOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the plan and return counts. No writes. */
+export const adminPreviewPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
+    request<PreLaunchFlagReport>("/api/admin/legacy/pre-launch-flag/preview", {
+        method: "POST",
+        body: preLaunchFlagFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if there's anything to flag, applies it.
+ * Safe to re-send: an already-flagged row is skipped, never re-flagged or
+ * double-written.
+ */
+export const adminCommitPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
+    request<PreLaunchFlagCommitResult>("/api/admin/legacy/pre-launch-flag/commit", {
+        method: "POST",
+        body: preLaunchFlagFormData(opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout

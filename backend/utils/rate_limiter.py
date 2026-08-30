@@ -440,6 +440,12 @@ booking_import_commit_limit = default_limiter.limit("10/hour")
 wallet_import_validate_limit = default_limiter.limit("30/hour")
 wallet_import_commit_limit = default_limiter.limit("10/hour")
 
+# Pre-launch legacy data flagging (2026-08-30) — small, fixed dataset
+# (hundreds of rows, not thousands), same generous-headroom reasoning as the
+# wallet importer above.
+pre_launch_flag_preview_limit = default_limiter.limit("30/hour")
+pre_launch_flag_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and

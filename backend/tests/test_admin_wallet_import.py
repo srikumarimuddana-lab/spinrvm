@@ -47,14 +47,14 @@ def staff_admin_override():
     app.dependency_overrides.pop(get_admin_user, None)
 
 
-# --- fixtures mirroring the (inferred) legacy export shape -----------------
+# --- fixtures mirroring the real 07-26 wallets.csv export shape ------------
 
 WALLET_ROW = {
     "_id": "wal-1",
     "customer_id": "cus-1",
     "driver_id": "",
     "amount": "50.00",
-    "type": "from_bank",
+    "wallet_type": "from_bank",
     "status": "add",
 }
 CUSTOMER = {"_id": "cus-1", "phone": "3065551111"}
@@ -242,7 +242,7 @@ def test_validate_clean_export_reports_without_writing(test_client, super_admin_
 
 
 def test_validate_report_carries_no_pii(test_client, super_admin_override):
-    bad = {**WALLET_ROW, "type": "mystery_bucket"}  # unrecognized -> error
+    bad = {**WALLET_ROW, "wallet_type": "mystery_bucket"}  # unrecognized -> error
     store = _fresh_store()
     p_sb, p_audit = _patches(store)
     with p_sb, p_audit:
@@ -378,7 +378,7 @@ def test_commit_driver_owned_entry_uses_drivers_user_id(test_client, super_admin
         "_id": "wal-2",
         "customer_id": "",
         "driver_id": "drv-legacy-1",
-        "type": "from_driver_refer",
+        "wallet_type": "from_driver_refer",
         "amount": "20.00",
     }
     with p_sb, p_audit:

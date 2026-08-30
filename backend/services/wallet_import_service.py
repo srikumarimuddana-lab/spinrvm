@@ -5,24 +5,27 @@ app's ``wallets`` collection into Spinr's ``wallets``/``wallet_transactions``
 tables. Per the migration audit (docs/audit/2026-08-19-full-mongodb-export-
 collection-inventory.md), this collection is small (13 rows in the reference
 export) but carries real, owed money: ~$900 of rider wallet credit and ~$60 of
-driver referral-wallet credit, all under legacy ``type`` values ``from_bank``
-(rider top-up), ``from_driver_refer`` / ``for_owner_refer`` (driver referral
-reward), and legacy ``status`` values ``add`` / ``deduct``.
+driver referral-wallet credit, all under legacy ``wallet_type`` values
+``from_bank`` (rider top-up), ``from_driver_refer`` / ``for_owner_refer``
+(driver referral reward), and legacy ``status`` values ``add`` / ``deduct``.
 
-**Column-name disclaimer (read before running against a real export):** the
-column names below (``_id``, ``customer_id``, ``driver_id``, ``amount``,
-``type``, ``status``, ``created_at``) are inferred from this same export's
-sibling collections' consistent naming convention (``bookings.csv``,
-``customers.csv``, ``driverearnings.csv`` all use exactly these names for the
-equivalent fields) -- they have NOT been confirmed against a real
-``wallets.csv`` header row, since no prior audit session captured one.
-``validate_required_columns`` fails loudly (as plan errors, refusing commit)
-rather than silently defaulting if any expected column is absent, so a
-mismatch surfaces immediately on the first dry-run instead of corrupting a
-balance. **The admin route (``routes/admin/wallet_import.py``) is wired up,
-but the very first real ``/validate`` call against the real CSV is still the
-first time this assumption gets tested** -- read that response's ``errors``
-carefully before ever calling ``/commit``.
+**Column-name correction (2026-08-30, against the real export):** this
+module originally guessed the legacy type column was named ``type`` --
+inferred from sibling collections' naming convention, never confirmed
+against a real ``wallets.csv`` header row. The real 07-26 export's header is
+``#,_id,__v,amount,applied_refer_code,booking_id,created_at,customer_id,
+driver_id,refer_amount_consumed,status,updated_at,wallet_type`` -- the
+column is ``wallet_type``, not ``type``, and there is no ``applied_refer_code``/
+``booking_id``/``refer_amount_consumed`` dependency (unused by this
+importer). Confirmed live-bug impact: every real ``/validate`` call would
+have failed with "wallets CSV is missing required column: wallet_type"
+(reported as ``type`` before this fix), refusing every commit -- the tool
+was fully wired and deployed (PRs #4473/#4477/#4480) but had never actually
+been run against real data, exactly as the prior version of this docstring
+warned. ``validate_required_columns`` fails loudly (as plan errors, refusing
+commit) rather than silently defaulting if any expected column is absent, so
+the mismatch surfaced immediately on the first real dry-run rather than
+corrupting a balance -- it just needed a real CSV to trigger it.
 
 Admin flow, mirroring ``routes/admin/booking_import.py``:
 
@@ -89,11 +92,11 @@ REQUIRED_WALLET_COLUMNS = {
     "customer_id",
     "driver_id",
     "amount",
-    "type",
+    "wallet_type",
     "status",
 }
 
-# Legacy `type` -> the live wallet_transactions.type this maps onto (must be
+# Legacy `wallet_type` -> the live wallet_transactions.type this maps onto (must be
 # one of the values wallet_transactions_type_check allows -- migration 199).
 # `for_owner_refer` reads as the referring party's own reward for referring
 # someone else, same live bucket as a driver's own `from_driver_refer`
@@ -303,11 +306,11 @@ def build_plan(
             skipped_zero_amount += 1
             continue
 
-        legacy_type = (r.get("type") or "").strip()
+        legacy_type = (r.get("wallet_type") or "").strip()
         txn_type = LEGACY_TYPE_TO_TXN_TYPE.get(legacy_type)
         if txn_type is None:
             plan.errors.append(
-                ImportReportItem(idx, old_id, "type", f"unrecognized legacy wallet type {legacy_type!r}")
+                ImportReportItem(idx, old_id, "wallet_type", f"unrecognized legacy wallet type {legacy_type!r}")
             )
             continue
 

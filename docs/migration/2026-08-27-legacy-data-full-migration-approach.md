@@ -218,17 +218,34 @@ charges or double-collect from a real customer.
 **Recommendation:** explicitly deferred. Needs live Stripe access this session doesn't have,
 and a fresh (not 07-26/08-22 vintage) export per the original audit's own caveat.
 
-### Phase 6 — Legacy wallet balances — deferred, needs new infrastructure
+### Phase 6 — Legacy wallet balances — built and live (PRs #4473/#4477/#4480); fixed 2026-08-30; ready for a scoped run
 
 **What:** `wallets.csv` — real money: $900 rider wallet credit + $60 driver referral credit
 across 13 rows.
-**Risk:** high — this is real money, and a plain `INSERT` into `wallets`/`wallet_transactions`
-is exactly the kind of race-unsafe write CLAUDE.md's money-path rules exist to prevent. It
-needs the same row-locked-RPC pattern `corporate_wallet_apply_delta` already established for
-corporate wallets — that pattern doesn't yet exist for consumer wallets and would need to be
-built (not a big build, but it's new code, not a data script).
-**Recommendation:** small in row-count, but do not rush it. Build the RPC, dry-run it,
-reconcile the $960 by hand before any write.
+**Status, corrected 2026-08-30:** this section previously said the row-locked RPC pattern
+"doesn't yet exist for consumer wallets and would need to be built" — that was wrong even at
+the time this doc was written. `wallet_apply_credit` (migration 196, credit-only) already
+existed; `wallet_apply_delta` (migration 249, signed delta, credit+debit) shipped soon after,
+and the full three-CSV importer (`services/wallet_import_service.py` +
+`routes/admin/wallet_import.py`, super_admin-gated, + the admin-dashboard "Legacy Wallet
+Import" tool under Bulk Operations) was built and merged to `main` on 2026-08-24
+(`docs/change-log/2026-08-24-wallet-import-service-built.md`, PRs #4473/#4477/#4480) — before
+this doc's Phase 6 section was last edited to say "deferred, needs new infrastructure."
+**Bug found and fixed 2026-08-30:** the importer's own docstring flagged that its expected
+CSV column names were inferred from sibling exports, never confirmed against a real
+`wallets.csv` header. Checked against the real 07-26 export: the legacy type column is named
+`wallet_type`, not `type` as guessed — every real `/validate` call would have failed with a
+missing-column error, blocking every commit. Fixed (`docs/change-log/2026-08-30-wallet-import-wallet-type-column-fix.md`);
+a dry-run of `build_plan` against the real `wallets.csv`/`customers.csv`/`drivers.csv` (with
+production's actual phone matches) now runs clean: 8 rider-owned rows all skip as unmatched
+(none of the 3 rider `customer_id`s resolve to a `customers.csv` row at all, so no rider
+credit risk exists in this data as-is — see the manual reconciliation write-up for what would
+recover the $900), and 5 driver-owned rows apply cleanly, netting to exactly $60 across 3
+drivers (one of the 4 matched drivers nets to $0 from an add+deduct pair).
+**Recommendation:** ready for the operator to run for real via the existing admin-dashboard
+"Legacy Wallet Import" tool (Bulk Operations → Legacy Wallet Import), Preview first. The rider
+portion will report as unmatched and credit nothing until the one unresolved rider phone
+number (see the manual reconciliation) is recovered and added to `customers.csv`.
 
 ## 5. Two former legal/product blockers — both actioned 2026-08-27
 

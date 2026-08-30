@@ -94,6 +94,7 @@ from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
 from .legacy_driver_import import router as legacy_driver_import_router
+from .legacy_saved_address_backfill import router as legacy_saved_address_backfill_router
 from .legacy_sin_dob_backfill import router as legacy_sin_dob_backfill_router
 from .legacy_vehicle_history_backfill import router as legacy_vehicle_history_backfill_router
 from .legal_documents import router as legal_documents_router
@@ -249,6 +250,9 @@ admin_router.include_router(dispute_evidence_submission_router, dependencies=[De
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])
+# Phase 4 of the 2026-08-27 migration plan -- rider-owned data, same gate as
+# rider_import_router above.
+admin_router.include_router(legacy_saved_address_backfill_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
 admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
 # Dispute-evidence-pack download (C23 item 4) -- same "support" gate as the

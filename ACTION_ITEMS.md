@@ -11545,6 +11545,35 @@ record of what was assumed vs. what was actually true</summary>
   with accept/reject unit tests; a documented decision (here or in a
   short ADR) on migration order for the rest.
 
+### B40. `saved_addresses` (rider home/work address book) has RLS enabled but zero policies — anon/authenticated fully denied, only the service-role backend can read/write
+
+- [ ] **Status:** open. Found 2026-08-30 while building the Phase 4 legacy
+  saved-address backfill (`docs/migration/2026-08-27-legacy-data-full-
+  migration-approach.md` §4) — confirmed directly against production
+  (`pg_policy` returns zero rows for `saved_addresses`, `pg_class.
+  relrowsecurity = true`). This is the first place this gap is documented
+  anywhere in the repo.
+- **Why it isn't urgent today:** RLS-enabled-with-no-policy denies all
+  access to the `anon`/`authenticated` roles by default (fail-closed, not
+  fail-open) — it isn't a live vulnerability. `routes/addresses.py` already
+  reads/writes this table exclusively via the service-role key, which
+  bypasses RLS entirely and does its own `user_id = current_user["id"]`
+  scoping; grepped both `rider-app` and `driver-app` and neither references
+  `saved_addresses` directly, so there is no anon-key path to this table
+  today.
+- **Why it's still worth closing:** every other user-data table in this
+  repo follows the documented `backend/migrations/CLAUDE.md` RLS pattern
+  (`SELECT` restricted to `auth.uid() = user_id`, `INSERT`/`UPDATE`/`DELETE`
+  explicitly enumerated) as defense-in-depth, in case a future change ever
+  has a client talk to Supabase directly for this table. `saved_addresses`
+  holds real rider PII (home/work coordinates) and is the one table in the
+  repo that's silently relying on "nothing calls it directly yet" instead
+  of an explicit policy.
+- **Acceptance:** add `SELECT`/`INSERT`/`DELETE` policies scoped to
+  `auth.uid() = user_id`, matching the pattern every other user-writable
+  table already uses; verify `routes/addresses.py`'s existing service-role
+  reads/writes are unaffected (they bypass RLS regardless).
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

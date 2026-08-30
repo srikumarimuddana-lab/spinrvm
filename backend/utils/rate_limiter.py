@@ -467,6 +467,12 @@ legacy_sin_dob_backfill_commit_limit = default_limiter.limit("10/hour")
 # above: commit is the write path and gets the tighter limit.
 legacy_vehicle_history_backfill_commit_limit = default_limiter.limit("10/hour")
 
+# Admin legacy saved-address backfill (Phase 4 of the 2026-08-27 migration
+# plan) -- /validate is a read-only dry-run; /commit inserts rows into the
+# live saved_addresses table. Same posture as the backfills above: commit
+# is the write path and gets the tighter limit.
+legacy_saved_address_backfill_commit_limit = default_limiter.limit("10/hour")
+
 # Admin Data Transfer jobs (list/detail/download-link) — read-only status
 # polling, but download-link regeneration mints a fresh signed Storage URL
 # each call; bound it the same as other admin list/detail endpoints.

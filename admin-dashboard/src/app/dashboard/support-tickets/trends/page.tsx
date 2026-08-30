@@ -218,9 +218,11 @@ export default function TrendsPage() {
                         <HBarCard title="By category" rec={data.by_category} color={c.accent} tooltipStyle={c.tooltip} />
                         <ContactsCard contacts={data.top_contacts} color={c.neutral} tooltipStyle={c.tooltip} />
                         {Object.keys(data.by_tag ?? {}).length > 0 && (
+                            // eslint-disable-next-line no-restricted-syntax -- deliberate accent outside the categorical palette, distinguishing this card from By category (#2816)
                             <HBarCard title="By tag" rec={data.by_tag} color="#ec4899" tooltipStyle={c.tooltip} />
                         )}
                         {Object.keys(data.by_classification ?? {}).length > 0 && (
+                            // eslint-disable-next-line no-restricted-syntax -- deliberate accent outside the categorical palette, distinguishing this card from By category/By tag (#2816)
                             <HBarCard title="By classification" rec={data.by_classification} color="#0ea5e9" tooltipStyle={c.tooltip} />
                         )}
                     </div>

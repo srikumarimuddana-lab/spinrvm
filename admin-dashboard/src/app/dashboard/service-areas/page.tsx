@@ -2382,8 +2382,10 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
                 }}
                 labelFormatter={(label) => label}
               />
+              {/* eslint-disable-next-line no-restricted-syntax -- neutral baseline marker, not part of the categorical/semantic palette (#2816) */}
               <ReferenceLine y={1.0} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1.0× (normal)', position: 'insideTopLeft', fontSize: 10, fill: '#94a3b8' }} />
               <ReferenceLine y={2.5} stroke={c.bad} strokeDasharray="4 4" label={{ value: '2.5× (cap)', position: 'insideTopLeft', fontSize: 10, fill: c.bad }} />
+              {/* eslint-disable-next-line no-restricted-syntax -- surge line keeps its own distinct orange, deliberately outside the categorical palette (#2816) */}
               <Area type="monotone" dataKey="multiplier" stroke="#F97316" strokeWidth={2}
                 fill={`url(#surgeGrad-${areaId})`} name="Multiplier" dot={false} />
             </AreaChart>

@@ -54,6 +54,7 @@ import {
 import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
 import { LegacyWalletImport } from "./_components/LegacyWalletImport";
+import { PreLaunchDataFlag } from "./_components/PreLaunchDataFlag";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -518,7 +519,11 @@ export default function BulkOperationsPage() {
                     <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
                         vehicle-history
                     </Link>{" "}
-                    backfills for drivers created there.
+                    backfills for drivers created there. Riders get a{" "}
+                    <Link href="/dashboard/riders/legacy-saved-address-backfill" className="underline">
+                        saved-address
+                    </Link>{" "}
+                    backfill for riders created via Bulk Rider Import below.
                 </p>
             </div>
 
@@ -801,6 +806,13 @@ export default function BulkOperationsPage() {
                 adjustments from the previous app
             </div>
             <LegacyWalletImport />
+
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <Upload className="h-4 w-4" />
+                Pre-Launch Legacy Data Flagging — flag already-migrated pre-launch driver/ride
+                rows so admin views and KPIs can filter them out
+            </div>
+            <PreLaunchDataFlag />
         </div>
     );
 }

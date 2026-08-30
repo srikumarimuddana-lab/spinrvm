@@ -11349,6 +11349,137 @@ record of what was assumed vs. what was actually true</summary>
   config, Spinr Pass area toggles, etc.) was not audited field-by-field
   for other inline rules and stays open for a future pass if one turns
   up. Checkbox stays `[ ]`.
+- **2026-08-30 update — step 11 done: `staff/page.tsx`'s
+  create/edit-staff form.** `handleSubmit` gated staff-account
+  create/update with two inline checks
+  (`!form.email || !form.first_name || !form.last_name`, and
+  `!form.password` on the create-only path) with no dedicated test
+  coverage. Staff accounts are the admin RBAC surface
+  (`AVAILABLE_MODULES`/`ROLE_PRESETS` in
+  `backend/routes/admin/staff.py`), so a validation gap here has real
+  access-control consequence, not just a UX bug.
+
+  New colocated `admin-dashboard/src/lib/staffFormSchema.ts`
+  (`isStaffRequiredFieldsValid`, `isStaffPasswordValid`) reproduces both
+  checks as byte-for-byte equivalent predicates — plain truthy checks on
+  the raw field, no `.trim()` added, since that would be a
+  validation-rule change rather than a pure extraction. New
+  `admin-dashboard/src/lib/__tests__/staffFormSchema.test.ts` (7
+  accept/reject cases). Verification: 7/7 new tests pass; full
+  admin-dashboard suite 411/411 tests, 41/41 files, exit 0
+  (`npm run test:coverage`, the exact CI invocation); `npx tsc --noEmit`
+  clean; `npx eslint` on touched files: 0 errors, 3 pre-existing warnings
+  on unrelated lines (confirmed via `git diff` that none fall on the 3
+  lines this diff touches: the import line and the two guard swaps);
+  **real production build** (`npm run build`) completed successfully,
+  exit code 0, full route manifest generated including
+  `/dashboard/staff`; blast-radius grep confirmed
+  `form.email`/`form.first_name`/`form.last_name`/`form.password` appear
+  nowhere else in `admin-dashboard/src` outside this page's own form (a
+  different, unrelated form on `support-tickets/tickets/page.tsx` also
+  has a field literally named `form.email` — confirmed unrelated, not a
+  shared definition). Full Change Impact Log:
+  `docs/change-log/2026-08-30-b39-admin-staff-form-zod-step11.md`.
+  **Still open:** while re-scanning `service-areas/page.tsx` for other
+  inline rules (per the "not fully resolved" note above), found one more:
+  `handleFieldUpdate`'s tax-configuration justification prompt
+  (`if (!justification) return;`, gating GST/PST/HST field changes,
+  mirroring the surge-justification pattern per its own A29 comment) —
+  picked up next as step 12. The rest of `service-areas/page.tsx` (fees,
+  incentives, Spinr Pass area toggles, the heatmap numeric-field
+  clamps — those are inline `parseFloat`/`NaN` sanitization with no
+  user-facing error message, same "nothing to extract" shape as prior
+  steps' numeric fallbacks, not a new candidate) remains unaudited beyond
+  what's named here. Checkbox stays `[ ]`.
+- **2026-08-30 update — step 12 done: `service-areas/page.tsx`'s
+  tax-configuration justification prompt** — the candidate named at the
+  end of step 11. `handleFieldUpdate` gates any GST/PST/HST field change
+  with an inline check (`if (!justification) return;`) on a
+  `window.prompt(...)`-collected written justification, mirroring the
+  surge-justification pattern (step 10) per the page's own A29 comment:
+  "GST/PST/HST config carries real regulatory + financial weight (every
+  rider's charge, CRA/SK remittance), so the backend now requires a
+  written justification for any of these fields."
+
+  New colocated `admin-dashboard/src/lib/taxJustificationSchema.ts`
+  (`isTaxJustificationValid`) reproduces the check as a byte-for-byte
+  equivalent predicate. **UX gate only** — the backend independently
+  requires `tax_justification` on these fields and 400s without one (per
+  the page's own comment: "rather than letting the save silently 400"),
+  so this change does not weaken that server-side requirement. New
+  `admin-dashboard/src/lib/__tests__/taxJustificationSchema.test.ts` (6
+  accept/reject cases: non-empty, trimmed, undefined/Cancel, null, empty,
+  whitespace-only). Verification: 6/6 new tests pass; full
+  admin-dashboard suite 417/417 tests, 42/42 files, exit 0 (`npm run
+  test:coverage`, the exact CI invocation); `npx tsc --noEmit` clean;
+  `npx eslint` on touched files: 0 errors, 65 pre-existing warnings on
+  unrelated lines in this large file (confirmed via `git diff` that none
+  fall on the 2 lines this diff touches: the import line and the
+  one-line predicate-call swap); **real production build**
+  (`npm run build`) completed successfully, exit code 0, full route
+  manifest generated including `/dashboard/service-areas`; blast-radius
+  grep confirmed `tax_justification`/`TAX_FIELDS` appear nowhere else in
+  `admin-dashboard/src`. Full Change Impact Log:
+  `docs/change-log/2026-08-30-b39-admin-tax-justification-zod-step12.md`.
+
+  **Still open:** every other admin-dashboard corporate/billing form not
+  yet named remains unmigrated; no ADR/migration-order doc written yet.
+  `service-areas/page.tsx` now has both its surge (step 10) and tax
+  (step 12) justification gates migrated, but the rest of this large
+  multi-tab file (fees, incentives, Spinr Pass area toggles) still hasn't
+  been swept field-by-field beyond what's named across steps 10-12.
+  Checkbox stays `[ ]`.
+- **2026-08-30 update — step 13 done: `service-areas/page.tsx`'s
+  `SpinrPassAreaTab` plan create/edit form** — found while sweeping the
+  rest of this file per step 12's "still open" note. `handleSubmit` gated
+  a plan create/update with `if (!form.name || !form.price) return;`.
+  Notably this is a **second, separate** Spinr Pass plan form, distinct
+  from `subscriptions/page.tsx`'s `PlanModal` (step 9) even though both
+  ultimately call the same `createSubscriptionPlan`/
+  `updateSubscriptionPlan` API — the two are not byte-for-byte equivalent
+  to each other: this one keeps `price` as a raw string
+  (`useState({ price: "" })`, `parseFloat`-parsed only at submit time)
+  and checks `!form.price` (non-empty-string truthy check — "0" passes,
+  "" fails), while step 9's form checks a numeric `form.price < 0` on an
+  already-`number`-typed field. Kept as a separate schema file rather
+  than reusing step 9's predicates since the types genuinely differ and
+  merging them would be a validation-rule change. Flagging this as a
+  candidate for a follow-up de-duplication item (two independent
+  implementations of the same Spinr Pass plan form) — not addressed in
+  this step, which stays a pure extraction of the existing behavior.
+
+  Also confirmed: neither the original code nor this extraction guards
+  against a non-numeric price string (e.g. `"abc"` → `parseFloat` →
+  `NaN` sent to the backend) — that gap predates this change and is
+  preserved as-is, documented in the schema file rather than silently
+  fixed (a silent fix would be a validation-rule change on an
+  already-shipped screen, against this item's own risk warning).
+
+  New colocated `admin-dashboard/src/lib/spinrPassAreaPlanSchema.ts`
+  (`isSpinrPassPlanNameValid`, `isSpinrPassPlanPriceValid`) reproduces
+  both checks as byte-for-byte equivalent predicates. New
+  `admin-dashboard/src/lib/__tests__/spinrPassAreaPlanSchema.test.ts` (6
+  accept/reject cases, including the non-numeric-string-accepted case
+  documenting the pre-existing gap). Verification: 6/6 new tests pass;
+  full admin-dashboard suite 423/423 tests, 43/43 files, exit 0 (`npm run
+  test:coverage`, the exact CI invocation); `npx tsc --noEmit` clean;
+  `npx eslint` on touched files: 0 errors, 65 pre-existing warnings on
+  unrelated lines (confirmed via `git diff` that none fall on the 2 lines
+  this diff touches); **real production build** (`npm run build`)
+  completed successfully, exit code 0, full route manifest generated
+  including `/dashboard/service-areas`; blast-radius grep confirmed
+  `form.price` in this file's `SpinrPassAreaTab` scope is unrelated to
+  `subscriptions/page.tsx`'s own `form.price` (different component,
+  different type). Full Change Impact Log:
+  `docs/change-log/2026-08-30-b39-admin-spinr-pass-area-plan-zod-step13.md`.
+
+  **Still open:** every other admin-dashboard corporate/billing form not
+  yet named remains unmigrated; no ADR/migration-order doc written yet.
+  `service-areas/page.tsx`'s create-area form (`handleCreate`,
+  `!createForm.name`) and airport-zone form (`handleCreateAirportSubRegion`,
+  `!airportForm.name || airportForm.polygon.length < 3`) are two more
+  real inline checks found during this sweep but not yet migrated —
+  candidates for a future step. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator
@@ -11413,6 +11544,35 @@ record of what was assumed vs. what was actually true</summary>
   the highest-risk money/compliance-adjacent form on each surface migrated
   with accept/reject unit tests; a documented decision (here or in a
   short ADR) on migration order for the rest.
+
+### B40. `saved_addresses` (rider home/work address book) has RLS enabled but zero policies — anon/authenticated fully denied, only the service-role backend can read/write
+
+- [ ] **Status:** open. Found 2026-08-30 while building the Phase 4 legacy
+  saved-address backfill (`docs/migration/2026-08-27-legacy-data-full-
+  migration-approach.md` §4) — confirmed directly against production
+  (`pg_policy` returns zero rows for `saved_addresses`, `pg_class.
+  relrowsecurity = true`). This is the first place this gap is documented
+  anywhere in the repo.
+- **Why it isn't urgent today:** RLS-enabled-with-no-policy denies all
+  access to the `anon`/`authenticated` roles by default (fail-closed, not
+  fail-open) — it isn't a live vulnerability. `routes/addresses.py` already
+  reads/writes this table exclusively via the service-role key, which
+  bypasses RLS entirely and does its own `user_id = current_user["id"]`
+  scoping; grepped both `rider-app` and `driver-app` and neither references
+  `saved_addresses` directly, so there is no anon-key path to this table
+  today.
+- **Why it's still worth closing:** every other user-data table in this
+  repo follows the documented `backend/migrations/CLAUDE.md` RLS pattern
+  (`SELECT` restricted to `auth.uid() = user_id`, `INSERT`/`UPDATE`/`DELETE`
+  explicitly enumerated) as defense-in-depth, in case a future change ever
+  has a client talk to Supabase directly for this table. `saved_addresses`
+  holds real rider PII (home/work coordinates) and is the one table in the
+  repo that's silently relying on "nothing calls it directly yet" instead
+  of an explicit policy.
+- **Acceptance:** add `SELECT`/`INSERT`/`DELETE` policies scoped to
+  `auth.uid() = user_id`, matching the pattern every other user-writable
+  table already uses; verify `routes/addresses.py`'s existing service-role
+  reads/writes are unaffected (they bypass RLS regardless).
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { showToast } from './useToast';
+import { createFixFeed } from '@shared/utils/fixFeed';
 import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
@@ -130,6 +131,8 @@ interface UseDriverDashboardReturn {
   isOnline: boolean;
   connectionState: ConnectionState;
   location: Location.LocationObject | null;
+  /** Un-throttled GPS fix stream for the car marker's playback buffer. */
+  markerFixFeed: import('@shared/utils/fixFeed').FixFeed;
   locationStatus: LocationStatus;
   otpInput: string;
   setOtpInput: (value: string) => void;
@@ -346,6 +349,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Throttle setLocation re-renders: map updates at most every 10 s.
   // WS payloads still fire every watchPositionAsync callback (~5 s).
   const lastRenderMsRef = useRef<number>(0);
+  // Un-throttled fix channel to the CarMarker (see @shared/utils/fixFeed).
+  // createFixFeed is a pure factory (allocates a Set); once-only via useRef.
+  // eslint-disable-next-line react-hooks/purity
+  const markerFixFeedRef = useRef(createFixFeed());
   // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
@@ -768,6 +775,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
 
           locationRef.current = loc;
+          // Un-throttled marker feed: the CarMarker's playback buffer needs
+          // EVERY displayed fix with its real measurement time — the render
+          // throttle below stretches inter-fix spacing past the 5 s playback
+          // delay and starves the buffer (freeze-then-jump, live-testing
+          // 2026-09-02). Zero re-renders: subscribers ingest via refs.
+          markerFixFeedRef.current.emit({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            heading: loc.coords.heading,
+            timestampMs: loc.timestamp || Date.now(),
+          });
           const now = Date.now();
           // Tighten the render cadence during active trip phases so the driver
           // UI distance counter and map marker stay responsive. Idle was 10s —
@@ -1818,6 +1836,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   return {
     // State
     isOnline,
+    // Stable identity for the life of the hook — safe to read during render.
+    // eslint-disable-next-line react-hooks/refs
+    markerFixFeed: markerFixFeedRef.current,
     connectionState,
     location,
     locationStatus,

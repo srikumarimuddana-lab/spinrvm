@@ -74,6 +74,43 @@ describe('playbackPosition', () => {
     // Last segment covered 0.0004 deg in 4s → +0.0002 deg in 2s.
     expect(p.coordinate.longitude).toBeCloseTo(-104.63 + 0.001, 10);
     expect(p.bearing).toBeCloseTo(90, 0);
+    expect(p.speedMps).toBeGreaterThan(0);
+  });
+
+  it('reports the bracketing segment ground speed while interpolating', () => {
+    const p = playbackPosition(buf, 12_000)!;
+    // 0.0004 deg lng ≈ 28.4 m at lat 50.44, over 4 s ≈ 7.1 m/s.
+    expect(p.speedMps).toBeCloseTo(7.1, 0);
+  });
+
+  it('samples a smooth curve through a turn instead of the straight chord', () => {
+    // Eastbound then northbound: an L-turn at the middle fix. The spline
+    // should round the corner — at the midpoint of the second segment the
+    // position must deviate from the straight chord toward the outside.
+    const turn: PlaybackFix[] = [
+      { latitude: 50.4383, longitude: -104.6310, timestampMs: 10_000 },
+      { latitude: 50.4383, longitude: -104.6306, timestampMs: 14_000 },
+      { latitude: 50.4383, longitude: -104.6302, timestampMs: 18_000 }, // corner
+      { latitude: 50.4386, longitude: -104.6302, timestampMs: 22_000 }, // north
+      { latitude: 50.4390, longitude: -104.6302, timestampMs: 26_000 },
+    ];
+    const atCorner = playbackPosition(turn, 18_000)!;
+    // Passes exactly through the buffered fix (interpolation, not smoothing-away).
+    expect(atCorner.coordinate.latitude).toBeCloseTo(50.4383, 8);
+    expect(atCorner.coordinate.longitude).toBeCloseTo(-104.6302, 8);
+    // AT the corner vertex the spline tangent is already mid-rotation —
+    // between east (90) and north (0) — where a linear chord would still
+    // report the full 90 of one leg and then snap. (Verified 40.3°.)
+    expect(atCorner.bearing).not.toBeNull();
+    expect(atCorner.bearing! > 0 && atCorner.bearing! < 90).toBe(true);
+
+    // A second into the northbound leg the heading has settled near north
+    // (small self-correcting Catmull-Rom overshoot past 0 is acceptable).
+    const afterTurn = playbackPosition(turn, 19_000)!;
+    expect(afterTurn.mode).toBe('interpolating');
+    const b = afterTurn.bearing!;
+    const northDelta = Math.min(b, 360 - b);
+    expect(northDelta).toBeLessThan(15);
   });
 
   it('holds at the newest fix once the extrapolation cap is exceeded', () => {

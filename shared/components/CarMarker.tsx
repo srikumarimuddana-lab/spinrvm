@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, View } from 'react-native';
+import { Animated, Easing, Platform, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
@@ -16,6 +16,7 @@ import {
     shouldResetBuffer,
     type PlaybackFix,
 } from '../utils/markerPlayback';
+import type { FixFeed, MarkerFix } from '../utils/fixFeed';
 
 const CAR_IMAGES = {
     standard: require('../assets/car_marker.png'),
@@ -60,6 +61,20 @@ interface CarMarkerProps {
         longitude: number;
     };
     heading?: number | null;
+    /**
+     * Real measurement time of `coordinate` (e.g. expo-location's
+     * `loc.timestamp` or the WS fix's server timestamp). Without it the fix is
+     * stamped at ARRIVAL, so any upstream batching/throttling distorts the
+     * playback velocity — segments look fast then slow. Pass it wherever the
+     * source provides one.
+     */
+    fixTimestampMs?: number | null;
+    /**
+     * Un-throttled fix stream (see utils/fixFeed). When provided, it is the
+     * primary ingest path — the `coordinate` prop then only seeds/anchors —
+     * so an upstream render throttle can never starve the playback buffer.
+     */
+    fixFeed?: FixFeed | null;
     size?: number;
     zIndex?: number;
     identifier?: string;
@@ -115,15 +130,21 @@ const MAX_ROTATE_MS = 600;
  * onLoad never fires; a late onLoad re-arms one final snapshot.
  *
  * Movement: PLAYBACK BUFFER (the Lyft technique). Incoming fixes are queued
- * with timestamps and the marker renders the car PLAYBACK_DELAY_MS in the
- * past, stepping through the queue every TICK_MS via AnimatedRegion.timing —
- * so motion is continuous instead of "arrive, park, leap" between fixes.
- * When the buffer runs dry (network gap) the position dead-reckons along the
- * last segment for a short capped window, then holds honestly. See
- * utils/markerPlayback.ts for the engine and the reasoning. AnimatedRegion
- * is driven on BOTH platforms (an earlier Android-only
- * animateMarkerToCoordinate path left the region stale and re-renders
- * snapped the car back to its mount position — "teleporting").
+ * with their REAL measurement timestamps and the marker renders the car
+ * PLAYBACK_DELAY_MS in the past. Each tick animates toward the playback
+ * position one tick in the FUTURE with linear easing, so animation velocity
+ * equals played-back ground speed and segments join without pulsing.
+ * Position/bearing are sampled from a Catmull-Rom spline through the fixes
+ * (markerPlayback.ts), so turns are rounded and headings rotate through
+ * corners. When the buffer runs dry (network gap) the position dead-reckons
+ * along the last segment for a short capped window, then holds honestly.
+ *
+ * Platform split: Android drives a plain Marker through the NATIVE
+ * animateMarkerToCoordinate (UI-thread ValueAnimator — the JS AnimatedRegion
+ * path degrades to 5-10 fps on Android, react-native-maps#1765), with the
+ * coordinate prop re-synced after each animation window so re-renders can't
+ * teleport the marker back to its mount position. iOS keeps Marker.Animated
+ * + AnimatedRegion.timing, which is smooth there.
  *
  * Rotation: animated through an Animated.Value along the shortest arc, so
  * the car turns smoothly instead of snapping its angle. Bearing source
@@ -137,6 +158,8 @@ const MAX_ROTATE_MS = 600;
 const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
     heading,
+    fixTimestampMs,
+    fixFeed,
     size = 40,
     zIndex = 1,
     identifier,
@@ -145,6 +168,8 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     routeCoordinates,
 }) => {
     const markerRef = useRef<any>(null);
+    // Stable Animated holders created once; reading .current at init is safe.
+    // eslint-disable-next-line react-hooks/refs
     const animatedRegion = useRef(
         new AnimatedRegion({
             latitude: coordinate.latitude,
@@ -179,6 +204,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // Continuously-accumulated rotation (can exceed 0–360 so shortest-arc
     // tweens never spin the long way round). Driven imperatively — no
     // per-fix re-render just to turn the car.
+    // eslint-disable-next-line react-hooks/refs
     const rotationAnim = useRef(
         new Animated.Value(
             heading != null && Number.isFinite(heading) && heading >= 0 ? heading : 0,
@@ -217,6 +243,61 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         [],
     );
 
+    // Android renders a PLAIN Marker driven by the native
+    // animateMarkerToCoordinate (a UI-thread ValueAnimator): the
+    // AnimatedRegion path marches every animation frame over the JS bridge
+    // and is documented to degrade to 5–10 fps under load
+    // (react-native-maps#1765); the native call is the mechanism the
+    // Uber-style Android implementations use. Teleport guard: the coordinate
+    // prop is kept in a state that re-syncs to each tick's target only AFTER
+    // the animation window, so a re-render's prop-diff sets the native
+    // coordinate to where the marker already is (visual no-op) instead of
+    // yanking it back to its mount position — the regression that motivated
+    // the earlier all-JS approach. animateMarkerToCoordinate must not be
+    // called on Marker.Animated (react-native-maps#3913), hence the plain
+    // Marker here.
+    const isAndroid = Platform.OS === 'android';
+    const [androidCoord, setAndroidCoord] = useState(coordinate);
+    // Android rotation steps per tick (the rotation prop is not animatable on
+    // a plain Marker). The spline bearing is C¹-continuous, so consecutive
+    // steps are a few degrees — visually smooth at 2 steps/second.
+    const [androidRotation, setAndroidRotation] = useState(
+        heading != null && Number.isFinite(heading) && heading >= 0 ? heading : 0,
+    );
+    const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+
+    // Single ingest path used by both the feed subscription and the prop
+    // effect. Reads only refs — stable by construction.
+    const ingestFix = useCallback((fix: MarkerFix) => {
+        const now = Date.now();
+        const coord = { latitude: fix.latitude, longitude: fix.longitude };
+        if (shouldResetBuffer(bufferRef.current, coord, SNAP_DISTANCE_M)) {
+            bufferRef.current.length = 0;
+            hasMovementBearingRef.current = false;
+            if (Platform.OS === 'android') {
+                setAndroidCoord(coord);
+                prevTargetRef.current = coord;
+            }
+        }
+        const ts =
+            Number.isFinite(fix.timestampMs) && Math.abs(now - fix.timestampMs) < 60_000
+                ? fix.timestampMs
+                : now;
+        pushFix(bufferRef.current, { ...coord, timestampMs: ts }, now);
+    }, []);
+
+    // Un-throttled feed subscription — the primary ingest when provided.
+    const hasFeedRef = useRef(!!fixFeed);
+    useEffect(() => {
+        hasFeedRef.current = !!fixFeed;
+        if (!fixFeed) return;
+        return fixFeed.subscribe((fix) => {
+            if (fix.heading != null) headingRef.current = fix.heading;
+            ingestFix(fix);
+        });
+    }, [fixFeed, ingestFix]);
+
     // ── Fix ingest: every coordinate prop change lands in the playback
     // buffer. A jump past SNAP_DISTANCE_M (stale fix after backgrounding,
     // ride handoff) resets the buffer so the marker snaps once instead of
@@ -233,19 +314,35 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             return;
         }
         prevCoordRef.current = coordinate;
-        if (shouldResetBuffer(bufferRef.current, coordinate, SNAP_DISTANCE_M)) {
-            bufferRef.current.length = 0;
-            hasMovementBearingRef.current = false;
-        }
-        pushFix(bufferRef.current, { ...coordinate, timestampMs: now }, now);
+        // With a live feed the prop stream is the throttled/stale echo of the
+        // same fixes — ingesting both would inject arrival-time duplicates.
+        // The prop then only seeds an empty buffer (mount, post-reset).
+        if (hasFeedRef.current && bufferRef.current.length > 0) return;
+        // Stamp with the real measurement time when the source provides one —
+        // arrival time is distorted by upstream batching/throttling (a fix
+        // held 3 s by a render throttle would otherwise read as 3 s of extra
+        // travel time, halving the played-back speed). ingestFix guards a
+        // nonsense device clock by falling back to arrival time.
+        ingestFix({ ...coordinate, timestampMs: fixTimestampMs ?? now });
+        // fixTimestampMs intentionally not a dep: it describes this coordinate.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [coordinate.latitude, coordinate.longitude, coordinate]);
 
-    // ── Playback ticker: every TICK_MS, place the marker where the buffer
-    // says the car was PLAYBACK_DELAY_MS ago and glide there over one tick.
-    // Cheap when idle: a held position that hasn't moved re-targets nothing.
+    // ── Playback ticker. Every TICK_MS the marker animates toward the
+    // playback position ONE TICK IN THE FUTURE with LINEAR easing, so the
+    // animation's velocity equals the played-back ground speed by
+    // construction and consecutive segments join without the
+    // accelerate-brake pulse the default Easing.inOut produced twice a
+    // second (Gojek's "duration is the difference between smooth and
+    // choppy"). Cheap when idle: a held position re-targets nothing.
     useEffect(() => {
         const id = setInterval(() => {
-            const p = playbackPosition(bufferRef.current, Date.now() - PLAYBACK_DELAY_MS);
+            // Lookahead target: where playback will be when this tick's
+            // animation completes.
+            const p = playbackPosition(
+                bufferRef.current,
+                Date.now() - PLAYBACK_DELAY_MS + TICK_MS,
+            );
             if (!p) return;
 
             // Snap the played-back position onto the route when close enough;
@@ -261,10 +358,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 return; // parked — no animation churn, no rotation churn
             }
 
-            // Bearing priority: route segment → direction of travel → reported
-            // GPS heading (cold start only). See selectBearing() for why
-            // movement outranks the reported heading (Android's placeholder 0).
-            const { bearing, source } = selectBearing({
+            // Bearing priority: route segment → spline tangent / direction of
+            // travel → reported GPS heading (cold start only). See
+            // selectBearing() for why movement outranks the reported heading
+            // (Android's placeholder 0). The spline tangent (p.bearing) is
+            // preferred over the chord between tick targets when available —
+            // it rotates through turns instead of kinking at fixes.
+            const selected = selectBearing({
                 snap,
                 movedMeters: movedM,
                 from,
@@ -273,22 +373,48 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 hasMovementBearing: hasMovementBearingRef.current,
                 minMoveMeters: MIN_BEARING_MOVE_M,
             });
+            const bearing =
+                selected.source === 'travel' && p.bearing != null ? p.bearing : selected.bearing;
             prevTargetRef.current = target;
             if (bearing != null) {
-                if (source === 'route' || source === 'travel') hasMovementBearingRef.current = true;
-                animateRotationTo(bearing, TICK_MS);
+                if (selected.source === 'route' || selected.source === 'travel') {
+                    hasMovementBearingRef.current = true;
+                }
+                if (isAndroid) {
+                    setAndroidRotation(((bearing % 360) + 360) % 360);
+                } else {
+                    animateRotationTo(bearing, TICK_MS);
+                }
             }
 
+            if (isAndroid) {
+                const node = markerRef.current;
+                if (node?.animateMarkerToCoordinate) {
+                    node.animateMarkerToCoordinate(target, TICK_MS);
+                    if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
+                    resyncTimerRef.current = setTimeout(() => setAndroidCoord(target), TICK_MS);
+                } else {
+                    // New-arch/interop builds where the native method is
+                    // missing: fall back to a direct prop set (steps at
+                    // 2 fps, but never a frozen marker).
+                    setAndroidCoord(target);
+                }
+                return;
+            }
             animatedRegion
                 .timing({
                     latitude: target.latitude,
                     longitude: target.longitude,
                     duration: TICK_MS,
+                    easing: Easing.linear,
                     useNativeDriver: false,
                 } as any)
                 .start();
         }, TICK_MS);
-        return () => clearInterval(id);
+        return () => {
+            clearInterval(id);
+            if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
+        };
         // All inputs are stable refs; the ticker itself must never restart.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -315,16 +441,21 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // back to the bundled variant. Reset when the URL changes so a fixed
     // upload is retried.
     const [imageFailed, setImageFailed] = useState(false);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => setImageFailed(false), [imageUri]);
     const useCustomImage = !!imageUri && !imageFailed;
 
+    // Android: plain Marker + native animator (see the teleport-guard note
+    // above). iOS: Marker.Animated + AnimatedRegion, which is smooth there.
+    const MarkerComponent: any = isAndroid ? Marker : Marker.Animated;
+
     return (
-        <Marker.Animated
+        <MarkerComponent
             ref={markerRef}
-            coordinate={animatedRegion as any}
+            coordinate={isAndroid ? androidCoord : (animatedRegion as any)}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            rotation={rotationAnim as any}
+            rotation={isAndroid ? androidRotation : (rotationAnim as any)}
             tracksViewChanges={tracksViewChanges}
             zIndex={zIndex}
             identifier={identifier}
@@ -352,7 +483,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     }}
                 />
             </View>
-        </Marker.Animated>
+        </MarkerComponent>
     );
 };
 
@@ -361,6 +492,8 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.coordinate.latitude === next.coordinate.latitude &&
         prev.coordinate.longitude === next.coordinate.longitude &&
         prev.heading === next.heading &&
+        prev.fixTimestampMs === next.fixTimestampMs &&
+        prev.fixFeed === next.fixFeed &&
         prev.size === next.size &&
         prev.zIndex === next.zIndex &&
         prev.identifier === next.identifier &&

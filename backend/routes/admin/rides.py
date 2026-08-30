@@ -13,6 +13,7 @@ try:
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
     from ...geo_utils import calculate_distance
+    from ...services.pre_launch_flag_service import fetch_pre_launch_flagged_ids
     from ...settings_loader import get_app_settings
     from ...socket_manager import manager
     from ...utils.audit_logger import log_admin_action
@@ -36,6 +37,7 @@ except ImportError:
     from dependencies import get_admin_user
     from features import send_push_notification
     from geo_utils import calculate_distance
+    from services.pre_launch_flag_service import fetch_pre_launch_flagged_ids  # type: ignore
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.audit_logger import log_admin_action
@@ -140,6 +142,7 @@ async def _build_rides_filters(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     service_area_id: Optional[str] = None,
+    pre_launch: Optional[bool] = None,
 ) -> Dict[str, Any]:
     filters: Dict[str, Any] = {}
     if status:
@@ -148,6 +151,20 @@ async def _build_rides_filters(
         filters["is_scheduled"] = is_scheduled
     if service_area_id:
         filters["service_area_id"] = service_area_id
+    # Pre-launch flag filter (legacy_import_metadata.pre_launch_test, set by
+    # services/pre_launch_flag_service.py -- see its module docstring). The
+    # generic filter DSL has no JSONB-path operator, so flagged ids are
+    # resolved first and fed into the existing $in/$nin filter, same
+    # approach routes/admin/drivers.py's admin_get_drivers uses.
+    if pre_launch is not None:
+        flagged_ids = fetch_pre_launch_flagged_ids("rides")
+        if pre_launch:
+            # Empty $in list is intentional, not a bug: it compiles to
+            # PostgREST's `id=in.()`, matching zero rows -- correct when
+            # nothing is flagged yet, rather than raising or matching all.
+            filters["id"] = {"$in": list(flagged_ids)}
+        elif flagged_ids:
+            filters["id"] = {"$nin": list(flagged_ids)}
     if date_from:
         iso = date_from if "T" in date_from else f"{date_from}T00:00:00+00:00"
         filters.setdefault("created_at", {})["$gte"] = iso
@@ -198,11 +215,17 @@ async def admin_get_rides(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     service_area_id: Optional[str] = None,
+    pre_launch: Optional[bool] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = Query(default=None, pattern="^(asc|desc)$"),
 ):
-    """Get rides with server-side search, filters, and pagination."""
-    filters = await _build_rides_filters(status, is_scheduled, search, date_from, date_to, service_area_id)
+    """Get rides with server-side search, filters, and pagination.
+
+    `pre_launch`: filters on legacy_import_metadata.pre_launch_test (set by
+    services/pre_launch_flag_service.py). True = flagged only, False = hide
+    flagged, omitted = no filter (default, matches every prior behavior).
+    """
+    filters = await _build_rides_filters(status, is_scheduled, search, date_from, date_to, service_area_id, pre_launch)
 
     total_count = await db_supabase.count_documents("rides", filters)
 

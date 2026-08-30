@@ -1405,3 +1405,108 @@ class TestAdminRidesReadEndpointsSmoke:
         assert resp.status_code == 200
         # ROUND_HALF_UP: 10.125 -> 10.13 (banker's rounding would give 10.12).
         assert resp.json()["total_paid"] == 10.13
+
+
+# ---------------------------------------------------------------------------
+# GET /rides -- pre_launch filter (2026-08-30 pre-launch data flagging tool)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetRidesPreLaunchFilter:
+    """legacy_import_metadata.pre_launch_test is set by
+    services/pre_launch_flag_service.py. _build_rides_filters has no
+    JSONB-path filter operator of its own, so it resolves flagged ids first
+    (fetch_pre_launch_flagged_ids) and compiles pre_launch=true/false to
+    $in/$nin against `id` -- mirrors
+    TestAdminGetDriversPreLaunchFilter in test_admin_drivers_coverage.py
+    for the sibling admin_get_drivers route."""
+
+    def test_omitted_applies_no_filter(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids") as fetch_flagged,
+        ):
+            resp = client.get("/api/admin/rides")
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]
+        fetch_flagged.assert_not_called()
+
+    def test_true_shows_flagged_only(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value={"ride-1", "ride-2"}),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "true"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["filters"]["id"]["$in"]) == {"ride-1", "ride-2"}
+
+    def test_true_with_nothing_flagged_matches_zero_rows(self, client, as_super_admin):
+        """Empty $in compiles to PostgREST's id=in.() -- matches nothing,
+        which is correct when no ride is flagged yet."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value=set()),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "true"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": []}
+
+    def test_false_hides_flagged(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value={"ride-1"}),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$nin": ["ride-1"]}
+
+    def test_false_with_nothing_flagged_applies_no_filter(self, client, as_super_admin):
+        """Nothing to exclude -- must not add a vacuous $nin: [] that could
+        be misread as excluding everything."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value=set()),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "false"})
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]

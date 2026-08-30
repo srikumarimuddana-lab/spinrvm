@@ -137,11 +137,18 @@ export function LegacyBookingImport() {
     const [serviceAreaId, setServiceAreaId] = useState("");
     const [vehicleTypeName, setVehicleTypeName] = useState("Economy");
     const [vehicleTypeId, setVehicleTypeId] = useState("");
-    // Defaults to the standing 2026-08-20 decision (include cancelled/failed
-    // bookings) -- this is a per-run scope toggle, not a change to that
-    // default. See docs/change-log/2026-08-20-legacy-cancelled-failed-
-    // booking-import.md.
-    const [includeCancelledFailed, setIncludeCancelledFailed] = useState(true);
+    // Defaults to unchecked (2026-08-30) -- every real run of this batch has
+    // actually been scoped to "completed rides only" in practice, and the
+    // prior checked-by-default caused a real incident on 2026-08-29: an
+    // operator committed with this left at its old default and got 918
+    // unwanted cancelled/failed rows imported, requiring a manual SQL
+    // rollback (see docs/runbooks/legacy-booking-import-2026-08-22-batch.md
+    // Sec8.1-8.2). The broader cancelled/failed import path itself is still
+    // fully supported and correct (docs/change-log/2026-08-20-legacy-
+    // cancelled-failed-booking-import.md) -- this only changes what an
+    // operator starts from, so the common case (completed-only) is opt-in
+    // by default rather than opt-out.
+    const [includeCancelledFailed, setIncludeCancelledFailed] = useState(false);
     const [report, setReport] = useState<BookingImportReport | null>(null);
     const [committed, setCommitted] = useState<BookingImportCommitResult | null>(null);
     const [confirmText, setConfirmText] = useState("");
@@ -465,14 +472,20 @@ export function LegacyBookingImport() {
                             </div>
                         ) : report.can_commit ? (
                             <div className="space-y-2 rounded-md border p-3">
-                                <Label htmlFor="booking-import-confirm" className="text-xs">
+                                <p className="text-xs text-muted-foreground">
                                     This writes {c.total_rides_planned} ride(s) ({c.rides_planned}{" "}
                                     completed + {c.cancelled_failed_rides_planned} cancelled/failed)
                                     and {c.payouts_planned} payout record(s) to live data and cannot
-                                    be undone from here. Type{" "}
-                                    <span className="font-mono">{CONFIRM_PHRASE}</span> to enable.
-                                </Label>
-                                <div className="flex gap-2">
+                                    be undone from here.
+                                </p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Label
+                                        htmlFor="booking-import-confirm"
+                                        className="whitespace-nowrap text-xs"
+                                    >
+                                        Type <span className="font-mono">{CONFIRM_PHRASE}</span> to
+                                        enable:
+                                    </Label>
                                     <Input
                                         id="booking-import-confirm"
                                         value={confirmText}

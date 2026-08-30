@@ -36,6 +36,7 @@ import {
     adminUpdateDriverStripeAccount,
     adminValidateRiderImport,
     adminCommitRiderImport,
+    adminBackfillRiderCreatedAt,
     adminRegenerateImportedSnapshots,
     adminRegenerateImportedRoutes,
     type StripeImportKind,
@@ -46,6 +47,7 @@ import {
     type RiderImportReport,
     type RiderImportReportItem,
     type RiderImportDuplicate,
+    type RiderCreatedAtBackfillResult,
     type SnapshotRegenerateResult,
     type RouteRegenerateResult,
 } from "@/lib/api";
@@ -784,6 +786,7 @@ export default function BulkOperationsPage() {
                 Booking Import for any batch that includes riders not
                 already in production. */}
             <RiderImportSection />
+            <RiderCreatedAtBackfillSection />
 
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <Upload className="h-4 w-4" />
@@ -1342,6 +1345,108 @@ function RiderImportSection() {
                 </Card>
             )}
         </>
+    );
+}
+
+// One-time repair tool (2026-08-30): build_plan() previously hardcoded new
+// riders' created_at to import time instead of the CSV's own legacy value,
+// so already-imported riders show the wrong "Joined" date on the admin
+// Users page. Re-uploading the same rider CSV (or any CSV with the same
+// phones + a real created_at column) finds and fixes the mismatch. See
+// docs/change-log/2026-08-30-rider-created-at-legacy-date-fix.md.
+function RiderCreatedAtBackfillSection() {
+    const { toast } = useToast();
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [file, setFile] = useState<File | null>(null);
+    const [running, setRunning] = useState(false);
+    const [result, setResult] = useState<RiderCreatedAtBackfillResult | null>(null);
+
+    const runScan = async (apply: boolean) => {
+        if (!file) return;
+        setRunning(true);
+        try {
+            const res = await adminBackfillRiderCreatedAt(file, apply);
+            setResult(res);
+            toast({
+                title: apply ? "Backfill applied" : "Scan complete",
+                description: apply
+                    ? `${res.fixed} rider(s) corrected`
+                    : `Found ${res.fixed} rider(s) with the wrong Joined date`,
+            });
+        } catch (err: unknown) {
+            toast({
+                title: apply ? "Backfill failed" : "Scan failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Fix Rider Join Dates</CardTitle>
+                <CardDescription>
+                    One-time data repair — not part of the import above. Re-upload the same
+                    rider CSV to find and fix riders whose stored &quot;Joined&quot; date is the
+                    import date instead of their real legacy signup date. Safe to re-run — only
+                    mismatches show up each time.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex items-center gap-3">
+                    <Input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".csv,text/csv"
+                        className="max-w-xs"
+                        onChange={(e) => {
+                            setFile(e.target.files?.[0] ?? null);
+                            setResult(null);
+                        }}
+                    />
+                    <Button variant="outline" onClick={() => runScan(false)} disabled={!file || running}>
+                        {running ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <Info className="mr-2 h-4 w-4" />
+                        )}
+                        Preview (no writes)
+                    </Button>
+                    {result && !result.applied && result.fixed > 0 && (
+                        <Button onClick={() => runScan(true)} disabled={running}>
+                            {running ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                            )}
+                            Apply fix ({result.fixed})
+                        </Button>
+                    )}
+                </div>
+                {result && (
+                    <div className="rounded-md border p-4 text-sm">
+                        <p>
+                            Scanned <span className="font-mono">{result.scanned_rows}</span> row(s);{" "}
+                            {result.applied ? "corrected" : "would correct"}{" "}
+                            <span className="font-mono">{result.fixed}</span> Joined date(s).
+                        </p>
+                        {result.applied && result.fixed > 0 && (
+                            <p className="mt-2 flex items-center gap-1.5 text-success">
+                                <CheckCircle2 className="h-4 w-4" /> Fixed — re-run Preview to confirm zero remain.
+                            </p>
+                        )}
+                        {!result.applied && result.fixed === 0 && (
+                            <p className="mt-2 flex items-center gap-1.5 text-success">
+                                <CheckCircle2 className="h-4 w-4" /> Nothing to fix.
+                            </p>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
     );
 }
 

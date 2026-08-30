@@ -388,3 +388,56 @@ def test_backfill_orphaned_no_orphans_is_a_no_op(test_client, super_admin_overri
 def test_backfill_orphaned_requires_admin_auth(test_client):
     resp = test_client.post("/api/admin/legacy-drivers/backfill-orphaned", json={})
     assert resp.status_code in (401, 403)
+
+
+# ── /legacy-drivers/backfill-created-at (2026-08-30 data repair) ────────
+
+
+def _created_at_mismatch_store():
+    store = _fresh_store()
+    store["users"] = [{"id": "u-1", "created_at": "2026-02-17T04:53:20+00:00"}]
+    store["drivers"] = [
+        {
+            "id": "d-1",
+            "user_id": "u-1",
+            "created_at": "2026-08-30T01:58:38+00:00",
+            "legacy_import_metadata": {"backfill_reason": "orphaned_by_2026-08-29_commit_atomicity_bug"},
+        }
+    ]
+    return store
+
+
+def test_backfill_created_at_dry_run_default_does_not_write(test_client, super_admin_override):
+    store = _created_at_mismatch_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post("/api/admin/legacy-drivers/backfill-created-at", json={})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"scanned": 1, "applied": False, "fixed": 1}
+    assert store["drivers"][0]["created_at"] == "2026-08-30T01:58:38+00:00"
+
+
+def test_backfill_created_at_apply_writes_and_audit_logs(test_client, super_admin_override):
+    store = _created_at_mismatch_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit as audit_mock:
+        resp = test_client.post("/api/admin/legacy-drivers/backfill-created-at", json={"apply": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"scanned": 1, "applied": True, "fixed": 1}
+    assert store["drivers"][0]["created_at"] == "2026-02-17T04:53:20+00:00"
+    audit_mock.assert_awaited_once()
+    assert audit_mock.await_args[0][1] == "driver_created_at_backfill"
+
+
+def test_backfill_created_at_no_mismatch_is_a_no_op(test_client, super_admin_override):
+    store = _fresh_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post("/api/admin/legacy-drivers/backfill-created-at", json={"apply": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"scanned": 0, "applied": True, "fixed": 0}
+
+
+def test_backfill_created_at_requires_admin_auth(test_client):
+    resp = test_client.post("/api/admin/legacy-drivers/backfill-created-at", json={})
+    assert resp.status_code in (401, 403)

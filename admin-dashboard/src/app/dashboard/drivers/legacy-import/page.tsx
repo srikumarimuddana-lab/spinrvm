@@ -14,9 +14,11 @@ import {
     adminValidateLegacyDriverImport,
     adminCommitLegacyDriverImport,
     adminBackfillOrphanedLegacyDrivers,
+    adminBackfillDriverCreatedAt,
     type LegacyDriverImportReport,
     type LegacyDriverImportReportItem,
     type OrphanedDriverBackfillResult,
+    type DriverCreatedAtBackfillResult,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -499,6 +501,7 @@ export default function LegacyDriverImportPage() {
             )}
 
             <OrphanedDriverBackfillSection />
+            <DriverCreatedAtBackfillSection />
         </div>
     );
 }
@@ -585,6 +588,98 @@ function OrphanedDriverBackfillSection() {
                             Scanned <span className="font-mono">{result.scanned}</span> account(s)
                             with orphaned legacy-driver history; {result.applied ? "created" : "would create"}{" "}
                             <span className="font-mono">{result.fixed}</span> driver row(s).
+                        </p>
+                        {result.applied && result.fixed > 0 && (
+                            <p className="mt-2 flex items-center gap-1.5 text-success">
+                                <CheckCircle2 className="h-4 w-4" /> Fixed — re-run Preview to confirm zero remain.
+                            </p>
+                        )}
+                        {!result.applied && result.fixed === 0 && (
+                            <p className="mt-2 flex items-center gap-1.5 text-success">
+                                <CheckCircle2 className="h-4 w-4" /> Nothing to fix.
+                            </p>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+// One-time repair tool (2026-08-30): the orphan backfill above stamps a
+// repaired drivers row's created_at as the repair run's own time — correct
+// in the sense that the driver PROFILE row genuinely didn't exist until
+// then, but wrong as a "Joined" date on the admin Users/Drivers pages: the
+// driver's real join date is already correct on their linked user's own
+// created_at. See docs/change-log/2026-08-30-rider-created-at-legacy-date-fix.md.
+function DriverCreatedAtBackfillSection() {
+    const { toast } = useToast();
+    const [running, setRunning] = useState(false);
+    const [result, setResult] = useState<DriverCreatedAtBackfillResult | null>(null);
+
+    const runScan = async (apply: boolean) => {
+        setRunning(true);
+        try {
+            const res = await adminBackfillDriverCreatedAt(apply);
+            setResult(res);
+            toast({
+                title: apply ? "Backfill applied" : "Scan complete",
+                description: apply
+                    ? `${res.fixed} driver row(s) corrected`
+                    : `Found ${res.fixed} driver row(s) with the wrong Joined date`,
+            });
+        } catch (err: unknown) {
+            toast({
+                title: apply ? "Backfill failed" : "Scan failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Fix Backfilled Driver Join Dates</CardTitle>
+                <CardDescription>
+                    One-time data repair — not part of the normal import flow above. The
+                    orphaned-account repair above (correctly) creates a driver row today, but
+                    that leaves the driver&apos;s admin-page &quot;Joined&quot; date showing today
+                    instead of their real signup date, which is already correct on the linked
+                    account. This finds every backfilled driver row whose date doesn&apos;t
+                    match its account&apos;s, and corrects it. Safe to re-run — only mismatches
+                    show up each time.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex items-center gap-3">
+                    <Button variant="outline" onClick={() => runScan(false)} disabled={running}>
+                        {running ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <Info className="mr-2 h-4 w-4" />
+                        )}
+                        Preview (no writes)
+                    </Button>
+                    {result && !result.applied && result.fixed > 0 && (
+                        <Button onClick={() => runScan(true)} disabled={running}>
+                            {running ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                            )}
+                            Apply fix ({result.fixed})
+                        </Button>
+                    )}
+                </div>
+                {result && (
+                    <div className="rounded-md border p-4 text-sm">
+                        <p>
+                            Scanned <span className="font-mono">{result.scanned}</span> backfilled
+                            driver row(s); {result.applied ? "corrected" : "would correct"}{" "}
+                            <span className="font-mono">{result.fixed}</span> Joined date(s).
                         </p>
                         {result.applied && result.fixed > 0 && (
                             <p className="mt-2 flex items-center gap-1.5 text-success">

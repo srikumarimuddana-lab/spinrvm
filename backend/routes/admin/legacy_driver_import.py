@@ -290,3 +290,33 @@ async def backfill_orphaned_legacy_drivers(
             {"scanned": result["scanned"], "fixed": result["fixed"], "service_area_id": service_area["id"]},
         )
     return result
+
+
+class BackfillDriverCreatedAtRequest(BaseModel):
+    apply: bool = False
+
+
+@router.post("/legacy-drivers/backfill-created-at")
+async def backfill_driver_created_at(
+    body: BackfillDriverCreatedAtRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """One-time repair (2026-08-30): backfill_orphaned_legacy_driver_rows()
+    stamps the repaired drivers row's `created_at` as the repair run's own
+    time, but the driver's real join date already sits correctly on their
+    linked `users.created_at`. Finds (and, if apply=True, fixes) every
+    backfilled drivers row whose `created_at` doesn't already match its
+    user's. See docs/change-log/2026-08-30-rider-created-at-legacy-date-fix.md.
+    """
+    mismatches = await asyncio.to_thread(import_svc.find_backfilled_driver_created_at_mismatches)
+    result = {"scanned": len(mismatches), "applied": body.apply, "fixed": len(mismatches)}
+    if body.apply and mismatches:
+        await asyncio.to_thread(import_svc.apply_driver_created_at_corrections, mismatches)
+        await log_admin_action(
+            admin,
+            "driver_created_at_backfill",
+            "drivers",
+            "bulk",
+            {"fixed": len(mismatches)},
+        )
+    return result

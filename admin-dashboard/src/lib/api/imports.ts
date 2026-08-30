@@ -177,6 +177,22 @@ export const adminBackfillOrphanedLegacyDrivers = (
         headers: { "Content-Type": "application/json" },
     });
 
+/** One-time repair (2026-08-30): the orphan backfill above stamps a
+ * repaired drivers row's created_at as the repair run's own time; the
+ * driver's real join date is already correct on their linked user's
+ * created_at. apply=false (default) only reports what would change. */
+export interface DriverCreatedAtBackfillResult {
+    scanned: number;
+    applied: boolean;
+    fixed: number;
+}
+export const adminBackfillDriverCreatedAt = (apply: boolean) =>
+    request<DriverCreatedAtBackfillResult>("/api/admin/legacy-drivers/backfill-created-at", {
+        method: "POST",
+        body: JSON.stringify({ apply }),
+        headers: { "Content-Type": "application/json" },
+    });
+
 /* ── Legacy Booking Import (4 CSVs) ───────── */
 // Super-admin-only (backend/routes/admin/booking_import.py). Imports completed
 // rides from the previous app into `rides`, plus one offsetting `payouts` row
@@ -587,6 +603,27 @@ export const adminCommitRiderImport = (file: File, batch?: string) =>
         method: "POST",
         body: riderImportFormData(file, batch),
     });
+
+/** One-time repair (2026-08-30): build_plan() previously hardcoded new
+ * riders' created_at to import time instead of the CSV's own legacy value,
+ * so already-imported riders show the wrong "Joined" date. Re-upload the
+ * same rider CSV (or any CSV with the same phones + a real created_at
+ * column) to find and fix the mismatch. apply=false (default) only reports
+ * what would change. */
+export interface RiderCreatedAtBackfillResult {
+    scanned_rows: number;
+    applied: boolean;
+    fixed: number;
+}
+export const adminBackfillRiderCreatedAt = (file: File, apply: boolean) => {
+    const fd = new FormData();
+    fd.append("riders_csv", file);
+    fd.append("apply", String(apply));
+    return request<RiderCreatedAtBackfillResult>("/api/admin/riders/created-at-backfill", {
+        method: "POST",
+        body: fd,
+    });
+};
 
 /* ── Legacy SIN/DOB Backfill (2 CSVs) ─────── */
 // Admin-dashboard wrapper for the CLI-only

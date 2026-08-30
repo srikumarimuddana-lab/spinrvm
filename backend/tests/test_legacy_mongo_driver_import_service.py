@@ -747,6 +747,93 @@ def test_backfill_no_orphans_returns_zero_without_error(monkeypatch):
     assert result == {"scanned": 0, "applied": True, "fixed": 0}
 
 
+# ── created_at legacy-date backfill (2026-08-30) ────────────────────────
+# backfill_orphaned_legacy_driver_rows() stamps the repaired drivers row's
+# created_at as the repair run's own time; the driver's real join date is
+# already correct on their linked users.created_at. See docs/change-log/
+# 2026-08-30-rider-created-at-legacy-date-fix.md.
+
+
+def test_find_backfilled_driver_created_at_mismatches_finds_mismatch(monkeypatch):
+    fake = _install(
+        monkeypatch,
+        store={
+            "users": [{"id": "u-1", "created_at": "2026-02-17T04:53:20+00:00"}],
+            "drivers": [
+                {
+                    "id": "d-1",
+                    "user_id": "u-1",
+                    "created_at": "2026-08-30T01:58:38+00:00",
+                    "legacy_import_metadata": {"backfill_reason": "orphaned_by_2026-08-29_commit_atomicity_bug"},
+                }
+            ],
+        },
+    )
+    mismatches = svc.find_backfilled_driver_created_at_mismatches()
+    assert mismatches == [
+        {
+            "driver_id": "d-1",
+            "old_created_at": "2026-08-30T01:58:38+00:00",
+            "new_created_at": "2026-02-17T04:53:20+00:00",
+        }
+    ]
+    # Read-only: no write happened.
+    assert fake.store["drivers"][0]["created_at"] == "2026-08-30T01:58:38+00:00"
+
+
+def test_find_backfilled_driver_created_at_mismatches_skips_already_correct(monkeypatch):
+    _install(
+        monkeypatch,
+        store={
+            "users": [{"id": "u-1", "created_at": "2026-02-17T04:53:20+00:00"}],
+            "drivers": [
+                {
+                    "id": "d-1",
+                    "user_id": "u-1",
+                    "created_at": "2026-02-17T04:53:20+00:00",
+                    "legacy_import_metadata": {"backfill_reason": "orphaned_by_2026-08-29_commit_atomicity_bug"},
+                }
+            ],
+        },
+    )
+    assert svc.find_backfilled_driver_created_at_mismatches() == []
+
+
+def test_find_backfilled_driver_created_at_mismatches_ignores_non_backfilled_drivers(monkeypatch):
+    _install(
+        monkeypatch,
+        store={
+            "users": [{"id": "u-1", "created_at": "2026-02-17T04:53:20+00:00"}],
+            "drivers": [
+                {
+                    "id": "d-1",
+                    "user_id": "u-1",
+                    "created_at": "2026-08-30T01:58:38+00:00",
+                    "legacy_import_metadata": {"source": "legacy_mongo_driver_import"},
+                }
+            ],
+        },
+    )
+    # Not stamped with the orphan-backfill reason -- an ordinary driver row
+    # whose created_at legitimately differs from its user's for some other
+    # reason, must never be touched by this repair.
+    assert svc.find_backfilled_driver_created_at_mismatches() == []
+
+
+def test_apply_driver_created_at_corrections_writes(monkeypatch):
+    fake = _install(monkeypatch, store={"drivers": [{"id": "d-1", "created_at": "2026-08-30T01:58:38+00:00"}]})
+    svc.apply_driver_created_at_corrections(
+        [
+            {
+                "driver_id": "d-1",
+                "old_created_at": "2026-08-30T01:58:38+00:00",
+                "new_created_at": "2026-02-17T04:53:20+00:00",
+            }
+        ]
+    )
+    assert fake.store["drivers"][0]["created_at"] == "2026-02-17T04:53:20+00:00"
+
+
 # ── print_mongo_driver_import_report ────────────────────────────────────
 
 

@@ -2282,6 +2282,55 @@ def backfill_orphaned_legacy_driver_rows(*, service_area: dict[str, Any], apply:
     return result
 
 
+_ORPHAN_BACKFILL_REASON = "orphaned_by_2026-08-29_commit_atomicity_bug"
+
+
+def find_backfilled_driver_created_at_mismatches() -> list[dict[str, Any]]:
+    """One-time repair (2026-08-30): read-only. backfill_orphaned_legacy_
+    driver_rows() stamps `created_at` as the repair run's own time -- correct
+    in the sense that the driver PROFILE row genuinely didn't exist until
+    then, but wrong as a "Joined" date: the driver's real signup date is
+    already sitting correctly on their linked `users.created_at` (set when
+    the original mongo_driver_history link attempt ran, before the
+    atomicity bug orphaned the driver row). Finds every backfilled driver
+    row whose `created_at` doesn't already match its own user's.
+    """
+    drivers = supabase.table("drivers").select("id,user_id,created_at,legacy_import_metadata").execute().data or []
+    backfilled = [
+        d for d in drivers if (d.get("legacy_import_metadata") or {}).get("backfill_reason") == _ORPHAN_BACKFILL_REASON
+    ]
+    if not backfilled:
+        return []
+
+    user_ids = sorted({d["user_id"] for d in backfilled if d.get("user_id")})
+    users_by_id: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(user_ids), 200):
+        batch = user_ids[i : i + 200]
+        for u in supabase.table("users").select("id,created_at").in_("id", batch).execute().data or []:
+            users_by_id[u["id"]] = u
+
+    mismatches: list[dict[str, Any]] = []
+    for d in backfilled:
+        user = users_by_id.get(d.get("user_id"))
+        if not user or not user.get("created_at"):
+            continue
+        if _epoch_ms_from_iso(d.get("created_at")) == _epoch_ms_from_iso(user["created_at"]):
+            continue
+        mismatches.append(
+            {
+                "driver_id": d["id"],
+                "old_created_at": d.get("created_at"),
+                "new_created_at": user["created_at"],
+            }
+        )
+    return mismatches
+
+
+def apply_driver_created_at_corrections(mismatches: list[dict[str, Any]]) -> None:
+    for m in mismatches:
+        supabase.table("drivers").update({"created_at": m["new_created_at"]}).eq("id", m["driver_id"]).execute()
+
+
 def print_mongo_driver_import_report(plan: MongoDriverImportPlan, *, dry_run: bool) -> None:
     mode = "DRY RUN" if dry_run else "COMMIT"
     print(f"{mode} report -- legacy Mongo driver-profile import")

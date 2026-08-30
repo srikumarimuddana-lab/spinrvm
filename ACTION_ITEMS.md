@@ -11391,6 +11391,44 @@ record of what was assumed vs. what was actually true</summary>
   user-facing error message, same "nothing to extract" shape as prior
   steps' numeric fallbacks, not a new candidate) remains unaudited beyond
   what's named here. Checkbox stays `[ ]`.
+- **2026-08-30 update — step 12 done: `service-areas/page.tsx`'s
+  tax-configuration justification prompt** — the candidate named at the
+  end of step 11. `handleFieldUpdate` gates any GST/PST/HST field change
+  with an inline check (`if (!justification) return;`) on a
+  `window.prompt(...)`-collected written justification, mirroring the
+  surge-justification pattern (step 10) per the page's own A29 comment:
+  "GST/PST/HST config carries real regulatory + financial weight (every
+  rider's charge, CRA/SK remittance), so the backend now requires a
+  written justification for any of these fields."
+
+  New colocated `admin-dashboard/src/lib/taxJustificationSchema.ts`
+  (`isTaxJustificationValid`) reproduces the check as a byte-for-byte
+  equivalent predicate. **UX gate only** — the backend independently
+  requires `tax_justification` on these fields and 400s without one (per
+  the page's own comment: "rather than letting the save silently 400"),
+  so this change does not weaken that server-side requirement. New
+  `admin-dashboard/src/lib/__tests__/taxJustificationSchema.test.ts` (6
+  accept/reject cases: non-empty, trimmed, undefined/Cancel, null, empty,
+  whitespace-only). Verification: 6/6 new tests pass; full
+  admin-dashboard suite 417/417 tests, 42/42 files, exit 0 (`npm run
+  test:coverage`, the exact CI invocation); `npx tsc --noEmit` clean;
+  `npx eslint` on touched files: 0 errors, 65 pre-existing warnings on
+  unrelated lines in this large file (confirmed via `git diff` that none
+  fall on the 2 lines this diff touches: the import line and the
+  one-line predicate-call swap); **real production build**
+  (`npm run build`) completed successfully, exit code 0, full route
+  manifest generated including `/dashboard/service-areas`; blast-radius
+  grep confirmed `tax_justification`/`TAX_FIELDS` appear nowhere else in
+  `admin-dashboard/src`. Full Change Impact Log:
+  `docs/change-log/2026-08-30-b39-admin-tax-justification-zod-step12.md`.
+
+  **Still open:** every other admin-dashboard corporate/billing form not
+  yet named remains unmigrated; no ADR/migration-order doc written yet.
+  `service-areas/page.tsx` now has both its surge (step 10) and tax
+  (step 12) justification gates migrated, but the rest of this large
+  multi-tab file (fees, incentives, Spinr Pass area toggles) still hasn't
+  been swept field-by-field beyond what's named across steps 10-12.
+  Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

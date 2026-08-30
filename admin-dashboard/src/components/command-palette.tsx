@@ -51,7 +51,7 @@ export function CommandPalette() {
     const inputRef = useRef<HTMLInputElement>(null);
 
     const isSuperAdmin = user?.role === "super_admin";
-    const userModules = user?.modules || [];
+    const userModules = useMemo(() => user?.modules ?? [], [user?.modules]);
 
     // Same visibility rules as sidebar.tsx's NAV_GROUPS filtering — see that
     // file's SidebarInner() for the reference implementation this mirrors.
@@ -72,27 +72,35 @@ export function CommandPalette() {
             .map((r) => r.route);
     }, [query, visibleRoutes]);
 
+    // Opening (whether via the shortcut or Radix's own onOpenChange, e.g.
+    // Escape/overlay-click) always starts from a blank query. Handled here
+    // as a plain event-callback, not an effect reacting to `open` state, so
+    // there's no cascading-render setState-in-effect.
+    const handleOpenChange = (next: boolean) => {
+        if (next) {
+            setQuery("");
+            setActiveIndex(0);
+        }
+        setOpen(next);
+    };
+
+    // Tracks `open` for the keydown listener below without re-subscribing
+    // it on every toggle — the listener itself is registered once on mount.
+    const openRef = useRef(open);
+    useEffect(() => {
+        openRef.current = open;
+    }, [open]);
+
     useEffect(() => {
         const onKeyDown = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
                 e.preventDefault();
-                setOpen((o) => !o);
+                handleOpenChange(!openRef.current);
             }
         };
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
     }, []);
-
-    useEffect(() => {
-        if (open) {
-            setQuery("");
-            setActiveIndex(0);
-        }
-    }, [open]);
-
-    useEffect(() => {
-        setActiveIndex(0);
-    }, [query]);
 
     const navigate = (href: string) => {
         setOpen(false);
@@ -128,7 +136,7 @@ export function CommandPalette() {
     let flatIndex = -1;
 
     return (
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={handleOpenChange}>
             <DialogContent
                 showCloseButton={false}
                 className="top-[20%] max-w-lg translate-y-0 gap-0 overflow-hidden p-0"
@@ -142,7 +150,10 @@ export function CommandPalette() {
                     <Input
                         ref={inputRef}
                         value={query}
-                        onChange={(e) => setQuery(e.target.value)}
+                        onChange={(e) => {
+                            setQuery(e.target.value);
+                            setActiveIndex(0);
+                        }}
                         onKeyDown={onInputKeyDown}
                         placeholder="Jump to a page..."
                         aria-label="Search admin dashboard pages"

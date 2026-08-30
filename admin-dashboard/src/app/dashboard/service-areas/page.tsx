@@ -3,6 +3,7 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
+import { PageHeader } from "@/components/page-header";
 import { useCrudToast } from "@/components/ui/use-crud-toast";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -249,15 +250,16 @@ export default function ServiceAreasPage() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Service Areas</h1>
-          <p className="text-muted-foreground mt-1">Configure pricing, fees, taxes & subscriptions per area</p>
-        </div>
-        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-semibold hover:bg-primary/90">
-          <Plus className="h-5 w-5" /> New Area
-        </button>
-      </div>
+      <PageHeader
+        className="flex items-center justify-between mb-8"
+        title="Service Areas"
+        description="Configure pricing, fees, taxes & subscriptions per area"
+        actions={
+          <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-semibold hover:bg-primary/90">
+            <Plus className="h-5 w-5" /> New Area
+          </button>
+        }
+      />
 
       {/* Create Form */}
       {showCreate && (

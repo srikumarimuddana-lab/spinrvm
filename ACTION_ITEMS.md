@@ -11429,6 +11429,57 @@ record of what was assumed vs. what was actually true</summary>
   multi-tab file (fees, incentives, Spinr Pass area toggles) still hasn't
   been swept field-by-field beyond what's named across steps 10-12.
   Checkbox stays `[ ]`.
+- **2026-08-30 update — step 13 done: `service-areas/page.tsx`'s
+  `SpinrPassAreaTab` plan create/edit form** — found while sweeping the
+  rest of this file per step 12's "still open" note. `handleSubmit` gated
+  a plan create/update with `if (!form.name || !form.price) return;`.
+  Notably this is a **second, separate** Spinr Pass plan form, distinct
+  from `subscriptions/page.tsx`'s `PlanModal` (step 9) even though both
+  ultimately call the same `createSubscriptionPlan`/
+  `updateSubscriptionPlan` API — the two are not byte-for-byte equivalent
+  to each other: this one keeps `price` as a raw string
+  (`useState({ price: "" })`, `parseFloat`-parsed only at submit time)
+  and checks `!form.price` (non-empty-string truthy check — "0" passes,
+  "" fails), while step 9's form checks a numeric `form.price < 0` on an
+  already-`number`-typed field. Kept as a separate schema file rather
+  than reusing step 9's predicates since the types genuinely differ and
+  merging them would be a validation-rule change. Flagging this as a
+  candidate for a follow-up de-duplication item (two independent
+  implementations of the same Spinr Pass plan form) — not addressed in
+  this step, which stays a pure extraction of the existing behavior.
+
+  Also confirmed: neither the original code nor this extraction guards
+  against a non-numeric price string (e.g. `"abc"` → `parseFloat` →
+  `NaN` sent to the backend) — that gap predates this change and is
+  preserved as-is, documented in the schema file rather than silently
+  fixed (a silent fix would be a validation-rule change on an
+  already-shipped screen, against this item's own risk warning).
+
+  New colocated `admin-dashboard/src/lib/spinrPassAreaPlanSchema.ts`
+  (`isSpinrPassPlanNameValid`, `isSpinrPassPlanPriceValid`) reproduces
+  both checks as byte-for-byte equivalent predicates. New
+  `admin-dashboard/src/lib/__tests__/spinrPassAreaPlanSchema.test.ts` (6
+  accept/reject cases, including the non-numeric-string-accepted case
+  documenting the pre-existing gap). Verification: 6/6 new tests pass;
+  full admin-dashboard suite 423/423 tests, 43/43 files, exit 0 (`npm run
+  test:coverage`, the exact CI invocation); `npx tsc --noEmit` clean;
+  `npx eslint` on touched files: 0 errors, 65 pre-existing warnings on
+  unrelated lines (confirmed via `git diff` that none fall on the 2 lines
+  this diff touches); **real production build** (`npm run build`)
+  completed successfully, exit code 0, full route manifest generated
+  including `/dashboard/service-areas`; blast-radius grep confirmed
+  `form.price` in this file's `SpinrPassAreaTab` scope is unrelated to
+  `subscriptions/page.tsx`'s own `form.price` (different component,
+  different type). Full Change Impact Log:
+  `docs/change-log/2026-08-30-b39-admin-spinr-pass-area-plan-zod-step13.md`.
+
+  **Still open:** every other admin-dashboard corporate/billing form not
+  yet named remains unmigrated; no ADR/migration-order doc written yet.
+  `service-areas/page.tsx`'s create-area form (`handleCreate`,
+  `!createForm.name`) and airport-zone form (`handleCreateAirportSubRegion`,
+  `!airportForm.name || airportForm.polygon.length < 3`) are two more
+  real inline checks found during this sweep but not yet migrated —
+  candidates for a future step. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

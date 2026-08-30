@@ -82,6 +82,10 @@ export default function MonitoringPage() {
   const [demandData, setDemandData] = useState<AreaDemandSupply[]>([]);
   const [demandError, setDemandError] = useState<string | null>(null);
   const [demandFetchedAt, setDemandFetchedAt] = useState<Date | null>(null);
+  // Surfaces a failure of the active-rides REST fetch (initial load + poll)
+  // instead of letting it swallow into an empty array, which would render
+  // identically to a genuinely quiet "Active Rides (0)" period.
+  const [activeRidesError, setActiveRidesError] = useState<string | null>(null);
 
   // ── Auth token for WebSocket ────────────────────────────────────────
   const token = useAuthStore((s) => s.token);
@@ -256,12 +260,13 @@ export default function MonitoringPage() {
 
   // ── Initial data load + polling ─────────────────────────────────────
   const loadData = useCallback(async () => {
-    const [rawDriversResult, rawRidesResult] = await Promise.all([
+    const [rawDriversResult, ridesResult] = await Promise.all([
       getMonitoringDrivers().catch(() => [] as any[]),
-      getMonitoringRides().catch(() => [] as any[]),
+      getMonitoringRides()
+        .then((data) => ({ ok: true as const, data }))
+        .catch((err) => ({ ok: false as const, err })),
     ]);
     const rawDrivers = Array.isArray(rawDriversResult) ? rawDriversResult : [];
-    const rawRides = Array.isArray(rawRidesResult) ? rawRidesResult : [];
 
     // Sync driver markers
     const incomingDriverIds = new Set<string>();
@@ -277,17 +282,28 @@ export default function MonitoringPage() {
       }
     }
 
-    // Sync ride markers
-    const incomingRideIds = new Set<string>();
-    for (const r of rawRides as MonitoringRide[]) {
-      incomingRideIds.add(r.id);
-      applyRide(r);
-    }
-    for (const id of ridesMapRef.current.keys()) {
-      if (!incomingRideIds.has(id)) {
-        mapHandlesRef.current?.removeRideMarkers(id);
-        ridesMapRef.current.delete(id);
+    // Sync ride markers — only when the fetch actually succeeded. Treating a
+    // failed fetch as "zero active rides" would both wipe the existing
+    // markers/list and render identically to a genuinely quiet period, so a
+    // failure surfaces via activeRidesError instead and leaves the last-known
+    // rides in place (never swallowed into an empty array).
+    if (ridesResult.ok) {
+      setActiveRidesError(null);
+      const rawRides = Array.isArray(ridesResult.data) ? ridesResult.data : [];
+      const incomingRideIds = new Set<string>();
+      for (const r of rawRides as MonitoringRide[]) {
+        incomingRideIds.add(r.id);
+        applyRide(r);
       }
+      for (const id of ridesMapRef.current.keys()) {
+        if (!incomingRideIds.has(id)) {
+          mapHandlesRef.current?.removeRideMarkers(id);
+          ridesMapRef.current.delete(id);
+        }
+      }
+    } else {
+      console.error("active rides fetch failed", ridesResult.err);
+      setActiveRidesError(ridesResult.err?.message ?? "Active rides failed to load.");
     }
 
     refreshCounts();
@@ -620,6 +636,18 @@ export default function MonitoringPage() {
           <span className="font-medium">Live data paused</span>
           <span className="text-warning">
             — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : wsError || "connection lost"})
+          </span>
+        </div>
+      )}
+
+      {/* Active-rides fetch failure — a separate feed from the WebSocket above
+          (REST poll, not the live socket), so it needs its own banner: the
+          rides list can be stuck on stale data while the socket is fine. */}
+      {activeRidesError && (
+        <div className="flex items-center gap-2 bg-warning/10 border-b border-warning/30 px-4 py-2 text-sm text-warning">
+          <span className="font-medium">Live data paused</span>
+          <span className="text-warning">
+            — active rides list may be stale ({activeRidesError})
           </span>
         </div>
       )}

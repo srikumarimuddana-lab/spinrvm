@@ -154,6 +154,29 @@ export const adminCommitLegacyDriverImport = (file: File, opts?: LegacyDriverImp
         body: legacyDriverImportFormData(file, opts),
     });
 
+/** One-time repair for the 2026-08-29 production incident: users flagged
+ * is_driver=true via this import's existing-account-link path whose
+ * companion drivers row never landed (a since-fixed commit-ordering bug).
+ * apply=false (default) only reports what would be created. */
+export interface OrphanedDriverBackfillResult {
+    scanned: number;
+    applied: boolean;
+    fixed: number;
+}
+export const adminBackfillOrphanedLegacyDrivers = (
+    apply: boolean,
+    opts?: { serviceAreaId?: string; serviceAreaName?: string },
+) =>
+    request<OrphanedDriverBackfillResult>("/api/admin/legacy-drivers/backfill-orphaned", {
+        method: "POST",
+        body: JSON.stringify({
+            apply,
+            service_area_id: opts?.serviceAreaId,
+            service_area_name: opts?.serviceAreaName,
+        }),
+        headers: { "Content-Type": "application/json" },
+    });
+
 /* ── Legacy Booking Import (4 CSVs) ───────── */
 // Super-admin-only (backend/routes/admin/booking_import.py). Imports completed
 // rides from the previous app into `rides`, plus one offsetting `payouts` row
@@ -172,6 +195,7 @@ export interface BookingImportCounts {
     bookings_read: number;
     skipped_not_completed: number;
     skipped_test_account: number;
+    skipped_cancelled_failed_excluded_by_scope: number;
     target_rows: number;
     skipped_already_imported: number;
     skipped_unmatched_both: number;
@@ -188,6 +212,20 @@ export interface BookingImportCounts {
     sum_offset_payouts: number;
     sum_tips: number;
     sum_tax: number;
+    // --- cancelled/failed path (added 2026-08-20, A41) --- rides_planned
+    // above is completed-only and predates this path; these are the fields
+    // that account for the rest of what commit actually writes to `rides`.
+    cancelled_target_rows: number;
+    failed_target_rows: number;
+    cancelled_failed_rides_planned: number;
+    cancelled_failed_skipped_already_imported: number;
+    cancelled_failed_skipped_unmatched_both: number;
+    cancelled_failed_zero_fare_completed: number;
+    cancelled_failed_skipped_missing_coordinates: number;
+    cancelled_failed_unmatched_riders: number;
+    cancelled_failed_unmatched_drivers: number;
+    total_rides_planned: number;
+    insurance_periods_planned: number;
 }
 export interface BookingImportReport {
     batch: string;
@@ -220,6 +258,11 @@ export interface BookingImportOptions {
     vehicleTypeId?: string;
     vehicleTypeName?: string;
     batch?: string;
+    // Per-run scope, not a re-litigation of the 2026-08-20 decision to
+    // support cancelled/failed bookings -- that decision stands and the
+    // backend still defaults to true. Lets one commit be scoped down
+    // without changing the default for the next.
+    includeCancelledFailed?: boolean;
 }
 
 function bookingImportFormData(files: BookingImportFiles, opts?: BookingImportOptions): FormData {
@@ -233,6 +276,9 @@ function bookingImportFormData(files: BookingImportFiles, opts?: BookingImportOp
     if (opts?.vehicleTypeId) fd.append("vehicle_type_id", opts.vehicleTypeId);
     if (opts?.vehicleTypeName) fd.append("vehicle_type_name", opts.vehicleTypeName);
     if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.includeCancelledFailed !== undefined) {
+        fd.append("include_cancelled_failed", String(opts.includeCancelledFailed));
+    }
     return fd;
 }
 
@@ -634,6 +680,26 @@ export interface SnapshotRegenerateResult {
 
 export const adminRegenerateImportedSnapshots = (force: boolean, limit: number = 50) =>
     request<SnapshotRegenerateResult>("/api/admin/rides/regenerate-imported-snapshots", {
+        method: "POST",
+        body: JSON.stringify({ force, limit }),
+        headers: { "Content-Type": "application/json" },
+    });
+
+/* ── Imported Ride Road-Route Regeneration ───────────── */
+// Admin-dashboard equivalent of scripts/backfill_imported_ride_routes.py --
+// that CLI script needs shell access to the backend; this lets an operator
+// run the same backfill safely through the browser like every other
+// legacy-migration tool on this page.
+export interface RouteRegenerateResult {
+    total: number;
+    success: number;
+    failed: number;
+    message?: string;
+    errors: { ride_id: string; error: string }[];
+}
+
+export const adminRegenerateImportedRoutes = (force: boolean, limit: number = 200) =>
+    request<RouteRegenerateResult>("/api/admin/rides/regenerate-imported-routes", {
         method: "POST",
         body: JSON.stringify({ force, limit }),
         headers: { "Content-Type": "application/json" },

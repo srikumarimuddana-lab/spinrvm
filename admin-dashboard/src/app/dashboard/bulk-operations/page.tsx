@@ -37,6 +37,7 @@ import {
     adminValidateRiderImport,
     adminCommitRiderImport,
     adminRegenerateImportedSnapshots,
+    adminRegenerateImportedRoutes,
     type StripeImportKind,
     type StripeImportReport,
     type StripeImportReportItem,
@@ -46,6 +47,7 @@ import {
     type RiderImportReportItem,
     type RiderImportDuplicate,
     type SnapshotRegenerateResult,
+    type RouteRegenerateResult,
 } from "@/lib/api";
 import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
@@ -751,31 +753,37 @@ export default function BulkOperationsPage() {
                 </Card>
             )}
 
-            {/* Rider bulk import has moved to the Data Transfer module (Import
-                tab), which also carries documents, ride history, and the
-                insurance-period audit trail — not just profile CSV rows.
-                RiderImportSection is kept below (unused) rather than deleted
-                in case a rollback needs it back quickly. */}
-            <Card>
-                <CardHeader>
-                    <CardTitle>Rider Bulk Import has moved</CardTitle>
-                    <CardDescription>
-                        Rider import now lives in the Data Transfer module, alongside driver import, export, and SGI
-                        compliance forms.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <Button asChild>
-                        <a href="/dashboard/data-transfer">Go to Data Transfer</a>
-                    </Button>
-                </CardContent>
-            </Card>
-
+            {/* Corrected 2026-08-30: the "moved to Data Transfer" redirect below
+                was wrong -- checked, and Data Transfer's Import tab
+                (adminValidateDataTransferImport/adminCommitDataTransferImport,
+                routes/admin/data_transfer_import.py) is a different tool
+                entirely: it re-imports a previously-exported Spinr-native
+                data-portability bundle for one account (a zip built by the
+                Export tab), not a bulk CSV of brand-new accounts from an
+                external system. It cannot read the legacy Mongo customers.csv
+                shape this section expects. RiderImportSection was fully
+                built, tested (21 passing tests), and simply unreached by any
+                page for however long this redirect card pointed somewhere
+                that never had it — restored here rather than left orphaned. */}
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <MapPin className="h-4 w-4" />
                 Imported Ride Snapshots — regenerate route map images with Google Maps tiles
             </div>
             <SnapshotRegenerateSection />
+
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <MapPin className="h-4 w-4" />
+                Imported Ride Routes — backfill road-following routes (OSRM/Google Directions)
+            </div>
+            <RouteRegenerateSection />
+
+            {/* Ordering matters: booking_import_service.py matches a ride's
+                rider/driver by phone against an EXISTING account -- a rider
+                with no account yet gets their completed rides silently
+                skipped, not created alongside them. Run this before Legacy
+                Booking Import for any batch that includes riders not
+                already in production. */}
+            <RiderImportSection />
 
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <Upload className="h-4 w-4" />
@@ -872,6 +880,106 @@ function SnapshotRegenerateSection() {
                             <span className="text-muted-foreground">
                                 Renderer: {result.renderer}
                             </span>
+                        </div>
+                        {result.errors.length > 0 && (
+                            <details className="text-sm">
+                                <summary className="cursor-pointer text-muted-foreground">
+                                    Error details ({result.errors.length})
+                                </summary>
+                                <ul className="mt-2 space-y-1 text-xs font-mono">
+                                    {result.errors.map((e, i) => (
+                                        <li key={i}>
+                                            {e.ride_id.slice(0, 8)}… — {e.error}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </details>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+function RouteRegenerateSection() {
+    const { toast } = useToast();
+    const [running, setRunning] = useState(false);
+    const [force, setForce] = useState(false);
+    const [result, setResult] = useState<RouteRegenerateResult | null>(null);
+
+    const handleRegenerate = async () => {
+        setRunning(true);
+        setResult(null);
+        try {
+            const res = await adminRegenerateImportedRoutes(force, 200);
+            setResult(res);
+            toast({
+                title: `Routes regenerated`,
+                description: `${res.success} succeeded, ${res.failed} failed`,
+            });
+        } catch (err: unknown) {
+            toast({
+                title: "Route generation failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Route Backfill</CardTitle>
+                <CardDescription>
+                    Compute road-following routes (OSRM, falling back to Google Directions) for
+                    imported rides missing a real <code>planned_route_polyline</code>, and update
+                    each ride&apos;s <code>distance_km</code> to match.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={force}
+                            onChange={(e) => setForce(e.target.checked)}
+                            className="rounded border-input"
+                        />
+                        Re-generate all (including rides that already have a route)
+                    </label>
+                </div>
+                <Button onClick={handleRegenerate} disabled={running}>
+                    {running ? (
+                        <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Generating routes...
+                        </>
+                    ) : (
+                        <>
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Regenerate Routes
+                        </>
+                    )}
+                </Button>
+                {result && (
+                    <div className="rounded-md border p-4 space-y-2">
+                        <div className="flex gap-4 text-sm">
+                            <span className="flex items-center gap-1">
+                                <CheckCircle2 className="h-4 w-4 text-success" />
+                                {result.success} succeeded
+                            </span>
+                            {result.failed > 0 && (
+                                <span className="flex items-center gap-1">
+                                    <AlertTriangle className="h-4 w-4 text-warning" />
+                                    {result.failed} failed
+                                </span>
+                            )}
+                            {result.message && (
+                                <span className="text-muted-foreground">{result.message}</span>
+                            )}
                         </div>
                         {result.errors.length > 0 && (
                             <details className="text-sm">

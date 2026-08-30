@@ -317,3 +317,74 @@ def test_requires_admin_auth(test_client):
     # No admin_override fixture -> the router-level get_admin_user gate rejects.
     resp = _post(test_client, "/api/admin/legacy-drivers/import/validate", _csv(GOOD_ROW))
     assert resp.status_code in (401, 403)
+
+
+# ── /legacy-drivers/backfill-orphaned (2026-08-29 data repair) ──────────
+
+_ORPHAN_HISTORY = [
+    {
+        "batch": "20260828205731",
+        "old_driver_id": "697cb9d28cd7f3775ff4fe6e",
+        "source": "legacy_mongo_driver_import",
+        "was_deleted_in_source": False,
+        "was_blocked_in_source": False,
+        "incomplete_profile_in_source": True,
+        "linked_at": "2026-08-28T20:57:37.794441+00:00",
+    }
+]
+
+
+def _orphan_store():
+    store = _fresh_store()
+    store["users"] = [
+        {
+            "id": "u-orphan",
+            "first_name": "Unnamed",
+            "last_name": "Legacy Driver fe6e",
+            "phone": "+16393188526",
+            "is_driver": True,
+            "legacy_import_metadata": {"mongo_driver_history": _ORPHAN_HISTORY},
+        }
+    ]
+    return store
+
+
+def test_backfill_orphaned_dry_run_default_does_not_write(test_client, super_admin_override):
+    store = _orphan_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post("/api/admin/legacy-drivers/backfill-orphaned", json={})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {"scanned": 1, "applied": False, "fixed": 1}
+    assert store["drivers"] == []
+
+
+def test_backfill_orphaned_apply_writes_and_audit_logs(test_client, super_admin_override):
+    store = _orphan_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit as audit_mock:
+        resp = test_client.post("/api/admin/legacy-drivers/backfill-orphaned", json={"apply": True})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {"scanned": 1, "applied": True, "fixed": 1}
+    assert len(store["drivers"]) == 1
+    assert store["drivers"][0]["user_id"] == "u-orphan"
+    assert store["drivers"][0]["service_area_id"] == "sa-1"
+    audit_mock.assert_awaited_once()
+    assert audit_mock.await_args[0][1] == "legacy_driver_orphan_backfill"
+
+
+def test_backfill_orphaned_no_orphans_is_a_no_op(test_client, super_admin_override):
+    store = _fresh_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post("/api/admin/legacy-drivers/backfill-orphaned", json={"apply": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"scanned": 0, "applied": True, "fixed": 0}
+    assert store["drivers"] == []
+
+
+def test_backfill_orphaned_requires_admin_auth(test_client):
+    resp = test_client.post("/api/admin/legacy-drivers/backfill-orphaned", json={})
+    assert resp.status_code in (401, 403)

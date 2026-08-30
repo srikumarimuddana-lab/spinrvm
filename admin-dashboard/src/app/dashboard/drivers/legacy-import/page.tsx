@@ -13,8 +13,10 @@ import {
 import {
     adminValidateLegacyDriverImport,
     adminCommitLegacyDriverImport,
+    adminBackfillOrphanedLegacyDrivers,
     type LegacyDriverImportReport,
     type LegacyDriverImportReportItem,
+    type OrphanedDriverBackfillResult,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -495,6 +497,101 @@ export default function LegacyDriverImportPage() {
                     </CardContent>
                 </Card>
             )}
+
+            <OrphanedDriverBackfillSection />
         </div>
+    );
+}
+
+// One-time repair tool for the 2026-08-29 production incident: two commits
+// made before commit_mongo_driver_import_plan's atomicity fix left users
+// flagged is_driver=true (via this import's existing-account-link path)
+// with no matching drivers row at all — see
+// docs/change-log/2026-08-29-legacy-driver-import-orphan-fix.md. Preview
+// (apply=false) always runs first; Apply Fix only appears once a preview
+// has found something to fix.
+function OrphanedDriverBackfillSection() {
+    const { toast } = useToast();
+    const [running, setRunning] = useState(false);
+    const [result, setResult] = useState<OrphanedDriverBackfillResult | null>(null);
+
+    const runScan = async (apply: boolean) => {
+        setRunning(true);
+        try {
+            const res = await adminBackfillOrphanedLegacyDrivers(apply);
+            setResult(res);
+            toast({
+                title: apply ? "Backfill applied" : "Scan complete",
+                description: apply
+                    ? `${res.fixed} driver row(s) created for ${res.scanned} orphaned account(s)`
+                    : `Found ${res.fixed} orphaned account(s) out of ${res.scanned} scanned`,
+            });
+        } catch (err: unknown) {
+            toast({
+                title: apply ? "Backfill failed" : "Scan failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setRunning(false);
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>Fix Orphaned Legacy-Linked Accounts</CardTitle>
+                <CardDescription>
+                    One-time data repair — not part of the normal import flow above. Finds
+                    users flagged as a driver (is_driver=true) via this import&apos;s
+                    existing-account-link path whose driver profile was never actually
+                    created (a since-fixed commit-ordering bug), and creates the missing{" "}
+                    <span className="font-mono">needs_review</span>/offline/unverified driver
+                    row from that account&apos;s own surviving import history. Safe to re-run —
+                    only accounts still missing a driver row show up each time.
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex items-center gap-3">
+                    <Button variant="outline" onClick={() => runScan(false)} disabled={running}>
+                        {running ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <Info className="mr-2 h-4 w-4" />
+                        )}
+                        Preview (no writes)
+                    </Button>
+                    {result && !result.applied && result.fixed > 0 && (
+                        <Button onClick={() => runScan(true)} disabled={running}>
+                            {running ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                            )}
+                            Apply fix ({result.fixed})
+                        </Button>
+                    )}
+                </div>
+                {result && (
+                    <div className="rounded-md border p-4 text-sm">
+                        <p>
+                            Scanned <span className="font-mono">{result.scanned}</span> account(s)
+                            with orphaned legacy-driver history; {result.applied ? "created" : "would create"}{" "}
+                            <span className="font-mono">{result.fixed}</span> driver row(s).
+                        </p>
+                        {result.applied && result.fixed > 0 && (
+                            <p className="mt-2 flex items-center gap-1.5 text-success">
+                                <CheckCircle2 className="h-4 w-4" /> Fixed — re-run Preview to confirm zero remain.
+                            </p>
+                        )}
+                        {!result.applied && result.fixed === 0 && (
+                            <p className="mt-2 flex items-center gap-1.5 text-success">
+                                <CheckCircle2 className="h-4 w-4" /> Nothing to fix.
+                            </p>
+                        )}
+                    </div>
+                )}
+            </CardContent>
+        </Card>
     );
 }

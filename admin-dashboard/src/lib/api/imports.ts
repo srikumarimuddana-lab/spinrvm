@@ -154,6 +154,29 @@ export const adminCommitLegacyDriverImport = (file: File, opts?: LegacyDriverImp
         body: legacyDriverImportFormData(file, opts),
     });
 
+/** One-time repair for the 2026-08-29 production incident: users flagged
+ * is_driver=true via this import's existing-account-link path whose
+ * companion drivers row never landed (a since-fixed commit-ordering bug).
+ * apply=false (default) only reports what would be created. */
+export interface OrphanedDriverBackfillResult {
+    scanned: number;
+    applied: boolean;
+    fixed: number;
+}
+export const adminBackfillOrphanedLegacyDrivers = (
+    apply: boolean,
+    opts?: { serviceAreaId?: string; serviceAreaName?: string },
+) =>
+    request<OrphanedDriverBackfillResult>("/api/admin/legacy-drivers/backfill-orphaned", {
+        method: "POST",
+        body: JSON.stringify({
+            apply,
+            service_area_id: opts?.serviceAreaId,
+            service_area_name: opts?.serviceAreaName,
+        }),
+        headers: { "Content-Type": "application/json" },
+    });
+
 /* ── Legacy Booking Import (4 CSVs) ───────── */
 // Super-admin-only (backend/routes/admin/booking_import.py). Imports completed
 // rides from the previous app into `rides`, plus one offsetting `payouts` row

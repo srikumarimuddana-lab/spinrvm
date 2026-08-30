@@ -753,26 +753,18 @@ export default function BulkOperationsPage() {
                 </Card>
             )}
 
-            {/* Rider bulk import has moved to the Data Transfer module (Import
-                tab), which also carries documents, ride history, and the
-                insurance-period audit trail — not just profile CSV rows.
-                RiderImportSection is kept below (unused) rather than deleted
-                in case a rollback needs it back quickly. */}
-            <Card>
-                <CardHeader>
-                    <CardTitle>Rider Bulk Import has moved</CardTitle>
-                    <CardDescription>
-                        Rider import now lives in the Data Transfer module, alongside driver import, export, and SGI
-                        compliance forms.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <Button asChild>
-                        <a href="/dashboard/data-transfer">Go to Data Transfer</a>
-                    </Button>
-                </CardContent>
-            </Card>
-
+            {/* Corrected 2026-08-30: the "moved to Data Transfer" redirect below
+                was wrong -- checked, and Data Transfer's Import tab
+                (adminValidateDataTransferImport/adminCommitDataTransferImport,
+                routes/admin/data_transfer_import.py) is a different tool
+                entirely: it re-imports a previously-exported Spinr-native
+                data-portability bundle for one account (a zip built by the
+                Export tab), not a bulk CSV of brand-new accounts from an
+                external system. It cannot read the legacy Mongo customers.csv
+                shape this section expects. RiderImportSection was fully
+                built, tested (21 passing tests), and simply unreached by any
+                page for however long this redirect card pointed somewhere
+                that never had it — restored here rather than left orphaned. */}
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <MapPin className="h-4 w-4" />
                 Imported Ride Snapshots — regenerate route map images with Google Maps tiles
@@ -784,6 +776,14 @@ export default function BulkOperationsPage() {
                 Imported Ride Routes — backfill road-following routes (OSRM/Google Directions)
             </div>
             <RouteRegenerateSection />
+
+            {/* Ordering matters: booking_import_service.py matches a ride's
+                rider/driver by phone against an EXISTING account -- a rider
+                with no account yet gets their completed rides silently
+                skipped, not created alongside them. Run this before Legacy
+                Booking Import for any batch that includes riders not
+                already in production. */}
+            <RiderImportSection />
 
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <Upload className="h-4 w-4" />

@@ -518,7 +518,14 @@ function OrphanedDriverBackfillSection() {
     const runScan = async (apply: boolean) => {
         setRunning(true);
         try {
-            const res = await adminBackfillOrphanedLegacyDrivers(apply);
+            // Same Saskatoon default id used by the CSV import form above —
+            // a bare name lookup is ambiguous in production ("Saskatoon" and
+            // "Saskatoon Airport" both match get_service_area()'s
+            // ilike("name", "%Saskatoon%")), which get_service_area()
+            // correctly refuses to guess at rather than picking one.
+            const res = await adminBackfillOrphanedLegacyDrivers(apply, {
+                serviceAreaId: "361d17bb-ec55-4561-943f-e3bbee5d7a55",
+            });
             setResult(res);
             toast({
                 title: apply ? "Backfill applied" : "Scan complete",

@@ -181,6 +181,32 @@ describe('DocumentReviewer', () => {
     );
   });
 
+  describe('canReview=false (staff missing the "documents" module grant)', () => {
+    // Regression pin: the "drivers" module (gating the whole Drivers page)
+    // and the "documents" module (gating getDriverDocuments/reviewDocument/
+    // downloadDriverDocument server-side) are two different grants. A staff
+    // member can hold "drivers" without "documents" — previously that meant
+    // seeing the full approve/reject UI here and getting a 403 on every
+    // click, because nothing checked "documents" client-side.
+    it('does not fetch documents and shows a permission message instead of the reviewer UI', async () => {
+      render(<DocumentReviewer open driverId="d1" driverName="Ada" onClose={() => {}} canReview={false} />);
+
+      await screen.findByText(/don.t have access to document review/i);
+      expect(getDriverDocuments).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Reject/ })).not.toBeInTheDocument();
+    });
+
+    it('still lets the staff member close the dialog', async () => {
+      const onClose = vi.fn();
+      render(<DocumentReviewer open driverId="d1" driverName="Ada" onClose={onClose} canReview={false} />);
+
+      await screen.findByText(/don.t have access to document review/i);
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalled();
+    });
+  });
+
   describe('focus trap (ranked blocker #22)', () => {
     it('moves focus into the modal dialog when it opens', async () => {
       const trigger = document.createElement('button');

@@ -132,6 +132,43 @@ describe('ActiveRidePanel', () => {
     expect(getAllByText('$15.00').length).toBeGreaterThan(0);
   });
 
+  // rides.driver_earnings is fare-only (the bonus is claimed at completion),
+  // so the panel adds the projected bonus itself — otherwise the headline drops
+  // to the bare fare the moment the driver accepts the offer.
+  describe('incentive bonus', () => {
+    it('adds the bonus to the headline and shows the split', () => {
+      const { getAllByText, getByText } = renderWithSafeArea(
+        <ActiveRidePanel {...defaultProps} totalBonus={5} />,
+      );
+      expect(getAllByText('$20.00').length).toBeGreaterThan(0);
+      expect(getByText('$15.00 + $5.00 bonus')).toBeTruthy();
+    });
+
+    it('announces the bonus to screen readers', () => {
+      const { getByLabelText } = renderWithSafeArea(
+        <ActiveRidePanel {...defaultProps} totalBonus={5} />,
+      );
+      expect(
+        getByLabelText(/earnings \$20\.00, including \$5\.00 bonus/),
+      ).toBeTruthy();
+    });
+
+    it('shows no bonus line when there is no incentive', () => {
+      const { queryByText, getAllByText } = renderWithSafeArea(
+        <ActiveRidePanel {...defaultProps} totalBonus={null} />,
+      );
+      expect(getAllByText('$15.00').length).toBeGreaterThan(0);
+      expect(queryByText(/bonus/)).toBeNull();
+    });
+
+    it('shows no bonus line for a zero bonus', () => {
+      const { queryByText } = renderWithSafeArea(
+        <ActiveRidePanel {...defaultProps} totalBonus={0} />,
+      );
+      expect(queryByText(/bonus/)).toBeNull();
+    });
+  });
+
   it('shows pickup address', () => {
     const { getByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     expect(getByText('123 Main St')).toBeTruthy();
@@ -146,6 +183,15 @@ describe('ActiveRidePanel', () => {
     const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     // Label flips to "Expand ride details" when collapsed; expanded is the default.
     expect(getByLabelText('Collapse ride details')).toBeTruthy();
+  });
+
+  it('reports its expanded state to onExpandedChange so the map can reserve mapPadding', () => {
+    // index.tsx's follow-camera effect trusts this callback to know how much
+    // of the screen the sheet occupies (see its onExpandedChange comment) —
+    // pin that it fires true on mount (the sheet's real default state).
+    const onExpandedChange = jest.fn();
+    renderWithSafeArea(<ActiveRidePanel {...defaultProps} onExpandedChange={onExpandedChange} />);
+    expect(onExpandedChange).toHaveBeenCalledWith(true);
   });
 
   it('renders nothing when ride is null', () => {

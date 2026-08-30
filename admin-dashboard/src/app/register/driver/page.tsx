@@ -236,36 +236,36 @@ export default function DriverRegistrationPage() {
             case 0: return (
                 <div className="space-y-4">
                     <div className="space-y-2">
-                        <Label>Phone Number</Label>
-                        <Input placeholder="+1306..." value={formData.phone} onChange={e => handleChange("phone", e.target.value)} />
+                        <Label htmlFor="phone">Phone Number</Label>
+                        <Input id="phone" placeholder="+1306..." value={formData.phone} onChange={e => handleChange("phone", e.target.value)} />
                     </div>
                 </div>
             );
             case 1: return (
                 <div className="space-y-4">
                     <div className="space-y-2">
-                        <Label>Enter OTP sent to {formData.phone}</Label>
-                        <Input placeholder="1234" value={formData.otp} onChange={e => handleChange("otp", e.target.value)} />
+                        <Label htmlFor="otp">Enter OTP sent to {formData.phone}</Label>
+                        <Input id="otp" placeholder="1234" value={formData.otp} onChange={e => handleChange("otp", e.target.value)} />
                     </div>
                 </div>
             );
             case 2: return (
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                        <Label>First Name</Label>
-                        <Input value={formData.first_name} onChange={e => handleChange("first_name", e.target.value)} />
+                        <Label htmlFor="first_name">First Name</Label>
+                        <Input id="first_name" value={formData.first_name} onChange={e => handleChange("first_name", e.target.value)} />
                     </div>
                     <div className="space-y-2">
-                        <Label>Last Name</Label>
-                        <Input value={formData.last_name} onChange={e => handleChange("last_name", e.target.value)} />
+                        <Label htmlFor="last_name">Last Name</Label>
+                        <Input id="last_name" value={formData.last_name} onChange={e => handleChange("last_name", e.target.value)} />
                     </div>
                     <div className="space-y-2 sm:col-span-2">
-                        <Label>Email</Label>
-                        <Input type="email" value={formData.email} onChange={e => handleChange("email", e.target.value)} />
+                        <Label htmlFor="email">Email</Label>
+                        <Input id="email" type="email" value={formData.email} onChange={e => handleChange("email", e.target.value)} />
                     </div>
                     <div className="space-y-2 sm:col-span-2">
-                        <Label>City</Label>
-                        <Input value={formData.city} onChange={e => handleChange("city", e.target.value)} />
+                        <Label htmlFor="city">City</Label>
+                        <Input id="city" value={formData.city} onChange={e => handleChange("city", e.target.value)} />
                     </div>
                 </div>
             );
@@ -283,29 +283,29 @@ export default function DriverRegistrationPage() {
                         </Select>
                     </div>
                     <div className="space-y-2">
-                        <Label>Year</Label>
-                        <Input type="number" placeholder="2020" value={formData.vehicle_year} onChange={e => handleChange("vehicle_year", e.target.value)} />
+                        <Label htmlFor="vehicle_year">Year</Label>
+                        <Input id="vehicle_year" type="number" placeholder="2020" value={formData.vehicle_year} onChange={e => handleChange("vehicle_year", e.target.value)} />
                         <p className="text-xs text-muted-foreground">Must be {new Date().getFullYear() - 9} or newer.</p>
                     </div>
                     <div className="space-y-2">
-                        <Label>Make</Label>
-                        <Input placeholder="Toyota" value={formData.vehicle_make} onChange={e => handleChange("vehicle_make", e.target.value)} />
+                        <Label htmlFor="vehicle_make">Make</Label>
+                        <Input id="vehicle_make" placeholder="Toyota" value={formData.vehicle_make} onChange={e => handleChange("vehicle_make", e.target.value)} />
                     </div>
                     <div className="space-y-2">
-                        <Label>Model</Label>
-                        <Input placeholder="Camry" value={formData.vehicle_model} onChange={e => handleChange("vehicle_model", e.target.value)} />
+                        <Label htmlFor="vehicle_model">Model</Label>
+                        <Input id="vehicle_model" placeholder="Camry" value={formData.vehicle_model} onChange={e => handleChange("vehicle_model", e.target.value)} />
                     </div>
                     <div className="space-y-2">
-                        <Label>Color</Label>
-                        <Input placeholder="White" value={formData.vehicle_color} onChange={e => handleChange("vehicle_color", e.target.value)} />
+                        <Label htmlFor="vehicle_color">Color</Label>
+                        <Input id="vehicle_color" placeholder="White" value={formData.vehicle_color} onChange={e => handleChange("vehicle_color", e.target.value)} />
                     </div>
                     <div className="space-y-2">
-                        <Label>License Plate</Label>
-                        <Input placeholder="ABC 123" value={formData.license_plate} onChange={e => handleChange("license_plate", e.target.value)} />
+                        <Label htmlFor="license_plate">License Plate</Label>
+                        <Input id="license_plate" placeholder="ABC 123" value={formData.license_plate} onChange={e => handleChange("license_plate", e.target.value)} />
                     </div>
                     <div className="space-y-2 sm:col-span-2">
-                        <Label>VIN (Vehicle Identification Number)</Label>
-                        <Input value={formData.vehicle_vin} onChange={e => handleChange("vehicle_vin", e.target.value)} />
+                        <Label htmlFor="vehicle_vin">VIN (Vehicle Identification Number)</Label>
+                        <Input id="vehicle_vin" value={formData.vehicle_vin} onChange={e => handleChange("vehicle_vin", e.target.value)} />
                     </div>
                 </div>
             );
@@ -315,20 +315,20 @@ export default function DriverRegistrationPage() {
                         <h4 className="font-medium flex items-center gap-2"><FileText className="h-4 w-4" /> Driver&apos;s License</h4>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
-                                <Label>License Number</Label>
-                                <Input value={formData.license_number} onChange={e => handleChange("license_number", e.target.value)} />
+                                <Label htmlFor="license_number">License Number</Label>
+                                <Input id="license_number" value={formData.license_number} onChange={e => handleChange("license_number", e.target.value)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Expiry Date</Label>
-                                <Input type="date" value={formData.license_expiry_date} onChange={e => handleChange("license_expiry_date", e.target.value)} />
+                                <Label htmlFor="license_expiry_date">Expiry Date</Label>
+                                <Input id="license_expiry_date" type="date" value={formData.license_expiry_date} onChange={e => handleChange("license_expiry_date", e.target.value)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Front Photo</Label>
-                                <Input type="file" onChange={e => handleFileChange("license_front", e.target.files?.[0] || null)} />
+                                <Label htmlFor="license_front">Front Photo</Label>
+                                <Input id="license_front" type="file" onChange={e => handleFileChange("license_front", e.target.files?.[0] || null)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Back Photo</Label>
-                                <Input type="file" onChange={e => handleFileChange("license_back", e.target.files?.[0] || null)} />
+                                <Label htmlFor="license_back">Back Photo</Label>
+                                <Input id="license_back" type="file" onChange={e => handleFileChange("license_back", e.target.files?.[0] || null)} />
                             </div>
                         </div>
                     </div>
@@ -337,24 +337,24 @@ export default function DriverRegistrationPage() {
                         <h4 className="font-medium flex items-center gap-2"><Car className="h-4 w-4" /> Vehicle Documents</h4>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
-                                <Label>Inspection Expiry</Label>
-                                <Input type="date" value={formData.vehicle_inspection_expiry_date} onChange={e => handleChange("vehicle_inspection_expiry_date", e.target.value)} />
+                                <Label htmlFor="vehicle_inspection_expiry_date">Inspection Expiry</Label>
+                                <Input id="vehicle_inspection_expiry_date" type="date" value={formData.vehicle_inspection_expiry_date} onChange={e => handleChange("vehicle_inspection_expiry_date", e.target.value)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Insurance Expiry</Label>
-                                <Input type="date" value={formData.insurance_expiry_date} onChange={e => handleChange("insurance_expiry_date", e.target.value)} />
+                                <Label htmlFor="insurance_expiry_date">Insurance Expiry</Label>
+                                <Input id="insurance_expiry_date" type="date" value={formData.insurance_expiry_date} onChange={e => handleChange("insurance_expiry_date", e.target.value)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Upload Inspection</Label>
-                                <Input type="file" onChange={e => handleFileChange("inspection", e.target.files?.[0] || null)} />
+                                <Label htmlFor="inspection_file">Upload Inspection</Label>
+                                <Input id="inspection_file" type="file" onChange={e => handleFileChange("inspection", e.target.files?.[0] || null)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Upload Insurance</Label>
-                                <Input type="file" onChange={e => handleFileChange("insurance", e.target.files?.[0] || null)} />
+                                <Label htmlFor="insurance_file">Upload Insurance</Label>
+                                <Input id="insurance_file" type="file" onChange={e => handleFileChange("insurance", e.target.files?.[0] || null)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Upload Registration</Label>
-                                <Input type="file" onChange={e => handleFileChange("registration", e.target.files?.[0] || null)} />
+                                <Label htmlFor="registration_file">Upload Registration</Label>
+                                <Input id="registration_file" type="file" onChange={e => handleFileChange("registration", e.target.files?.[0] || null)} />
                             </div>
                         </div>
                     </div>
@@ -363,12 +363,12 @@ export default function DriverRegistrationPage() {
                         <h4 className="font-medium flex items-center gap-2"><Check className="h-4 w-4" /> Background Check</h4>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
-                                <Label>Expiry Date</Label>
-                                <Input type="date" value={formData.background_check_expiry_date} onChange={e => handleChange("background_check_expiry_date", e.target.value)} />
+                                <Label htmlFor="background_check_expiry_date">Expiry Date</Label>
+                                <Input id="background_check_expiry_date" type="date" value={formData.background_check_expiry_date} onChange={e => handleChange("background_check_expiry_date", e.target.value)} />
                             </div>
                             <div className="space-y-2">
-                                <Label>Upload Document</Label>
-                                <Input type="file" onChange={e => handleFileChange("background_check", e.target.files?.[0] || null)} />
+                                <Label htmlFor="background_check_file">Upload Document</Label>
+                                <Input id="background_check_file" type="file" onChange={e => handleFileChange("background_check", e.target.files?.[0] || null)} />
                             </div>
                         </div>
                     </div>

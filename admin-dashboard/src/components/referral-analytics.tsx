@@ -10,6 +10,8 @@ import { formatCurrency } from "@/lib/utils";
 import {
     LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from "recharts";
+import { useTheme } from "next-themes";
+import { chartColors } from "@/components/analytics/chart-palette";
 import { Users, CheckCircle2, Clock, XCircle, DollarSign, Percent, Gift, TrendingUp, RefreshCw } from "lucide-react";
 
 /**
@@ -27,6 +29,9 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
     const [data, setData] = useState<Data | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
 
     // Service areas for the filter dropdown — loaded once.
     useEffect(() => {
@@ -154,12 +159,12 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
                                         <YAxis yAxisId="left" allowDecimals={false} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                                         <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                                         <Tooltip
-                                            contentStyle={{ background: "hsl(var(--background))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                                            contentStyle={c.tooltip}
                                             formatter={(v: any, name: any) => (name === "Paid" ? formatCurrency(Number(v || 0)) : v)}
                                         />
                                         <Legend wrapperStyle={{ fontSize: 12 }} />
                                         <Line yAxisId="left" type="monotone" dataKey="redeemed" name="Redeemed" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
-                                        <Line yAxisId="right" type="monotone" dataKey="paidNum" name="Paid" stroke="#10b981" strokeWidth={2} dot={false} />
+                                        <Line yAxisId="right" type="monotone" dataKey="paidNum" name="Paid" stroke={c.good} strokeWidth={2} dot={false} />
                                     </LineChart>
                                 </ResponsiveContainer>
                             )}

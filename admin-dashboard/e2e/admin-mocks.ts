@@ -20,7 +20,17 @@ export const MOCK_ADMIN_USER = {
   id: 'admin_1',
   email: 'admin@spinr.ca',
   role: 'admin',
-  modules: ['dashboard'],
+  // Full grantable-module list (backend/routes/admin/staff.py
+  // AVAILABLE_MODULES). useRequireModule no longer treats role "admin" as a
+  // bypass (Admin #4), so the default mock user must actually hold the module
+  // of whichever page a spec drives — specs testing denial paths override
+  // `user` with a narrower grant, and super-admin-only pages still deny this
+  // user because the role stays "admin".
+  modules: [
+    'dashboard', 'users', 'drivers', 'rides', 'earnings', 'promotions',
+    'service_areas', 'vehicle_types', 'support', 'disputes', 'notifications',
+    'settings', 'corporate_accounts', 'documents', 'audit', 'support_tickets',
+  ],
 };
 
 // `route.fulfill()` resolves to `undefined`, which is indistinguishable

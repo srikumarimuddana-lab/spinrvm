@@ -13,11 +13,12 @@ import { getSettings } from "@/lib/api";
  * which have no business living in a context every component can read.
  * Add new flags here as they're introduced (epic #2785 Phase 3+).
  */
-type FlagKey = "admin_theme_v2_enabled";
-const FLAG_KEYS: FlagKey[] = ["admin_theme_v2_enabled"];
+type FlagKey = "admin_theme_v2_enabled" | "admin_command_palette_enabled";
+const FLAG_KEYS: FlagKey[] = ["admin_theme_v2_enabled", "admin_command_palette_enabled"];
 
 const DEFAULTS: Record<FlagKey, boolean> = {
   admin_theme_v2_enabled: false,
+  admin_command_palette_enabled: false,
 };
 
 const FeatureFlagsContext = createContext<Record<FlagKey, boolean>>(DEFAULTS);

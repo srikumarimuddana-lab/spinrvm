@@ -1584,6 +1584,10 @@ def _chain(rows):
     m.select.return_value = m
     m.eq.return_value = m
     m.or_.return_value = m
+    # A ride with no service_area_id filters with .is_() — without this the
+    # auto-MagicMock returns a non-chained child and .data is not a list, so
+    # the lookup raises and the assertion under test passes vacuously.
+    m.is_.return_value = m
     m.limit.return_value = m
     m.in_.return_value = m
     m.execute.return_value = MagicMock(data=rows)
@@ -1595,6 +1599,7 @@ def _raising_chain(exc):
     m.select.return_value = m
     m.eq.return_value = m
     m.or_.return_value = m
+    m.is_.return_value = m
     m.limit.return_value = m
     m.in_.return_value = m
     m.execute.side_effect = exc
@@ -1735,6 +1740,49 @@ class TestGetActiveRideEnrichment:
         assert result["total_bonus"] == 5.0
         assert result["quest_hint"]["title"] == "5 rides today"
         assert result["quest_hint"]["progress_pct"] == 60.0
+
+    async def test_in_progress_status_still_includes_incentives(self):
+        """The bonus is claimed at completion, so it belongs on the panel for
+        the whole ride — not just the pre-acceptance offer window.
+
+        rides.driver_earnings is fare-only by design, so when this projection
+        stopped at driver_assigned every post-acceptance screen quoted the bare
+        fare and the driver saw their earnings drop the moment they accepted.
+        """
+        from backend.routes.drivers.ride_reads import get_active_ride
+
+        ride = _ride(status="in_progress", service_area_id="area-1", vehicle_type_id="vt-1")
+        rows = [
+            {
+                "id": "inc-1",
+                "name": "Rush hour bonus",
+                "bonus_amount": "5.00",
+                "incentive_type": "per_ride",
+                "service_area_id": "area-1",
+                "vehicle_type_id": None,
+            }
+        ]
+        fake_supabase = MagicMock()
+        fake_supabase.table.side_effect = lambda name: (
+            _chain(rows) if name == "ride_incentives" else _chain([])
+        )
+
+        with _Patches(
+            *self._base_patches(ride),
+            patch("backend.routes.drivers.ride_reads.db_supabase.supabase", fake_supabase),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(side_effect=lambda fn: fn()),
+            ),
+        ):
+            result = await get_active_ride(current_user={"id": _USER_ID})
+
+        assert result["total_bonus"] == 5.0
+        assert result["incentives"] == [
+            {"name": "Rush hour bonus", "bonus_amount": 5.0, "incentive_type": "per_ride"}
+        ]
+        # Quest hint stays offer-only — it is a dispatch nudge, not earnings.
+        assert result["quest_hint"] is None
 
     async def test_incentive_lookup_exception_is_non_fatal(self):
         from backend.routes.drivers.ride_reads import get_active_ride

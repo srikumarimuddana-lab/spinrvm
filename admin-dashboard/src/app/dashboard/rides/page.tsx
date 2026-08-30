@@ -34,6 +34,10 @@ export default function RidesPage() {
     );
     const [statusFilter, setStatusFilter] = useState("all");
     const [areaFilter, setAreaFilter] = useState("all");
+    // "all" | "hide" | "only" -- maps to pre_launch=false/true (or omitted).
+    // "all" is the default, matching every prior page load (no silent
+    // behavior change for admins already using this page).
+    const [preLaunchFilter, setPreLaunchFilter] = useState<"all" | "hide" | "only">("all");
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [sortBy, setSortBy] = useState<string>("created_at");
@@ -67,6 +71,7 @@ export default function RidesPage() {
             dateFrom?: string;
             dateTo?: string;
             areaFilter?: string;
+            preLaunch?: "all" | "hide" | "only";
             sortBy?: string;
             sortDir?: "asc" | "desc";
         },
@@ -84,6 +89,8 @@ export default function RidesPage() {
             if (opts.dateFrom) apiOpts.dateFrom = opts.dateFrom;
             if (opts.dateTo) apiOpts.dateTo = opts.dateTo;
             if (opts.areaFilter && opts.areaFilter !== "all") apiOpts.serviceAreaId = opts.areaFilter;
+            if (opts.preLaunch === "only") apiOpts.preLaunch = true;
+            else if (opts.preLaunch === "hide") apiOpts.preLaunch = false;
             if (opts.sortBy) apiOpts.sortBy = opts.sortBy;
             if (opts.sortDir) apiOpts.sortDir = opts.sortDir;
 
@@ -103,9 +110,10 @@ export default function RidesPage() {
         dateFrom,
         dateTo,
         areaFilter,
+        preLaunch: preLaunchFilter,
         sortBy,
         sortDir,
-    }), [statusFilter, search, dateFrom, dateTo, areaFilter, sortBy, sortDir]);
+    }), [statusFilter, search, dateFrom, dateTo, areaFilter, preLaunchFilter, sortBy, sortDir]);
 
     useEffect(() => {
         Promise.all([
@@ -125,10 +133,11 @@ export default function RidesPage() {
             dateFrom,
             dateTo,
             areaFilter,
+            preLaunch: preLaunchFilter,
             sortBy,
             sortDir,
         });
-    }, [loadRides, statusFilter, search, dateFrom, dateTo, areaFilter, sortBy, sortDir]);
+    }, [loadRides, statusFilter, search, dateFrom, dateTo, areaFilter, preLaunchFilter, sortBy, sortDir]);
 
     const handlePageChange = (newPage: number) => {
         setPage(newPage);
@@ -144,7 +153,7 @@ export default function RidesPage() {
     const handleStatusChange = (tab: string) => {
         setStatusFilter(tab);
         setPage(0);
-        loadRides(0, pageSize, { tab, search, dateFrom, dateTo, areaFilter, sortBy, sortDir });
+        loadRides(0, pageSize, { tab, search, dateFrom, dateTo, areaFilter, preLaunch: preLaunchFilter, sortBy, sortDir });
     };
 
     const handleSearchChange = (value: string) => {
@@ -158,6 +167,7 @@ export default function RidesPage() {
                 dateFrom,
                 dateTo,
                 areaFilter,
+                preLaunch: preLaunchFilter,
                 sortBy,
                 sortDir,
             });
@@ -167,26 +177,32 @@ export default function RidesPage() {
     const handleAreaChange = (value: string) => {
         setAreaFilter(value);
         setPage(0);
-        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter: value, sortBy, sortDir });
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter: value, preLaunch: preLaunchFilter, sortBy, sortDir });
+    };
+
+    const handlePreLaunchChange = (value: "all" | "hide" | "only") => {
+        setPreLaunchFilter(value);
+        setPage(0);
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter, preLaunch: value, sortBy, sortDir });
     };
 
     const handleDateFromChange = (value: string) => {
         setDateFrom(value);
         setPage(0);
-        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom: value, dateTo, areaFilter, sortBy, sortDir });
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom: value, dateTo, areaFilter, preLaunch: preLaunchFilter, sortBy, sortDir });
     };
 
     const handleDateToChange = (value: string) => {
         setDateTo(value);
         setPage(0);
-        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo: value, areaFilter, sortBy, sortDir });
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo: value, areaFilter, preLaunch: preLaunchFilter, sortBy, sortDir });
     };
 
     const handleSortChange = (key: string, dir: "asc" | "desc") => {
         setSortBy(key);
         setSortDir(dir);
         setPage(0);
-        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter, sortBy: key, sortDir: dir });
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter, preLaunch: preLaunchFilter, sortBy: key, sortDir: dir });
     };
 
     const handleExport = async (): Promise<any[]> => {
@@ -255,6 +271,8 @@ export default function RidesPage() {
                 onStatusChange={handleStatusChange}
                 areaFilter={areaFilter}
                 onAreaChange={handleAreaChange}
+                preLaunchFilter={preLaunchFilter}
+                onPreLaunchChange={handlePreLaunchChange}
                 dateFrom={dateFrom}
                 onDateFromChange={handleDateFromChange}
                 dateTo={dateTo}

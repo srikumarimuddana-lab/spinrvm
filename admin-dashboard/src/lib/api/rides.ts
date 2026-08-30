@@ -14,6 +14,9 @@ export interface RideListOpts {
     dateFrom?: string;
     dateTo?: string;
     serviceAreaId?: string;
+    /** true = pre-launch-flagged rides only, false = hide flagged, omitted = no filter.
+     * See services/pre_launch_flag_service.py for what "flagged" means. */
+    preLaunch?: boolean;
     sortBy?: string;
     sortDir?: "asc" | "desc";
 }
@@ -29,6 +32,7 @@ export const getRides = (
     if (opts?.dateFrom) params.set("date_from", opts.dateFrom);
     if (opts?.dateTo) params.set("date_to", opts.dateTo);
     if (opts?.serviceAreaId) params.set("service_area_id", opts.serviceAreaId);
+    if (opts?.preLaunch !== undefined) params.set("pre_launch", String(opts.preLaunch));
     if (opts?.sortBy) params.set("sort_by", opts.sortBy);
     if (opts?.sortDir) params.set("sort_dir", opts.sortDir);
     return request<{ rides: any[]; total_count: number; limit: number; offset: number }>(

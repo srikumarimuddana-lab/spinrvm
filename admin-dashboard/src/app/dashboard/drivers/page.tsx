@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2 } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2, Tag } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
@@ -132,6 +132,10 @@ export default function DriversPage() {
     // Legacy-import filter — "imported"/"not_imported" map to the
     // legacy_import=true/false query param; "all" sends no filter.
     const [legacyFilter, setLegacyFilter] = useState<"all" | "imported" | "not_imported">("all");
+    // Pre-launch-flag filter — "hide"/"only" map to the pre_launch=false/true
+    // query param (services/pre_launch_flag_service.py); "all" sends no
+    // filter (default — matches every prior page load, no silent change).
+    const [preLaunchFilter, setPreLaunchFilter] = useState<"all" | "hide" | "only">("all");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
@@ -272,6 +276,8 @@ export default function DriversPage() {
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
         if (legacyFilter === "imported") opts.legacy_import = true;
         else if (legacyFilter === "not_imported") opts.legacy_import = false;
+        if (preLaunchFilter === "only") opts.pre_launch = true;
+        else if (preLaunchFilter === "hide") opts.pre_launch = false;
         // Returns the rendered page so a caller that just mutated a driver can
         // re-sync the open detail sheet from the refreshed server rows.
         return getDrivers(opts)
@@ -285,7 +291,7 @@ export default function DriversPage() {
             })
             .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } return [] as any[]; })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
-    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, sortKey, sortDir]);
+    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, sortKey, sortDir]);
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { loadDrivers(); }, [loadDrivers]);
@@ -297,7 +303,7 @@ export default function DriversPage() {
     // Reset to first page whenever anything that changes the result set or its
     // ordering changes — otherwise a new search/sort could land you on a page
     // that no longer exists.
-    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, legacyFilter, sortKey, sortDir]);
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, sortKey, sortDir]);
     // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
     // unioned from BOTH pricing stores because admins can configure
     // vehicles for an area either way:
@@ -892,12 +898,23 @@ export default function DriversPage() {
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <Tag className="h-4 w-4 text-muted-foreground" />
+                        <Select value={preLaunchFilter} onValueChange={(v) => setPreLaunchFilter(v as "all" | "hide" | "only")}>
+                            <SelectTrigger className="h-9 text-xs w-[170px]" aria-label="Filter by pre-launch flag"><SelectValue placeholder="All Drivers" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Drivers</SelectItem>
+                                <SelectItem value="hide">Hide pre-launch test</SelectItem>
+                                <SelectItem value="only">Pre-launch test only</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <CalendarRange className="h-4 w-4 text-muted-foreground" />
                         <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter from date" />
                         <span className="text-xs text-muted-foreground">to</span>
                         <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
                     </div>
-                    {(serviceAreaId || vehicleTypeFilter || legacyFilter !== "all" || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setLegacyFilter("all"); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
+                    {(serviceAreaId || vehicleTypeFilter || legacyFilter !== "all" || preLaunchFilter !== "all" || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setLegacyFilter("all"); setPreLaunchFilter("all"); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
                     {/* Fleet-wide money tools are super_admin server-side —
                         hide them for lower roles instead of surfacing buttons

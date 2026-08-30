@@ -35,6 +35,8 @@ export interface PlaybackPosition {
   /** Direction of motion for this instant, or null when not moving/known. */
   bearing: number | null;
   mode: PlaybackMode;
+  /** Ground speed of the active segment in m/s, or null when held/waiting. */
+  speedMps: number | null;
 }
 
 /** How far in the past the marker renders. Large enough that at the fastest
@@ -74,8 +76,79 @@ export function pushFix(
 }
 
 /**
+ * Catmull-Rom (cubic Hermite) sample through the buffered fixes for the
+ * bracketing segment [p1→p2] at fraction `t`, with one-sided clamping at the
+ * buffer edges. Linear chords between 2–4 s fixes cut corners and kink the
+ * heading at every vertex; the spline is C¹-continuous, so both the position
+ * AND the tangent (bearing) flow smoothly through each fix — the JS-only
+ * approximation of Uber's predicted-points-along-path animation.
+ *
+ * Longitude is scaled by cos(lat) inside the tangent math implicitly via the
+ * small-angle degree space — at the ≤100 m spans between fixes the error is
+ * far below GPS noise. Falls back to `null` (caller uses linear) when a
+ * neighbor segment is implausible (teleport glitch) so a bad fix cannot bend
+ * the curve toward it.
+ */
+function splineSample(
+  p0: PlaybackFix,
+  p1: PlaybackFix,
+  p2: PlaybackFix,
+  p3: PlaybackFix,
+  t: number,
+): { coordinate: TrackingLatLng; bearing: number | null } | null {
+  const span = p2.timestampMs - p1.timestampMs;
+  if (span <= 0) return null;
+  for (const [a, b] of [[p0, p1], [p2, p3]] as const) {
+    const ms = b.timestampMs - a.timestampMs;
+    if (ms < 0) return null;
+    if (ms > 0) {
+      const speed = (distanceMeters(a.latitude, a.longitude, b.latitude, b.longitude) / ms) * 1000;
+      if (speed > MAX_PLAUSIBLE_SPEED_MPS) return null;
+    }
+  }
+  // Non-uniform Catmull-Rom tangents on the time parameterization, scaled to
+  // this segment's span (finite differences over the neighbor windows).
+  const t0 = p1.timestampMs - p0.timestampMs;
+  const t2 = p3.timestampMs - p2.timestampMs;
+  const m1lat = ((p2.latitude - p0.latitude) / (t0 + span || span)) * span;
+  const m1lng = ((p2.longitude - p0.longitude) / (t0 + span || span)) * span;
+  const m2lat = ((p3.latitude - p1.latitude) / (span + t2 || span)) * span;
+  const m2lng = ((p3.longitude - p1.longitude) / (span + t2 || span)) * span;
+
+  const tt = t * t;
+  const ttt = tt * t;
+  const h00 = 2 * ttt - 3 * tt + 1;
+  const h10 = ttt - 2 * tt + t;
+  const h01 = -2 * ttt + 3 * tt;
+  const h11 = ttt - tt;
+  const coordinate = {
+    latitude: h00 * p1.latitude + h10 * m1lat + h01 * p2.latitude + h11 * m2lat,
+    longitude: h00 * p1.longitude + h10 * m1lng + h01 * p2.longitude + h11 * m2lng,
+  };
+  // Tangent (derivative of the Hermite basis) → instantaneous bearing.
+  const d00 = 6 * tt - 6 * t;
+  const d10 = 3 * tt - 4 * t + 1;
+  const d01 = -6 * tt + 6 * t;
+  const d11 = 3 * tt - 2 * t;
+  const dLat = d00 * p1.latitude + d10 * m1lat + d01 * p2.latitude + d11 * m2lat;
+  const dLng = d00 * p1.longitude + d10 * m1lng + d01 * p2.longitude + d11 * m2lng;
+  const dx = dLng * Math.cos((coordinate.latitude * Math.PI) / 180);
+  const magnitude = Math.hypot(dx, dLat);
+  const bearing =
+    magnitude > 1e-9 ? ((Math.atan2(dx, dLat) * 180) / Math.PI + 360) % 360 : null;
+  return { coordinate, bearing };
+}
+
+/**
  * Where the marker should be at `renderTimeMs` (typically now − delay).
  * Returns null only for an empty buffer.
+ *
+ * With 4+ buffered fixes around the render time, the position and bearing are
+ * sampled from a Catmull-Rom spline through the fixes (smooth corners, smooth
+ * heading); otherwise linear interpolation between the bracketing pair.
+ * `speedMps` is always the bracketing segment's average ground speed, so the
+ * caller can reason about motion (bearing gating, camera zoom) without
+ * re-deriving it.
  */
 export function playbackPosition(
   buffer: readonly PlaybackFix[],
@@ -86,7 +159,7 @@ export function playbackPosition(
 
   const first = buffer[0];
   if (renderTimeMs <= first.timestampMs) {
-    return { coordinate: first, bearing: null, mode: 'waiting' };
+    return { coordinate: first, bearing: null, mode: 'waiting', speedMps: null };
   }
 
   const newest = buffer[buffer.length - 1];
@@ -98,20 +171,30 @@ export function playbackPosition(
         const b = buffer[i + 1];
         const span = b.timestampMs - a.timestampMs;
         const t = span > 0 ? (renderTimeMs - a.timestampMs) / span : 1;
+        const segM = distanceMeters(a.latitude, a.longitude, b.latitude, b.longitude);
+        const speedMps = span > 0 ? (segM / span) * 1000 : 0;
+
+        // Spline path: needs the fix on either side; edges clamp one-sided.
+        const smooth =
+          segM >= MIN_SEGMENT_MOVE_M
+            ? splineSample(buffer[i - 1] ?? a, a, b, buffer[i + 2] ?? b, t)
+            : null;
+        if (smooth) {
+          return { ...smooth, mode: 'interpolating', speedMps };
+        }
         const coordinate = {
           latitude: a.latitude + (b.latitude - a.latitude) * t,
           longitude: a.longitude + (b.longitude - a.longitude) * t,
         };
-        const segM = distanceMeters(a.latitude, a.longitude, b.latitude, b.longitude);
         const bearing =
           segM >= MIN_SEGMENT_MOVE_M
             ? bearingDegrees(a.latitude, a.longitude, b.latitude, b.longitude)
             : null;
-        return { coordinate, bearing, mode: 'interpolating' };
+        return { coordinate, bearing, mode: 'interpolating', speedMps };
       }
     }
     // Unreachable (renderTime > first guaranteed above), but stay safe.
-    return { coordinate: first, bearing: null, mode: 'waiting' };
+    return { coordinate: first, bearing: null, mode: 'waiting', speedMps: null };
   }
 
   // Past the newest fix: dead-reckon along the last segment's velocity.
@@ -132,10 +215,11 @@ export function playbackPosition(
         coordinate,
         bearing: bearingDegrees(prev.latitude, prev.longitude, newest.latitude, newest.longitude),
         mode: 'extrapolating',
+        speedMps: speed,
       };
     }
   }
-  return { coordinate: newest, bearing: null, mode: 'holding' };
+  return { coordinate: newest, bearing: null, mode: 'holding', speedMps: null };
 }
 
 /**

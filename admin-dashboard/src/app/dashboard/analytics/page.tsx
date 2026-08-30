@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Input } from "@/components/ui/input";
-import { CHART_PALETTE_DARK, CHART_PALETTE_LIGHT } from "@/components/analytics/chart-palette";
+import { CHART_PALETTE_DARK, CHART_PALETTE_LIGHT, chartColors } from "@/components/analytics/chart-palette";
 import { DriverOffersPanel } from "@/components/analytics/driver-offers-panel";
 import { MarketplaceOverviewPanel } from "@/components/analytics/marketplace-overview-panel";
 import { SupplyPanel } from "@/components/analytics/supply-panel";
@@ -177,7 +177,9 @@ function AnalyticsPageInner() {
   );
 
   const { resolvedTheme } = useTheme();
-  const REASON_COLORS = useMemo(() => reasonColors(resolvedTheme === "dark"), [resolvedTheme]);
+  const isDark = resolvedTheme === "dark";
+  const c = useMemo(() => chartColors(isDark), [isDark]);
+  const REASON_COLORS = useMemo(() => reasonColors(isDark), [isDark]);
 
   // Buckets are America/Regina business time (migration 350), not UTC nor the
   // viewer's browser zone. Label it — a bare "14:00" is ambiguous, and it was
@@ -408,10 +410,10 @@ function AnalyticsPageInner() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" fontSize={12} />
                 <YAxis fontSize={12} />
-                <Tooltip />
+                <Tooltip contentStyle={c.tooltip} />
                 <Legend />
-                <Bar dataKey="completed" fill="#10B981" name="Completed" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="cancelled" fill="#EF4444" name="Cancelled" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="completed" fill={c.good} name="Completed" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="cancelled" fill={c.bad} name="Cancelled" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -511,11 +513,7 @@ function AnalyticsPageInner() {
                       <Legend wrapperStyle={{ fontSize: 12 }} />
                       <Tooltip
                         formatter={(v: any, n: any) => [Number(v).toLocaleString(), n]}
-                        contentStyle={{
-                          fontSize: 12, borderRadius: 10,
-                          border: "1px solid hsl(var(--border))",
-                          background: "hsl(var(--card))",
-                        }}
+                        contentStyle={c.tooltip}
                       />
                     </PieChart>
                   </ResponsiveContainer>
@@ -540,8 +538,8 @@ function AnalyticsPageInner() {
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="hour" fontSize={11} tickFormatter={(h) => `${h}:00`} />
                       <YAxis fontSize={11} />
-                      <Tooltip labelFormatter={(h) => `${h}:00`} />
-                      <Bar dataKey="count" fill="#EF4444" radius={[3, 3, 0, 0]} name="Cancellations" />
+                      <Tooltip labelFormatter={(h) => `${h}:00`} contentStyle={c.tooltip} />
+                      <Bar dataKey="count" fill={c.bad} radius={[3, 3, 0, 0]} name="Cancellations" />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -715,8 +713,8 @@ function AnalyticsPageInner() {
                               className="h-full rounded-full"
                               style={{
                                 width: `${Math.max(0, Math.min(100, Number(d.completion_rate) || 0))}%`,
-                                backgroundColor: d.completion_rate >= 80 ? '#10B981'
-                                  : d.completion_rate >= 60 ? '#F59E0B' : '#EF4444',
+                                backgroundColor: d.completion_rate >= 80 ? c.good
+                                  : d.completion_rate >= 60 ? c.warn : c.bad,
                               }}
                             />
                           </div>

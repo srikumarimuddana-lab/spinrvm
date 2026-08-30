@@ -20,6 +20,8 @@ import { TUNING_PLAYBOOK, tuningWarnings, warningsFor } from "@/lib/heatmap-tuni
 import { parseAllowlistIds } from "@/lib/allowlist-ids";
 import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { useTheme } from "next-themes";
+import { chartColors } from "@/components/analytics/chart-palette";
 import { needsSurgeJustification, isSurgeJustificationValid } from "@/lib/surgeJustificationSchema";
 import { isTaxJustificationValid } from "@/lib/taxJustificationSchema";
 import { isSpinrPassPlanNameValid, isSpinrPassPlanPriceValid } from "@/lib/spinrPassAreaPlanSchema";
@@ -2291,12 +2293,8 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
     return () => { cancelled = true; };
   }, [areaId, hours]);
 
-  const surgeTooltipStyle = {
-    fontSize: 12, borderRadius: 10,
-    border: '1px solid hsl(var(--border))',
-    background: 'hsl(var(--card))',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-  };
+  const { resolvedTheme } = useTheme();
+  const c = chartColors(resolvedTheme === "dark");
 
   return (
     <div className="mt-6 pt-6 border-t">
@@ -2379,15 +2377,17 @@ function SurgeHistoryChart({ areaId, areaName }: { areaId: string; areaName: str
               />
               <YAxis fontSize={11} domain={[0.8, 'auto']} tickFormatter={v => `${v}×`} />
               <Tooltip
-                contentStyle={surgeTooltipStyle}
+                contentStyle={c.tooltip}
                 formatter={(value, name) => {
                   if (name === 'Multiplier') return [`${value}×`, name];
                   return [String(value), name];
                 }}
                 labelFormatter={(label) => label}
               />
+              {/* eslint-disable-next-line no-restricted-syntax -- neutral baseline marker, not part of the categorical/semantic palette (#2816) */}
               <ReferenceLine y={1.0} stroke="#94a3b8" strokeDasharray="4 4" label={{ value: '1.0× (normal)', position: 'insideTopLeft', fontSize: 10, fill: '#94a3b8' }} />
-              <ReferenceLine y={2.5} stroke="#ef4444" strokeDasharray="4 4" label={{ value: '2.5× (cap)', position: 'insideTopLeft', fontSize: 10, fill: '#ef4444' }} />
+              <ReferenceLine y={2.5} stroke={c.bad} strokeDasharray="4 4" label={{ value: '2.5× (cap)', position: 'insideTopLeft', fontSize: 10, fill: c.bad }} />
+              {/* eslint-disable-next-line no-restricted-syntax -- surge line keeps its own distinct orange, deliberately outside the categorical palette (#2816) */}
               <Area type="monotone" dataKey="multiplier" stroke="#F97316" strokeWidth={2}
                 fill={`url(#surgeGrad-${areaId})`} name="Multiplier" dot={false} />
             </AreaChart>

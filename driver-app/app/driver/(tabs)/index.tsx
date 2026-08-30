@@ -13,6 +13,8 @@ import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import {
   DriverTopBar,
   DriverIdlePanel,
+  HUD_EXPANDED_HEIGHT_DP,
+  HUD_COLLAPSED_HEIGHT_DP,
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
@@ -590,16 +592,16 @@ function DriverDashboard() {
   const followRef = useRef(true);
   const followZoomTierRef = useRef<number | null>(null);
   const [courseUp, setCourseUp] = useState(true);
-  // DriverIdlePanel's own content height (hudArea's vehicle/online pills +
-  // the 100dp GO/STOP button + its internal margins) — excludes
-  // insets.bottom, which is added separately below since it's already
-  // available here. Approximated from DriverIdlePanel.tsx's styles;
-  // deliberately generous rather than exact — this only needs to keep the
-  // map's own "center" concept out from under the panel, not pixel-match
-  // it. Kept as a local constant (not exported) since only this follow
-  // effect and the MapView's mapPadding prop below need it, and moving it
-  // to DriverIdlePanel would create a cross-file coupling for one number.
-  const IDLE_PANEL_HEIGHT_DP = 230;
+  // DriverIdlePanel's own content height, minus its collapsible hud block
+  // (the GO/STOP button + its container margins/padding) — the hud itself
+  // now auto-collapses ~2s after going online (round 7), reported back via
+  // onExpandedChange below so mapPadding can shrink accordingly instead of
+  // always reserving the full expanded height. Approximated from
+  // DriverIdlePanel.tsx's styles; deliberately generous rather than exact —
+  // this only needs to keep the map's own "center" concept out from under
+  // the panel, not pixel-match it.
+  const IDLE_PANEL_BASE_HEIGHT_DP = 140;
+  const [idleHudExpanded, setIdleHudExpanded] = useState(true);
   // ActiveRidePanel's draggable sheet reports its own open/collapsed state
   // (see onExpandedChange below) so mapPadding can track it instead of
   // guessing — without this, extending the follow camera's "pin the car
@@ -853,7 +855,13 @@ function DriverDashboard() {
         // ride state keeps its existing route-overview framing unpadded.
         mapPadding={
           rideState === 'idle'
-            ? { top: 0, right: 0, left: 0, bottom: IDLE_PANEL_HEIGHT_DP + insets.bottom }
+            ? {
+                top: 0, right: 0, left: 0,
+                bottom:
+                  IDLE_PANEL_BASE_HEIGHT_DP +
+                  (idleHudExpanded ? HUD_EXPANDED_HEIGHT_DP : HUD_COLLAPSED_HEIGHT_DP) +
+                  insets.bottom,
+              }
             : rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress'
             ? {
                 top: 0, right: 0, left: 0,
@@ -1225,6 +1233,7 @@ function DriverDashboard() {
           isOnline={isOnline}
           onToggleOnline={toggleOnline}
           pulseAnim={pulseAnim}
+          onExpandedChange={setIdleHudExpanded}
         />
       )}
       {rideState === 'ride_offered' && incomingRide && (

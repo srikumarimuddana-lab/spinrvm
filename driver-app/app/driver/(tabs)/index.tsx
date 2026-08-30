@@ -1039,6 +1039,18 @@ function DriverDashboard() {
         )
       )}
 
+      {/* Current speed — GPS-derived (coords.speed, m/s), shown while
+          online and actually moving. Throttled location state is fine for a
+          readout; hidden when stationary to keep the map minimal. */}
+      {isOnline && (location.coords.speed ?? 0) >= 1.5 && (
+        <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
+          <Text style={styles.speedChipValue} allowFontScaling={false}>
+            {Math.round((location.coords.speed ?? 0) * 3.6)}
+          </Text>
+          <Text style={styles.speedChipUnit} allowFontScaling={false}>km/h</Text>
+        </View>
+      )}
+
       {/* Map Controls */}
       <MapControls
         mapRef={mapRef}
@@ -1178,6 +1190,32 @@ function DriverDashboard() {
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
+    speedChip: {
+      position: 'absolute',
+      left: 16,
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: 24,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 10,
+      elevation: 6,
+    },
+    speedChipValue: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+      lineHeight: 20,
+    },
+    speedChipUnit: {
+      fontSize: 10,
+      color: colors.textDim,
+    },
     container: {
       flex: 1,
       backgroundColor: colors.background,

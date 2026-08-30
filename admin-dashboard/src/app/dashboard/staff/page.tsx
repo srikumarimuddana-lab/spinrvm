@@ -15,6 +15,7 @@ import {
 // list page (audit-logs, safety, drivers, users, ...) renders through
 // Table/SortableHead/Card/Button/Input, not raw <div>/<button>/<input>.
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
@@ -254,17 +255,17 @@ export default function StaffPage() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Staff Management</h1>
-          <p className="text-muted-foreground mt-1">Create staff accounts and control module access</p>
-        </div>
-        <Button onClick={() => { resetForm(); setShowForm(true); }}>
-          <Plus className="h-4 w-4 mr-1.5" />
-          Add Staff
-        </Button>
-      </div>
+      <PageHeader
+        className="flex items-center justify-between mb-8"
+        title="Staff Management"
+        description="Create staff accounts and control module access"
+        actions={
+          <Button onClick={() => { resetForm(); setShowForm(true); }}>
+            <Plus className="h-4 w-4 mr-1.5" />
+            Add Staff
+          </Button>
+        }
+      />
 
       {/* Add/Edit Form */}
       {showForm && (

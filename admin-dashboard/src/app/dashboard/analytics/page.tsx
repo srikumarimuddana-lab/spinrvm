@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -291,53 +292,54 @@ function AnalyticsPageInner() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
             {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
             <BarChart3 className="h-6 w-6 text-blue-500" />
             Operational Analytics
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            {svcArea
-              ? `${areas.find((a: any) => a.id === svcArea)?.name || "Selected area"} — acceptance, cancellations, dispatch and demand`
-              : "All service areas — acceptance, cancellations, dispatch and demand"}
-          </p>
-        </div>
-        <div className="flex gap-2 items-center flex-wrap">
-          <Select value={areaId} onValueChange={setAreaId}>
-            <SelectTrigger className="w-44" aria-label="Filter by service area">
-              <span className="flex items-center gap-1.5 truncate">
-                <MapPin className="h-3.5 w-3.5 shrink-0" />
+          </span>
+        }
+        description={
+          svcArea
+            ? `${areas.find((a: any) => a.id === svcArea)?.name || "Selected area"} — acceptance, cancellations, dispatch and demand`
+            : "All service areas — acceptance, cancellations, dispatch and demand"
+        }
+        actions={
+          <div className="flex gap-2 items-center flex-wrap">
+            <Select value={areaId} onValueChange={setAreaId}>
+              <SelectTrigger className="w-44" aria-label="Filter by service area">
+                <span className="flex items-center gap-1.5 truncate">
+                  <MapPin className="h-3.5 w-3.5 shrink-0" />
+                  <SelectValue />
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_AREAS}>All service areas</SelectItem>
+                {areas
+                  .filter((a: any) => a.is_active !== false && !a.parent_service_area_id)
+                  .map((a: any) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name || a.id}</SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            <Select value={dateRange} onValueChange={setDateRange}>
+              <SelectTrigger className="w-32" aria-label="Date range">
                 <SelectValue />
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_AREAS}>All service areas</SelectItem>
-              {areas
-                .filter((a: any) => a.is_active !== false && !a.parent_service_area_id)
-                .map((a: any) => (
-                  <SelectItem key={a.id} value={a.id}>{a.name || a.id}</SelectItem>
+              </SelectTrigger>
+              <SelectContent>
+                {DATE_RANGES.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                 ))}
-            </SelectContent>
-          </Select>
-          <Select value={dateRange} onValueChange={setDateRange}>
-            <SelectTrigger className="w-32" aria-label="Date range">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {DATE_RANGES.map((r) => (
-                <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button variant="outline" size="sm" onClick={fetchAll} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
-      </div>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={fetchAll} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
+        }
+      />
 
       {/* Backend error banner */}
       {fetchError && !loading && (

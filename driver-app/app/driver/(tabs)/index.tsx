@@ -155,6 +155,7 @@ function DriverDashboard() {
     isOnline,
     connectionState,
     location,
+    markerFixFeed,
     locationStatus,
     otpInput,
     setOtpInput,
@@ -741,6 +742,8 @@ function DriverDashboard() {
               longitude: location.coords.longitude,
             }}
             heading={location.coords.heading}
+            fixTimestampMs={location.timestamp}
+            fixFeed={markerFixFeed}
             isOnline={isOnline}
             variant={markerVariant}
             imageUri={markerImageUri}

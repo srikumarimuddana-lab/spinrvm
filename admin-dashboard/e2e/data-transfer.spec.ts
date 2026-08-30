@@ -152,6 +152,9 @@ test.describe('admin dashboard: bulk-operations (legacy, super-admin-only) — i
     await setupAdminMocks(page, { user: { role: 'admin', modules: ['bulk_operations'] } });
     await page.goto('/dashboard/bulk-operations');
     await expect(page.getByText(/Super-admin CSV tools/i)).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: 'Compliance & Tax Reporting' })).toBeVisible({ timeout: 20000 });
+    // Since the compliance tab moved behind useRequireSuperAdmin, a plain
+    // admin has no visible Records & Compliance tab at all — the shell
+    // renders its no-access card instead of falling back to a tab.
+    await expect(page.getByRole('heading', { name: 'No access to Records & Compliance' })).toBeVisible({ timeout: 20000 });
   });
 });

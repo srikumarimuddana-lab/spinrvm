@@ -43,7 +43,10 @@ test.describe('admin dashboard: forecast — interaction', () => {
   test('area and hours-ahead filter dropdowns are present', async ({ page }) => {
     await mockForecast(page);
     await page.goto('/dashboard/forecast');
-    await expect(page.getByLabel('All Areas')).toBeVisible({ timeout: 20000 });
+    // /dashboard/forecast now redirects to /dashboard/analytics?tab=forecast:
+    // the area filter moved to the Analytics page's shared filter bar
+    // (aria-label "Filter by service area"); "Hours ahead" stays on the panel.
+    await expect(page.getByLabel('Filter by service area')).toBeVisible({ timeout: 20000 });
     await expect(page.getByLabel('Hours ahead')).toBeVisible();
   });
 

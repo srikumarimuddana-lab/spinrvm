@@ -67,7 +67,7 @@ async function mockAdminAPIs(page: any) {
     }
     // Auth session — checkAuth expects { authenticated: true, user }
     if (url.includes('/auth/session') || url.includes('/auth/me') || url.includes('/admin/me')) {
-      return json(200, { authenticated: true, user: { id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' } });
+      return json(200, { authenticated: true, user: { id: 'admin_1', email: 'admin@spinr.ca', role: 'super_admin' } });
     }
 
     // Rides list — getRides()/getDrivers() expect a bare array, not a wrapper object.

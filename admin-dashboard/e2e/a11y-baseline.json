@@ -1,9 +1,9 @@
 {
-  "/dashboard": 1,
+  "/dashboard": 2,
   "/dashboard/ai-console": 1,
   "/dashboard/analytics": 0,
   "/dashboard/audit-logs": 1,
-  "/dashboard/bulk-operations": 1,
+  "/dashboard/bulk-operations": 2,
   "/dashboard/cloud-messaging": 2,
   "/dashboard/corporate-accounts": 0,
   "/dashboard/corporate-accounts/kyb-queue": 0,

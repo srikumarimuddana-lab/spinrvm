@@ -182,7 +182,10 @@ test.describe('admin dashboard: driver-offers — interaction', () => {
   test('page loads and renders a driver row', async ({ page }) => {
     await mockDriverOffers(page);
     await page.goto('/dashboard/driver-offers');
-    await expect(page.getByText('Driver Offer Analytics')).toBeVisible({ timeout: 20000 });
+    // The standalone page now redirects to /dashboard/analytics?tab=offers,
+    // where DriverOffersPanel renders these card titles instead of the old
+    // 'Driver Offer Analytics' page heading.
+    await expect(page.getByText(/Per-Driver Breakdown/)).toBeVisible({ timeout: 20000 });
     await expect(page.getByText('John Driver')).toBeVisible({ timeout: 10000 });
   });
 

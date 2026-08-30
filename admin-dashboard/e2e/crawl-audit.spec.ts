@@ -55,7 +55,7 @@ async function mockAllAPIs(page: any) {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ token: TEST_ADMIN_JWT, access_expires_at: '2100-01-01T00:00:00Z', csrf_token: 'test-csrf' }) });
     }
     if (url.includes('/auth/session') || url.includes('/auth/me')) {
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true, user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }) });
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true, user: { id: '1', email: 'admin@spinr.ca', role: 'super_admin' } }) });
     }
     // Generic empty-but-valid shapes for list/stat endpoints
     return route.fulfill({

@@ -93,14 +93,15 @@ def _driver(**overrides):
 
 
 def _wallet_row(**overrides):
-    """A legacy rider top-up: $50 added, from_bank."""
+    """A legacy rider top-up: $50 added, from_bank, post-launch (2026-05-01)."""
     row = {
         "_id": "wal-1",
         "customer_id": "cus-1",
         "driver_id": "",
         "amount": "50.00",
-        "type": "from_bank",
+        "wallet_type": "from_bank",
         "status": "add",
+        "created_at": "1777593600000",  # 2026-05-01T00:00:00Z, post-launch
     }
     row.update(overrides)
     return row
@@ -136,6 +137,106 @@ def test_missing_required_column_is_an_error(monkeypatch):
     assert plan.deltas_to_apply == []
 
 
+def test_real_export_header_uses_wallet_type_not_type(monkeypatch):
+    """Regression test for the 2026-08-30 column-name bug: this module
+    originally required a column literally named ``type``, guessed from
+    sibling collections' naming convention. The real 07-26 wallets.csv
+    export's header has no ``type`` column at all -- only ``wallet_type`` --
+    so every real /validate call failed with a missing-column error until
+    this was fixed. A row shaped exactly like the real export (``type``
+    absent, ``wallet_type`` present, plus the export's other real columns
+    this importer doesn't use) must parse cleanly.
+    """
+    _install_fake(monkeypatch)
+    real_shaped_row = {
+        "_id": "6a15c565baf4f7d5a7820b8e",
+        "__v": "0",
+        "amount": "40",
+        "applied_refer_code": "",
+        "booking_id": "6a15c078baf4f7d5a781b783",
+        "created_at": "1779811685966",
+        "customer_id": "",
+        "driver_id": "drv-legacy-1",
+        "refer_amount_consumed": "false",
+        "status": "add",
+        "updated_at": "",
+        "wallet_type": "for_owner_refer",
+    }
+    plan = _plan([real_shaped_row])
+    assert not plan.errors, plan.errors
+    (entry,) = plan.deltas_to_apply
+    assert entry["type_"] == "referral_reward"
+    assert entry["delta"] == Decimal("40")
+
+
+def test_csv_with_only_old_type_column_name_is_a_missing_column_error(monkeypatch):
+    """A CSV that only has the old, wrongly-guessed ``type`` column (no
+    ``wallet_type``) must refuse with a clear missing-column error, not
+    silently ignore the legacy type. Locks in the fix so a future
+    regression back to the old column name fails loudly, the same way a
+    real run against the actual export did before this fix.
+    """
+    _install_fake(monkeypatch)
+    bad_row = _wallet_row()
+    bad_row["type"] = bad_row.pop("wallet_type")  # rename back to the old, wrong guess
+    plan = _plan([bad_row])
+    assert any(e.field == "wallet_type" for e in plan.errors)
+    assert plan.deltas_to_apply == []
+
+
+# --------------------------------------------------------------------------
+# Pre-launch cutoff (2026-08-30: owner-confirmed launch date 2026-03-30)
+# --------------------------------------------------------------------------
+
+
+def test_pre_launch_entry_is_skipped_even_when_matched(monkeypatch):
+    """A legacy wallet entry timestamped before Spinr's 2026-03-30 launch is
+    never credited, even when the rider/driver phone matches a real, live
+    Spinr account today -- it was created during the previous app's
+    pre-launch build/test period, not by a real person."""
+    _install_fake(monkeypatch)
+    plan = _plan([_wallet_row(created_at="1769579916416")])  # 2026-01-28, pre-launch
+    assert not plan.errors
+    assert plan.deltas_to_apply == []
+    assert plan.stats["skipped_pre_launch"] == 1
+    assert any("pre-launch" in w.message for w in plan.warnings)
+
+
+def test_post_launch_entry_on_launch_day_boundary_is_kept(monkeypatch):
+    """created_at exactly at LAUNCH_DATE (2026-03-30T00:00:00Z) is kept, not
+    skipped -- the cutoff is a strict less-than."""
+    _install_fake(monkeypatch)
+    plan = _plan([_wallet_row(created_at="1774828800000")])  # exactly 2026-03-30T00:00:00Z
+    assert plan.stats["skipped_pre_launch"] == 0
+    assert len(plan.deltas_to_apply) == 1
+
+
+def test_missing_created_at_is_an_error_not_a_silent_skip(monkeypatch):
+    """An unparseable/missing created_at can't be classified pre- or
+    post-launch -- refuse rather than guess, matching this module's
+    never-guess-at-money convention."""
+    _install_fake(monkeypatch)
+    plan = _plan([_wallet_row(created_at="")])
+    assert any(e.field == "created_at" for e in plan.errors)
+    assert plan.deltas_to_apply == []
+
+
+def test_pre_launch_and_post_launch_rows_in_same_csv(monkeypatch):
+    """A pre-launch row never blocks a legitimate post-launch row in the
+    same file -- pre-launch is a warning, not an error."""
+    _install_fake(monkeypatch)
+    plan = _plan(
+        [
+            _wallet_row(_id="wal-old", created_at="1769579916416"),  # pre-launch
+            _wallet_row(_id="wal-new", created_at="1777593600000"),  # post-launch
+        ]
+    )
+    assert not plan.errors
+    assert plan.stats["skipped_pre_launch"] == 1
+    assert len(plan.deltas_to_apply) == 1
+    assert plan.deltas_to_apply[0]["reference_id"] == "legacy-wallet-wal-new"
+
+
 # --------------------------------------------------------------------------
 # Matching: rider vs driver ownership, unmatched accounts
 # --------------------------------------------------------------------------
@@ -155,7 +256,9 @@ def test_driver_wallet_entry_uses_drivers_user_id_not_drivers_id(monkeypatch):
     """Driver-owned wallet rows must resolve to drivers.user_id (the shared
     users.id wallets.user_id references), never drivers.id itself."""
     _install_fake(monkeypatch)
-    plan = _plan([_wallet_row(customer_id="", driver_id="drv-legacy-1", type="from_driver_refer", amount="20.00")])
+    plan = _plan(
+        [_wallet_row(customer_id="", driver_id="drv-legacy-1", wallet_type="from_driver_refer", amount="20.00")]
+    )
     (entry,) = plan.deltas_to_apply
     assert entry["user_id"] == "user-2"  # drivers.user_id, not "drv-1"
     assert entry["type_"] == "referral_reward"
@@ -207,8 +310,8 @@ def test_unrecognized_legacy_type_is_an_error(monkeypatch):
     """Never guess at an unmapped legacy type -- see LEGACY_TYPE_TO_TXN_TYPE's
     own comment on why only these three are recognized."""
     _install_fake(monkeypatch)
-    plan = _plan([_wallet_row(type="mystery_bucket")])
-    assert any(e.field == "type" for e in plan.errors)
+    plan = _plan([_wallet_row(wallet_type="mystery_bucket")])
+    assert any(e.field == "wallet_type" for e in plan.errors)
     assert plan.deltas_to_apply == []
 
 
@@ -263,7 +366,7 @@ def test_stats_reconcile_to_the_batch_total(monkeypatch):
                 _id="wal-2",
                 customer_id="",
                 driver_id="drv-legacy-1",
-                type="from_driver_refer",
+                wallet_type="from_driver_refer",
                 amount="10.00",
                 status="deduct",
             ),
@@ -293,7 +396,7 @@ def _rpc_supabase(store, rpc_return):
 def test_commit_refuses_when_plan_has_errors(monkeypatch):
     _install_fake(monkeypatch)
     plan = _plan([_wallet_row(amount="")])  # unparseable-but-present -> 0 -> skipped, not an error
-    plan.errors.append(svc.ImportReportItem(1, "wal-x", "type", "forced error"))
+    plan.errors.append(svc.ImportReportItem(1, "wal-x", "wallet_type", "forced error"))
     with pytest.raises(RuntimeError, match="refusing to commit"):
         svc.commit_plan(plan)
 

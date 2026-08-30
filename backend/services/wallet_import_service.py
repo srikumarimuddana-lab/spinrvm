@@ -4,25 +4,41 @@ Imports prepaid rider/driver wallet credits from the previous (MongoDB-backed)
 app's ``wallets`` collection into Spinr's ``wallets``/``wallet_transactions``
 tables. Per the migration audit (docs/audit/2026-08-19-full-mongodb-export-
 collection-inventory.md), this collection is small (13 rows in the reference
-export) but carries real, owed money: ~$900 of rider wallet credit and ~$60 of
-driver referral-wallet credit, all under legacy ``type`` values ``from_bank``
-(rider top-up), ``from_driver_refer`` / ``for_owner_refer`` (driver referral
-reward), and legacy ``status`` values ``add`` / ``deduct``.
+export), all under legacy ``wallet_type`` values ``from_bank`` (rider top-up),
+``from_driver_refer`` / ``for_owner_refer`` (driver referral reward), and
+legacy ``status`` values ``add`` / ``deduct``.
 
-**Column-name disclaimer (read before running against a real export):** the
-column names below (``_id``, ``customer_id``, ``driver_id``, ``amount``,
-``type``, ``status``, ``created_at``) are inferred from this same export's
-sibling collections' consistent naming convention (``bookings.csv``,
-``customers.csv``, ``driverearnings.csv`` all use exactly these names for the
-equivalent fields) -- they have NOT been confirmed against a real
-``wallets.csv`` header row, since no prior audit session captured one.
-``validate_required_columns`` fails loudly (as plan errors, refusing commit)
-rather than silently defaulting if any expected column is absent, so a
-mismatch surfaces immediately on the first dry-run instead of corrupting a
-balance. **The admin route (``routes/admin/wallet_import.py``) is wired up,
-but the very first real ``/validate`` call against the real CSV is still the
-first time this assumption gets tested** -- read that response's ``errors``
-carefully before ever calling ``/commit``.
+**Pre-launch cutoff (owner-confirmed 2026-08-30):** Spinr's public launch was
+2026-03-30 -- every legacy wallet entry timestamped before that date was
+created during the previous app's pre-launch build/test period, never by a
+real customer or driver, and is never money actually owed. ``LAUNCH_DATE``
+enforces this as a hard skip (``skipped_pre_launch``), ahead of account
+matching, so a pre-launch id is never credited even when it happens to match
+a real, live Spinr account today. Of the reference export's 13 rows, only 5
+are post-launch: one real driver referral credit ($40) and one real
+add+deduct pair that nets to $0 for a second driver. The other 8 rows
+(~$900 of what looked like rider wallet credit, plus ~$20 across 2 more
+driver rows) are pre-launch test/seed data -- not owed money, and a
+candidate for cleanup rather than migration (see
+docs/change-log/2026-08-30-wallet-import-pre-launch-cutoff.md).
+
+**Column-name correction (2026-08-30, against the real export):** this
+module originally guessed the legacy type column was named ``type`` --
+inferred from sibling collections' naming convention, never confirmed
+against a real ``wallets.csv`` header row. The real 07-26 export's header is
+``#,_id,__v,amount,applied_refer_code,booking_id,created_at,customer_id,
+driver_id,refer_amount_consumed,status,updated_at,wallet_type`` -- the
+column is ``wallet_type``, not ``type``, and there is no ``applied_refer_code``/
+``booking_id``/``refer_amount_consumed`` dependency (unused by this
+importer). Confirmed live-bug impact: every real ``/validate`` call would
+have failed with "wallets CSV is missing required column: wallet_type"
+(reported as ``type`` before this fix), refusing every commit -- the tool
+was fully wired and deployed (PRs #4473/#4477/#4480) but had never actually
+been run against real data, exactly as the prior version of this docstring
+warned. ``validate_required_columns`` fails loudly (as plan errors, refusing
+commit) rather than silently defaulting if any expected column is absent, so
+the mismatch surfaced immediately on the first real dry-run rather than
+corrupting a balance -- it just needed a real CSV to trigger it.
 
 Admin flow, mirroring ``routes/admin/booking_import.py``:
 
@@ -84,16 +100,28 @@ IMPORT_SOURCE = "legacy_mongo_wallet_import"
 
 ZERO = Decimal("0")
 
+# Spinr's public launch date (owner-confirmed, 2026-08-30). Every legacy
+# wallet entry timestamped before this was created during the previous
+# app's pre-launch build/test period, not by a real customer or driver --
+# it is never money actually owed and must never be credited, even to a
+# legacy Mongo id that happens to match a real, live Spinr account today
+# (an internal test account and a real driver can share the same phone
+# once the real person actually signs up post-launch). Applied as a hard
+# skip, ahead of account matching, so pre-launch rows never even reach the
+# "no matching account" bucket.
+LAUNCH_DATE = datetime(2026, 3, 30, tzinfo=timezone.utc)
+
 REQUIRED_WALLET_COLUMNS = {
     "_id",
     "customer_id",
     "driver_id",
     "amount",
-    "type",
+    "wallet_type",
     "status",
+    "created_at",
 }
 
-# Legacy `type` -> the live wallet_transactions.type this maps onto (must be
+# Legacy `wallet_type` -> the live wallet_transactions.type this maps onto (must be
 # one of the values wallet_transactions_type_check allows -- migration 199).
 # `for_owner_refer` reads as the referring party's own reward for referring
 # someone else, same live bucket as a driver's own `from_driver_refer`
@@ -164,6 +192,26 @@ def parse_money(value: str) -> Decimal:
     if not raw:
         return ZERO
     return to_decimal(raw)
+
+
+def parse_legacy_epoch_ms(value: str) -> datetime | None:
+    """Legacy epoch-milliseconds timestamp -> a UTC datetime, or None if
+    blank/unparseable.
+
+    Duplicated (not imported) from driver_import_service._parse_legacy_epoch_ms
+    -- this module doesn't otherwise depend on that one, matching this repo's
+    existing per-module small-helper duplication convention.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        ms = int(float(raw))
+    except (TypeError, ValueError):
+        return None
+    if ms <= 0:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
 
 
 def _index_by_id(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -248,6 +296,7 @@ def build_plan(
     seen_old_ids: set[str] = set()
     skipped_missing_id = 0
     skipped_duplicate_id = 0
+    skipped_pre_launch = 0
     skipped_zero_amount = 0
     skipped_unmatched = 0
     rider_rows = 0
@@ -266,6 +315,23 @@ def build_plan(
             skipped_duplicate_id += 1
             continue
         seen_old_ids.add(old_id)
+
+        created_at = parse_legacy_epoch_ms(r.get("created_at", ""))
+        if created_at is None:
+            plan.errors.append(ImportReportItem(idx, old_id, "created_at", "missing or unparseable created_at"))
+            continue
+        if created_at < LAUNCH_DATE:
+            # Pre-launch test/seed data (owner-confirmed 2026-08-30, see
+            # LAUNCH_DATE's own comment) -- never money actually owed, and
+            # never guessed at even when the legacy id happens to match a
+            # real, live Spinr account today. A warning, not an error: this
+            # is expected, not a data-shape problem, so it never blocks
+            # commit of the legitimate post-launch rows in the same file.
+            plan.warnings.append(
+                ImportReportItem(idx, old_id, "created_at", "pre-launch (before 2026-03-30); skipped as test data")
+            )
+            skipped_pre_launch += 1
+            continue
 
         cust_id = (r.get("customer_id") or "").strip()
         drv_id = (r.get("driver_id") or "").strip()
@@ -303,11 +369,11 @@ def build_plan(
             skipped_zero_amount += 1
             continue
 
-        legacy_type = (r.get("type") or "").strip()
+        legacy_type = (r.get("wallet_type") or "").strip()
         txn_type = LEGACY_TYPE_TO_TXN_TYPE.get(legacy_type)
         if txn_type is None:
             plan.errors.append(
-                ImportReportItem(idx, old_id, "type", f"unrecognized legacy wallet type {legacy_type!r}")
+                ImportReportItem(idx, old_id, "wallet_type", f"unrecognized legacy wallet type {legacy_type!r}")
             )
             continue
 
@@ -351,6 +417,7 @@ def build_plan(
         "rows_read": len(wallet_rows),
         "skipped_missing_id": skipped_missing_id,
         "skipped_duplicate_id": skipped_duplicate_id,
+        "skipped_pre_launch": skipped_pre_launch,
         "skipped_unmatched": skipped_unmatched,
         "skipped_zero_amount": skipped_zero_amount,
         "target_rows": len(plan.deltas_to_apply),
@@ -461,6 +528,7 @@ def print_report(plan: WalletImportPlan, results: list[dict[str, Any]] | None, *
     print(f"  rows read                : {s.get('rows_read', 0)}")
     print(f"  skipped (missing id)     : {s.get('skipped_missing_id', 0)}")
     print(f"  skipped (duplicate id)   : {s.get('skipped_duplicate_id', 0)}")
+    print(f"  skipped (pre-launch)     : {s.get('skipped_pre_launch', 0)}")
     print(f"  skipped (no account)     : {s.get('skipped_unmatched', 0)}")
     print(f"  skipped (zero amount)    : {s.get('skipped_zero_amount', 0)}")
     print(f"  deltas planned           : {s.get('target_rows', 0)}")

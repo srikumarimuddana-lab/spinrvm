@@ -70,6 +70,9 @@ interface ActiveRidePanelProps {
   slideUpAnim: Animated.Value;
   fadeAnim: Animated.Value;
   distanceToPickup?: number | null;
+  /** Projected platform-funded bonus for this ride, from the active-ride
+      payload's `total_bonus`. Null/0 when no incentive applies. */
+  totalBonus?: number | null;
 }
 
 // Haversine distance between two points in meters
@@ -101,6 +104,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   slideUpAnim,
   fadeAnim,
   distanceToPickup,
+  totalBonus,
 }) => {
   // All hooks MUST be before any early return to avoid React ordering issues
   const router = useRouter();
@@ -332,7 +336,14 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     ? `${rider.first_name}${rider.last_name ? ' ' + rider.last_name[0] + '.' : ''}`
     : rider?.name || t('activeRide.rider');
 
-  const earnings = ride.driver_earnings ?? ride.total_fare ?? 0;
+  // `rides.driver_earnings` is fare-only by design — the bonus lives in
+  // ride_incentive_claims and is only written at completion — so the panel has
+  // to add the projected bonus itself. Without this the headline dropped to the
+  // bare fare the moment the driver accepted, under-quoting the offer they took.
+  const fareEarnings = ride.driver_earnings ?? ride.total_fare ?? 0;
+  const bonusEarnings = totalBonus ?? 0;
+  const hasBonus = bonusEarnings > 0;
+  const earnings = fareEarnings + bonusEarnings;
   const distKm = ride.distance_km ?? 0;
   const durMin = ride.duration_minutes ?? 0;
 
@@ -466,7 +477,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View
             style={styles.headerRow}
             accessibilityRole="text"
-            accessibilityLabel={`${status.label}, ${status.sub}, earnings $${earnings.toFixed(2)}`}
+            accessibilityLabel={
+              hasBonus
+                ? `${status.label}, ${status.sub}, earnings $${earnings.toFixed(2)}, ` +
+                  `including $${bonusEarnings.toFixed(2)} bonus`
+                : `${status.label}, ${status.sub}, earnings $${earnings.toFixed(2)}`
+            }
           >
             <View style={[styles.statusIconBg, { backgroundColor: `${status.color}18` }]}>
               <Ionicons name={status.icon} size={20} color={status.color} />
@@ -478,6 +494,14 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             <View style={styles.earningsBox}>
               <Text style={styles.earningsValue}>${earnings.toFixed(2)}</Text>
               <Text allowFontScaling={false} style={styles.earningsLabel}>{t('activeRide.yourEarnings')}</Text>
+              {/* Only when a bonus actually applies — a "+$0.00" line on every
+                  ordinary ride is noise. Same wording as the offer panel so the
+                  figure the driver accepted is the figure they keep seeing. */}
+              {hasBonus && (
+                <Text allowFontScaling={false} style={styles.earningsBreakdown} numberOfLines={1}>
+                  ${fareEarnings.toFixed(2)} + ${bonusEarnings.toFixed(2)} bonus
+                </Text>
+              )}
             </View>
           </View>
         </View>
@@ -806,6 +830,7 @@ function createStyles(colors: ThemeColors) {
     },
     earningsValue: { fontSize: 19, fontWeight: '900', color: colors.success, fontVariant: ['tabular-nums'] },
     earningsLabel: { fontSize: 9, fontWeight: '700', color: colors.textDim, letterSpacing: 0.4, textTransform: 'uppercase' },
+    earningsBreakdown: { fontSize: 9, fontWeight: '600', color: colors.success, marginTop: 2, fontVariant: ['tabular-nums'] },
 
     sheet: {
       paddingHorizontal: 16,

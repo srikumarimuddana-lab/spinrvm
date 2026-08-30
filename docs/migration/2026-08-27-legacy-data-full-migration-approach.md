@@ -235,17 +235,37 @@ this doc's Phase 6 section was last edited to say "deferred, needs new infrastru
 CSV column names were inferred from sibling exports, never confirmed against a real
 `wallets.csv` header. Checked against the real 07-26 export: the legacy type column is named
 `wallet_type`, not `type` as guessed — every real `/validate` call would have failed with a
-missing-column error, blocking every commit. Fixed (`docs/change-log/2026-08-30-wallet-import-wallet-type-column-fix.md`);
-a dry-run of `build_plan` against the real `wallets.csv`/`customers.csv`/`drivers.csv` (with
-production's actual phone matches) now runs clean: 8 rider-owned rows all skip as unmatched
-(none of the 3 rider `customer_id`s resolve to a `customers.csv` row at all, so no rider
-credit risk exists in this data as-is — see the manual reconciliation write-up for what would
-recover the $900), and 5 driver-owned rows apply cleanly, netting to exactly $60 across 3
-drivers (one of the 4 matched drivers nets to $0 from an add+deduct pair).
+missing-column error, blocking every commit. Fixed
+(`docs/change-log/2026-08-30-wallet-import-wallet-type-column-fix.md`).
+
+**Pre-launch cutoff added 2026-08-30 (owner-confirmed launch date 2026-03-30):** any legacy
+wallet entry dated before Spinr's public launch is pre-launch build/test data, never money
+actually owed — this reframes the whole $900/$60 figure this section originally cited. Of the
+13 rows in the real export, 10 are pre-launch (all 8 rider-owned rows — the entire ~$900 —
+plus 2 of the 4 matched driver rows, Tristan and Kiran, $10 each). Only 3 rows are genuinely
+post-launch: Gurpreet's $40 credit and Aakash Arora's $40 add/$40 deduct pair that nets to $0.
+The importer now enforces this cutoff in code (`LAUNCH_DATE`,
+`docs/change-log/2026-08-30-wallet-import-pre-launch-cutoff.md`) rather than relying on manual
+CSV editing before each run. A dry-run of `build_plan` against the real
+`wallets.csv`/`customers.csv`/`drivers.csv` (with production's actual phone matches) now
+credits **$40, to one driver (Gurpreet) only** — not $60/3 drivers as this section previously
+said before the cutoff was added.
+
 **Recommendation:** ready for the operator to run for real via the existing admin-dashboard
-"Legacy Wallet Import" tool (Bulk Operations → Legacy Wallet Import), Preview first. The rider
-portion will report as unmatched and credit nothing until the one unresolved rider phone
-number (see the manual reconciliation) is recovered and added to `customers.csv`.
+"Legacy Wallet Import" tool (Bulk Operations → Legacy Wallet Import), Preview first — it will
+show exactly the $40/1-driver result above. The pre-launch $900 rider portion and the $20
+across Tristan/Kiran are not part of this run at all now (correctly excluded by the launch
+cutoff, independent of the earlier finding that the rider portion was also unmatched) — this
+data stays in `wallets.csv` untouched by this tool, a candidate for the broader pre-launch
+cleanup pass raised below rather than for migration.
+
+**Broader pre-launch question raised 2026-08-30, investigation pending:** the same 2026-03-30
+cutoff plausibly applies to every other legacy importer used in this migration effort (rider
+CSV import, driver CSV import, SIN/DOB backfill, vehicle-history backfill, saved-address
+backfill, insurance-period corrections) — some already merged and run against production. This
+section only fixes the wallet importer, which had not yet been run. Whether any
+already-imported record traces back to pre-launch legacy data, and what (if anything) should
+be cleaned up before go-live, is a separate investigation — not yet done as of this edit.
 
 ## 5. Two former legal/product blockers — both actioned 2026-08-27
 

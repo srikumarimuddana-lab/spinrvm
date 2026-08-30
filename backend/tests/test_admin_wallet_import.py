@@ -56,6 +56,7 @@ WALLET_ROW = {
     "amount": "50.00",
     "wallet_type": "from_bank",
     "status": "add",
+    "created_at": "1777593600000",  # 2026-05-01T00:00:00Z, post-launch
 }
 CUSTOMER = {"_id": "cus-1", "phone": "3065551111"}
 DRIVER = {"_id": "drv-legacy-1", "phone": "3065552222"}

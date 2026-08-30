@@ -93,7 +93,7 @@ def _driver(**overrides):
 
 
 def _wallet_row(**overrides):
-    """A legacy rider top-up: $50 added, from_bank."""
+    """A legacy rider top-up: $50 added, from_bank, post-launch (2026-05-01)."""
     row = {
         "_id": "wal-1",
         "customer_id": "cus-1",
@@ -101,6 +101,7 @@ def _wallet_row(**overrides):
         "amount": "50.00",
         "wallet_type": "from_bank",
         "status": "add",
+        "created_at": "1777593600000",  # 2026-05-01T00:00:00Z, post-launch
     }
     row.update(overrides)
     return row
@@ -181,6 +182,59 @@ def test_csv_with_only_old_type_column_name_is_a_missing_column_error(monkeypatc
     plan = _plan([bad_row])
     assert any(e.field == "wallet_type" for e in plan.errors)
     assert plan.deltas_to_apply == []
+
+
+# --------------------------------------------------------------------------
+# Pre-launch cutoff (2026-08-30: owner-confirmed launch date 2026-03-30)
+# --------------------------------------------------------------------------
+
+
+def test_pre_launch_entry_is_skipped_even_when_matched(monkeypatch):
+    """A legacy wallet entry timestamped before Spinr's 2026-03-30 launch is
+    never credited, even when the rider/driver phone matches a real, live
+    Spinr account today -- it was created during the previous app's
+    pre-launch build/test period, not by a real person."""
+    _install_fake(monkeypatch)
+    plan = _plan([_wallet_row(created_at="1769579916416")])  # 2026-01-28, pre-launch
+    assert not plan.errors
+    assert plan.deltas_to_apply == []
+    assert plan.stats["skipped_pre_launch"] == 1
+    assert any("pre-launch" in w.message for w in plan.warnings)
+
+
+def test_post_launch_entry_on_launch_day_boundary_is_kept(monkeypatch):
+    """created_at exactly at LAUNCH_DATE (2026-03-30T00:00:00Z) is kept, not
+    skipped -- the cutoff is a strict less-than."""
+    _install_fake(monkeypatch)
+    plan = _plan([_wallet_row(created_at="1774828800000")])  # exactly 2026-03-30T00:00:00Z
+    assert plan.stats["skipped_pre_launch"] == 0
+    assert len(plan.deltas_to_apply) == 1
+
+
+def test_missing_created_at_is_an_error_not_a_silent_skip(monkeypatch):
+    """An unparseable/missing created_at can't be classified pre- or
+    post-launch -- refuse rather than guess, matching this module's
+    never-guess-at-money convention."""
+    _install_fake(monkeypatch)
+    plan = _plan([_wallet_row(created_at="")])
+    assert any(e.field == "created_at" for e in plan.errors)
+    assert plan.deltas_to_apply == []
+
+
+def test_pre_launch_and_post_launch_rows_in_same_csv(monkeypatch):
+    """A pre-launch row never blocks a legitimate post-launch row in the
+    same file -- pre-launch is a warning, not an error."""
+    _install_fake(monkeypatch)
+    plan = _plan(
+        [
+            _wallet_row(_id="wal-old", created_at="1769579916416"),  # pre-launch
+            _wallet_row(_id="wal-new", created_at="1777593600000"),  # post-launch
+        ]
+    )
+    assert not plan.errors
+    assert plan.stats["skipped_pre_launch"] == 1
+    assert len(plan.deltas_to_apply) == 1
+    assert plan.deltas_to_apply[0]["reference_id"] == "legacy-wallet-wal-new"
 
 
 # --------------------------------------------------------------------------

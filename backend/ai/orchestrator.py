@@ -33,6 +33,7 @@ try:
     from .tools import execute_tool, tool_defs_for
 except ImportError:
     from ai import conversations, response_cache
+    from ai.guardrails import fallback_over_cap
     from ai.pii import filter_tool_leakage, scrub_pii
     from ai.prompts import build_system_prompt
     from ai.providers import get_adapter

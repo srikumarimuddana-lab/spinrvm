@@ -34,6 +34,7 @@ try:
     from .tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 except ImportError:
     from ai.context import current_ai_user, require_ai_user
+    from ai.guardrails import fallback_over_cap
     from ai.tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 
 try:

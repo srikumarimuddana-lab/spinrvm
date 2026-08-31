@@ -1,15 +1,27 @@
 name: Dependabot auto-merge
 
-# Automatically approve and enable auto-merge for Dependabot PRs that only
-# bump patch versions. Minor/major bumps still require human review.
+# Automatically approve and enable auto-merge for Dependabot PRs that bump
+# patch OR minor versions. Major bumps always require human review.
+#
+# Extended to minor bumps 2026-08-31 (previously patch-only) — see
+# docs/change-log/ for the corresponding entry. Security-critical backend
+# libraries (the `security-critical` group in .github/dependabot.yml:
+# cryptography, PyJWT, bcrypt, firebase-admin) are carved out of BOTH patch
+# and minor auto-merge, not just minor — a minor bump to one of these can
+# change auth/crypto behavior in ways a patch bump shouldn't, so they always
+# need a human reviewer regardless of semver tier. This is a narrower
+# exclusion than "all money/auth-adjacent deps": it matches exactly the
+# group dependabot.yml already defines, so extending or shrinking the
+# exclusion list only ever requires touching one place.
 #
 # Requirements for auto-merge to actually land:
 #   1. Branch protection on `main` must have "Require status checks to pass"
 #      — the merge is queued and only executes after all required checks go green.
 #   2. "Allow auto-merge" must be enabled in repo Settings → General.
 #
-# To extend to minor updates for a specific ecosystem, add another `if` block
-# matching update-type == 'version-update:semver-minor' and the desired ecosystem.
+# To extend to major updates, or to narrow/widen the security-critical
+# exclusion list, edit the `security-critical` step below — it's the single
+# source of truth both auto-merge steps gate on.
 
 on:
   pull_request:
@@ -21,7 +33,7 @@ permissions:
 
 jobs:
   auto-merge:
-    name: Auto-merge Dependabot patch updates
+    name: Auto-merge Dependabot patch/minor updates
     runs-on: ubuntu-latest
     # Only run for Dependabot PRs
     if: github.actor == 'dependabot[bot]'
@@ -33,23 +45,48 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Auto-approve patch updates for all ecosystems.
-      # Security-critical libraries (cryptography, PyJWT, stripe) are grouped
-      # in dependabot.yml; they follow the same rule — patches auto-merge,
-      # minors/majors need a human reviewer.
-      - name: Approve patch update
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+      # Single source of truth for the security-critical carve-out, checked
+      # by name rather than trusting a specific fetch-metadata group output —
+      # keeps this workflow's own behavior auditable without depending on an
+      # upstream action's exact output shape for something this consequential.
+      # Names must match the `security-critical` group's `patterns:` in
+      # .github/dependabot.yml (backend/pip block) exactly.
+      - name: Check for security-critical dependency
+        id: security_check
+        env:
+          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
+        run: |
+          is_critical=false
+          for name in cryptography PyJWT bcrypt firebase-admin; do
+            if echo "$DEP_NAMES" | grep -qiw "$name"; then
+              is_critical=true
+            fi
+          done
+          echo "is_critical=$is_critical" >> "$GITHUB_OUTPUT"
+          echo "Dependencies: $DEP_NAMES (security-critical: $is_critical)"
+
+      # Auto-approve patch/minor updates for all ecosystems, excluding
+      # security-critical backend libraries at any tier (see header comment).
+      - name: Approve patch/minor update
+        if: |
+          (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+           steps.meta.outputs.update-type == 'version-update:semver-minor') &&
+          steps.security_check.outputs.is_critical != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr review --approve "$PR_URL"
 
-      - name: Enable auto-merge for patch update
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+      - name: Enable auto-merge for patch/minor update
+        if: |
+          (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+           steps.meta.outputs.update-type == 'version-update:semver-minor') &&
+          steps.security_check.outputs.is_critical != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PACKAGE_ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
         run: |
           gh pr merge --auto --squash "$PR_URL"
-          echo "Auto-merge enabled for $PR_URL (${PACKAGE_ECOSYSTEM} patch)"
+          echo "Auto-merge enabled for $PR_URL (${PACKAGE_ECOSYSTEM} ${UPDATE_TYPE})"

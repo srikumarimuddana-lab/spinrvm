@@ -934,9 +934,18 @@ class TestGetDriverEarningsComparison:
         assert result["change_pct"]["rides"] == 0.0
 
     async def test_month_period_zero_previous_gives_100pct_or_0pct(self):
+        from datetime import datetime, timedelta, timezone
+
         from backend.routes.drivers import get_driver_earnings_comparison
 
-        current_ride = _ride(ride_completed_at="2026-08-01T00:00:00+00:00")
+        # Relative timestamp: the assertion below relies on the handler's
+        # Python-side previous-window filter (ride_completed_at < now-30d)
+        # excluding this ride, so it must always sit inside the current
+        # 30-day window. A hardcoded date broke here on 2026-08-31, when
+        # 2026-08-01 aged past the 30-day boundary and previous became 1.
+        current_ride = _ride(
+            ride_completed_at=(datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        )
 
         def get_rows(table, filters=None, **kw):
             if table != "rides":

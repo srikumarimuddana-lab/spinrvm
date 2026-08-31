@@ -108,3 +108,28 @@ keywords = [
     "sin_raw", "sin_number", "social_insurance_number", "social_insurance_no",
     "account_number", "institute_number", "institution_number", "transit_number",
 ]
+
+# Driver-migration CSV-dump PII detector — widening the #4547 backstop above to
+# cover the incident's *second* file (#4596, driver_csv_migration.sql, 189
+# drivers). That file's PII column shape (name/email/phone/license_number/
+# latitude/longitude) has no SIN/bank/institution keyword, so spinr-sin-bank-pii
+# never matched it — it went undetected from 2026-08-16 until a later manual
+# audit found it (see docs/audit/breach-record.md Incident 1). The signal this
+# rule keys on isn't the column names alone (too common — "email"/"phone" would
+# gate almost every file in the repo and provide no real filtering), it's an
+# *email-address literal* appearing inside a `INSERT INTO ...driver...` SQL
+# statement — application code never embeds a literal PII email in a committed
+# SQL string; only a hand-authored one-off data-migration dump does. `[\s\S]`
+# (not `(?s)`) lets the match span the newlines inside a multi-line INSERT/
+# VALUES statement without needing a Go regex mode flag. As with
+# spinr-sin-bank-pii, an occasional false positive (a fixture/seed file with a
+# literal test email inside a driver-table INSERT) is an accepted trade-off —
+# worth a human's 30-second look, per backend/migrations/CLAUDE.md's "One-off
+# data-migration scripts" section.
+[[rules]]
+id = "spinr-driver-csv-pii"
+description = "Possible driver PII data dump (literal email address inside an INSERT INTO ...driver... statement) — verify this isn't a real committed migration export before merging."
+regex = '''(?i)insert\s+into\s+\w*driver\w*[\s\S]{0,4000}?['"][^'",]*@[^'",]*\.[^'",]{2,}['"]'''
+keywords = [
+    "insert into", "license_number", "driver_csv_import", "driver_bank_sin_migration",
+]

@@ -17,10 +17,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { Download, Mail, FileText, RefreshCw } from "lucide-react";
 import {
     getDriverStatements,
@@ -52,6 +54,21 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
     skipped_inactive: { label: "No activity", cls: "bg-muted text-muted-foreground" },
 };
 
+// Quiet Console Stage 3: flag-on Badge variant per statement status.
+// "claimed" has no semantic token (it's neither good nor bad — see
+// STATUS_STYLE's comment) and is deliberately kept plain `outline` here
+// rather than reusing outline-warning, which "skipped_no_email" already
+// owns in this same status set — collapsing the two would erase the
+// distinction STATUS_STYLE exists to preserve. STATUS_STYLE itself is
+// untouched.
+const STATUS_BADGE_VARIANT: Record<string, "outline" | "outline-success" | "outline-warning" | "outline-destructive"> = {
+    sent: "outline-success",
+    claimed: "outline",
+    failed: "outline-destructive",
+    skipped_no_email: "outline-warning",
+    skipped_inactive: "outline",
+};
+
 const fmtPeriod = (s: DriverStatement) => {
     const kind = s.period_type === "monthly" ? "Monthly" : "Weekly";
     return `${kind} · ${s.period_start} → ${s.period_end}`;
@@ -68,6 +85,9 @@ export interface DriverStatementsPanelProps {
 }
 
 export function DriverStatementsPanel({ driverId, driverName, notify }: DriverStatementsPanelProps) {
+    // Quiet Console Stage 3: gates the flag-on Badge alternate for the
+    // statement-status pill below — STATUS_STYLE stays the flag-off path.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const [statements, setStatements] = useState<DriverStatement[] | null>(null);
     const [loading, setLoading] = useState(false);
     const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -234,9 +254,13 @@ export function DriverStatementsPanel({ driverId, driverName, notify }: DriverSt
                                 <div className="min-w-0">
                                     <p className="text-xs font-medium">{fmtPeriod(s)}</p>
                                     <div className="flex items-center gap-2 mt-0.5">
-                                        <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold ${style.cls}`}>
-                                            {style.label}
-                                        </span>
+                                        {themeV2Enabled ? (
+                                            <Badge variant={STATUS_BADGE_VARIANT[s.status] ?? "outline"} className="text-[10px] font-semibold">{style.label}</Badge>
+                                        ) : (
+                                            <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold ${style.cls}`}>
+                                                {style.label}
+                                            </span>
+                                        )}
                                         {s.totals?.earnings?.total && (
                                             <span className="text-[10px] text-muted-foreground tabular-nums">
                                                 ${s.totals.earnings.total} earned

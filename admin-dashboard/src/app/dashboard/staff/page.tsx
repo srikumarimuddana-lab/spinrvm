@@ -15,12 +15,14 @@ import {
 // list page (audit-logs, safety, drivers, users, ...) renders through
 // Table/SortableHead/Card/Button/Input, not raw <div>/<button>/<input>.
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { isStaffRequiredFieldsValid, isStaffPasswordValid } from "@/lib/staffFormSchema";
 
 // Must stay in step with AVAILABLE_MODULES in backend/routes/admin/staff.py.
@@ -107,6 +109,12 @@ export default function StaffPage() {
   const { allowed } = useRequireModule("staff");
   const { user } = useAuthStore();
   const { toast } = useToast();
+  // Quiet Console Stage 3: gates the flag-on Badge alternate for the role
+  // pill below — the ad-hoc ROLE_COLORS original stays intact when the
+  // flag is off. This is the canonical "5 competing hues for one
+  // non-status picker" case: super_admin is the one role that stands out
+  // (outline-accent), every other role is plain outline.
+  const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
   const [deleteTarget, setDeleteTarget] = useState<Staff | null>(null);
   const [mfaResetTarget, setMfaResetTarget] = useState<Staff | null>(null);
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -429,9 +437,15 @@ export default function StaffPage() {
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{s.email}</TableCell>
                     <TableCell>
-                      <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${ROLE_COLORS[s.role] || ROLE_COLORS.custom}`}>
-                        {s.role.replace("_", " ").toUpperCase()}
-                      </span>
+                      {themeV2Enabled ? (
+                        <Badge variant={s.role === "super_admin" ? "outline-accent" : "outline"} className="text-xs font-bold">
+                          {s.role.replace("_", " ").toUpperCase()}
+                        </Badge>
+                      ) : (
+                        <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${ROLE_COLORS[s.role] || ROLE_COLORS.custom}`}>
+                          {s.role.replace("_", " ").toUpperCase()}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1 max-w-xs">

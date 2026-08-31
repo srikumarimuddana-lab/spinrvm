@@ -1227,9 +1227,22 @@ def _stats_rows(table, filters=None, **kwargs):
     return []
 
 
+async def _stats_rows_batched_in(table, column, values, extra_filters=None, **kwargs):
+    # admin_get_driver_stats fetches users via get_rows_batched_in (a
+    # separate function from get_rows, both re-exported by db_supabase — see
+    # #4783 for why patching only get_rows leaves this call hitting a real,
+    # unconfigured client). Route it through the same _stats_rows fixture.
+    filters = dict(extra_filters or {})
+    filters[column] = {"$in": list(values)}
+    return _stats_rows(table, filters, **kwargs)
+
+
 class TestDriverStats:
     def test_basic_aggregate_and_needs_review_and_deleted_classification(self, test_client, super_admin_override):
-        with patch("db_supabase.get_rows", AsyncMock(side_effect=_stats_rows)):
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=_stats_rows)),
+            patch("db_supabase.get_rows_batched_in", AsyncMock(side_effect=_stats_rows_batched_in)),
+        ):
             resp = test_client.get("/api/admin/drivers/stats")
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -1244,7 +1257,10 @@ class TestDriverStats:
         assert len(body["charts"]["daily_joins"]) > 0
 
     def test_service_area_filter_and_custom_date_range(self, test_client, super_admin_override):
-        with patch("db_supabase.get_rows", AsyncMock(side_effect=_stats_rows)):
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=_stats_rows)),
+            patch("db_supabase.get_rows_batched_in", AsyncMock(side_effect=_stats_rows_batched_in)),
+        ):
             resp = test_client.get(
                 "/api/admin/drivers/stats",
                 params={"service_area_id": "area-1", "start_date": "2026-07-01", "end_date": "2026-07-15"},

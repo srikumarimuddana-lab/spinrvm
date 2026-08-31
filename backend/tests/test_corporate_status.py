@@ -223,6 +223,113 @@ def test_close_refunds_wallet_when_flag_enabled(test_client, admin_override):
     assert mock_audit.await_args.kwargs["details"]["wallet_winddown"] == winddown_result
 
 
+def test_close_cancels_stripe_subscription_immediately(test_client, admin_override):
+    """#4602 finding 3: closing a company must cascade-cancel its Stripe SaaS
+    subscription immediately (not at period end) -- by close time the company
+    already has zero platform access (auto-topup disabled, pre-pickup rides
+    cancelled, wallet wound down), so there's no remaining period to honor."""
+    with (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(return_value=corporate_account_row("closed", stripe_customer_id="cus_1")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "routes.corporate_accounts.cancel_pre_pickup_rides_for_company",
+            AsyncMock(return_value=0),
+        ),
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value={"corporate_suspend_cancels_pre_pickup_rides": True}),
+        ),
+        patch(
+            "routes.corporate_accounts.cancel_subscription",
+            AsyncMock(return_value={"status": "cancelled"}),
+        ) as mock_cancel_sub,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/status",
+            json={"status": "closed"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_cancel_sub.assert_awaited_once_with(company_id="c1", admin_id="admin_1", at_period_end=False)
+
+
+def test_close_with_no_active_subscription_does_not_error(test_client, admin_override):
+    """The common case -- most companies don't have a live SaaS subscription
+    at all -- must not surface as a failure."""
+    from services.corporate_subscription_service import CorporateSubscriptionError
+
+    with (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(return_value=corporate_account_row("closed", stripe_customer_id="cus_1")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "routes.corporate_accounts.cancel_pre_pickup_rides_for_company",
+            AsyncMock(return_value=0),
+        ),
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value={"corporate_suspend_cancels_pre_pickup_rides": True}),
+        ),
+        patch(
+            "routes.corporate_accounts.cancel_subscription",
+            AsyncMock(side_effect=CorporateSubscriptionError("no_active_subscription")),
+        ) as mock_cancel_sub,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/status",
+            json={"status": "closed"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_cancel_sub.assert_awaited_once()
+
+
+def test_suspend_never_cancels_subscription(test_client, admin_override):
+    """Suspend is reversible -- subscription cancellation is close-only,
+    mirroring wallet wind-down's own suspend/close asymmetry."""
+    with (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(return_value=corporate_account_row("suspended", stripe_customer_id="cus_1")),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "routes.corporate_accounts.cancel_subscription",
+            AsyncMock(),
+        ) as mock_cancel_sub,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/status",
+            json={"status": "suspended"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_cancel_sub.assert_not_awaited()
+
+
 def test_suspend_never_triggers_wallet_winddown(test_client, admin_override):
     """Suspend is reversible — wind-down is close-only, per design."""
     with (

@@ -47,7 +47,22 @@ async def test_admin_get_expiring_documents_filters_rides_by_ride_completed_at()
             return [ride]
         raise AssertionError(f"unexpected table: {table}")
 
-    with patch.object(admin_drivers.db_supabase, "get_rows", new=AsyncMock(side_effect=fake_get_rows)) as get_rows:
+    async def fake_get_rows_batched_in(table, column, values, extra_filters=None, *, columns="*", limit=None, batch_size=200):
+        # See #4783: get_rows_batched_in calls its own module's internal
+        # get_rows, bypassing a patch on db_supabase.get_rows alone.
+        vals = list(values)
+        if not vals:
+            return []
+        filters = dict(extra_filters or {})
+        filters[column] = {"$in": vals}
+        rows = await get_rows(table, filters, limit=limit or 1000, offset=0, columns=columns)
+        return rows if limit is None else rows[:limit]
+
+    get_rows = AsyncMock(side_effect=fake_get_rows)
+    with (
+        patch.object(admin_drivers.db_supabase, "get_rows", new=get_rows),
+        patch.object(admin_drivers.db_supabase, "get_rows_batched_in", new=AsyncMock(side_effect=fake_get_rows_batched_in)),
+    ):
         result = await admin_drivers.admin_get_expiring_documents(window_days=30)
 
     assert result["items"][0]["rides_last_30d"] == 1

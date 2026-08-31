@@ -923,10 +923,48 @@ jobs:
               (r'\bDROP\s+INDEX\b',         "DROP INDEX — query performance regression risk"),
           ]
 
+          def strip_sql_comments(text):
+              # backend/migrations/CLAUDE.md mandates a rollback plan in a top
+              # comment ("always reversible on paper, even if no down-migration
+              # file") — that comment routinely describes a DROP COLUMN/DROP
+              # INDEX/etc. as the rollback for an additive migration. Scanning
+              # raw file text (comments included) false-positives on every such
+              # migration, flagging documented, never-executed rollback notes
+              # as "dangerous" (see #4791 / migration 376). Strip comments
+              # first so only executable SQL is scanned.
+              #
+              # Block comments first (may span lines) — /* */ essentially never
+              # appears inside a string literal in this repo's migrations, so a
+              # non-string-aware strip is an acceptable simplification here.
+              text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+
+              out_lines = []
+              for line in text.split('\n'):
+                  result = []
+                  in_string = False
+                  i = 0
+                  while i < len(line):
+                      ch = line[i]
+                      if ch == "'":
+                          # Toggling on every quote char (rather than trying to
+                          # special-case doubled '' escapes) still lands on the
+                          # right in_string state at end-of-scan for a single
+                          # -- search, which is all this needs.
+                          in_string = not in_string
+                          result.append(ch)
+                          i += 1
+                          continue
+                      if not in_string and ch == '-' and i + 1 < len(line) and line[i + 1] == '-':
+                          break
+                      result.append(ch)
+                      i += 1
+                  out_lines.append(''.join(result))
+              return '\n'.join(out_lines)
+
           issues = []
           for filepath in migration_files:
               try:
-                  content = open(filepath).read().upper()
+                  content = strip_sql_comments(open(filepath).read()).upper()
                   for pattern, description in DANGEROUS:
                       if re.search(pattern, content, re.IGNORECASE):
                           issues.append(f"{filepath}: {description}")
@@ -986,6 +1024,33 @@ jobs:
           )
           OVERRIDE = re.compile(r'--\s*migration-override-ok\s*:', re.IGNORECASE)
 
+          def strip_sql_comments(text):
+              # Same false-positive class as the dangerous-pattern scan above
+              # (see #4791): a migration's own header prose can say something
+              # like "... CREATE OR REPLACE FUNCTION is idempotent ..." --
+              # without stripping comments first, COR.findall() below reads
+              # that as a real target named "is". Strip comments so only
+              # executable SQL is scanned for real CREATE OR REPLACE targets.
+              text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+              out_lines = []
+              for line in text.split('\n'):
+                  result = []
+                  in_string = False
+                  i = 0
+                  while i < len(line):
+                      ch = line[i]
+                      if ch == "'":
+                          in_string = not in_string
+                          result.append(ch)
+                          i += 1
+                          continue
+                      if not in_string and ch == '-' and i + 1 < len(line) and line[i + 1] == '-':
+                          break
+                      result.append(ch)
+                      i += 1
+                  out_lines.append(''.join(result))
+              return '\n'.join(out_lines)
+
           def target_name(raw: str) -> str:
               """Bare object name, schema-insensitive.
 
@@ -1001,10 +1066,12 @@ jobs:
                   content = open(fpath).read()
               except OSError:
                   continue
+              # OVERRIDE is checked against the raw content (not comment-
+              # stripped) -- the annotation itself lives in a comment.
               if OVERRIDE.search(content):
                   print(f"  Skipping {fpath}: migration-override-ok annotation found.")
                   continue
-              for name in COR.findall(content):
+              for name in COR.findall(strip_sql_comments(content)):
                   pr_targets.setdefault(target_name(name), []).append(fpath)
 
           if not pr_targets:
@@ -1027,7 +1094,7 @@ jobs:
                       content = open(fpath).read()
                   except OSError:
                       continue
-                  for name in COR.findall(content):
+                  for name in COR.findall(strip_sql_comments(content)):
                       if target_name(name) in pr_targets:
                           conflicts.append({
                               'target': name,

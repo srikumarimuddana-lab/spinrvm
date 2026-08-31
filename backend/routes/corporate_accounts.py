@@ -75,6 +75,14 @@ try:
 except ImportError:
     from services.corporate_wallet_winddown_service import refund_wallet_balance_on_close  # type: ignore[no-redef]
 
+try:
+    from ..services.corporate_subscription_service import CorporateSubscriptionError, cancel_subscription
+except ImportError:
+    from services.corporate_subscription_service import (  # type: ignore[no-redef]
+        CorporateSubscriptionError,
+        cancel_subscription,
+    )
+
 logger = logging.getLogger(__name__)
 
 # Alias for backward compatibility
@@ -922,6 +930,44 @@ async def change_company_status(
                     exc_info=True,
                 )
                 winddown_result = {"skipped_reason": "unhandled_exception"}
+
+    # #4602 finding 3: closing a company used to never touch its Stripe SaaS
+    # subscription — this is the "second, unlinked step" the finding warned
+    # an admin could forget, leaving a terminated customer billed every
+    # period with no way to use the product (chargeback/reputational risk).
+    # 'closed' is terminal (see the 409 check above) and by this point the
+    # company already has zero platform access (auto-topup disabled,
+    # pre-pickup rides cancelled, wallet wound down above) — there is no
+    # remaining service to bill for, so cancel immediately rather than at
+    # period end. 'suspended' is deliberately NOT cascaded here: it's
+    # reversible, and cancelling+later re-creating a Stripe subscription on
+    # reactivation would add proration/billing-cycle complexity for what's
+    # meant to be a short, recoverable pause.
+    subscription_cancel_result = None
+    if transition.status == CompanyStatus.CLOSED:
+        try:
+            subscription_cancel_result = await cancel_subscription(
+                company_id=normalized_id,
+                admin_id=str(current_admin.get("id") or ""),
+                at_period_end=False,
+            )
+        except CorporateSubscriptionError as exc:
+            if str(exc) != "no_active_subscription":
+                logger.error(
+                    "Corporate subscription cancellation failed on close for company %s: %s",
+                    normalized_id,
+                    exc,
+                )
+                subscription_cancel_result = {"skipped_reason": str(exc)}
+            # no_active_subscription is the common case (not every company
+            # has a live SaaS subscription) -- not an error, nothing to log.
+        except Exception:
+            logger.error(
+                "Corporate subscription cancellation failed on close for company %s",
+                normalized_id,
+                exc_info=True,
+            )
+            subscription_cancel_result = {"skipped_reason": "unhandled_exception"}
 
     # Reactivation visibility: change_company_status only ever DISABLES
     # auto-topup on suspend/close (above) — there's no corresponding "turn it

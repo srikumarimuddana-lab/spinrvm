@@ -11526,6 +11526,96 @@ record of what was assumed vs. what was actually true</summary>
   stays `[ ]` — B39 is scoped as an ongoing "migrate one form at a time"
   backlog item per its own text, not a finite checklist with a
   completion state.
+- **2026-08-31 update — broader sweep (all three apps), user-directed.**
+  Per user request, ran a full read-only sweep of `rider-app/`,
+  `driver-app/`, and `admin-dashboard/src/app/` (excluding forms already
+  migrated in steps 1-14, cross-checked against zod/`*Schema` imports) to
+  find every remaining ad hoc form-validation candidate, not just
+  opportunistic ones found while touching a file for other reasons. **21
+  real candidates found**, ranked money → compliance/KYC/safety →
+  RBAC/other:
+
+  **rider-app** (3): `ride-completed.tsx` custom-tip amount (money,
+  highest risk — see bug note below); `become-driver.tsx` wizard
+  (vehicle-age + doc-upload/expiry rules, compliance); `manage-cards.tsx`
+  (payment-method add); `emergency-contacts.tsx` (safety, phone-format
+  rule). `login.tsx` re-confirmed as already resolved (nothing to
+  extract).
+
+  **driver-app** (7): `become-driver.tsx` (KYC onboarding — doc expiry,
+  vehicle age, vehicle-info completeness); `vehicle-info.tsx` (post-
+  onboarding vehicle edit — see bug note below); `emergency-contacts.tsx`
+  (safety); `report-safety.tsx` (safety); `(tabs)/profile.tsx` (email
+  regex); `settings.tsx` (type-DELETE account-deletion confirmation,
+  PIPEDA-adjacent); `addresses.tsx` / `destination-mode.tsx` (saved-
+  address + geocode-failure gates — same shape, likely one shared
+  extraction). `payout.tsx` and `profile-setup.tsx` already migrated.
+
+  **admin-dashboard** (13): `users/page.tsx` wallet credit/debit (money
+  — distinct from the already-migrated *corporate* wallet-adjustment
+  schema); `disputes/page.tsx` refund resolution (money, refund-≤-
+  original-fare cap); `promotions/page.tsx` (money, largest single ad hoc
+  block — discount %/flat caps, $500 ceiling, expiry); `create-ride-
+  modal.tsx` (money, admin fare override); `safety/page.tsx` incident log
+  + merge-duplicate flow; `cloud-messaging/page.tsx` broadcast compose +
+  marketing-suppression add (PIPEDA-adjacent); `corporate-accounts/[id]/
+  members/page.tsx` invite-email regex; `drivers/page.tsx` photo-upload
+  MIME check; `users/page.tsx` ban/suspend reason; `venues/page.tsx`
+  (also uses raw `alert`/`confirm` instead of the toast pattern);
+  `faqs/page.tsx`; plus two **silent no-op UX gaps** (not missing
+  validation exactly, but worth a mention): `rides/_components/
+  ride-complaint-form.tsx` and `ride-flag-form.tsx` show no error at all
+  on an empty submit — same "silent early-return" shape as several
+  already-migrated forms, but these don't even have the field-level
+  message some of those had.
+
+  **Two real correctness bugs surfaced** (not just missing validation —
+  flagged to the user, who directed fixing both in their own extraction
+  PR, matching the C42-B precedent):
+  1. `rider-app/app/ride-completed.tsx` — `customTip ? parseFloat(customTip)
+     || 0 : 0` (×4 duplicated occurrences). `|| 0` does not catch a
+     negative value (`-5 || 0` → `-5`, truthy), so a rider typing "-5"
+     into the custom-tip field could have sent a negative amount into the
+     Stripe charge (`confirmPayment`) and the driver-rating call
+     (`rateRide`).
+  2. `driver-app/app/vehicle-info.tsx` — `vehicle_year: parseInt(form.vehicle_year)
+     || 0`, no `isNaN` guard (unlike the sibling check in
+     `become-driver.tsx`), so an invalid year silently becomes `0` and
+     reaches a compliance-relevant field.
+
+  User confirmed: fix both bugs now (in their respective extraction
+  PRs), and work the full 21-item list end-to-end rather than stopping
+  after the money tier. Proceeding sequentially, one PR per step per the
+  established one-branch/one-PR-in-flight workflow.
+- **2026-08-31 update — step 15 done: `rider-app/app/ride-completed.tsx`'s
+  custom-tip amount (money-highest-risk candidate from the broader
+  sweep), including the negative-tip bug fix.** Extracted the 4
+  duplicated `customTip ? parseFloat(customTip) || 0 : 0` occurrences
+  into `rider-app/utils/customTipSchema.ts`'s `getCustomTipAmount(customTip)`.
+  This is NOT a pure byte-for-byte extraction — per the user's explicit
+  direction, it also fixes the negative-value gap described above:
+  `getCustomTipAmount` now explicitly rejects negative and non-finite
+  parsed values, clamping them to `0` (the same "no tip" outcome the
+  original code already produced for every other invalid input — empty
+  string, whitespace, non-numeric text). New
+  `rider-app/utils/__tests__/customTipSchema.test.ts` (6 accept/reject
+  cases, including the negative-value fix). Verification: 6/6 new tests
+  pass; full rider-app suite — 2 pre-existing failures in
+  `rideDetailsScreen.test.tsx` confirmed unrelated (reproduce identically
+  with this change `git stash`-ed out, i.e. present on `main`) —
+  otherwise all passing (1896/1902 total, the 6 failures being those
+  same pre-existing ones); `npx tsc --noEmit` clean; `npx eslint` clean
+  on touched files; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed the duplicated inline
+  expression appeared in exactly these 4 places, all in this one file.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-rider-custom-tip-zod-step15.md`.
+
+  **Still open:** the remaining 20 candidates from the broader sweep
+  (driver-app's `vehicle-info.tsx` negative-year bug + 6 more driver-app
+  candidates; 12 more admin-dashboard candidates); no ADR/migration-order
+  doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

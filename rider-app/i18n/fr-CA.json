@@ -118,8 +118,6 @@
     "push_notifications_subtitle": "Mises à jour des courses et alertes",
     "email_notifications": "Notifications par courriel",
     "email_notifications_subtitle": "Reçus et promotions",
-    "sms_notifications": "Notifications SMS",
-    "sms_notifications_subtitle": "Code OTP et confirmations de course",
     "appearance": "Apparence",
     "dark_mode": "Mode sombre",
     "dark_mode_subtitle": "Réduire la fatigue oculaire la nuit",

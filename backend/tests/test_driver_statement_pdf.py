@@ -52,6 +52,41 @@ def test_handles_empty_statement_without_raising():
     assert pdf.startswith(b"%PDF")
 
 
+def test_tax_by_type_renders_separate_lines():
+    """#4639: when tax_by_type is available, render separate GST/PST lines
+    instead of the combined fallback."""
+    fixture = {
+        **_FIXTURE,
+        "earnings": {**_FIXTURE["earnings"], "tax_by_type": {"GST": "6.60", "PST": "3.30"}},
+    }
+    text = _pdf_text(generate_driver_statement_pdf(fixture))
+    assert "GST collected on fares" in text
+    assert "PST collected on fares" in text
+
+
+def test_missing_tax_by_type_falls_back_to_combined_line(caplog):
+    """No tax_by_type key at all (legacy statement shape) -- combined line,
+    same as before #4639, and the fallback is logged loudly since
+    tax_collected is nonzero."""
+    import logging
+
+    with caplog.at_level(logging.ERROR):
+        text = _pdf_text(generate_driver_statement_pdf(_FIXTURE))
+    assert "GST/PST collected on fares" in text
+    assert any("combined GST/PST fallback" in r.message for r in caplog.records)
+
+
+def test_zero_tax_collected_fallback_is_silent(caplog):
+    """A period with genuinely zero tax collected must not page on the
+    combined-line fallback -- there's nothing wrong to flag."""
+    import logging
+
+    fixture = {**_FIXTURE, "earnings": {**_FIXTURE["earnings"], "tax_collected": "0.00"}}
+    with caplog.at_level(logging.ERROR):
+        generate_driver_statement_pdf(fixture)
+    assert not any("combined GST/PST fallback" in r.message for r in caplog.records)
+
+
 def test_payout_row_cap_is_disclosed_not_silent():
     """The table caps at _MAX_PAYOUT_ROWS but 'Total paid out' covers EVERY
     payout — so the overflow must be stated on the document. A silent cap on a

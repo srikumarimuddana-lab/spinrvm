@@ -9,6 +9,7 @@ import asyncio
 from . import _deps, matching
 from ._deps import (  # noqa: F401
     ROUND_HALF_UP,
+    SURGE_CAP,
     APIRouter,
     CreateRideRequest,
     Decimal,
@@ -858,6 +859,24 @@ async def create_ride(
     )
     airport_fee = _d(airport_result.get("airport_fee", 0.0))
     airport_zone_name = airport_result.get("airport_zone_name")
+
+    # Defensive clamp at the actual charge site (#4638). calculate_fare() is a
+    # pure function with no internal cap — enforcement upstream of here is
+    # 100% caller discipline spread across 4 separate fare-list builders
+    # (fare_service.py, routes/fares.py, features.py, estimates.py). This is
+    # the one place that persists the CHARGED fare, whether surge came from
+    # the HMAC-verified estimate_token or the fare_info fallback above, so a
+    # single missed clamp anywhere upstream would otherwise become a live
+    # regulatory-ceiling breach with zero safety net at the point of charge.
+    # No-op today (every upstream builder already clamps), and provably so:
+    # CLAUDE.md's SURGE_CAP = 2.5 is the ceiling for auto mode; this can only
+    # ever lower surge, never raise it.
+    if surge > _d(SURGE_CAP):
+        logger.error(
+            f"[SURGE] upstream fare builder handed booking() an unclamped surge={float(surge)} "
+            f"(cap={SURGE_CAP}) for rider={current_user['id']} — clamping at the charge site",
+        )
+        surge = _d(SURGE_CAP)
 
     fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge, airport_fee=airport_fee)
     base_fare = fb.base_fare

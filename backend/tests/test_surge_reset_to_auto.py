@@ -38,6 +38,31 @@ async def test_reset_to_auto_enables_surge_gate():
     assert result["surge_enabled"] is True
 
 
+async def test_reset_to_auto_clears_stale_manual_multiplier():
+    """#4638 finding 3: a parked manual multiplier must not stay live after
+    reset-to-auto — it would otherwise keep pricing at the old (still-capped,
+    but stale) tier until the surge engine's next ~2-minute tick."""
+    from features import admin_reset_surge_to_auto, db
+
+    area_before = {"id": "area-1", "surge_enabled": False, "surge_source": "manual", "surge_multiplier": 2.0}
+    area_after = {
+        "id": "area-1",
+        "surge_enabled": True,
+        "surge_source": "auto",
+        "surge_active": True,
+        "surge_multiplier": 1.0,
+    }
+
+    with (
+        patch.object(db, "find_one", new=AsyncMock(side_effect=[area_before, area_after])),
+        patch.object(db, "update_one", new=AsyncMock()) as mock_update,
+    ):
+        await admin_reset_surge_to_auto("area-1")
+
+    set_payload = mock_update.call_args.args[2]["$set"]
+    assert set_payload["surge_multiplier"] == 1.0
+
+
 async def test_reset_to_auto_404_when_area_missing():
     """Unknown area still 404s and writes nothing."""
     from fastapi import HTTPException

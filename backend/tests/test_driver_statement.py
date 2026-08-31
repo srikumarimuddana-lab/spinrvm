@@ -159,6 +159,36 @@ async def test_build_statement_tax_snapshot_fallback():
         db.get_rows = _tables(rides=rides)
         out = await stmt.build_statement({"id": "d1"}, "weekly", date(2026, 7, 20))
     assert out["earnings"]["tax_collected"] == "1.10"
+    # No rides.tax_breakdown on this legacy-shaped row -- tax_by_type is
+    # empty and the PDF renderer falls back to the combined line.
+    assert out["earnings"]["tax_by_type"] == {}
+
+
+@pytest.mark.asyncio
+async def test_build_statement_tax_by_type_breakdown():
+    """#4639: driver GST-remittance statement must separate GST/PST when
+    rides.tax_breakdown is available, same field routes/corporate_company.py
+    and the receipt PDFs already render separate lines from."""
+    rides = [
+        {
+            "id": "r1",
+            "driver_earnings": "10.00",
+            "tax_amount": "1.10",
+            "tax_breakdown": {"GST": {"rate": 5.0, "amount": "0.50"}, "PST": {"rate": 6.0, "amount": "0.60"}},
+        },
+        {
+            "id": "r2",
+            "driver_earnings": "20.00",
+            "tax_amount": "1.00",
+            "tax_breakdown": {"GST": {"rate": 5.0, "amount": "1.00"}},
+        },
+    ]
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables(rides=rides)
+        out = await stmt.build_statement({"id": "d1"}, "weekly", date(2026, 7, 20))
+    e = out["earnings"]
+    assert e["tax_collected"] == "2.10"
+    assert e["tax_by_type"] == {"GST": "1.50", "PST": "0.60"}
 
 
 @pytest.mark.asyncio

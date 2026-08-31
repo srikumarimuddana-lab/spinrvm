@@ -36,8 +36,10 @@ from ._deps import (  # noqa: F401
 
 try:
     from ...services import sos_contact_consent
+    from ...services.zoho_desk_integration import create_ticket_for_safety
 except ImportError:
     from services import sos_contact_consent  # type: ignore
+    from services.zoho_desk_integration import create_ticket_for_safety  # type: ignore
 
 router = APIRouter()
 
@@ -267,6 +269,16 @@ async def trigger_emergency(
             raise HTTPException(
                 status_code=503, detail="Unable to send emergency alert. Please try again or call 911."
             ) from exc
+
+    # Raise a Zoho Desk ticket (urgent) for the safety team -- fire-and-forget,
+    # no-op when the integration is disabled; never blocks the alert. #4599
+    # Finding 2: SOS previously reached only the admin WS broadcast + email +
+    # CRITICAL log below, none of which land in the safety team's day-to-day
+    # triage queue the way the routine, self-filed /safety/report path
+    # already does via this same call -- the highest-severity safety event
+    # had less operational tracking than a non-urgent report. Mirrors
+    # routes/safety.py::submit_safety_report's placement and call shape.
+    _deps.spawn(create_ticket_for_safety(incident))
 
     # Notify admin dashboard via WebSocket. Keep the existing
     # emergency_alert event firing for backward compatibility with any
@@ -650,6 +662,10 @@ async def trigger_emergency_rideless(
             raise HTTPException(
                 status_code=503, detail="Unable to send emergency alert. Please try again or call 911."
             ) from exc
+
+    # #4599 Finding 2: same Zoho ticket as trigger_emergency above -- see that
+    # function's comment for the full rationale.
+    _deps.spawn(create_ticket_for_safety(incident))
 
     try:
         await _deps.manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})

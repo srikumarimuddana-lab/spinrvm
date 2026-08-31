@@ -3590,6 +3590,13 @@ _SNAPSHOT_CONCURRENCY = 8
 class RegenerateSnapshotsRequest(BaseModel):
     force: bool = False
     limit: int = Field(50, ge=1, le=500)
+    # Dry-run mode (2026-08-31): this route and regenerate-imported-routes
+    # below were the only two tools on the Bulk Operations page that wrote
+    # immediately with no preview step, breaking that page's own stated
+    # "every tool is dry-run first" contract. preview=True runs the exact
+    # same eligibility query and returns the count that would be affected,
+    # with zero renders/uploads/writes.
+    preview: bool = False
 
 
 @router.post("/rides/regenerate-imported-snapshots")
@@ -3652,6 +3659,13 @@ async def admin_regenerate_imported_snapshots(
     )
     if not rides:
         return {"total": 0, "success": 0, "failed": 0, "message": "No rides to process"}
+
+    if body.preview:
+        return {
+            "total": len(rides),
+            "preview": True,
+            "message": f"Would attempt to regenerate {len(rides)} snapshot(s). No writes made.",
+        }
 
     loop = asyncio.get_event_loop()
     success = 0
@@ -3787,6 +3801,9 @@ _ROUTE_CONCURRENCY = 8
 class RegenerateRoutesRequest(BaseModel):
     force: bool = False
     limit: int = Field(200, ge=1, le=500)
+    # Dry-run mode (2026-08-31) -- see RegenerateSnapshotsRequest.preview's
+    # comment above; same fix, same reason, applied to this route too.
+    preview: bool = False
 
 
 @router.post("/rides/regenerate-imported-routes")
@@ -3845,6 +3862,13 @@ async def admin_regenerate_imported_routes(
     targets = [r for r in rides if _needs_route(r)][: body.limit]
     if not targets:
         return {"total": 0, "success": 0, "failed": 0, "message": "No rides need a route backfill"}
+
+    if body.preview:
+        return {
+            "total": len(targets),
+            "preview": True,
+            "message": f"Would attempt to backfill {len(targets)} route(s). No writes made.",
+        }
 
     semaphore = asyncio.Semaphore(_ROUTE_CONCURRENCY)
     success = 0

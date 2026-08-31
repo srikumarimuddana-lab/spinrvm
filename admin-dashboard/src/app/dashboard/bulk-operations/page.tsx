@@ -819,9 +819,27 @@ export default function BulkOperationsPage() {
 
 function SnapshotRegenerateSection() {
     const { toast } = useToast();
+    const [previewing, setPreviewing] = useState(false);
     const [running, setRunning] = useState(false);
     const [force, setForce] = useState(true);
     const [result, setResult] = useState<SnapshotRegenerateResult | null>(null);
+
+    const handlePreview = async () => {
+        setPreviewing(true);
+        setResult(null);
+        try {
+            const res = await adminRegenerateImportedSnapshots(force, 200, true);
+            setResult(res);
+        } catch (err: unknown) {
+            toast({
+                title: "Preview failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setPreviewing(false);
+        }
+    };
 
     const handleRegenerate = async () => {
         setRunning(true);
@@ -851,7 +869,8 @@ function SnapshotRegenerateSection() {
                 <CardDescription>
                     Regenerate PNG route map images for imported rides using Google Static Maps.
                     Each snapshot shows the OSRM road route with an orange-to-red gradient on real
-                    map tiles, with pickup (green) and dropoff (red) markers.
+                    map tiles, with pickup (green) and dropoff (red) markers. Preview first — no
+                    writes until you click Regenerate.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -860,33 +879,57 @@ function SnapshotRegenerateSection() {
                         <input
                             type="checkbox"
                             checked={force}
-                            onChange={(e) => setForce(e.target.checked)}
+                            onChange={(e) => {
+                                setForce(e.target.checked);
+                                setResult(null);
+                            }}
                             className="rounded border-input"
                         />
                         Re-generate all (including rides that already have a snapshot)
                     </label>
                 </div>
-                <Button onClick={handleRegenerate} disabled={running}>
-                    {running ? (
-                        <>
+                <div className="flex items-center gap-3">
+                    <Button variant="outline" onClick={handlePreview} disabled={previewing || running}>
+                        {previewing ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Generating snapshots...
-                        </>
-                    ) : (
-                        <>
-                            <RefreshCw className="mr-2 h-4 w-4" />
-                            Regenerate Snapshots
-                        </>
+                        ) : (
+                            <Info className="mr-2 h-4 w-4" />
+                        )}
+                        Preview
+                    </Button>
+                    <Button
+                        onClick={handleRegenerate}
+                        disabled={running || previewing || !result || !result.preview || result.total === 0}
+                    >
+                        {running ? (
+                            <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Generating snapshots...
+                            </>
+                        ) : (
+                            <>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                Regenerate Snapshots
+                            </>
+                        )}
+                    </Button>
+                    {!result && (
+                        <span className="text-sm text-muted-foreground">Run Preview first.</span>
                     )}
-                </Button>
-                {result && (
+                </div>
+                {result?.preview && (
+                    <div className="rounded-md border p-4 text-sm">
+                        <p>{result.message}</p>
+                    </div>
+                )}
+                {result && !result.preview && (
                     <div className="rounded-md border p-4 space-y-2">
                         <div className="flex gap-4 text-sm">
                             <span className="flex items-center gap-1">
                                 <CheckCircle2 className="h-4 w-4 text-success" />
                                 {result.success} succeeded
                             </span>
-                            {result.failed > 0 && (
+                            {(result.failed ?? 0) > 0 && (
                                 <span className="flex items-center gap-1">
                                     <AlertTriangle className="h-4 w-4 text-warning" />
                                     {result.failed} failed
@@ -896,7 +939,7 @@ function SnapshotRegenerateSection() {
                                 Renderer: {result.renderer}
                             </span>
                         </div>
-                        {result.errors.length > 0 && (
+                        {result.errors && result.errors.length > 0 && (
                             <details className="text-sm">
                                 <summary className="cursor-pointer text-muted-foreground">
                                     Error details ({result.errors.length})
@@ -919,9 +962,27 @@ function SnapshotRegenerateSection() {
 
 function RouteRegenerateSection() {
     const { toast } = useToast();
+    const [previewing, setPreviewing] = useState(false);
     const [running, setRunning] = useState(false);
     const [force, setForce] = useState(false);
     const [result, setResult] = useState<RouteRegenerateResult | null>(null);
+
+    const handlePreview = async () => {
+        setPreviewing(true);
+        setResult(null);
+        try {
+            const res = await adminRegenerateImportedRoutes(force, 200, true);
+            setResult(res);
+        } catch (err: unknown) {
+            toast({
+                title: "Preview failed",
+                description: err instanceof Error ? err.message : "Unknown error",
+                variant: "destructive",
+            });
+        } finally {
+            setPreviewing(false);
+        }
+    };
 
     const handleRegenerate = async () => {
         setRunning(true);
@@ -951,7 +1012,8 @@ function RouteRegenerateSection() {
                 <CardDescription>
                     Compute road-following routes (OSRM, falling back to Google Directions) for
                     imported rides missing a real <code>planned_route_polyline</code>, and update
-                    each ride&apos;s <code>distance_km</code> to match.
+                    each ride&apos;s <code>distance_km</code> to match. Preview first — no writes
+                    until you click Regenerate.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -960,33 +1022,57 @@ function RouteRegenerateSection() {
                         <input
                             type="checkbox"
                             checked={force}
-                            onChange={(e) => setForce(e.target.checked)}
+                            onChange={(e) => {
+                                setForce(e.target.checked);
+                                setResult(null);
+                            }}
                             className="rounded border-input"
                         />
                         Re-generate all (including rides that already have a route)
                     </label>
                 </div>
-                <Button onClick={handleRegenerate} disabled={running}>
-                    {running ? (
-                        <>
+                <div className="flex items-center gap-3">
+                    <Button variant="outline" onClick={handlePreview} disabled={previewing || running}>
+                        {previewing ? (
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Generating routes...
-                        </>
-                    ) : (
-                        <>
-                            <RefreshCw className="mr-2 h-4 w-4" />
-                            Regenerate Routes
-                        </>
+                        ) : (
+                            <Info className="mr-2 h-4 w-4" />
+                        )}
+                        Preview
+                    </Button>
+                    <Button
+                        onClick={handleRegenerate}
+                        disabled={running || previewing || !result || !result.preview || result.total === 0}
+                    >
+                        {running ? (
+                            <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Generating routes...
+                            </>
+                        ) : (
+                            <>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                Regenerate Routes
+                            </>
+                        )}
+                    </Button>
+                    {!result && (
+                        <span className="text-sm text-muted-foreground">Run Preview first.</span>
                     )}
-                </Button>
-                {result && (
+                </div>
+                {result?.preview && (
+                    <div className="rounded-md border p-4 text-sm">
+                        <p>{result.message}</p>
+                    </div>
+                )}
+                {result && !result.preview && (
                     <div className="rounded-md border p-4 space-y-2">
                         <div className="flex gap-4 text-sm">
                             <span className="flex items-center gap-1">
                                 <CheckCircle2 className="h-4 w-4 text-success" />
                                 {result.success} succeeded
                             </span>
-                            {result.failed > 0 && (
+                            {(result.failed ?? 0) > 0 && (
                                 <span className="flex items-center gap-1">
                                     <AlertTriangle className="h-4 w-4 text-warning" />
                                     {result.failed} failed
@@ -996,7 +1082,7 @@ function RouteRegenerateSection() {
                                 <span className="text-muted-foreground">{result.message}</span>
                             )}
                         </div>
-                        {result.errors.length > 0 && (
+                        {result.errors && result.errors.length > 0 && (
                             <details className="text-sm">
                                 <summary className="cursor-pointer text-muted-foreground">
                                     Error details ({result.errors.length})

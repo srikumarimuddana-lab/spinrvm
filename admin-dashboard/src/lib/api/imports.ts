@@ -760,16 +760,22 @@ export const adminCommitSinDobBackfill = (files: SinDobBackfillFiles, opts?: Sin
 /* ── Imported Ride Snapshot Regeneration ─────────────── */
 export interface SnapshotRegenerateResult {
     total: number;
-    success: number;
-    failed: number;
-    renderer: string;
-    errors: { ride_id: string; error: string }[];
+    success?: number;
+    failed?: number;
+    renderer?: string;
+    errors?: { ride_id: string; error: string }[];
+    // Present (with success/failed/renderer/errors omitted) when preview=true.
+    preview?: boolean;
+    message?: string;
 }
 
-export const adminRegenerateImportedSnapshots = (force: boolean, limit: number = 50) =>
+/** preview=true (added 2026-08-31) runs the same eligibility query and
+ * returns the count that would be affected -- no renders, uploads, or
+ * writes. Matches every other tool's dry-run-first pattern on this page. */
+export const adminRegenerateImportedSnapshots = (force: boolean, limit: number = 50, preview: boolean = false) =>
     request<SnapshotRegenerateResult>("/api/admin/rides/regenerate-imported-snapshots", {
         method: "POST",
-        body: JSON.stringify({ force, limit }),
+        body: JSON.stringify({ force, limit, preview }),
         headers: { "Content-Type": "application/json" },
     });
 
@@ -780,16 +786,21 @@ export const adminRegenerateImportedSnapshots = (force: boolean, limit: number =
 // legacy-migration tool on this page.
 export interface RouteRegenerateResult {
     total: number;
-    success: number;
-    failed: number;
+    success?: number;
+    failed?: number;
     message?: string;
-    errors: { ride_id: string; error: string }[];
+    errors?: { ride_id: string; error: string }[];
+    // Present (with success/failed/errors omitted) when preview=true.
+    preview?: boolean;
 }
 
-export const adminRegenerateImportedRoutes = (force: boolean, limit: number = 200) =>
+/** preview=true (added 2026-08-31) returns the count of rides that need a
+ * route backfill (same _needs_route filter) with no OSRM/Google calls and
+ * no writes. Matches every other tool's dry-run-first pattern on this page. */
+export const adminRegenerateImportedRoutes = (force: boolean, limit: number = 200, preview: boolean = false) =>
     request<RouteRegenerateResult>("/api/admin/rides/regenerate-imported-routes", {
         method: "POST",
-        body: JSON.stringify({ force, limit }),
+        body: JSON.stringify({ force, limit, preview }),
         headers: { "Content-Type": "application/json" },
     });
 

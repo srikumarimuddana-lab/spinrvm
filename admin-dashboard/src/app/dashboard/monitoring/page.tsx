@@ -25,6 +25,8 @@ import { DriverPanel } from "./driver-panel";
 import { RidePanel } from "./ride-panel";
 import { AlertFeed } from "./alert-feed";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
+import { Badge } from "@/components/ui/badge";
 import type {
   AlertEvent,
   AreaDemandSupply,
@@ -46,6 +48,7 @@ const DEGRADED_POLL_INTERVAL_MS = 10_000;
 export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");
   const { toast } = useToast();
+  const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
   // ── Refs: source-of-truth maps (never trigger re-renders) ──────────
   const driversMapRef = useRef<Map<string, MonitoringDriver>>(new Map());
   const ridesMapRef = useRef<Map<string, MonitoringRide>>(new Map());
@@ -688,21 +691,37 @@ export default function MonitoringPage() {
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span
-                      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                        // eslint-disable-next-line no-restricted-syntax -- ride lifecycle stages must stay visually distinct (#2816)
-                        r.status === "searching" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" :
-                        // eslint-disable-next-line no-restricted-syntax -- see above
-                        r.status === "driver_assigned" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" :
-                        // eslint-disable-next-line no-restricted-syntax -- see above
-                        r.status === "driver_arrived" ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300" :
-                        "bg-success/15 text-success"
-                      }`}
-                    >
-                      {r.status === "searching" ? "Searching" :
-                       r.status === "driver_assigned" ? "Assigned" :
-                       r.status === "driver_arrived" ? "Arrived" : "In Progress"}
-                    </span>
+                    {themeV2Enabled ? (
+                      <Badge
+                        className="text-[10px]"
+                        variant={
+                          r.status === "searching" ? "outline-warning" :
+                          r.status === "driver_assigned" ? "outline" :
+                          r.status === "driver_arrived" ? "outline" :
+                          "outline-success"
+                        }
+                      >
+                        {r.status === "searching" ? "Searching" :
+                         r.status === "driver_assigned" ? "Assigned" :
+                         r.status === "driver_arrived" ? "Arrived" : "In Progress"}
+                      </Badge>
+                    ) : (
+                      <span
+                        className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          // eslint-disable-next-line no-restricted-syntax -- ride lifecycle stages must stay visually distinct (#2816)
+                          r.status === "searching" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" :
+                          // eslint-disable-next-line no-restricted-syntax -- see above
+                          r.status === "driver_assigned" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" :
+                          // eslint-disable-next-line no-restricted-syntax -- see above
+                          r.status === "driver_arrived" ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300" :
+                          "bg-success/15 text-success"
+                        }`}
+                      >
+                        {r.status === "searching" ? "Searching" :
+                         r.status === "driver_assigned" ? "Assigned" :
+                         r.status === "driver_arrived" ? "Arrived" : "In Progress"}
+                      </span>
+                    )}
                     {r.total_fare != null && (
                       <span className="text-[10px] text-muted-foreground">${r.total_fare.toFixed(2)}</span>
                     )}

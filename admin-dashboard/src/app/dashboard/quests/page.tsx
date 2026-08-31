@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { getQuests, createQuest, updateQuest, getQuestParticipants, getServiceAreas } from "@/lib/api";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 // datetime-local inputs hold a *local* wall-clock string. Format a Date into
 // that shape in LOCAL time — using toISOString() here would stuff a UTC clock
@@ -103,7 +104,21 @@ const STATUS_COLORS: Record<string, string> = {
   expired: "bg-muted text-muted-foreground",
 };
 
+// Quiet Console Stage 3 counterpart to STATUS_COLORS above. Backend lifecycle
+// (backend/routes/quests.py, migration 20_quests.sql): active (still working
+// toward the target) → completed (target hit, reward not yet claimed —
+// this is the state that needs the driver/admin's attention) → claimed
+// (reward paid out, terminal positive). expired keeps its original neutral
+// treatment rather than reading as an error.
+const STATUS_QUIET_VARIANTS: Record<string, "outline" | "outline-warning" | "outline-success"> = {
+  active: "outline",
+  completed: "outline-warning",
+  claimed: "outline-success",
+  expired: "outline",
+};
+
 export default function QuestsPage() {
+  const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
   const [quests, setQuests] = useState<Quest[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -416,9 +431,15 @@ export default function QuestsPage() {
                                         </div>
                                       </TableCell>
                                       <TableCell>
-                                        <Badge className={STATUS_COLORS[p.status] || "bg-muted"}>
-                                          {p.status}
-                                        </Badge>
+                                        {themeV2Enabled ? (
+                                          <Badge variant={STATUS_QUIET_VARIANTS[p.status] || "outline"}>
+                                            {p.status}
+                                          </Badge>
+                                        ) : (
+                                          <Badge className={STATUS_COLORS[p.status] || "bg-muted"}>
+                                            {p.status}
+                                          </Badge>
+                                        )}
                                       </TableCell>
                                       <TableCell className="text-xs">
                                         {formatDate(p.started_at)}

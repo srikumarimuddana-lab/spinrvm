@@ -29,6 +29,7 @@ import { DriverStatementsPanel } from "./_components/driver-statements-panel";
 import DriverActivity from "./_components/driver-activity";
 import DriverDistance from "./_components/driver-distance";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
 import { isPhotoFileTypeValid } from "@/lib/driverPhotoUploadSchema";
@@ -94,6 +95,10 @@ function matchesRequirement(
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    // Quiet Console Stage 3: gates the flag-on Badge alternates for the
+    // driver-lifecycle status pill and the Spinr Pass pill below — the
+    // ad-hoc-color originals stay fully intact when the flag is off.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     // SIN reveal and the Stripe payout sync are both gated to super_admin
     // server-side (admin_reveal_driver_sin / admin_refresh_driver_stripe_payouts)
     // — gate the UI the same way so lower roles never see a button that can
@@ -1075,18 +1080,27 @@ export default function DriversPage() {
                                                     same class as driver-action-bar.tsx's STATUS_CONFIG; not a
                                                     #2816 migration target (a 3-token system can't express 6
                                                     distinct states). */}
-                                                {/* eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816) */}
-                                                {driver.account_deleted ? <Badge variant="default" className="bg-zinc-200 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 text-[10px] px-1.5 py-0 border-zinc-300 dark:border-zinc-700"><Trash2 className="h-3 w-3 mr-1" />Deleted</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : driver.status === "needs_review" ? <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : driver.status === "suspended" ? <Badge variant="default" className="bg-orange-100 text-orange-700 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] px-1.5 py-0 border-orange-200 dark:border-orange-800"><Pause className="h-3 w-3 mr-1" />Suspended</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : driver.status === "banned" ? <Badge variant="default" className="bg-red-200 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-300 dark:border-red-800"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
+                                                {themeV2Enabled ? (
+                                                    driver.account_deleted ? <Badge variant="outline" className="text-[10px] px-1.5 py-0"><Trash2 className="h-3 w-3 mr-1" />Deleted</Badge>
+                                                    : driver.status === "active" ? <Badge variant="outline-success" className="text-[10px] px-1.5 py-0"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
+                                                    : driver.status === "needs_review" ? <Badge variant="outline-warning" className="text-[10px] px-1.5 py-0"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
+                                                    : driver.status === "suspended" ? <Badge variant="outline-destructive" className="text-[10px] px-1.5 py-0"><Pause className="h-3 w-3 mr-1" />Suspended</Badge>
+                                                    : driver.status === "banned" ? <Badge variant="outline-destructive" className="text-[10px] px-1.5 py-0"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
+                                                    : <Badge variant="outline" className="text-[10px] px-1.5 py-0"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>
+                                                ) : (
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    driver.account_deleted ? <Badge variant="default" className="bg-zinc-200 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 text-[10px] px-1.5 py-0 border-zinc-300 dark:border-zinc-700"><Trash2 className="h-3 w-3 mr-1" />Deleted</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : driver.status === "active" ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Active</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : driver.status === "needs_review" ? <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : driver.status === "suspended" ? <Badge variant="default" className="bg-orange-100 text-orange-700 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] px-1.5 py-0 border-orange-200 dark:border-orange-800"><Pause className="h-3 w-3 mr-1" />Suspended</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : driver.status === "banned" ? <Badge variant="default" className="bg-red-200 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-300 dark:border-red-800"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>
+                                                )}
                                                 <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-success/40 text-success bg-success/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
                                             </div>
                                         </TableCell>
@@ -1242,18 +1256,27 @@ export default function DriversPage() {
                                             {/* Same categorical driver-lifecycle-status map as the list row above
                                                 (6 states, 5 hues) -- not a #2816 migration target. */}
                                             <div className="flex items-center gap-2 mt-2">
-                                                {/* eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816) */}
-                                                {selected.account_deleted ? <Badge className="bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><Trash2 className="h-3 w-3" /> Deleted</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
-                                                // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
-                                                : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
+                                                {themeV2Enabled ? (
+                                                    selected.account_deleted ? <Badge variant="outline"><Trash2 className="h-3 w-3" /> Deleted</Badge>
+                                                    : selected.status === "active" ? <Badge variant="outline-success"><ShieldCheck className="h-3 w-3" /> Active</Badge>
+                                                    : selected.status === "needs_review" ? <Badge variant="outline-warning"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
+                                                    : selected.status === "suspended" ? <Badge variant="outline-destructive"><Pause className="h-3 w-3" /> Suspended</Badge>
+                                                    : selected.status === "banned" ? <Badge variant="outline-destructive"><Ban className="h-3 w-3" /> Banned</Badge>
+                                                    : <Badge variant="outline"><ShieldAlert className="h-3 w-3" /> Pending</Badge>
+                                                ) : (
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    selected.account_deleted ? <Badge className="bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"><Trash2 className="h-3 w-3" /> Deleted</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
+                                                    // eslint-disable-next-line no-restricted-syntax -- categorical driver-lifecycle-status map (#2816)
+                                                    : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>
+                                                )}
                                                 <Badge variant="outline" className={selected.is_online && !selected.account_deleted ? "border-success/40 text-success" : ""}>
                                                     {selected.is_online && !selected.account_deleted ? "Online" : "Offline"}
                                                     {selected.last_status_changed_at && (
@@ -1262,8 +1285,12 @@ export default function DriversPage() {
                                                         </span>
                                                     )}
                                                 </Badge>
-                                                {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
-                                                {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
+                                                {selected.subscription_status === "active" && (themeV2Enabled ? (
+                                                    <Badge variant="outline-accent"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>
+                                                ) : (
+                                                    // eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816)
+                                                    <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>
+                                                ))}
                                                 {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
                                             {/* Profile Completeness Summary */}
@@ -1618,10 +1645,14 @@ export default function DriversPage() {
                                                             {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
                                                             <p className="text-xs text-violet-600/70 dark:text-violet-400/70 mt-0.5">{expLabel ? `Renews / expires ${expLabel}` : "Subscription active"}</p>
                                                         </div>
-                                                        {/* eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816) */}
-                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[10px] font-bold uppercase tracking-wide shrink-0">
-                                                            Active
-                                                        </span>
+                                                        {themeV2Enabled ? (
+                                                            <Badge variant="outline-accent" className="text-[10px] font-bold uppercase tracking-wide shrink-0">Active</Badge>
+                                                        ) : (
+                                                            // eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816)
+                                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                                Active
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 );
                                             }
@@ -2119,6 +2150,21 @@ const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: strin
 };
 /* eslint-enable no-restricted-syntax */
 
+// Quiet Console Stage 3: the flag-on Badge variant for each ride status
+// above — a 3-token system still can't hold 7 distinct hues, so the
+// pre-trip progression states (assigned/accepted/arrived/in_progress) share
+// plain `outline` rather than getting invented shades. RIDE_STATUS_STYLE
+// itself (and the flag-off rendering using it) is untouched.
+const RIDE_STATUS_BADGE_VARIANT: Record<string, "outline" | "outline-success" | "outline-warning" | "outline-destructive"> = {
+    completed: "outline-success",
+    in_progress: "outline",
+    cancelled: "outline-destructive",
+    driver_assigned: "outline",
+    driver_accepted: "outline",
+    driver_arrived: "outline",
+    searching: "outline-warning",
+};
+
 function VerificationSummaryCard({
     requiredDocs,
     activeDocs,
@@ -2225,6 +2271,17 @@ const PAYOUT_STATUS_STYLE: Record<string, { bg: string; text: string; label: str
 };
 /* eslint-enable no-restricted-syntax */
 
+// Quiet Console Stage 3: flag-on Badge variant per payout status — reuses
+// the existing success/warning/destructive tokens for the three states that
+// already carry them above, and falls "processing" back to plain `outline`
+// instead of inventing a quiet blue. PAYOUT_STATUS_STYLE itself is untouched.
+const PAYOUT_STATUS_BADGE_VARIANT: Record<string, "outline" | "outline-success" | "outline-warning" | "outline-destructive"> = {
+    completed: "outline-success",
+    pending: "outline-warning",
+    processing: "outline",
+    failed: "outline-destructive",
+};
+
 function PayoutMetric({ label, value, tone, sub }: { label: string; value: string; tone?: "emerald" | "amber" | "red" | "neutral"; sub?: string }) {
     const styles = {
         emerald: { bg: "bg-success/10 border-success/30", value: "text-success" },
@@ -2263,6 +2320,9 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
     canRefreshPayouts: boolean;
     notify: (opts: { title: string; description?: string; variant?: "destructive" }) => void;
 }) {
+    // Quiet Console Stage 3: gates the flag-on Badge alternate for the
+    // payout-status pill below — PAYOUT_STATUS_STYLE stays the flag-off path.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const fmtDateTime = (iso?: string | null) => {
         if (!iso) return "—";
         try {
@@ -2708,9 +2768,13 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                                     </TableCell>
                                     <TableCell>
                                         <div className="flex flex-col gap-0.5">
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold w-fit ${style.bg} ${style.text}`}>
-                                                {style.label}
-                                            </span>
+                                            {themeV2Enabled ? (
+                                                <Badge variant={PAYOUT_STATUS_BADGE_VARIANT[p.status] ?? "outline"} className="text-[10px] w-fit">{style.label}</Badge>
+                                            ) : (
+                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold w-fit ${style.bg} ${style.text}`}>
+                                                    {style.label}
+                                                </span>
+                                            )}
                                             {p.status === "failed" && p.error_message && (
                                                 <span className="text-[10px] text-destructive truncate max-w-[200px]" title={p.error_message}>{p.error_message}</span>
                                             )}
@@ -2920,6 +2984,18 @@ const TRAINING_STATUS_STYLES: Record<string, string> = {
 };
 /* eslint-enable no-restricted-syntax */
 
+// Quiet Console Stage 3: flag-on Badge variant per training status —
+// "invited" reads as a pending/attention state, "completed" as a positive
+// one; the rest are workflow stages with no valence, so they share plain
+// `outline`. TRAINING_STATUS_STYLES itself is untouched.
+const TRAINING_STATUS_BADGE_VARIANT: Record<string, "outline" | "outline-success" | "outline-warning"> = {
+    completed: "outline-success",
+    in_progress: "outline",
+    registered: "outline",
+    invited: "outline-warning",
+    not_invited: "outline",
+};
+
 function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
     data: DriverTraining | null;
     loading: boolean;
@@ -2927,6 +3003,9 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
     onRefresh: () => void;
     fmtDate: (d: string) => string;
 }) {
+    // Quiet Console Stage 3: gates the flag-on Badge alternate for the
+    // training-status pill below — TRAINING_STATUS_STYLES stays the flag-off path.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     if (loading) {
         return <div className="text-sm text-muted-foreground py-10 text-center">Loading training data from the LMS…</div>;
     }
@@ -2968,9 +3047,13 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Training Status</p>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide mt-1.5 ${TRAINING_STATUS_STYLES[t.status] || "bg-muted text-muted-foreground"}`}>
-                        {statusLabel}
-                    </span>
+                    {themeV2Enabled ? (
+                        <Badge variant={TRAINING_STATUS_BADGE_VARIANT[t.status] ?? "outline"} className="text-[10px] font-bold uppercase tracking-wide mt-1.5">{statusLabel}</Badge>
+                    ) : (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide mt-1.5 ${TRAINING_STATUS_STYLES[t.status] || "bg-muted text-muted-foreground"}`}>
+                            {statusLabel}
+                        </span>
+                    )}
                 </div>
                 <div className="rounded-xl border border-border/50 p-3">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Registered</p>
@@ -3108,6 +3191,9 @@ function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
     driverName: string;
     fmtDate: (d: string) => string;
 }) {
+    // Quiet Console Stage 3: gates the flag-on Badge alternate for the
+    // ride-status pill below — RIDE_STATUS_STYLE stays the flag-off path.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const [statusFilter, setStatusFilter] = useState<string>("all");
     const [search, setSearch] = useState("");
     const [sortKey, setSortKey] = useState<RidesSortKey>("created_at");
@@ -3353,9 +3439,13 @@ function DriverRidesTab({ rides, totalCount, loading, driverName, fmtDate }: {
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
-                                            {style.label}
-                                        </span>
+                                        {themeV2Enabled ? (
+                                            <Badge variant={RIDE_STATUS_BADGE_VARIANT[r.status] ?? "outline"} className="text-[10px]">{style.label}</Badge>
+                                        ) : (
+                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
+                                                {style.label}
+                                            </span>
+                                        )}
                                         {r.legacy_import_metadata && Object.keys(r.legacy_import_metadata).length > 0 && (
                                             <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-muted text-muted-foreground">
                                                 Imported

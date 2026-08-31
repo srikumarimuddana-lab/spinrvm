@@ -6,6 +6,8 @@ import { formatCurrency } from "@/lib/utils";
 import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX, Tag, AlertTriangle } from "lucide-react";
 import { getStatusBadge, fmtTime, fmtKm, rideDistances } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
+import { Badge } from "@/components/ui/badge";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Car },
@@ -76,6 +78,7 @@ export default function RideList({
     onSelect, page, pageSize, pageSizes, onPageSizeChange, totalPages, onPageChange,
     sortBy, sortDir, onSortChange, onExport,
 }: RideListProps) {
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const [exporting, setExporting] = useState(false);
 
     const handleExportClick = async () => {
@@ -285,12 +288,18 @@ export default function RideList({
                                                 Imported
                                             </span>
                                         )}
-                                        {(ride.legacy_import_metadata?.data_quality?.issues ?? []).map((issue: string) => (
-                                            // eslint-disable-next-line no-restricted-syntax -- semantic warning color, not a status-badge duplicate (#2816)
-                                            <span key={issue} className="inline-block text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded px-1.5 py-0.5 mb-0.5 mr-1">
-                                                {DATA_QUALITY_ISSUE_LABELS[issue] ?? issue}
-                                            </span>
-                                        ))}
+                                        {(ride.legacy_import_metadata?.data_quality?.issues ?? []).map((issue: string) =>
+                                            themeV2Enabled ? (
+                                                <Badge key={issue} variant="outline-warning" className="text-[10px] mb-0.5 mr-1">
+                                                    {DATA_QUALITY_ISSUE_LABELS[issue] ?? issue}
+                                                </Badge>
+                                            ) : (
+                                                // eslint-disable-next-line no-restricted-syntax -- semantic warning color, not a status-badge duplicate (#2816)
+                                                <span key={issue} className="inline-block text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded px-1.5 py-0.5 mb-0.5 mr-1">
+                                                    {DATA_QUALITY_ISSUE_LABELS[issue] ?? issue}
+                                                </span>
+                                            )
+                                        )}
                                         <p className="text-sm font-medium truncate">{ride.pickup_address || "—"}</p>
                                         <p className="text-xs text-muted-foreground truncate mt-0.5">
                                             <span className="text-muted-foreground/60">to</span> {ride.dropoff_address || "—"}

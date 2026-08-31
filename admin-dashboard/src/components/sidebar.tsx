@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
 import { useSidebarStore } from "@/store/sidebarStore";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { getApprovalQueue, getExpiringDocs } from "@/lib/api";
 
 interface NavItem {
@@ -253,6 +254,11 @@ function SidebarInner() {
     // pattern already used throughout (e.g. analytics/page.tsx,
     // driver-charts.tsx) rather than a bespoke hydration guard.
     const { resolvedTheme } = useTheme();
+    // Quiet Console Stage 2 (epic #2785 Phase 3+): thin left-rule active
+    // indicator instead of the filled pill, gated the same way
+    // dashboard/layout.tsx gates the `.theme-v2` shell class — off by
+    // default, so this must be a no-op until the flag is flipped.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
 
     const userModules = user?.modules || [];
     // Corporate + admin portal review, Admin #4: this used to also treat
@@ -405,7 +411,16 @@ function SidebarInner() {
                                                     "flex items-center rounded-lg text-[13px] font-medium transition-colors",
                                                     collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
                                                     active
-                                                        ? "bg-sidebar-primary/10 text-sidebar-primary"
+                                                        ? (themeV2Enabled
+                                                            // Quiet Console Stage 2: thin left-edge rule
+                                                            // instead of the filled pill. An inset
+                                                            // box-shadow (not a border) draws the rule
+                                                            // without adding to the box model, so it
+                                                            // can't shift the icon/label the way a real
+                                                            // border would — no padding compensation
+                                                            // needed.
+                                                            ? "shadow-[inset_2px_0_0_0_var(--sidebar-primary)] text-sidebar-primary bg-transparent"
+                                                            : "bg-sidebar-primary/10 text-sidebar-primary")
                                                         // Was text-sidebar-foreground/60 — computed
                                                         // ~4.0:1 against the light-mode sidebar
                                                         // background, short of the 4.5:1 AA floor for
@@ -460,7 +475,9 @@ function SidebarInner() {
                                                                     "relative flex items-center rounded-lg text-[13px] font-medium transition-colors",
                                                                     "justify-center p-2.5 my-0.5",
                                                                     childActive
-                                                                        ? "bg-sidebar-primary/10 text-sidebar-primary"
+                                                                        ? (themeV2Enabled
+                                                                            ? "shadow-[inset_2px_0_0_0_var(--sidebar-primary)] text-sidebar-primary bg-transparent"
+                                                                            : "bg-sidebar-primary/10 text-sidebar-primary")
                                                                         : "text-sidebar-foreground-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                                                 )}
                                                             >
@@ -487,7 +504,9 @@ function SidebarInner() {
                                                                     className={cn(
                                                                         "flex items-center gap-2 rounded-lg text-[12px] font-medium transition-colors px-2.5 py-[6px] my-[1px]",
                                                                         childActive
-                                                                            ? "bg-sidebar-primary/10 text-sidebar-primary"
+                                                                            ? (themeV2Enabled
+                                                                                ? "shadow-[inset_2px_0_0_0_var(--sidebar-primary)] text-sidebar-primary bg-transparent"
+                                                                                : "bg-sidebar-primary/10 text-sidebar-primary")
                                                                             // Was text-sidebar-foreground/50 (~3.1:1 on
                                                                             // light, below the 4.5:1 AA floor for this
                                                                             // 12px text) — same fix as the parent links

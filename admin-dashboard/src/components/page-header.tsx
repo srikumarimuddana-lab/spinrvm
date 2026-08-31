@@ -1,4 +1,8 @@
+"use client";
+
 import { ReactNode } from "react";
+import { cn } from "@/lib/utils";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 /**
  * Shared top-of-page heading for dashboard pages — consolidates what were
@@ -24,10 +28,14 @@ export interface PageHeaderProps {
 }
 
 export function PageHeader({ title, description, actions, className }: PageHeaderProps) {
+    // Quiet Console Stage 2: a slightly lighter type weight under the
+    // "everything is quieter" pilot — narrow, deliberate change, not a
+    // redesign of this component. Zero visible change when the flag is off.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     return (
         <div className={className ?? "flex items-center justify-between"}>
             <div>
-                <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
+                <h1 className={cn("text-3xl tracking-tight", themeV2Enabled ? "font-semibold" : "font-bold")}>{title}</h1>
                 {description && <p className="text-muted-foreground mt-1">{description}</p>}
             </div>
             {actions}

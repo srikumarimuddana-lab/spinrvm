@@ -1314,14 +1314,31 @@ class TestBatchFetchDriversAndUsers:
         drivers = [_driver()]
         users = [_user()]
 
-        def get_rows_side(table, filters=None, **kw):
+        async def get_rows_side(table, filters=None, **kw):
             if table == "drivers":
                 return drivers
             if table == "users":
                 return users
             return []
 
-        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+        get_rows = AsyncMock(side_effect=get_rows_side)
+
+        async def get_rows_batched_in_side(table, column, values, extra_filters=None, **kw):
+            # See #4783: get_rows_batched_in calls its own module's internal
+            # get_rows, bypassing a patch on db_supabase.get_rows alone.
+            if not list(values):
+                return []
+            filters = dict(extra_filters or {})
+            filters[column] = {"$in": list(values)}
+            return await get_rows(table, filters, **kw)
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_rows", get_rows),
+            patch(
+                "backend.routes.admin.drivers.db_supabase.get_rows_batched_in",
+                AsyncMock(side_effect=get_rows_batched_in_side),
+            ),
+        ):
             drivers_map, users_map = asyncio.run(_batch_fetch_drivers_and_users([RIDER_ID], [DRIVER_ID]))
 
         assert DRIVER_ID in drivers_map

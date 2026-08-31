@@ -77,7 +77,34 @@ async def _run_queue(fake_get_rows, **kwargs):
     from routes.admin import drivers as admin_drivers
 
     kwargs.setdefault("limit", 200)  # bypass the FastAPI Query default when calling directly
-    with patch.object(admin_drivers.db_supabase, "get_rows", new=AsyncMock(side_effect=fake_get_rows)) as get_rows:
+    get_rows = AsyncMock(side_effect=fake_get_rows)
+
+    # admin_get_approval_queue calls db_supabase.get_rows_batched_in for
+    # every $in lookup that can grow with the fleet. That function is
+    # defined in repositories/_base.py and calls _base's own module-level
+    # get_rows internally — patching db_supabase.get_rows alone (an
+    # attribute on a different module) never reaches that internal call
+    # (same class of gotcha CLAUDE.md documents for the `supabase` client
+    # binding, here applying to `get_rows` itself). Route the fake batched
+    # lookup through the same tracked `get_rows` mock so calls originating
+    # from get_rows_batched_in still land in get_rows.await_args_list.
+    async def fake_get_rows_batched_in(
+        table, column, values, extra_filters=None, *, columns="*", limit=None, batch_size=200
+    ):
+        vals = list(values)
+        if not vals:
+            return []
+        filters = dict(extra_filters or {})
+        filters[column] = {"$in": vals}
+        rows = await get_rows(table, filters, limit=limit or 1000, offset=0, columns=columns)
+        return rows if limit is None else rows[:limit]
+
+    with (
+        patch.object(admin_drivers.db_supabase, "get_rows", new=get_rows),
+        patch.object(
+            admin_drivers.db_supabase, "get_rows_batched_in", new=AsyncMock(side_effect=fake_get_rows_batched_in)
+        ),
+    ):
         result = await admin_drivers.admin_get_approval_queue(**kwargs)
     return result, get_rows
 

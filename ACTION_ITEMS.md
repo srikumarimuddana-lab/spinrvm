@@ -11840,6 +11840,32 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 14 candidates from the broader sweep (6
   driver-app candidates; 7 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 22 done: `admin-dashboard/src/app/dashboard/cloud-messaging/page.tsx`'s
+  broadcast-compose + marketing-suppression validation (sixth
+  admin-dashboard candidate, PIPEDA-adjacent).** Extracted both of the
+  page's ad hoc validation blocks: the broadcast-compose form's
+  `handleSend` (title/description required, recipients required for a
+  particular audience, schedule time required when scheduling, at least
+  one delivery channel selected) and the marketing-suppression form's
+  `handleAddSuppression` (target email/phone required) — into new
+  `admin-dashboard/src/lib/cloudMessagingFormSchema.ts`
+  (`getBroadcastFormError`, `getSuppressionFormError` + predicates + a
+  documentation zod schema). Pure extraction, byte-for-byte identical to
+  the original `if` blocks + `toast(...)` calls — no bug found, no
+  behavior change; `isParticular` now sourced from a shared
+  `isParticularAudience(...)` helper instead of being redefined inline.
+  New `admin-dashboard/src/lib/__tests__/cloudMessagingFormSchema.test.ts`
+  (18 accept/reject cases). Verification: 18/18 new tests pass; full
+  admin-dashboard suite (`vitest run`) 50/50 suites, 515/515 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 5 pre-existing warnings, unchanged
+  by this diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed no other file duplicates
+  either form's distinctive error copy. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-cloud-messaging-zod-step22.md`.
+  **Still open:** the remaining 13 candidates from the broader sweep (6
+  driver-app candidates; 6 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -7,7 +7,13 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "bg-card text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm",
+        // shadow-sm was static; shadow-[var(--shadow-card)] lets the
+        // "Quiet Console" direction flatten every card to a hairline
+        // border with no shadow via one token, same pattern --radius
+        // already uses. Default value of --shadow-card (globals.css)
+        // matches Tailwind's own --shadow-sm exactly, so this renders
+        // pixel-identical to before until admin_theme_v2_enabled is on.
+        "bg-card text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-[var(--shadow-card)]",
         className
       )}
       {...props}

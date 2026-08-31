@@ -18,6 +18,8 @@ import RideFlagForm from "./ride-flag-form";
 import RideComplaintForm from "./ride-complaint-form";
 import dynamic from "next/dynamic";
 import { routeQualityLabel } from "@spinr/shared/utils/routeSegments";
+import { Badge } from "@/components/ui/badge";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
 
@@ -88,6 +90,7 @@ interface Props {
 }
 
 export default function RideDetailModal({ rideId, open, onClose }: Props) {
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -882,13 +885,13 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             {offers.length === 0 ? (
                                                 <p className="text-sm text-muted-foreground">No dispatch offers recorded for this ride. (Offers are logged for rides matched through the batch-dispatch engine.)</p>
                                             ) : (() => {
-                                                const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
-                                                    accepted:  { label: "Accepted",  cls: "bg-success/15 text-success", Icon: CheckCircle2 },
-                                                    declined:  { label: "Declined",  cls: "bg-destructive/15 text-destructive", Icon: XCircle },
-                                                    expired:   { label: "Ignored",   cls: "bg-warning/15 text-warning", Icon: Clock },
+                                                const OFFER_META: Record<string, { label: string; cls: string; quietVariant: "outline-success" | "outline-destructive" | "outline-warning" | "outline"; Icon: React.ElementType }> = {
+                                                    accepted:  { label: "Accepted",  cls: "bg-success/15 text-success", quietVariant: "outline-success", Icon: CheckCircle2 },
+                                                    declined:  { label: "Declined",  cls: "bg-destructive/15 text-destructive", quietVariant: "outline-destructive", Icon: XCircle },
+                                                    expired:   { label: "Ignored",   cls: "bg-warning/15 text-warning", quietVariant: "outline-warning", Icon: Clock },
                                                     // eslint-disable-next-line no-restricted-syntax -- "preempted" is a neutral dispatch outcome, not success/warning/destructive; no dedicated token exists (#2816)
-                                                    preempted: { label: "Preempted", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400", Icon: Radio },
-                                                    pending:   { label: "Pending",   cls: "bg-muted text-muted-foreground", Icon: Radio },
+                                                    preempted: { label: "Preempted", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400", quietVariant: "outline", Icon: Radio },
+                                                    pending:   { label: "Pending",   cls: "bg-muted text-muted-foreground", quietVariant: "outline", Icon: Radio },
                                                 };
                                                 const respSecs = (o: any) => {
                                                     if (!o.offered_at || !o.responded_at) return null;
@@ -934,7 +937,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                                         {typeof o.eta_seconds === "number" && (
                                                                             <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(o.eta_seconds)}s ETA</span>
                                                                         )}
-                                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
+                                                                        {themeV2Enabled ? (
+                                                                            <Badge variant={meta.quietVariant} className="text-[10px]">{meta.label}</Badge>
+                                                                        ) : (
+                                                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
+                                                                        )}
                                                                     </div>
                                                                     <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1 pl-6 text-[10px] text-muted-foreground tabular-nums">
                                                                         <span>Offered {fmtTime(o.offered_at)}</span>

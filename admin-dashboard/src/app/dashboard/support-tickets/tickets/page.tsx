@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import {
     Table,
     TableBody,
@@ -59,6 +60,34 @@ function priorityClass(p: string): string {
     return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
+// Quiet Console Stage 3: flag-gated Badge-variant equivalents. "open" now
+// maps to badge.tsx's outline-info variant (added after this batch first
+// landed — reuses the existing --info token, same one already used
+// elsewhere for pending/processing states), replacing what was previously
+// a plain-outline fallback for lack of a blue/info variant.
+//
+// High/Urgent priority and a breached SLA both land on outline-destructive
+// too — the raw-color version deliberately used two different reds so an
+// Urgent+Breached row wasn't visually ambiguous, but the quiet palette only
+// has one destructive outline. Accepted here: the two badges sit in
+// separate table columns with distinct text ("Urgent" vs "Breached ago"),
+// consistent with Quiet Console's "let text, not color, carry categorical
+// distinctions" direction — flagged, not silently different from intent.
+function statusBadgeVariant(status: string): "outline-warning" | "outline-destructive" | "outline-info" | "outline" {
+    const s = (status || "").toLowerCase();
+    if (s.includes("hold")) return "outline-warning";
+    if (s.includes("escal")) return "outline-destructive";
+    if (s.includes("open")) return "outline-info";
+    return "outline";
+}
+
+function priorityBadgeVariant(p: string): "outline-destructive" | "outline-warning" | "outline" {
+    const s = (p || "").toLowerCase();
+    if (s === "high" || s === "urgent") return "outline-destructive";
+    if (s === "medium") return "outline-warning";
+    return "outline";
+}
+
 function tagNames(t: any): string {
     const tags = t?.tags;
     if (!Array.isArray(tags)) return "";
@@ -81,7 +110,7 @@ function isClosedStatus(t: any): boolean {
     return statusType === "closed" || status.includes("closed");
 }
 
-type SlaInfo = { label: string; className: string } | null;
+type SlaInfo = { label: string; className: string; variant: "outline-destructive" | "outline-warning" } | null;
 
 function slaStatus(t: any): SlaInfo {
     if (!SLA_PRIORITIES.has(t?.priority) || isClosedStatus(t) || !t?.createdTime) return null;
@@ -95,13 +124,14 @@ function slaStatus(t: any): SlaInfo {
     const dur = hh > 0 ? `${hh}h ${mm}m` : `${mm}m`;
     if (diffMs <= 0) {
         // eslint-disable-next-line no-restricted-syntax -- SLA breach must stay visually distinct from the destructive-priority badge it sits next to (#2816-style)
-        return { label: `Breached ${dur} ago`, className: "bg-red-100 text-red-800 hover:bg-red-100" };
+        return { label: `Breached ${dur} ago`, className: "bg-red-100 text-red-800 hover:bg-red-100", variant: "outline-destructive" };
     }
-    return { label: `Due in ${dur}`, className: "bg-warning/15 text-warning hover:bg-warning/15" };
+    return { label: `Due in ${dur}`, className: "bg-warning/15 text-warning hover:bg-warning/15", variant: "outline-warning" };
 }
 
 export default function TicketListPage() {
     const { allowed } = useRequireModule("support_tickets");
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const [tickets, setTickets] = useState<any[]>([]);
     const [agents, setAgents] = useState<any[]>([]);
 
@@ -395,11 +425,22 @@ export default function TicketListPage() {
                                 </TableCell>
                                 <TableCell className="text-sm">{t.contact?.email || t.email || "—"}</TableCell>
                                 <TableCell className="text-sm">{t.category || "—"}</TableCell>
-                                <TableCell><Badge variant="secondary" className={priorityClass(t.priority)}>{t.priority || "None"}</Badge></TableCell>
+                                <TableCell>
+                                    {themeV2Enabled ? (
+                                        <Badge variant={priorityBadgeVariant(t.priority)}>{t.priority || "None"}</Badge>
+                                    ) : (
+                                        <Badge variant="secondary" className={priorityClass(t.priority)}>{t.priority || "None"}</Badge>
+                                    )}
+                                </TableCell>
                                 <TableCell>
                                     {(() => {
                                         const sla = slaStatus(t);
-                                        return sla ? <Badge variant="secondary" className={sla.className}>{sla.label}</Badge> : <span className="text-xs text-muted-foreground">—</span>;
+                                        if (!sla) return <span className="text-xs text-muted-foreground">—</span>;
+                                        return themeV2Enabled ? (
+                                            <Badge variant={sla.variant}>{sla.label}</Badge>
+                                        ) : (
+                                            <Badge variant="secondary" className={sla.className}>{sla.label}</Badge>
+                                        );
                                     })()}
                                 </TableCell>
                                 <TableCell className="text-sm">
@@ -408,7 +449,13 @@ export default function TicketListPage() {
                                 <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                                     {t.createdTime?.slice(0, 10) || "—"}
                                 </TableCell>
-                                <TableCell><Badge variant="secondary" className={statusClass(t.status)}>{t.status}</Badge></TableCell>
+                                <TableCell>
+                                    {themeV2Enabled ? (
+                                        <Badge variant={statusBadgeVariant(t.status)}>{t.status}</Badge>
+                                    ) : (
+                                        <Badge variant="secondary" className={statusClass(t.status)}>{t.status}</Badge>
+                                    )}
+                                </TableCell>
                             </TableRow>
                         ))}
                     </TableBody>

@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 import {
     getSentryConfig,
@@ -117,6 +118,7 @@ function timeAgo(iso: string | null): string {
 
 export default function SentryLogsPage() {
     const { toast } = useToast();
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     // Strict super_admin, matching the backend's require_super_admin mount for
     // /api/admin/sentry exactly. The sidebar already hides the entry, but a
     // direct URL visit must not render a UI whose every call 403s.
@@ -483,9 +485,15 @@ export default function SentryLogsPage() {
                             <Card key={`${issue.surface}:${issue.id}`} className="transition-colors hover:bg-muted/30">
                                 <CardContent className="flex flex-col gap-2 pt-6">
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <Badge className={surfaceBadgeClass(issue.surface)}>
-                                            {SURFACE_LABEL[issue.surface] ?? issue.surface}
-                                        </Badge>
+                                        {themeV2Enabled ? (
+                                            <Badge variant="outline">
+                                                {SURFACE_LABEL[issue.surface] ?? issue.surface}
+                                            </Badge>
+                                        ) : (
+                                            <Badge className={surfaceBadgeClass(issue.surface)}>
+                                                {SURFACE_LABEL[issue.surface] ?? issue.surface}
+                                            </Badge>
+                                        )}
                                         <Badge variant={prio.variant} className="capitalize">
                                             {prio.label}
                                         </Badge>
@@ -602,9 +610,15 @@ export default function SentryLogsPage() {
                     ) : (
                         <div className="flex flex-col gap-4">
                             <div className="flex flex-wrap items-center gap-2">
-                                <Badge className={surfaceBadgeClass(detail.surface)}>
-                                    {SURFACE_LABEL[detail.surface] ?? detail.surface}
-                                </Badge>
+                                {themeV2Enabled ? (
+                                    <Badge variant="outline">
+                                        {SURFACE_LABEL[detail.surface] ?? detail.surface}
+                                    </Badge>
+                                ) : (
+                                    <Badge className={surfaceBadgeClass(detail.surface)}>
+                                        {SURFACE_LABEL[detail.surface] ?? detail.surface}
+                                    </Badge>
+                                )}
                                 <Badge variant={priorityInfo(detail).variant} className="capitalize">
                                     {priorityInfo(detail).label}
                                 </Badge>

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { getDriverNotes, addDriverNote, deleteDriverNote } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { useToast } from "@/components/ui/use-toast";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -25,6 +27,18 @@ const CATEGORIES = [
 ];
 /* eslint-enable no-restricted-syntax */
 
+// Quiet Console Stage 3: flag-on Badge variant per note category — reused
+// only in the note-list pill below (the category picker buttons above keep
+// their existing ad-hoc colors either way, since Badge isn't a toggle
+// control). CATEGORIES itself is untouched.
+const CATEGORY_BADGE_VARIANT: Record<string, "outline" | "outline-success" | "outline-warning" | "outline-destructive"> = {
+    general: "outline",
+    warning: "outline-warning",
+    document: "outline",
+    status_change: "outline-success",
+    complaint: "outline-destructive",
+};
+
 function fmtDateTime(d: string) {
     if (!d) return "";
     try {
@@ -37,6 +51,10 @@ function fmtDateTime(d: string) {
 
 export default function DriverNotes({ driverId }: { driverId: string }) {
     const { toast } = useToast();
+    // Quiet Console Stage 3: gates the flag-on Badge alternate for the
+    // per-note category pill below — the ad-hoc `cat.color` original stays
+    // intact when the flag is off.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const [notes, setNotes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -154,9 +172,15 @@ export default function DriverNotes({ driverId }: { driverId: string }) {
                                 <div className="flex items-start justify-between gap-3">
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2 mb-1.5">
-                                            <span className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold ${cat.color}`}>
-                                                <CatIcon className="h-3 w-3" /> {cat.label}
-                                            </span>
+                                            {themeV2Enabled ? (
+                                                <Badge variant={CATEGORY_BADGE_VARIANT[cat.value] ?? "outline"} className="text-[10px] font-semibold">
+                                                    <CatIcon className="h-3 w-3" /> {cat.label}
+                                                </Badge>
+                                            ) : (
+                                                <span className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold ${cat.color}`}>
+                                                    <CatIcon className="h-3 w-3" /> {cat.label}
+                                                </span>
+                                            )}
                                             <span className="text-[10px] text-muted-foreground flex items-center gap-1">
                                                 <Clock className="h-3 w-3" /> {fmtDateTime(note.created_at)}
                                             </span>

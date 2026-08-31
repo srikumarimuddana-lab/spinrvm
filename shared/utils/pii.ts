@@ -48,7 +48,13 @@ export function redactEmail(email: string | null | undefined): string {
  * Returns the form `"52.1,-106.6"`. Non-finite inputs are emitted as `"?"`.
  */
 export function redactCoords(lat: number, lng: number): string {
+  // `Math.round` rounds .5 ties toward +Infinity, not away from zero — for a
+  // negative half-integer tie (e.g. -106.65 * 10 === -1066.5) that rounds
+  // -106.65 to -106.6 instead of the expected -106.7. Round the magnitude
+  // and reapply the sign so ties round away from zero on both sides.
   const fmt = (n: number): string =>
-    Number.isFinite(n) ? (Math.round(n * 10) / 10).toFixed(1) : '?';
+    Number.isFinite(n)
+      ? (Math.sign(n) * (Math.round(Math.abs(n) * 10) / 10)).toFixed(1)
+      : '?';
   return `${fmt(lat)},${fmt(lng)}`;
 }

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -67,10 +67,11 @@ class UserStatusRequest(BaseModel):
 
 @router.get("/users")
 async def admin_get_users(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     search: Optional[str] = None,
     role: Optional[str] = None,
+    legacy_import: Optional[bool] = None,
 ):
     """Get users with optional role filter, search, and pagination.
 
@@ -79,6 +80,9 @@ async def admin_get_users(
     anyone the admin sees in the app (rider or driver) is represented
     here. This replaces the old hardcoded `role='rider'` filter that
     silently hid driver-registered users from the Users page.
+
+    `legacy_import` (optional): True narrows to legacy-imported profiles,
+    False to non-imported ones, omitted means no filter either way.
     """
     filters: Dict[str, Any] = {}
     role_param = (role or "all").lower()
@@ -96,6 +100,14 @@ async def admin_get_users(
         filters["role"] = {"$ne": "admin"}
     else:
         raise HTTPException(status_code=400, detail="role must be one of rider, driver, both, admin, all")
+
+    # `legacy_import_metadata` is JSONB NOT NULL DEFAULT '{}'::jsonb, not
+    # nullable -- "not migrated" is the default-value row, not a NULL one, so
+    # this must use $eq/$ne against `{}` (same trap EXCLUDE_LEGACY_RIDES in
+    # utils/legacy_rides.py exists to avoid; a bare `{col: None}` here would
+    # silently match zero rows instead of "not imported").
+    if legacy_import is not None:
+        filters["legacy_import_metadata"] = {"$ne": {}} if legacy_import else {"$eq": {}}
 
     if search:
         # Basic contains-match on phone / email / first_name; callers typically
@@ -131,7 +143,10 @@ async def admin_get_users(
 class UserSearchRequest(BaseModel):
     search: str
     role: Optional[str] = "all"
-    limit: int = 5
+    # Bounded on the model: this POST path does not go through the
+    # GET /admin/users query-param signature, so a Query(le=...) there
+    # would not constrain it.
+    limit: int = Field(5, ge=1, le=200)
 
 
 @router.post("/users/search")
@@ -486,8 +501,8 @@ async def admin_export_users(
 @router.get("/dsars")
 async def admin_list_dsars(
     status: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     admin: dict = Depends(get_admin_user),
 ):
     """DV-17: List PIPEDA data-export requests with SLA deadline tracking.

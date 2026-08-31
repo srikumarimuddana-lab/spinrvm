@@ -7,7 +7,6 @@ issue (weapon, assault, medical) also broadcasts to on-call admins
 over the admin WebSocket channel.
 """
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -18,18 +17,20 @@ from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
-    from ..dependencies import get_current_user
+    from ..dependencies import driver_row_for, get_current_user
     from ..documents import _resolve_upload_type, read_upload_capped
     from ..features import notify_safety_team
     from ..services.zoho_desk_integration import create_ticket_for_safety
     from ..supabase_client import supabase
+    from ..utils.background import spawn as _spawn
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import driver_row_for, get_current_user
     from documents import _resolve_upload_type, read_upload_capped  # type: ignore
     from features import notify_safety_team
     from services.zoho_desk_integration import create_ticket_for_safety
     from supabase_client import supabase  # type: ignore
+    from utils.background import spawn as _spawn  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +79,9 @@ async def submit_safety_report(
             _is_rider = _ride.get("rider_id") == user_id
             _driver_row = None
             if not _is_rider:
-                _driver_rows = await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
-                _driver_row = _driver_rows[0] if _driver_rows else None
+                # Reuses the row auth already fetched; only the immutable id is
+                # read, so the 30s cache window is immaterial here.
+                _driver_row = await driver_row_for(current_user)
             _is_driver = bool(_driver_row) and _ride.get("driver_id") == _driver_row["id"]
             if _is_rider or _is_driver:
                 verified_ride_id = body.ride_context.ride_id
@@ -115,7 +117,7 @@ async def submit_safety_report(
 
     # Raise a Zoho Desk ticket (urgent) for the safety team — fire-and-forget,
     # no-op when the integration is disabled; never blocks the report.
-    asyncio.create_task(create_ticket_for_safety(incident))
+    _spawn(create_ticket_for_safety(incident))
 
     # Notify the safety team — WS broadcast to admin dashboard + email
     # to the configured distribution list + CRITICAL log line for

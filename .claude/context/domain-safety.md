@@ -164,3 +164,4 @@ Rules specific to safety domain:
 - Don't mark an SOS as "resolved" automatically — requires safety team acknowledgment
 - Don't skip the 1.2-second hold on SOS — accidental triggers erode response trust
 - Don't reuse `safety_incidents.id` as a public reference — use a separate opaque `incident_ref` for user-facing correspondence
+- Don't add throttling/coalescing to any `drivers`-row write path without checking the Period 1 accumulator: `routes/drivers/location.py` folds `period1_accum_km`/`period1_accum_since` into the same UPDATE as lat/lng, and `utils/location_write_gate.py` must always let those writes through (`force=True`) — a skipped one silently under-counts a regulated SGI figure

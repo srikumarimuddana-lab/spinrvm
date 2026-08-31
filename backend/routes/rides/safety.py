@@ -99,9 +99,7 @@ async def trigger_emergency(
 
     # Verify the user is part of the ride
     is_rider = ride.get("rider_id") == current_user["id"]
-    driver = (lambda _r: _r[0] if _r else None)(
-        await _deps.db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-    )
+    driver = await _deps.driver_row_for(current_user)
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):
@@ -350,7 +348,9 @@ async def trigger_emergency(
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
 
-        location_text = " Location shared with emergency services." if body.latitude and body.longitude else ""
+        location_text = (
+            " Their live location has been shared with Spinr's safety team." if body.latitude and body.longitude else ""
+        )
         sms_body = (
             f"URGENT: {user_name} triggered an emergency alert during a Spinr ride."
             f"{location_text} Call them or emergency services immediately."

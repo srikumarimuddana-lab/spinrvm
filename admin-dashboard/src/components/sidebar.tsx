@@ -9,7 +9,7 @@ import {
     Menu, X,
     Shield, ShieldAlert, Cloud, Trophy, Activity,
     Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
-    PackageSearch, Flag, FileWarning, ScrollText, BookOpen,
+    PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap, CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
@@ -113,6 +113,12 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Finance",
         items: [
             { href: "/dashboard/earnings", label: "Earnings", icon: DollarSign, module: "earnings" },
+            // Was reachable only by typing the URL — no sidebar entry existed
+            // at all (IA audit, design/UX review 2026-08-28). Gated on
+            // "earnings" to match the backend mount exactly: subscriptions_router
+            // is require_module("earnings") in routes/admin/__init__.py, so this
+            // can't show a link a grant can't back.
+            { href: "/dashboard/subscriptions", label: "Subscriptions", icon: CreditCard, module: "earnings" },
             { href: "/dashboard/corporate-accounts", label: "Corporate", icon: Building2, module: "corporate_accounts" },
         ],
     },
@@ -146,7 +152,15 @@ const NAV_GROUPS: NavGroup[] = [
             },
             {
                 href: "/dashboard/support-tickets",
-                label: "Help Desk",
+                // "Help Desk" alone sat next to "Support & Issues" with no
+                // legible line between them (design/UX review 2026-08-28) —
+                // an admin had to already know this one is the Zoho
+                // integration and the other is internal tickets/disputes/
+                // complaints/etc. Matches the label staff/page.tsx's role
+                // picker already uses for this exact module ("support_tickets"
+                // → "Help Desk (Zoho)"), so this is adopting an existing
+                // naming precedent, not inventing a new one.
+                label: "Help Desk (Zoho)",
                 icon: Headphones,
                 module: "support_tickets",
                 children: [
@@ -171,6 +185,7 @@ const NAV_GROUPS: NavGroup[] = [
             // require_super_admin (raw production error data), so an
             // "admin"-role user would see the entry and 403 on every call.
             { href: "/dashboard/sentry-logs", label: "Sentry Issues", icon: Bug, module: "settings", superAdminOnly: true },
+            { href: "/dashboard/stripe-events", label: "Stripe Events", icon: Zap, module: "settings", superAdminOnly: true },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "audit" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             // Super-admin-only, stated with the flag rather than implied by a
@@ -296,7 +311,7 @@ function SidebarInner() {
 
             {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" role="button" tabIndex={0} aria-label="Close navigation menu" onClick={() => setMobileOpen(false)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMobileOpen(false); } }} />}
 
-            <aside className={cn(
+            <nav aria-label="Admin navigation" className={cn(
                 "fixed inset-y-0 left-0 z-40 flex flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200 md:translate-x-0",
                 collapsed ? "w-[68px]" : "w-60",
                 mobileOpen ? "translate-x-0 w-60" : "-translate-x-full md:translate-x-0"
@@ -343,12 +358,21 @@ function SidebarInner() {
                                         <div key={item.href}>
                                             <Link href={item.href} onClick={() => setMobileOpen(false)}
                                                 title={collapsed ? item.label : undefined}
+                                                aria-label={collapsed ? item.label : undefined}
                                                 className={cn(
                                                     "flex items-center rounded-lg text-[13px] font-medium transition-colors",
                                                     collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
                                                     active
                                                         ? "bg-sidebar-primary/10 text-sidebar-primary"
-                                                        : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                        // Was text-sidebar-foreground/60 — computed
+                                                        // ~4.0:1 against the light-mode sidebar
+                                                        // background, short of the 4.5:1 AA floor for
+                                                        // 13px text. --sidebar-foreground-muted is the
+                                                        // same solid token already used (and
+                                                        // contrast-verified) for the group-title labels
+                                                        // just above, at ~4.8:1 on light / ~5.1:1 on
+                                                        // dark. Design/UX review 2026-08-28.
+                                                        : "text-sidebar-foreground-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                                 )}
                                             >
                                                 <item.icon
@@ -370,22 +394,32 @@ function SidebarInner() {
                                                     childItems.map(child => {
                                                         const childActive = isActiveHref(child.href);
                                                         const childBadge = badgeFor(child.href);
+                                                        // A bare colored dot (below) has no text of its
+                                                        // own; the count previously only survived in
+                                                        // `title`, which most browsers use as a
+                                                        // fallback accessible name but which has no
+                                                        // touch-device support and inconsistent AT
+                                                        // behaviour. Set it as both `title` (visible
+                                                        // hover tooltip) and `aria-label` (real
+                                                        // accessible name) so it doesn't depend on that
+                                                        // fallback. Design/UX review 2026-08-28.
+                                                        const childAccessibleName =
+                                                            childBadge && childBadge > 0
+                                                                ? `${item.label} → ${child.label} (${childBadge} pending)`
+                                                                : `${item.label} → ${child.label}`;
                                                         return (
                                                             <Link
                                                                 key={child.href}
                                                                 href={child.href}
                                                                 onClick={() => setMobileOpen(false)}
-                                                                title={
-                                                                    childBadge && childBadge > 0
-                                                                        ? `${item.label} → ${child.label} (${childBadge} pending)`
-                                                                        : `${item.label} → ${child.label}`
-                                                                }
+                                                                title={childAccessibleName}
+                                                                aria-label={childAccessibleName}
                                                                 className={cn(
                                                                     "relative flex items-center rounded-lg text-[13px] font-medium transition-colors",
                                                                     "justify-center p-2.5 my-0.5",
                                                                     childActive
                                                                         ? "bg-sidebar-primary/10 text-sidebar-primary"
-                                                                        : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                                        : "text-sidebar-foreground-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                                                 )}
                                                             >
                                                                 <child.icon className="shrink-0 h-[18px] w-[18px]" />
@@ -412,7 +446,11 @@ function SidebarInner() {
                                                                         "flex items-center gap-2 rounded-lg text-[12px] font-medium transition-colors px-2.5 py-[6px] my-[1px]",
                                                                         childActive
                                                                             ? "bg-sidebar-primary/10 text-sidebar-primary"
-                                                                            : "text-sidebar-foreground/50 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                                            // Was text-sidebar-foreground/50 (~3.1:1 on
+                                                                            // light, below the 4.5:1 AA floor for this
+                                                                            // 12px text) — same fix as the parent links
+                                                                            // above. Design/UX review 2026-08-28.
+                                                                            : "text-sidebar-foreground-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                                                     )}
                                                                 >
                                                                     <child.icon className="shrink-0 h-3.5 w-3.5" />
@@ -444,7 +482,7 @@ function SidebarInner() {
                     moved to Topbar (top-right / top-left of the header) —
                     see components/topbar.tsx. Kept out of the sidebar
                     footer entirely rather than duplicated in both places. */}
-            </aside>
+            </nav>
         </>
     );
 }

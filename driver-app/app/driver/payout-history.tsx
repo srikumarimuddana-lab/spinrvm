@@ -15,6 +15,25 @@ import { useDriverStore } from '../../store/driverStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+// Previous-app transfers get their own section below the Spinr list so the
+// two eras never interleave. Three payout_type values are previous-app
+// rows, not just 'stripe_sync': 'legacy_import' (the booking importer's
+// offsetting payout, backend utils/legacy_rides.LEGACY_OFFSET_PAYOUT_TYPE)
+// and 'legacy_outstanding_correction' (backend services/legacy_payout_
+// correction_service.py) both write real rows to this same driver-facing
+// list and were previously falling through into the regular Spinr section
+// below instead. Found 2026-08-27 while tracing the migration plan's
+// Section 6 display gaps — see docs/change-log/2026-08-27-payout-history-
+// previous-app-grouping.md.
+//
+// These rows are shown permanently, not time-limited: backend
+// routes/drivers/payouts.py's get_payout_history stopped filtering by
+// utils.legacy_rides.previous_app_history_visible()'s Aug-31-2026 cutoff
+// as of the 2026-08-13 "blended lifetime earnings" decision (hiding a
+// driver's own real payout rows after a date would make their history look
+// like it lost entries). This section does not retire itself.
+const PREVIOUS_APP_PAYOUT_TYPES = new Set(['stripe_sync', 'legacy_import', 'legacy_outstanding_correction']);
+
 export default function PayoutHistoryScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -39,17 +58,12 @@ export default function PayoutHistoryScreen() {
         return sorted.filter(p => p.status === statusFilter);
     }, [payoutHistory, statusFilter]);
 
-    // Previous-app transfers get their own section below the Spinr list so
-    // the two eras never interleave. The server stops sending these rows
-    // after the transition cutoff (Aug 31, 2026 — see backend
-    // utils/legacy_rides), so this section retires itself with no app
-    // release needed.
     const spinrHistory = useMemo(
-        () => filteredHistory.filter((p: any) => p.payout_type !== 'stripe_sync'),
+        () => filteredHistory.filter((p: any) => !PREVIOUS_APP_PAYOUT_TYPES.has(p.payout_type)),
         [filteredHistory],
     );
     const previousAppHistory = useMemo(
-        () => filteredHistory.filter((p: any) => p.payout_type === 'stripe_sync'),
+        () => filteredHistory.filter((p: any) => PREVIOUS_APP_PAYOUT_TYPES.has(p.payout_type)),
         [filteredHistory],
     );
 

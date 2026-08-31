@@ -11,6 +11,7 @@ import {
   Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
@@ -21,18 +22,33 @@ import { logCompleteRegistration } from '@shared/analytics/meta';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
+import { HAS_AUTHENTICATED_BEFORE_KEY } from './login';
 
 const CODE_LENGTH = 4;
 
 export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { phoneNumber, consentAccepted } = useLocalSearchParams<{ phoneNumber: string; consentAccepted?: string }>();
+  const { phoneNumber, consentAccepted: consentParam } = useLocalSearchParams<{ phoneNumber: string; consentAccepted?: string }>();
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [countdown, setCountdown] = useState(30);
   const [canResend, setCanResend] = useState(false);
+  // Mutable copy of login.tsx's route param -- login.tsx no longer requires
+  // the checkbox to be checked before reaching this screen, so this can
+  // start false for a proactive new signup who didn't tick it, or a
+  // returning user for whom it's simply unused. If the backend comes back
+  // with consent_required (see handleVerify's catch), the inline consent
+  // card below lets the user accept it here instead of bouncing them back
+  // to login.tsx.
+  const [consentAccepted, setConsentAccepted] = useState(consentParam === 'true');
+  // True only after a verify attempt is rejected specifically for missing
+  // consent -- this only ever happens for a genuine new-account creation
+  // (routes/auth.py's verify_otp never checks this field for a returning
+  // user), so a returning user never sees this state.
+  const [needsConsent, setNeedsConsent] = useState(false);
+  const [resendingForConsent, setResendingForConsent] = useState(false);
   const { user, initialize, clearError } = useAuthStore();
   const inputRef = useRef<TextInput>(null);
   const resendInFlight = useRef(false);
@@ -135,10 +151,12 @@ export default function OtpScreen() {
         // signup is reported to the rider dataset. Both apps share this
         // endpoint; without the hint the backend defaults to 'rider'.
         client_app: 'rider',
-        // Explicit consent gesture from login.tsx's checkbox. Only enforced
-        // by the backend when this call actually creates a new account —
-        // harmless to send on a returning-user login too.
-        consent_accepted: consentAccepted === 'true',
+        // Explicit consent gesture from login.tsx's checkbox (or accepted
+        // inline below, if the backend rejected an earlier attempt for
+        // missing consent). Only enforced by the backend when this call
+        // actually creates a new account — harmless to send on a
+        // returning-user login too.
+        consent_accepted: consentAccepted,
       });
       if (!response.data) throw new Error('Empty response from auth server');
       const data = response.data as any;
@@ -161,6 +179,12 @@ export default function OtpScreen() {
 
       if (token) {
         await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);
+        // Marks this device as having completed a login at least once, so
+        // login.tsx skips the consent checkbox on the next visit — see
+        // HAS_AUTHENTICATED_BEFORE_KEY's own comment there. Not awaited
+        // (doesn't gate the sign-in flow); failure is harmless, it just
+        // means the checkbox shows again next time, same as a fresh device.
+        AsyncStorage.setItem(HAS_AUTHENTICATED_BEFORE_KEY, 'true').catch(() => {});
       }
       Analytics.otpVerified();
 
@@ -181,11 +205,46 @@ export default function OtpScreen() {
         await initialize();
       }
     } catch (err: any) {
+      // errors.auth.consent_required (backend/utils/error_keys.py) fires
+      // only when this phone number turns out to be a brand-new account and
+      // consent wasn't accepted before this call. The code that was just
+      // entered is already consumed server-side (OTPs are deleted on
+      // successful match, before the consent check runs) -- retrying the
+      // same code would just fail with ERR_OTP_INVALID, so this reveals an
+      // inline consent step that sends a fresh code once accepted, rather
+      // than telling the user their correct code was "invalid".
+      if (err?.messageKey === 'errors.auth.consent_required') {
+        setNeedsConsent(true);
+        setCode('');
+        showToast(
+          'One More Step',
+          'Please agree to our Terms of Service and Privacy Policy to finish creating your account.',
+          'warning',
+        );
+        return;
+      }
       triggerShake();
       setCode('');
       showToast('Verification Failed', getApiErrorMessage(err, 'Invalid code. Please try again.'), 'danger');
     } finally {
       setVerifying(false);
+    }
+  };
+
+  const handleAgreeAndResend = async () => {
+    if (!consentAccepted || resendingForConsent) return;
+    setResendingForConsent(true);
+    try {
+      await api.post('/auth/send-otp', { phone: phoneNumber });
+      setNeedsConsent(false);
+      setCode('');
+      setCountdown(30);
+      setCanResend(false);
+      showToast('Code Sent', 'A new verification code has been sent to your phone.', 'success');
+    } catch (e: any) {
+      showToast('Failed', getApiErrorMessage(e, 'Could not send a new code. Please try again.'), 'danger');
+    } finally {
+      setResendingForConsent(false);
     }
   };
 
@@ -290,6 +349,79 @@ export default function OtpScreen() {
           </TouchableOpacity>
         </Animated.View>
 
+        {needsConsent ? (
+          // Only reached when the backend rejected a correct code because
+          // this turned out to be a brand-new account with no recorded
+          // consent (errors.auth.consent_required) — a returning user never
+          // sees this. Mirrors login.tsx's checkbox exactly (same
+          // accessibility pattern: icon-based checked state, checkbox and
+          // links as separate touchables) so it reads as the same gesture,
+          // just relocated here instead of bouncing the user back a screen.
+          <View style={styles.consentCard}>
+            <Text style={styles.consentCardTitle}>Almost there</Text>
+            <Text style={styles.consentCardBody}>
+              To finish creating your account, please confirm you agree to Spinr&apos;s Terms of
+              Service and Privacy Policy. We&apos;ll send a new code once you do.
+            </Text>
+            <View style={styles.consentRow} accessible={false}>
+              <TouchableOpacity
+                onPress={() => setConsentAccepted((c) => !c)}
+                activeOpacity={0.7}
+                disabled={resendingForConsent}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: consentAccepted, disabled: resendingForConsent }}
+                accessibilityLabel="I agree to Spinr's Terms of Service and Privacy Policy"
+              >
+                <Ionicons
+                  name={consentAccepted ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={consentAccepted ? colors.primary : colors.textDim}
+                />
+              </TouchableOpacity>
+              <Text style={styles.consentRowText}>
+                I agree to Spinr&apos;s{' '}
+                <Text
+                  style={styles.termsLink}
+                  onPress={() => router.push({ pathname: '/legal', params: { type: 'tos' } } as any)}
+                  accessibilityRole="link"
+                  accessibilityLabel="Terms of Service"
+                >
+                  Terms of Service
+                </Text>
+                {' '}and{' '}
+                <Text
+                  style={styles.termsLink}
+                  onPress={() => router.push({ pathname: '/legal', params: { type: 'privacy' } } as any)}
+                  accessibilityRole="link"
+                  accessibilityLabel="Privacy Policy"
+                >
+                  Privacy Policy
+                </Text>
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.verifyBtn,
+                (!consentAccepted || resendingForConsent) && styles.verifyBtnInactive,
+              ]}
+              onPress={handleAgreeAndResend}
+              disabled={!consentAccepted || resendingForConsent}
+              activeOpacity={0.85}
+              accessibilityLabel="Agree and send new code"
+              accessibilityState={{ disabled: !consentAccepted || resendingForConsent }}
+            >
+              {resendingForConsent ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={[styles.verifyBtnText, !consentAccepted && styles.verifyBtnTextInactive]}>
+                  Agree & Send New Code
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : (
+        <>
         <TouchableOpacity
           style={[
             styles.verifyBtn,
@@ -337,6 +469,8 @@ export default function OtpScreen() {
             <Text style={styles.changeNumberText}>Change phone number</Text>
           </TouchableOpacity>
         </View>
+        </>
+        )}
         </View>
       </ScrollView>
 
@@ -420,5 +554,18 @@ function createStyles(colors: ThemeColors) {
     countdownNumber: { fontWeight: '700', color: colors.text },
     changeNumberBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
     changeNumberText: { fontSize: 14, color: colors.textDim, fontWeight: '500' },
+    consentCard: {
+      backgroundColor: colors.surfaceLight, borderRadius: 16,
+      borderWidth: 1, borderColor: colors.border,
+      padding: 18, marginBottom: 24,
+    },
+    consentCardTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 6 },
+    consentCardBody: { fontSize: 13, color: colors.textDim, lineHeight: 19, marginBottom: 14 },
+    consentRow: {
+      flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+      minHeight: 44, paddingVertical: 4, marginBottom: 14,
+    },
+    consentRowText: { flex: 1, fontSize: 12, color: colors.textDim, lineHeight: 18, paddingTop: 3 },
+    termsLink: { color: colors.primary, fontWeight: '600' },
   });
 }

@@ -8,7 +8,7 @@ on:
       - '.agents/**'
       - '.github/workflows/claude.yml'
   push:
-    branches: [main, develop]
+    branches: [main, staging]
     paths:
       - '.claude/**'
       - 'CLAUDE.md'

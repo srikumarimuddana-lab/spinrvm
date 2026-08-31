@@ -251,7 +251,11 @@ export default function BulkImportPage() {
                 <p className="text-sm text-muted-foreground">
                     Upload a CSV of drivers to create their accounts and profiles. Validate first, review
                     the report, then commit. Document files are uploaded per-driver afterwards from the
-                    driver&apos;s page.
+                    driver&apos;s page. Importing the previous app&apos;s raw MongoDB export instead? Use{" "}
+                    <a href="/dashboard/drivers/legacy-import" className="underline">
+                        Legacy Driver Import
+                    </a>{" "}
+                    — a different CSV shape, a different driver population.
                 </p>
             </div>
 

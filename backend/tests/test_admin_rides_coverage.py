@@ -13,6 +13,7 @@ established in tests/test_admin_business_logic.py.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -731,6 +732,221 @@ class TestAdminRegenerateImportedSnapshots:
         assert audit_mock.call_args[0][1] == "ride_snapshots_regenerated"
         assert audit_mock.call_args[0][4]["total"] == 1
 
+    def test_regenerate_processes_rides_concurrently_not_sequentially(self, client, as_super_admin):
+        """Regression test for a real 2026-08-29 production stall: a 62-ride
+        run got stuck at 50/62 with zero progress for 13+ minutes -- the
+        exact sequential-per-item request-timeout pattern found and fixed
+        three times already this session in the CSV importers. Proves the
+        fix (asyncio.Semaphore-bounded concurrency) by tracking the actual
+        max number of rides in flight at once, not by racing a wall clock.
+        """
+        rides = [
+            {
+                "id": f"ride-{i}",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": None,
+            }
+            for i in range(16)
+        ]
+        in_flight = 0
+        max_in_flight = 0
+
+        async def _fake_render(**_kwargs):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0)  # real cooperative yield -- lets other rides' tasks run
+            in_flight -= 1
+            return b"png-bytes"
+
+        fake_storage = MagicMock()
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            # A real (non-empty) key is required to reach the Google path at
+            # all -- otherwise "if gmap_key:" skips straight to the OSM
+            # fallback, which runs in a thread-pool executor rather than
+            # natively on the event loop and isn't what this test exercises.
+            patch("routes.admin.rides.get_app_settings", AsyncMock(return_value={"google_maps_api_key": "fake-key"})),
+            patch("utils.route_snapshot.render_ride_snapshot_google", _fake_render),
+            patch("supabase_client.supabase", MagicMock(storage=fake_storage)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-3")),
+            # Deliberately NOT patching asyncio.sleep here (unlike the other
+            # tests in this class): an AsyncMock's awaited return resolves
+            # without a real event-loop suspension, which would silently
+            # defeat the very interleaving this test needs to observe. A
+            # real asyncio.sleep(0) is a documented, guaranteed yield point.
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-snapshots", json={"limit": 500})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 16
+        assert body["success"] == 16
+        assert body["failed"] == 0
+        # The real bug (fully sequential) caps this at 1. Bounded concurrency
+        # should reach the configured concurrency limit exactly.
+        from routes.admin.rides import _SNAPSHOT_CONCURRENCY
+
+        assert max_in_flight == _SNAPSHOT_CONCURRENCY, (
+            f"expected {_SNAPSHOT_CONCURRENCY} rides in flight at once, saw {max_in_flight} "
+            "-- rides are being processed sequentially again"
+        )
+
+
+class TestAdminRegenerateImportedRoutes:
+    """Admin-dashboard equivalent of scripts/backfill_imported_ride_routes.py,
+    built alongside TestAdminRegenerateImportedSnapshots's fix for the same
+    reason: the CLI script needs shell access to the backend with OSRM_URL/
+    SUPABASE_SERVICE_ROLE_KEY, and there was no way for an operator to run
+    this backfill safely through the browser like every other legacy-
+    migration tool on the Bulk Operations page.
+    """
+
+    def test_regenerate_routes_requires_super_admin_403(self, client, as_finance_admin):
+        resp = client.post("/api/admin/rides/regenerate-imported-routes", json={})
+        assert resp.status_code == 403
+
+    def test_regenerate_routes_no_rides_skips_audit(self, client, as_super_admin):
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")) as audit_mock,
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-routes", json={})
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+        audit_mock.assert_not_awaited()
+
+    def test_regenerate_routes_skips_rides_that_already_have_a_real_route(self, client, as_super_admin):
+        """A ride with >1 polyline point already has a real road route and
+        must not be touched (or billed against OSRM/Google) unless force=true."""
+        rides = [
+            {
+                "id": "ride-has-route",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": [[50.4, -104.6], [50.45, -104.65], [50.5, -104.7]],
+            }
+        ]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-2")) as audit_mock,
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-routes", json={})
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+        assert resp.json()["message"] == "No rides need a route backfill"
+        audit_mock.assert_not_awaited()
+
+    def test_regenerate_routes_happy_path_writes_polyline_and_distance(self, client, as_super_admin):
+        rides = [
+            {
+                "id": "ride-1",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": None,
+            }
+        ]
+        fake_result = {"polyline": [[50.4, -104.6], [50.45, -104.65], [50.5, -104.7]], "distance_km": 12.34}
+        update_calls = []
+
+        async def _fake_update_one(table, filters, values):
+            update_calls.append((table, filters, values))
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.update_one", _fake_update_one),
+            patch("utils.route_distance.compute_route", AsyncMock(return_value=fake_result)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-3")) as audit_mock,
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-routes", json={"limit": 10})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["success"] == 1
+        assert body["failed"] == 0
+        assert len(update_calls) == 1
+        _, filters, values = update_calls[0]
+        assert filters == {"id": "ride-1"}
+        assert values["planned_route_polyline"] == fake_result["polyline"]
+        assert values["distance_km"] == fake_result["distance_km"]
+        audit_mock.assert_awaited_once()
+        assert audit_mock.call_args[0][1] == "imported_ride_routes_regenerated"
+
+    def test_regenerate_routes_no_route_from_any_provider_counts_as_failed(self, client, as_super_admin):
+        rides = [
+            {
+                "id": "ride-unreachable",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": None,
+            }
+        ]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("utils.route_distance.compute_route", AsyncMock(return_value=None)),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-4")),
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-routes", json={})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] == 0
+        assert body["failed"] == 1
+        assert body["errors"][0]["ride_id"] == "ride-unreachable"
+
+    def test_regenerate_routes_processes_concurrently_not_sequentially(self, client, as_super_admin):
+        """Same regression shape as the snapshot endpoint's own concurrency
+        test: proves bounded concurrency by tracking max rides in flight,
+        not by racing a wall clock."""
+        rides = [
+            {
+                "id": f"ride-{i}",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": None,
+            }
+            for i in range(16)
+        ]
+        in_flight = 0
+        max_in_flight = 0
+
+        async def _fake_compute_route(*_args, **_kwargs):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            await asyncio.sleep(0)  # real cooperative yield -- lets other rides' tasks run
+            in_flight -= 1
+            return {"polyline": [[50.4, -104.6], [50.5, -104.7]], "distance_km": 5.0}
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("utils.route_distance.compute_route", _fake_compute_route),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-5")),
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-routes", json={"limit": 500})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 16
+        assert body["success"] == 16
+
+        from routes.admin.rides import _ROUTE_CONCURRENCY
+
+        assert max_in_flight == _ROUTE_CONCURRENCY, (
+            f"expected {_ROUTE_CONCURRENCY} rides in flight at once, saw {max_in_flight} "
+            "-- rides are being processed sequentially again"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Read-only endpoints — lighter smoke coverage (happy path + one error path)
@@ -951,7 +1167,8 @@ class TestAdminRidesReadEndpointsSmoke:
                 "corporate_account_id": None,
             },
         ]
-        with patch("db_supabase.get_rows", AsyncMock(return_value=rows)):
+        mock_get_rows = AsyncMock(return_value=rows)
+        with patch("db_supabase.get_rows", mock_get_rows):
             resp = client.get(
                 "/api/admin/rides/heatmap-data",
                 params={"filter": "corporate", "start_date": "2026-01-01", "end_date": "2026-01-31"},
@@ -961,6 +1178,12 @@ class TestAdminRidesReadEndpointsSmoke:
         assert body["stats"]["total_rides"] == 2
         assert body["stats"]["corporate_rides"] == 1
         assert len(body["pickup_points"]) == 1
+        # Regression: must use $notnull, not {"$ne": None} — the latter compiles
+        # to SQL `<> NULL`, which never matches any row (repositories/_base.py's
+        # $notnull note), so the real Supabase query always returned zero
+        # corporate rides even though this mocked test still passed.
+        sent_filters = mock_get_rows.call_args.args[1]
+        assert sent_filters["corporate_account_id"] == {"$notnull": True}
 
     def test_get_earnings_happy_path(self, client, as_super_admin):
         rollup = [
@@ -1182,3 +1405,108 @@ class TestAdminRidesReadEndpointsSmoke:
         assert resp.status_code == 200
         # ROUND_HALF_UP: 10.125 -> 10.13 (banker's rounding would give 10.12).
         assert resp.json()["total_paid"] == 10.13
+
+
+# ---------------------------------------------------------------------------
+# GET /rides -- pre_launch filter (2026-08-30 pre-launch data flagging tool)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetRidesPreLaunchFilter:
+    """legacy_import_metadata.pre_launch_test is set by
+    services/pre_launch_flag_service.py. _build_rides_filters has no
+    JSONB-path filter operator of its own, so it resolves flagged ids first
+    (fetch_pre_launch_flagged_ids) and compiles pre_launch=true/false to
+    $in/$nin against `id` -- mirrors
+    TestAdminGetDriversPreLaunchFilter in test_admin_drivers_coverage.py
+    for the sibling admin_get_drivers route."""
+
+    def test_omitted_applies_no_filter(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids") as fetch_flagged,
+        ):
+            resp = client.get("/api/admin/rides")
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]
+        fetch_flagged.assert_not_called()
+
+    def test_true_shows_flagged_only(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value={"ride-1", "ride-2"}),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "true"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["filters"]["id"]["$in"]) == {"ride-1", "ride-2"}
+
+    def test_true_with_nothing_flagged_matches_zero_rows(self, client, as_super_admin):
+        """Empty $in compiles to PostgREST's id=in.() -- matches nothing,
+        which is correct when no ride is flagged yet."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value=set()),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "true"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": []}
+
+    def test_false_hides_flagged(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value={"ride-1"}),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$nin": ["ride-1"]}
+
+    def test_false_with_nothing_flagged_applies_no_filter(self, client, as_super_admin):
+        """Nothing to exclude -- must not add a vacuous $nin: [] that could
+        be misread as excluding everything."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value=set()),
+        ):
+            resp = client.get("/api/admin/rides", params={"pre_launch": "false"})
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]

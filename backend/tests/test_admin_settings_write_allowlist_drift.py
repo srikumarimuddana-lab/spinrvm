@@ -35,6 +35,7 @@ from routes.admin.settings import SettingsUpdateRequest
 # (soavhtdhefowwvforzwb) on 2026-08-22. 129 columns.
 KNOWN_SETTINGS_COLUMNS = frozenset(
     {
+        "admin_command_palette_enabled",
         "admin_theme_v2_enabled",
         "ai_api_key_anthropic",
         "ai_api_key_gemini",
@@ -109,6 +110,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "lms_api_base_url",
         "lms_api_key",
         "location_health_push_nudge_enabled",
+        "location_marker_write_gate_enabled",
         "marketing_from_email",
         "max_simultaneous_offers",
         "meta_capi_access_token",

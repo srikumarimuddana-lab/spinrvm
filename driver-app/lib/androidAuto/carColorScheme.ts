@@ -5,7 +5,7 @@
  * state, so it flips mid-drive at dusk. Two channels deliver it and we need both:
  *
  *   1. `colorScheme` in the React root's initial props. iternio's
- *      VirtualRenderer.kt:248 puts it there (`context.isDarkMode`) and
+ *      VirtualRenderer.kt:289 (0.5.13) puts it there (`context.isDarkMode`) and
  *      MapTemplate.ts:199 passes props straight to our component. That covers
  *      the FIRST render.
  *   2. `onAppearanceDidChange` on the MapTemplate config (MapTemplate.ts:75),

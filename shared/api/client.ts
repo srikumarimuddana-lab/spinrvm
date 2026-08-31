@@ -20,12 +20,29 @@ if (!API_URL || API_URL.includes('localhost') || API_URL.includes('10.0.2.2')) {
 // Request timeout in milliseconds
 const REQUEST_TIMEOUT = 15000;
 
-// Propagate the client's timeout to the backend as an absolute epoch-ms
-// deadline. The backend's DeadlineMiddleware reads this and uses it to
-// skip DB retries once the client has already given up — frees backend
-// thread-pool workers for requests that aren't already doomed.
+// Propagate the client's timeout to the backend so it can skip DB retries once
+// we've already given up — that frees backend thread-pool workers for requests
+// that aren't already doomed.
+//
+// Two headers are sent during the migration window:
+//
+//   X-Timeout-Ms  (preferred) — a RELATIVE duration. The backend adds it to its
+//     own monotonic clock, so this device's wall clock never enters the
+//     calculation and clock skew cannot affect the budget.
+//   X-Deadline-Ms (legacy) — an ABSOLUTE epoch from Date.now(). The backend
+//     derives the budget by subtracting its own clock from ours, so a device
+//     whose clock runs behind sends an already-expired deadline and every DB
+//     call in the request is rejected with a 503. That misconfiguration on a
+//     single handset was the cause of the 2026-08-24 alert storm.
+//
+// Both are sent so a backend that predates X-Timeout-Ms support keeps working;
+// the backend prefers X-Timeout-Ms when present and clamps the legacy value.
+// Drop X-Deadline-Ms once no deployed backend needs it.
 function deadlineHeader(timeoutMs: number = REQUEST_TIMEOUT): Record<string, string> {
-  return { 'X-Deadline-Ms': String(Date.now() + timeoutMs) };
+  return {
+    'X-Timeout-Ms': String(timeoutMs),
+    'X-Deadline-Ms': String(Date.now() + timeoutMs),
+  };
 }
 
 // Generate a UUID v4 that works in React Native (no crypto.randomUUID on RN).
@@ -821,14 +838,26 @@ const isSosUrl = (url: string): boolean => /^\/rides\/(?:[^/]+\/)?emergency$/.te
 // concurrent requests share the slot, which at worst skips a retry.
 const _inflight503Retries = new Set<string>();
 
-// Same pattern for 401 refresh-retries. Without this, a retryFn that re-enters
-// the public method mints a fresh closure on each recursion — an endpoint that
-// persistently 401s for a non-expiry reason (suspended user, role mismatch)
-// while /auth/refresh succeeds loops forever: hung spinners, backend hammering,
-// battery drain. One refresh-retry per logical request path.
-const _inflight401Retries = new Set<string>();
-
-const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
+// 401 refresh-retry loop guard: `isRetryAttempt` is threaded through from
+// the calling client.<method>() (see its `_isRetry` param) rather than
+// tracked in a Set keyed by "METHOD url" as the 503 guard above does. A
+// per-URL Set here previously caused a real bug — two concurrent ORIGINAL
+// requests to the same URL (e.g. two `api.get('/rides/active')` calls
+// racing) share one retryKey, so the second request's 401 found the key
+// already claimed by the first and fell straight through to a thrown
+// error instead of queueing behind the shared refresh via
+// _subscribeTokenRefresh. `isRetryAttempt` is per-call-chain instead: it is
+// false for every original call (so both concurrent calls above correctly
+// enter this block and the second correctly queues) and true only for the
+// call spawned BY a retryFn, so a persistently-401ing endpoint retries
+// at most once per original call instead of looping forever.
+const handleApiError = async (
+  response: Response,
+  method: string,
+  url: string,
+  retryFn?: () => Promise<unknown>,
+  isRetryAttempt = false,
+): Promise<never> => {
   // Set when this 401 went through the silent-refresh path below. Once
   // refreshTokens() has run, IT owns the logout decision (it logs out on a
   // definitive 401 and deliberately keeps the session on transient
@@ -878,15 +907,17 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // On 401, attempt a single silent token refresh then retry the original request.
   // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
   // so the refresh round-trip only adds failure modes during an emergency.
-  if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url) && !_inflight401Retries.has(`${method} ${url}`)) {
+  // !isRetryAttempt is the loop guard (see the comment above this function):
+  // true only for an original call, so a call already spawned by a retryFn
+  // that 401s again falls through to the terminal throw below instead of
+  // retrying forever.
+  if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url) && !isRetryAttempt) {
     // Set before any await, so the fall-through to the G2 backstop below
     // always sees it — covers both the first-caller path and the
     // queued-subscriber path (a queued request whose shared refresh fails
     // rejects inside this try and would otherwise fall through to G2 and
     // get logged out).
     refreshAttempted = true;
-    const retryKey = `${method} ${url}`;
-    _inflight401Retries.add(retryKey);
     try {
       if (_refreshPromise) {
         // A refresh is already in-flight — queue this request and wait for
@@ -907,10 +938,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
         return retried as never;
       }
 
-      // First caller: start the refresh. Clear the dedup sentinel BEFORE
-      // notifying subscribers so that any subscriber whose retryFn() triggers
-      // yet another 401 sees _refreshPromise === null and starts a fresh
-      // refresh cycle instead of queueing behind a completed promise.
+      // First caller: start the refresh.
       _refreshPromise = _refreshCallback();
       let refreshed = false;
       try {
@@ -929,8 +957,6 @@ const handleApiError = async (response: Response, method: string, url: string, r
     } catch {
       _refreshPromise = null;
       _onRefreshed('');
-    } finally {
-      _inflight401Retries.delete(retryKey);
     }
   }
 
@@ -1072,7 +1098,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
 
 // Custom API client using fetch
 const client = {
-  async get<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async get<T = unknown>(url: string, config?: { headers?: Record<string, string> }, _isRetry = false): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1092,13 +1118,13 @@ const client = {
       headers,
     });
 
-    if (!response.ok) return await handleApiError(response, 'GET', url, () => client.get(url, config));
+    if (!response.ok) return await handleApiError(response, 'GET', url, () => client.get(url, config, true), _isRetry);
 
     const data = await response.json();
     return { data, status: response.status };
   },
 
-  async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }, _isRetry = false): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     // Mirrors the FormData handling in put(): without it a multipart upload
     // was JSON.stringify'd into "{}" and the file never left the device.
@@ -1131,13 +1157,13 @@ const client = {
       body: isFormData ? (body as FormData) : (body ? JSON.stringify(body) : undefined),
     });
 
-    if (!response.ok) return await handleApiError(response, 'POST', url, () => client.post(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'POST', url, () => client.post(url, body, config, true), _isRetry);
 
     const data = await response.json();
     return { data, status: response.status };
   },
 
-  async put<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async put<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }, _isRetry = false): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
@@ -1166,13 +1192,13 @@ const client = {
       body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
     });
 
-    if (!response.ok) return await handleApiError(response, 'PUT', url, () => client.put(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'PUT', url, () => client.put(url, body, config, true), _isRetry);
 
     const data = await response.json();
     return { data, status: response.status };
   },
 
-  async patch<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async patch<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }, _isRetry = false): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1196,13 +1222,13 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) return await handleApiError(response, 'PATCH', url, () => client.patch(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'PATCH', url, () => client.patch(url, body, config, true), _isRetry);
 
     const data = await response.json();
     return { data, status: response.status };
   },
 
-  async delete<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async delete<T = unknown>(url: string, config?: { headers?: Record<string, string> }, _isRetry = false): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1225,7 +1251,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) return await handleApiError(response, 'DELETE', url, () => client.delete(url, config));
+    if (!response.ok) return await handleApiError(response, 'DELETE', url, () => client.delete(url, config, true), _isRetry);
 
     const data = await response.json().catch(() => ({} as T));
     return { data, status: response.status };

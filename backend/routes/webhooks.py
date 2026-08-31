@@ -14,6 +14,7 @@ try:
     )
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils.background import spawn as _spawn
     from ..utils.money import cents_to_dollars, dollars_to_cents
     from ..utils.rate_limiter import default_limiter
     from ..utils.rider_emails import send_refund_email, send_wallet_topup_email
@@ -29,6 +30,7 @@ except ImportError:
     )
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.money import cents_to_dollars, dollars_to_cents
     from utils.rate_limiter import default_limiter
     from utils.rider_emails import send_refund_email, send_wallet_topup_email
@@ -634,6 +636,16 @@ async def stripe_webhook(request: Request):
     if not is_new:
         return {"received": True, "duplicate": True, "event_id": event_id}
 
+    return await _dispatch_stripe_event(event_id, event_type, event_payload, data_object, stripe_secret)
+
+
+async def _dispatch_stripe_event(event_id, event_type, event_payload, data_object, stripe_secret=""):
+    """Core dispatch logic for a claimed Stripe event.
+
+    Extracted from stripe_webhook so the admin replay endpoint can re-process
+    a stuck event without needing to reconstruct Stripe signature verification.
+    Called by stripe_webhook after claim, and by admin/stripe_events.py replay.
+    """
     # ── Corporate flat-SaaS subscription events ─────────────────────
     # Checked first (cheap lookup) and, if matched, handled entirely by
     # _sync_corporate_subscription_event and returned immediately — the
@@ -659,12 +671,14 @@ async def stripe_webhook(request: Request):
             return {"received": True, "scope": "corporate_subscription", "event_id": event_id}
 
     # ── Dispatch ─────────────────────────────────────────────────────
-    # Any exception raised below propagates as 5xx, leaving processed_at
-    # NULL so Stripe retries. If Stripe's own retry window is exhausted
-    # before this succeeds, utils/stripe_reconcile.py's daily sweep
-    # (_reconcile_stuck_stripe_events, ACTION_ITEMS.md C10) will surface
-    # the row for manual review -- it does not auto-replay the payload
-    # (see that function's docstring for why).
+    # An exception raised below propagates as 5xx. Because
+    # claim_stripe_event already inserted the event_id row, Stripe's
+    # retry delivery will be deduped (returns False) UNLESS the failing
+    # path explicitly calls unclaim_stripe_event first. Paths that fail
+    # before any side effects should unclaim so the retry reprocesses;
+    # paths that partially applied side effects should leave the claim
+    # so _reconcile_stuck_stripe_events surfaces the row for manual
+    # review (ACTION_ITEMS.md C10).
     if event_type == "payment_intent.succeeded":
         meta = data_object.get("metadata") or {}
 
@@ -849,6 +863,7 @@ async def stripe_webhook(request: Request):
                         "ride_id": ride_id,
                     },
                 )
+                await unclaim_stripe_event(event_id)
                 raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
 
             logger.info(f"Payment confirmed via webhook for ride {ride_id}")
@@ -914,6 +929,7 @@ async def stripe_webhook(request: Request):
                         "ride_id": ride_id,
                     },
                 )
+                await unclaim_stripe_event(event_id)
                 raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
@@ -1650,9 +1666,7 @@ async def stripe_webhook(request: Request):
                 # One-off plans email from _activate_subscription instead.
                 # Fire-and-forget so we don't hold Stripe's webhook response open.
                 if _inv_amount and Decimal(str(_inv_amount)) > 0:
-                    import asyncio as _asyncio
-
-                    _asyncio.create_task(
+                    _spawn(
                         _drv_subs._send_subscription_invoice_email(
                             driver_id=row.get("driver_id"),
                             plan_name=row.get("plan_name") or "Spinr Pass",

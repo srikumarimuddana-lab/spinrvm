@@ -94,6 +94,10 @@ async def run_kyb_reverification_tick() -> None:
     )
 
     newly_flagged = 0
+    # The cooldown boundary, computed once so every company in this tick claims
+    # against the same instant, and passed to the claim so the DB applies the
+    # same comparison the Python pre-filter below does.
+    cutoff_iso = (datetime.now(timezone.utc) - _REFLAG_COOLDOWN).isoformat()
     for company in companies:
         last_flagged = company.get("kyb_reverify_flagged_at")
         if last_flagged:
@@ -104,7 +108,15 @@ async def run_kyb_reverification_tick() -> None:
             if last_dt and datetime.now(timezone.utc) - last_dt < _REFLAG_COOLDOWN:
                 continue
         try:
-            await mark_kyb_reverify_flagged(company_id=company["id"])
+            # The pre-filter above is a cheap early-out, not the authority: this
+            # loop runs on every replica with no leader lock, so two of them
+            # could both pass it for the same company. The write is now
+            # conditional on the same column, so only one wins — and only the
+            # winner counts and logs. Without that, the due_total metric
+            # inflated by a factor of the replica count and the compliance
+            # event was logged more than once per company.
+            if not await mark_kyb_reverify_flagged(company_id=company["id"], not_flagged_since_iso=cutoff_iso):
+                continue
             newly_flagged += 1
             logger.info(
                 "Corporate KYB re-verification due: company=%s last_reviewed=%s",

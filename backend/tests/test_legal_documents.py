@@ -21,6 +21,40 @@ except ImportError:
     )
 
 
+# NOTE: every test above this line calls get_legal_document() directly — it
+# exercises the handler's data-resolution logic but never touches how the
+# router is actually mounted in server.py. That gap is exactly how the
+# 2026-08-27 blank-policy production bug shipped unnoticed: the endpoint was
+# only ever wired into v1_api_router (-> /api/v1/legal-documents), while its
+# own docstring and all four mobile call sites assumed a root mount
+# (/legal-documents, no prefix) — see server.py's dual app.include_router()
+# calls for legal_documents_router. The test below goes through the real
+# ASGI app (test_client fixture, conftest.py) so a future regression on
+# *either* mount actually fails CI, instead of only testing logic that was
+# never wrong in the first place.
+@pytest.mark.anyio
+async def test_legal_documents_reachable_at_documented_root_path(test_client):
+    """GET /legal-documents (no /api/v1 prefix) must resolve — this is the
+    path routes/legal_documents.py's own docstring documents as canonical,
+    and the only path every mobile legal-content fetch actually calls."""
+    row = {"content": "Published ToS text", "version": 2, "updated_at": "2026-08-17"}
+    with patch("routes.legal_documents.db_supabase.find_one", AsyncMock(return_value=row)):
+        response = test_client.get("/legal-documents", params={"audience": "rider", "type": "tos"})
+    assert response.status_code == 200
+    assert response.json()["content"] == "Published ToS text"
+
+
+@pytest.mark.anyio
+async def test_legal_documents_also_reachable_under_api_v1_prefix(test_client):
+    """The /api/v1 alias must keep working too — additive, not a replacement
+    for the root mount."""
+    row = {"content": "Published Privacy text", "version": 1, "updated_at": "2026-08-17"}
+    with patch("routes.legal_documents.db_supabase.find_one", AsyncMock(return_value=row)):
+        response = test_client.get("/api/v1/legal-documents", params={"audience": "driver", "type": "privacy"})
+    assert response.status_code == 200
+    assert response.json()["content"] == "Published Privacy text"
+
+
 @pytest.mark.anyio
 async def test_published_row_wins_over_legacy():
     row = {"content": "Published ToS text", "version": 2, "updated_at": "2026-08-17"}

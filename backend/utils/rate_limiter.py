@@ -440,6 +440,12 @@ booking_import_commit_limit = default_limiter.limit("10/hour")
 wallet_import_validate_limit = default_limiter.limit("30/hour")
 wallet_import_commit_limit = default_limiter.limit("10/hour")
 
+# Pre-launch legacy data flagging (2026-08-30) — small, fixed dataset
+# (hundreds of rows, not thousands), same generous-headroom reasoning as the
+# wallet importer above.
+pre_launch_flag_preview_limit = default_limiter.limit("30/hour")
+pre_launch_flag_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and
@@ -447,6 +453,31 @@ wallet_import_commit_limit = default_limiter.limit("10/hour")
 # mass-create driver accounts unbounded. Corporate + admin portal review,
 # gap #45 — this endpoint previously had no rate limit at all.
 driver_import_commit_limit = default_limiter.limit("10/hour")
+
+# Admin legacy Mongo driver-profile import (Phase 1 of the 2026-08-27
+# migration plan) -- separate importer, separate population (drivers.csv's
+# ~900 un-imported Mongo-ObjectId-keyed rows), separate quota from the
+# Saskatoon CSV importer above. Same posture: /validate is read-only,
+# /commit creates/links/enriches real rows and gets the tighter limit.
+legacy_mongo_driver_import_commit_limit = default_limiter.limit("10/hour")
+
+# Admin legacy SIN/DOB backfill (2 CSVs) — /validate is a read-only dry-run;
+# /commit writes a vault-encrypted SIN + date_of_birth onto matched drivers.
+# Same shape/reasoning as driver_import_commit_limit above: commit is the
+# write path and gets the tighter limit.
+legacy_sin_dob_backfill_commit_limit = default_limiter.limit("10/hour")
+
+# Admin legacy vehicle-history backfill (Phase 2 of the 2026-08-27 migration
+# plan) -- /validate is a read-only dry-run; /commit inserts append-only
+# driver_vehicle_history rows. Same posture as driver_import_commit_limit
+# above: commit is the write path and gets the tighter limit.
+legacy_vehicle_history_backfill_commit_limit = default_limiter.limit("10/hour")
+
+# Admin legacy saved-address backfill (Phase 4 of the 2026-08-27 migration
+# plan) -- /validate is a read-only dry-run; /commit inserts rows into the
+# live saved_addresses table. Same posture as the backfills above: commit
+# is the write path and gets the tighter limit.
+legacy_saved_address_backfill_commit_limit = default_limiter.limit("10/hour")
 
 # Admin Data Transfer jobs (list/detail/download-link) — read-only status
 # polling, but download-link regeneration mints a fresh signed Storage URL

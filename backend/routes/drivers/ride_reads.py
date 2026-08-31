@@ -28,6 +28,17 @@ from ._shared import (  # noqa: F401
     serialize_ride_for_driver,
 )
 
+try:
+    from ...services.incentive_service import (
+        incentive_display_payload,
+        match_ride_incentives,
+    )
+except ImportError:
+    from services.incentive_service import (  # type: ignore
+        incentive_display_payload,
+        match_ride_incentives,
+    )
+
 router = APIRouter()
 
 # Fields the driver-facing active-ride UI renders for the rider. Anything not on
@@ -156,43 +167,23 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         raw = serialize_doc(rider)
         safe_rider = {k: raw[k] for k in _RIDER_PUBLIC_FIELDS if k in raw}
 
-    # Enrich with incentives + quest progress for driver_assigned rides
-    # so fetchActiveRide never strips enrichment data from the offer panel.
+    # Enrich with incentives so fetchActiveRide never strips enrichment data
+    # from the offer panel — and, past acceptance, so the in-trip earnings
+    # figure still includes the bonus the offer promised. `rides.driver_earnings`
+    # is fare-only by design (the bonus lives in ride_incentive_claims, written
+    # at completion), so a driver_assigned-only projection left every
+    # post-acceptance screen quoting the fare alone.
     incentives = None
     total_bonus = None
     quest_hint = None
-    if ride.get("status") == RideStatus.DRIVER_ASSIGNED.value:
-        try:
-            iq = (
-                db_supabase.supabase.table("ride_incentives")
-                .select("name, bonus_amount, incentive_type, service_area_id, vehicle_type_id")
-                .eq("is_active", True)
-            )
-            sa_id = ride.get("service_area_id")
-            if sa_id:
-                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
-            ir = await db_supabase.run_sync(iq.execute)
-            vt_id = ride.get("vehicle_type_id")
-            _inc_list = []
-            _bonus = 0.0
-            for inc in ir.data or []:
-                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
-                    continue
-                ba = float(inc.get("bonus_amount") or 0)
-                _inc_list.append(
-                    {
-                        "name": inc["name"],
-                        "bonus_amount": ba,
-                        "incentive_type": inc.get("incentive_type", "per_ride"),
-                    }
-                )
-                _bonus += ba
-            if _inc_list:
-                incentives = _inc_list
-                total_bonus = _bonus
-        except Exception as e:
-            logger.error(f"get_active_ride: incentive lookup failed: {e}", exc_info=True)
+    try:
+        _matched = await match_ride_incentives(db_supabase, ride)
+        if _matched:
+            incentives, total_bonus = incentive_display_payload(_matched)
+    except Exception as e:
+        logger.error(f"get_active_ride: incentive lookup failed: {e}", exc_info=True)
 
+    if ride.get("status") == RideStatus.DRIVER_ASSIGNED.value:
         try:
             driver_uid = current_user["id"]
             qr = await db_supabase.run_sync(
@@ -243,8 +234,8 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 
 @router.get("/rides/history")
 async def get_ride_history(
-    limit: int = Query(20),
-    offset: int = Query(0),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     status: Optional[str] = Query(None),
     period: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
@@ -354,19 +345,39 @@ async def get_ride_history(
     incentive_map: Dict[str, float] = {}
     if ride_ids:
         try:
-            claims = (
-                db_supabase.supabase.table("ride_incentive_claims")
-                .select("ride_id, bonus_amount")
-                .in_("ride_id", ride_ids)
-                .execute()
-            ).data or []
+            claims_res = await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_incentive_claims")
+                    .select("ride_id, bonus_amount")
+                    .in_("ride_id", ride_ids)
+                    .execute()
+                )
+            )
+            claims = getattr(claims_res, "data", None) or []
             for c in claims:
                 rid = str(c.get("ride_id", ""))
                 incentive_map[rid] = incentive_map.get(rid, 0) + float(c.get("bonus_amount") or 0)
         except Exception:
             logger.debug("ride_incentive_claims lookup failed", exc_info=True)
 
+    # Same flag + gating condition as routes/rides/queries.py's get_ride/{ride_id}
+    # and get_ride_history's show_legacy_badge — fetched once per page here.
+    # See docs/legacy-ride-history-presentation-plan.md Item 2/Section 6: only
+    # the single-ride detail endpoint computed this until now, so a driver
+    # scrolling their trip list saw no "Imported" distinction until tapping
+    # into a specific ride.
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    try:
+        _settings = await get_app_settings() or {}
+    except Exception:
+        _settings = {}
+    _legacy_badge_enabled = bool(_settings.get("legacy_ride_badge_enabled", False))
+
     for r in rides:
+        r["show_legacy_badge"] = bool(_legacy_badge_enabled and r.get("legacy_import_metadata"))
         rid = str(r.get("id", ""))
         des = r.get("driver_earnings_snapshot")
         if des and isinstance(des, dict) and "total" in des:

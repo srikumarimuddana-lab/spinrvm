@@ -57,7 +57,8 @@ jest.mock('expo-router', () => ({
 }));
 
 const COLORS = { primary: '#EF4444', surface: '#FFF', text: '#111', textDim: '#666' };
-jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
+const mockUseTheme = jest.fn(() => ({ colors: COLORS, isDark: false }));
+jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => mockUseTheme() }));
 
 const mockApiGet = jest.fn();
 jest.mock('@shared/api/client', () => ({
@@ -112,6 +113,11 @@ afterEach(() => {
   });
   renderer = null;
   jest.useRealTimers();
+  // mockReturnValue (not mockReturnValueOnce) is needed for the isDark
+  // override below, since it survives multiple re-renders — restore the
+  // default here since jest.clearAllMocks() doesn't reset a jest.fn()'s
+  // configured return value.
+  mockUseTheme.mockReturnValue({ colors: COLORS, isDark: false });
 });
 
 describe('PickOnMapScreen', () => {
@@ -290,5 +296,155 @@ describe('PickOnMapScreen', () => {
       backBtn.props.onPress();
     });
     expect(mockBack).toHaveBeenCalled();
+  });
+
+  it('falls back the field param to "dropoff" when the route provides none', async () => {
+    mockParams = {};
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Set destination');
+  });
+
+  it('falls back the address to a formatted coordinate string when the geocode response has no formatted_address', async () => {
+    mockApiGet.mockResolvedValue({ data: {} });
+    const r = await renderScreen();
+    const map = findMapView(r);
+    act(() => {
+      map.props.onRegionChangeComplete({ latitude: 51, longitude: -105, latitudeDelta: 0.008, longitudeDelta: 0.008 });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+      await flush();
+    });
+    expect(allText(r)).toContain('51.00000, -105.00000');
+  });
+
+  it('falls back the address to a formatted coordinate string when the geocode request itself fails', async () => {
+    mockApiGet.mockRejectedValue(new Error('network down'));
+    const r = await renderScreen();
+    const map = findMapView(r);
+    act(() => {
+      map.props.onRegionChangeComplete({ latitude: 51, longitude: -105, latitudeDelta: 0.008, longitudeDelta: 0.008 });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+      await flush();
+    });
+    expect(allText(r)).toContain('51.00000, -105.00000');
+  });
+
+  it('clears the pending debounce timer on a second pan before the first fires', async () => {
+    const r = await renderScreen();
+    mockApiGet.mockClear();
+    const map = findMapView(r);
+    act(() => {
+      map.props.onRegionChangeComplete({ latitude: 51, longitude: -105, latitudeDelta: 0.008, longitudeDelta: 0.008 });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(200); // still within the 500ms debounce window
+    });
+    act(() => {
+      map.props.onRegionChangeComplete({ latitude: 52, longitude: -106, latitudeDelta: 0.008, longitudeDelta: 0.008 });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+      await flush();
+    });
+    // Only the second, latest pan's geocode ever fires -- the first pan's
+    // timer was cleared, not left to also fire for the stale coordinates.
+    expect(mockApiGet).toHaveBeenCalledTimes(1);
+    expect(mockApiGet).toHaveBeenCalledWith(expect.stringContaining('lat=52&lng=-106'));
+  });
+
+  it('normal-mode Confirm drops a stale address and falls back to a coordinate string (pin moved after the last successful geocode)', async () => {
+    const r = await renderScreen();
+    const map = findMapView(r);
+    // First pan: resolves normally, geocoding a matching address for this pin.
+    act(() => {
+      map.props.onRegionChangeComplete({ latitude: 50.1, longitude: -104.2, latitudeDelta: 0.008, longitudeDelta: 0.008 });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+      await flush();
+    });
+    // Second pan, far away: never let the fresh geocode complete, so the
+    // stale label from the first pan is still what's in state.
+    mockApiGet.mockImplementation(() => new Promise(() => {})); // never resolves
+    act(() => {
+      map.props.onRegionChangeComplete({ latitude: 51.5, longitude: -105.5, latitudeDelta: 0.008, longitudeDelta: 0.008 });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+      await flush();
+    });
+    const confirmBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Confirm Location')))!;
+    // Confirm is disabled while the fresh geocode for the moved pin is in
+    // flight, but calling the handler directly (defence in depth) must still
+    // fall back to the coordinate string rather than the stale "123 Test St".
+    act(() => {
+      confirmBtn.props.onPress();
+    });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      pathname: '/search-destination',
+      params: {
+        mapPickField: 'dropoff',
+        mapPickLat: '51.5',
+        mapPickLng: '-105.5',
+        mapPickAddress: '51.50000, -105.50000',
+      },
+    });
+  });
+
+  it('recenter skips re-requesting permission when it is already granted', async () => {
+    const r = await renderScreen();
+    const recenterBtn = r.root.findAllByType(TouchableOpacity)[1];
+    await act(async () => {
+      await recenterBtn.props.onPress();
+      await flush();
+    });
+    expect(mockRequestForegroundPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockAnimateToRegion).toHaveBeenCalled();
+  });
+
+  it('recenter bails out silently when permission is still denied after requesting it', async () => {
+    mockGetForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    mockRequestForegroundPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const r = await renderScreen();
+    mockAnimateToRegion.mockClear();
+    const recenterBtn = r.root.findAllByType(TouchableOpacity)[1];
+    await act(async () => {
+      await recenterBtn.props.onPress();
+      await flush();
+    });
+    expect(mockRequestForegroundPermissionsAsync).toHaveBeenCalled();
+    expect(mockAnimateToRegion).not.toHaveBeenCalled();
+  });
+
+  it('sets userInterfaceStyle to "dark" on the map when the theme is dark', async () => {
+    mockUseTheme.mockReturnValue({ colors: COLORS, isDark: true });
+    const r = await renderScreen();
+    expect(findMapView(r).props.userInterfaceStyle).toBe('dark');
+  });
+
+  it('uses a smaller bottom-card padding on Android', async () => {
+    const RN = require('react-native');
+    const originalOS = RN.Platform.OS;
+    RN.Platform.OS = 'android';
+    try {
+      const r = await renderScreen();
+      const confirmBtn = r.root
+        .findAllByType(TouchableOpacity)
+        .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Confirm Location')))!;
+      // The bottom card is the confirm button's grandparent (card > row-below-map wrapper isn't
+      // needed here -- walk up to the View carrying paddingBottom).
+      let node: any = confirmBtn.parent;
+      while (node && !(node.props && node.props.style && node.props.style.paddingBottom !== undefined)) {
+        node = node.parent;
+      }
+      expect(node!.props.style.paddingBottom).toBe(24);
+    } finally {
+      RN.Platform.OS = originalOS;
+    }
   });
 });

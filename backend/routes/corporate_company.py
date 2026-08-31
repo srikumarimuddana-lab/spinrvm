@@ -1123,8 +1123,8 @@ async def billing_statement_pdf(
 @router.get("/billing/transactions")
 async def billing_transactions(
     company_id: str,
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     guard=Depends(require_company_admin),
 ):
     """Paged corporate wallet ledger (top-ups, debits, adjustments)."""

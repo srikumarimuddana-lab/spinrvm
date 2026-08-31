@@ -271,14 +271,6 @@ export default function RideDetailsScreen() {
     ],
     [actualSections, hasActualRoute, isV2Route, plannedSegments, showPlannedUnderlay],
   );
-  const routeLabel = hasActualRoute
-    ? 'Actual route'
-    : isV2Route
-      ? (showPlannedUnderlay ? 'Booked route' : 'Actual route')
-      : 'Planned route';
-  const routeQuality = routeQualityLabel(ride?.route_quality);
-  const routeIsProcessing =
-    ride?.route_geometry_status === 'pending' || ride?.route_geometry_status === 'processing';
 
   useEffect(() => {
     if (!routeMapReady || mapCoordinates.length < 2) return;
@@ -323,6 +315,10 @@ export default function RideDetailsScreen() {
 
   const isCompleted = ride.status === 'completed';
   const isCancelled = ride.status === 'cancelled';
+  // Backend-computed, flag-gated (app_settings.legacy_ride_badge_enabled) —
+  // never derive this from legacy_import_metadata directly, so the dark-ship
+  // flag stays the single source of truth for this UI.
+  const isImported = !!ride.show_legacy_badge;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -347,6 +343,17 @@ export default function RideDetailsScreen() {
           </Text>
           <Text style={styles.statusDate}>{formatDate(ride.created_at)}</Text>
         </View>
+
+        {/* Imported from the previous app (legacy migration) — honesty layer,
+            mirrors admin-dashboard's ride-detail-modal.tsx badge. Never shown
+            unless the backend flag is on AND this specific ride is a real
+            legacy import. */}
+        {isImported && (
+          <View style={styles.importedBadge}>
+            <Ionicons name="archive-outline" size={12} color={colors.textDim} />
+            <Text style={styles.importedBadgeText}>Imported</Text>
+          </View>
+        )}
 
         {/* V2 actual geometry is segmented. Planned geometry is separately labelled. */}
         {ride.pickup_lat && ride.dropoff_lat && (
@@ -407,17 +414,6 @@ export default function RideDetailsScreen() {
               />
             </MapView>
           </View>
-        )}
-        {isCompleted && (
-          <Text style={styles.routeQualityText}>
-            {hasActualRoute
-              ? `${routeLabel} · ${routeQuality}`
-              : isV2Route
-                ? routeIsProcessing
-                  ? 'Actual route processing'
-                  : 'Actual route unavailable'
-                : `${routeLabel} · Planned route preview`}
-          </Text>
         )}
 
         {/* Route Details */}
@@ -606,9 +602,15 @@ function createStyles(colors: ThemeColors) {
     statusText: { fontSize: 15, fontWeight: '700' },
     statusDate: { flex: 1, fontSize: 12, color: colors.textDim, textAlign: 'right' },
 
+    importedBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+      backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: 4,
+      borderRadius: 10, marginBottom: 16,
+    },
+    importedBadgeText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+
         mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: 16, backgroundColor: colors.border },
         map: { flex: 1 },
-        routeQualityText: { color: colors.textDim, fontSize: 12, marginTop: -10, marginBottom: 16 },
 
     routeCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
     routeRow: { flexDirection: 'row' },

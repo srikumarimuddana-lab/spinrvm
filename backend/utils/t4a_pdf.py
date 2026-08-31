@@ -42,6 +42,43 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 
+def _payer_identity() -> "tuple[str, str, str]":
+    """``(payer name, payer address, support email)`` from admin Settings.
+
+    A T4A is a CRA slip, so the payer it names must be the real, current legal
+    entity and address — which is exactly why these must not be hardcoded: a
+    company move would otherwise mean editing code to correct a tax document.
+    The flip side is that Settings now has to be kept accurate, because these
+    values land on a slip drivers file.
+
+    Sync because fpdf2 is. Falls back to the shipped legal name with **no
+    address** on a cold cache — a blank-but-honest address beats printing a
+    city the company may have left. Values are ``pdf_safe``d because Settings
+    is free text and fpdf2's core fonts are latin-1 only.
+    """
+    try:
+        try:
+            from .company_details import load_company_details_cached
+        except ImportError:  # pragma: no cover - direct module imports in tests
+            from utils.company_details import load_company_details_cached  # type: ignore
+
+        details = load_company_details_cached()
+    except Exception:  # pragma: no cover - defensive; a slip must still render
+        details = None
+
+    # Lazy import, same reason as generate_t4a_pdf's: a function-scope
+    # `from . import report_branding` there is invisible here.
+    try:
+        from . import report_branding
+    except ImportError:  # pragma: no cover - direct module imports in tests
+        from utils import report_branding  # type: ignore
+
+    if details is None:
+        return report_branding.COMPANY_LINE, "", "support@spinr.ca"
+    safe = report_branding.pdf_safe
+    return safe(details.name), safe(details.address or ""), safe(details.support_email)
+
+
 def generate_t4a_pdf(summary: dict) -> bytes:
     """Return a CRA-style T4A PDF as raw bytes (starts with b'%PDF').
 
@@ -133,10 +170,11 @@ def generate_t4a_pdf(summary: dict) -> bytes:
     # ═══════════════════════════════════════════════════════════════════════════
     # PAYER INFORMATION
     # ═══════════════════════════════════════════════════════════════════════════
+    _payer_name, _payer_address, _support_email = _payer_identity()
     section_heading("PAYER INFORMATION")
-    label_value("Payer / Issuer", "Spinr Mobility Inc.")
+    label_value("Payer / Issuer", _payer_name)
     label_value("Business Number (BN)", "See Spinr corporate tax records")
-    label_value("Address", "Saskatoon, SK, Canada")
+    label_value("Address", _payer_address or "See Spinr corporate tax records")
     h_rule()
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -194,7 +232,7 @@ def generate_t4a_pdf(summary: dict) -> bytes:
         "If GST/HST registered, report commissions as self-employment income (Box 020).",
         "GST/HST collected on fares must be remitted separately to CRA.",
         "Keep this slip for your records. Do not attach to your paper return.",
-        "For questions, contact Spinr driver support at support@spinr.ca.",
+        f"For questions, contact Spinr driver support at {_support_email}.",
     ]
     pdf.set_font("Helvetica", "", 8)
     for note in notes:
@@ -209,7 +247,7 @@ def generate_t4a_pdf(summary: dict) -> bytes:
     pdf.set_font("Helvetica", "I", 7)
     pdf.set_text_color(100, 100, 100)
     footer_lines = [
-        "This slip is issued by Spinr Mobility Inc. for CRA reporting purposes.",
+        f"This slip is issued by {_payer_name} for CRA reporting purposes.",
         f"Generated: {generated_at}  |  For the tax year ending December 31, {year}",
         "This document was produced electronically and is valid without a signature.",
     ]

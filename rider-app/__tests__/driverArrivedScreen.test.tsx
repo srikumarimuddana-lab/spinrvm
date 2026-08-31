@@ -66,7 +66,8 @@ jest.mock('expo-router', () => ({
 const COLORS = {
   primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB',
 };
-jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
+const mockUseTheme = jest.fn(() => ({ colors: COLORS, isDark: false }));
+jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => mockUseTheme() }));
 
 const mockApiPost = jest.fn();
 jest.mock('@shared/api/client', () => ({
@@ -126,6 +127,9 @@ jest.mock('../store/rideStore', () => ({
 }));
 
 import DriverArrivedScreen from '../app/driver-arrived';
+import MapViewDirections from 'react-native-maps-directions';
+import ConfirmSheet from '../components/ConfirmSheet';
+import CancelReasonSheet from '../components/CancelReasonSheet';
 
 const flush = async () => {
   await Promise.resolve();
@@ -360,4 +364,164 @@ describe('DriverArrivedScreen', () => {
     });
     expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
   });
+
+  it('fits the map to include the driver position when the driver has coordinates', async () => {
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.451, lng: -104.601 };
+    await renderScreen();
+    expect(mockFitToCoordinates).toHaveBeenCalledWith(
+      [
+        { latitude: CURRENT_RIDE.pickup_lat, longitude: CURRENT_RIDE.pickup_lng },
+        { latitude: 50.451, longitude: -104.601 },
+      ],
+      expect.any(Object),
+    );
+  });
+
+  it('draws the route and fits the map from MapViewDirections onReady when a Google Maps key is configured', async () => {
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = 'test-maps-key';
+    const r = await renderScreen();
+    const directions = r.root.findByType(MapViewDirections);
+    mockFitToCoordinates.mockClear();
+    act(() => {
+      directions.props.onReady({
+        coordinates: [
+          { latitude: CURRENT_RIDE.pickup_lat, longitude: CURRENT_RIDE.pickup_lng },
+          { latitude: CURRENT_RIDE.dropoff_lat, longitude: CURRENT_RIDE.dropoff_lng },
+        ],
+      });
+    });
+    expect(mockFitToCoordinates).toHaveBeenCalled();
+    delete process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  });
+
+  it('does not re-fit the map from a single-point onReady result', async () => {
+    process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = 'test-maps-key';
+    const r = await renderScreen();
+    const directions = r.root.findByType(MapViewDirections);
+    mockFitToCoordinates.mockClear();
+    act(() => {
+      directions.props.onReady({ coordinates: [{ latitude: CURRENT_RIDE.pickup_lat, longitude: CURRENT_RIDE.pickup_lng }] });
+    });
+    expect(mockFitToCoordinates).not.toHaveBeenCalled();
+    delete process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  });
+
+  it('dismisses the cancel-confirm sheet via its own onClose without cancelling', async () => {
+    const r = await renderScreen();
+    const cancelLink = findButtonByText(r, 'Cancel Ride');
+    act(() => { cancelLink.props.onPress(); });
+    expect(allText(r)).toContain('Driver is waiting');
+    const sheet = r.root.findByType(ConfirmSheet);
+    act(() => { sheet.props.onClose(); });
+    expect(allText(r)).not.toContain('Driver is waiting');
+    expect(mockCancelRide).not.toHaveBeenCalled();
+  });
+
+  it('dismisses the cancel-reason sheet via its own onClose without cancelling', async () => {
+    const r = await renderScreen();
+    const cancelLink = findButtonByText(r, 'Cancel Ride');
+    act(() => { cancelLink.props.onPress(); });
+    const confirmBtn = r.root.findByProps({ accessibilityLabel: 'confirm-Cancel & Pay $4.50' });
+    act(() => { confirmBtn.props.onPress(); });
+    expect(allText(r)).toContain('Submit Reason');
+    const reasonSheet = r.root.findByType(CancelReasonSheet);
+    act(() => { reasonSheet.props.onClose(); });
+    expect(mockCancelRide).not.toHaveBeenCalled();
+  });
+
+  describe('__DEV__ "Start Ride (skip OTP)" button', () => {
+    it('calls the start endpoint and refetches the ride on success', async () => {
+      mockApiPost.mockResolvedValue({ data: {} });
+      const r = await renderScreen();
+      mockFetchRide.mockClear();
+      const startBtn = findButtonByText(r, 'Start Ride (skip OTP)');
+      await act(async () => { await startBtn.props.onPress(); await flush(); });
+      expect(mockApiPost).toHaveBeenCalledWith('/drivers/rides/ride-1/start');
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+    });
+
+    it('swallows a failure from the start endpoint and still refetches', async () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+      mockApiPost.mockRejectedValue(new Error('down'));
+      const r = await renderScreen();
+      mockFetchRide.mockClear();
+      const startBtn = findButtonByText(r, 'Start Ride (skip OTP)');
+      await expect(act(async () => { await startBtn.props.onPress(); await flush(); })).resolves.toBeUndefined();
+      expect(mockFetchRide).toHaveBeenCalledWith('ride-1');
+      logSpy.mockRestore();
+    });
+
+    it('does not refetch when there is no rideId route param', async () => {
+      mockParams = {};
+      mockApiPost.mockResolvedValue({ data: {} });
+      const r = await renderScreen();
+      mockFetchRide.mockClear();
+      const startBtn = findButtonByText(r, 'Start Ride (skip OTP)');
+      await act(async () => { await startBtn.props.onPress(); await flush(); });
+      expect(mockFetchRide).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not fetch or poll when there is no rideId route param', async () => {
+    mockParams = {};
+    await renderScreen();
+    expect(mockFetchRide).not.toHaveBeenCalled();
+  });
+
+  it('renders driver-field fallbacks (name, rating, vehicle, plate) when the driver record is missing them', async () => {
+    mockRideState.currentDriver = { name: undefined, rating: undefined, license_plate: undefined };
+    const r = await renderScreen();
+    const text = allText(r);
+    expect(text).toContain('Your Driver');
+    expect(text).toContain('No ratings yet');
+    expect(text).toContain('Vehicle info unavailable');
+    expect(text).toContain('N/A');
+  });
+
+  it('falls back to "Unknown"/"New"/empty fields in the shared trip-info blob when the driver record and ride addresses are missing them', async () => {
+    mockRideState.currentDriver = { name: undefined, rating: undefined, vehicle_color: undefined, vehicle_make: undefined, vehicle_model: undefined, license_plate: undefined };
+    mockRideState.currentRide = { ...CURRENT_RIDE, pickup_address: undefined, dropoff_address: undefined };
+    const r = await renderScreen();
+    const shareButtons = r.root.findAllByType(TouchableOpacity).filter((n) =>
+      n.findAllByProps({ name: 'share-outline' }).length > 0
+    );
+    await act(async () => {
+      await shareButtons[0].props.onPress();
+      await flush();
+    });
+    expect(Share.share).toHaveBeenCalledWith({
+      message: expect.stringContaining('Driver: Unknown\nRating: New ⭐\nVehicle:   \nPlate: N/A'),
+    });
+    expect(Share.share).toHaveBeenCalledWith({
+      message: expect.stringContaining('📍 Pickup: \n📍 Dropoff: \n🔑 OTP: 4821'),
+    });
+  });
+
+  it('does not render a Retry button in the loading state when there is no rideId route param', async () => {
+    mockParams = {};
+    mockRideState.currentRide = null;
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Loading map…');
+    expect(r.root.findAllByType(TouchableOpacity).some((n) =>
+      n.findAllByType(Text).some((t) => { try { return JSON.stringify(t.props.children).includes('Retry'); } catch { return false; } })
+    )).toBe(false);
+  });
+
+  it('sets userInterfaceStyle to "dark" on the map when the theme is dark', async () => {
+    mockUseTheme.mockReturnValueOnce({ colors: COLORS, isDark: true });
+    const r = await renderScreen();
+    const map = r.root.findByType(MapView);
+    expect(map.props.userInterfaceStyle).toBe('dark');
+  });
 });
+
+// NOTE: `MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined`
+// is computed once at module load, so covering its Android branch needs a
+// fresh module registry with Platform.OS overridden *before* the module (and
+// its react-native-maps import) loads — jest.requireActual('react-native')
+// for that hits jest-expo's native TurboModule mocking and blows up
+// (DevMenu not registered). The same top-level pattern is repeated,
+// untested, in 7 other screens in this app (ride-in-progress, pick-on-map,
+// driver-arriving, ride-details, ride-options, confirm-pickup,
+// ride-completed) — an accepted, pre-existing, repo-wide gap, not something
+// to fix ad hoc in one screen's test file.

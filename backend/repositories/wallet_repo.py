@@ -373,21 +373,22 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
         except Exception as e:  # noqa: BLE001
             msg = str(e).lower()
             if _PG_UNIQUE_VIOLATION in msg or "duplicate key" in msg or "already exists" in msg:
-                # Check if the previous claim was actually completed. A row with
-                # processed_at=NULL means a prior handler crashed mid-way and Stripe
-                # is retrying — log a CRITICAL so the reconciliation alert fires, but
-                # still return False (do not re-process automatically to avoid
-                # double-charging). The ops team can replay via the admin endpoint.
-                existing = (
-                    supabase.table("stripe_events").select("processed_at").eq("event_id", event_id).limit(1).execute()
-                )
-                if existing.data and existing.data[0].get("processed_at") is None:
-                    logger.critical(
-                        "Stripe event {} is STUCK: claimed but never marked processed. Manual reconciliation required.",
+                try:
+                    existing = (
+                        supabase.table("stripe_events").select("processed_at").eq("event_id", event_id).limit(1).execute()
+                    )
+                    if existing.data and existing.data[0].get("processed_at") is None:
+                        logger.critical(
+                            "Stripe event {} is STUCK: claimed but never marked processed. Manual reconciliation required.",
+                            event_id,
+                        )
+                    else:
+                        logger.info("Stripe event {} already processed — deduplicating", event_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Stripe event {} is a duplicate but processed_at check failed — deduplicating anyway",
                         event_id,
                     )
-                else:
-                    logger.info("Stripe event {} already processed — deduplicating", event_id)
                 return False
             raise
 

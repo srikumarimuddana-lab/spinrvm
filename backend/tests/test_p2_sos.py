@@ -89,8 +89,6 @@ class TestTriggerEmergency:
             ws_calls.append(("admin_broadcast", message))
 
         async def _get_rows(table, query, **kwargs):
-            if table == "drivers":
-                return [driver_row] if driver_row else []
             if table == "emergency_contacts":
                 return emergency_contacts or []
             return []
@@ -124,7 +122,7 @@ class TestTriggerEmergency:
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
                 body=_Req(),
-                current_user={"id": sender_user_id},
+                current_user={"id": sender_user_id, "_driver": driver_row},
             )
 
         return result, persisted, ws_calls, sms_calls
@@ -295,10 +293,7 @@ class TestTriggerEmergency:
         push_mock = AsyncMock()
         with (
             patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
-            patch(
-                "backend.routes.rides._deps.db_supabase.get_rows",
-                AsyncMock(return_value=[_driver_row()]),
-            ),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
             patch(
@@ -312,7 +307,7 @@ class TestTriggerEmergency:
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
                 body=_Req(),
-                current_user={"id": DRIVER_USER_ID},
+                current_user={"id": DRIVER_USER_ID, "_driver": _driver_row()},
             )
             await asyncio.sleep(0)
 
@@ -349,7 +344,9 @@ class TestTriggerEmergency:
         SMS must go out to the decrypted phone, never the raw stored token."""
         contacts = [{"id": "ec-1", "phone": "vault-token-phone", "name": "vault-token-name"}]
         vault_decrypt = AsyncMock(
-            side_effect=lambda rpc, v, _hint="": v.replace("vault-token-", "+1306real") if rpc.startswith("decrypt") else v
+            side_effect=lambda rpc, v, _hint="": (
+                v.replace("vault-token-", "+1306real") if rpc.startswith("decrypt") else v
+            )
         )
         with patch("backend.routes.rides.safety.vault_decrypt", vault_decrypt):
             result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=contacts)
@@ -364,6 +361,25 @@ class TestTriggerEmergency:
 
         assert result["contacts_notified"] == 0
         assert sms_calls == []
+
+    async def test_sms_body_does_not_claim_emergency_services_were_notified(self):
+        """#4599: the SOS SMS to a rider's emergency contacts must NOT claim
+        the location was 'shared with emergency services' — Spinr has no
+        911/PSAP integration, and a contact reading that could decide not to
+        call 911 themselves. The truthful copy says the location went to
+        Spinr's safety team, and still directs the contact to call emergency
+        services."""
+        contacts = [{"id": "ec-1", "phone": "+13061112222", "name": "Mom"}]
+
+        result, _, _, sms_calls = await self._trigger(RIDER_ID, emergency_contacts=contacts)
+
+        assert result["contacts_notified"] == 1
+        assert sms_calls, "expected an SMS to the emergency contact"
+        body = sms_calls[0]["body"]
+        assert "shared with emergency services" not in body.lower()
+        assert "safety team" in body.lower()
+        # The contact is still told to call emergency services themselves.
+        assert "emergency services immediately" in body.lower()
 
     async def test_sms_exception_for_one_contact_does_not_block_the_others(self):
         """A raised exception from send_sms for one contact is logged (type

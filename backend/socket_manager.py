@@ -558,6 +558,19 @@ class ConnectionManager:
         if keys:
             await asyncio.gather(*(_send_one(key) for key in keys))
 
+    # UNUSED as of the location write gate. This 60 s cache was written on
+    # every WebSocket GPS ping, but `get_driver_location` below never had a
+    # single caller — every location reader (dispatch, /drivers/nearby, surge
+    # supply counts, admin monitoring) reads `drivers.lat/lng` from Postgres.
+    # The ping-path call sites were removed so the gate's Redis SET NX costs
+    # nothing net per ping. Kept, not deleted: this pair is the natural seed of
+    # a Redis read path for live position, and keeping it makes that revisit
+    # cheap. Wire a reader before reinstating the write. Endgame note (PR
+    # #4594 review): two competing futures exist for this path — Redis as the
+    # live-position read layer (this pair becomes load-bearing) vs. a batched
+    # write-behind flush to Postgres (ACTION_ITEMS C48 step 4 — this pair gets
+    # deleted). Neither is decided; whichever lands first should resolve the
+    # other, not accrete alongside it.
     async def update_driver_location(self, driver_id: str, lat: float, lng: float):
         try:
             from utils.redis_client import redis_set

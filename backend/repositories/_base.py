@@ -161,6 +161,11 @@ _breaker = _CircuitBreaker()
 _DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE") or _os.environ.get("DB_THREAD_POOL_MAX") or "64")
 _DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
 
+# Default row cap for get_rows when no explicit limit is provided.
+# Prevents accidental full-table scans. Callers that genuinely need
+# more rows must pass an explicit limit (or use the paginated helper).
+_DEFAULT_ROW_LIMIT = 1000
+
 
 def _record_db_queue_depth() -> None:
     queue = getattr(_DB_EXECUTOR, "_work_queue", None)
@@ -281,6 +286,20 @@ async def run_sync(
     remaining = _remaining_seconds()
     if remaining is not None and remaining <= 0:
         _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_exhausted"})
+        # Logged, not silent: this path used to increment a counter and raise a
+        # 503 with no trace at all, so a fleet-wide alert on the counter could
+        # not be traced to an endpoint or a cause. A deadline already expired
+        # *before* the first DB call means the budget was spent upstream —
+        # client clock skew, slow transit, or a slow pre-DB step — not the DB.
+        logger.warning(
+            "[DB] Rejected before submission: client deadline already expired",
+            extra={
+                "reason": "deadline_exhausted",
+                "stage": "pre_submit",
+                "retry_policy": retry_policy,
+                "overdue_seconds": round(-remaining, 3),
+            },
+        )
         raise ServiceUnavailableException("database")
 
     if not _breaker.should_allow():
@@ -298,6 +317,16 @@ async def run_sync(
             remaining = _remaining_seconds()
             if remaining is not None and remaining <= 0:
                 _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_exhausted"})
+                logger.warning(
+                    "[DB] Rejected mid-retry: client deadline expired between attempts",
+                    extra={
+                        "reason": "deadline_exhausted",
+                        "stage": "retry_loop",
+                        "retry_policy": retry_policy,
+                        "attempt": attempt,
+                        "overdue_seconds": round(-remaining, 3),
+                    },
+                )
                 _breaker.release_probe()
                 raise ServiceUnavailableException("database")
 
@@ -313,7 +342,16 @@ async def run_sync(
                     raise
                 future.cancel()
                 _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_timeout"})
-                logger.error("[DB] Executor wait exceeded the request deadline")
+                logger.error(
+                    "[DB] Executor wait exceeded the request deadline",
+                    extra={
+                        "reason": "deadline_timeout",
+                        "stage": "executor_wait",
+                        "retry_policy": retry_policy,
+                        "attempt": attempt,
+                        "waited_seconds": round(remaining, 3) if remaining is not None else None,
+                    },
+                )
                 _breaker.release_probe()
                 raise ServiceUnavailableException("database") from None
             finally:
@@ -843,6 +881,12 @@ async def get_rows(
 ):
     if not supabase:
         return []
+    if limit is not None and limit == 0:
+        return []
+
+    # Apply default limit when none specified to prevent unbounded queries
+    if limit is None:
+        limit = _DEFAULT_ROW_LIMIT
 
     def _fn():
         q = supabase.table(table).select(columns)
@@ -851,7 +895,7 @@ async def get_rows(
             q = q.order(order, desc=desc)
         if limit is not None and offset is not None:
             q = q.range(offset, offset + limit - 1)
-        elif limit:
+        elif limit is not None:
             q = q.limit(limit)
         elif offset is not None:
             q = q.offset(offset)

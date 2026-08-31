@@ -15,6 +15,23 @@ import TestRenderer, { act } from 'react-test-renderer';
 
 import LegacyConsentNoticeScreen from '../app/legacy-consent-notice';
 
+// Real rider-app en.json lookup (not an identity stub, unlike
+// privacySettingsScreen.test.tsx's `t: (k) => k`) so this file's existing
+// English-text assertions keep exercising the actual translated copy, same
+// intent as driver-app's SOSButton.test.tsx precedent. Reads the JSON
+// directly rather than going through the real i18n/index.ts module — that
+// module imports @react-native-async-storage/async-storage, which
+// driver-app's jest.setup.js mocks globally but this app's
+// jest-setup-expo.js does not, so requiring it here fails on the native
+// module (confirmed: `jest.requireActual('../i18n')` throws
+// "[@RNC/AsyncStorage]: NativeModule: AsyncStorage is null").
+jest.mock('../i18n', () => {
+  const en = require('../i18n/en.json');
+  const lookup = (key: string) =>
+    key.split('.').reduce((o: any, k: string) => (o && typeof o === 'object' ? o[k] : undefined), en) ?? key;
+  return { useTranslation: () => ({ t: lookup }) };
+});
+
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaView: ({ children }: any) => children,

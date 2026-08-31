@@ -28,6 +28,7 @@ export interface ApprovalQueueItem {
     is_new_applicant: boolean;
     is_resubmission: boolean;
     has_pending_photo: boolean;
+    profile_completeness_score: number | null;
 }
 
 export interface ApprovalQueueResponse {
@@ -39,6 +40,7 @@ export interface ApprovalQueueResponse {
         new_applicants: number;
         resubmissions: number;
         photo_review: number;
+        incomplete_profiles: number;
     };
     items: ApprovalQueueItem[];
 }

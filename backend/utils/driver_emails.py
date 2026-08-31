@@ -34,6 +34,12 @@ except ImportError:  # pragma: no cover - direct module imports in tests
 
 logger = logging.getLogger(__name__)
 
+#: Driver training (LMS) host, as shown to drivers. Matches the default
+#: ``lms_api_base_url`` the admin driver-training integration already points at
+#: (see routes/admin's training endpoints and tests/test_admin_driver_training.py),
+#: so the address in this email and the system behind it stay the same one.
+_TRAINING_HOST = "training.spinr.ca"
+
 
 def _greeting(user: dict[str, Any] | None) -> Optional[str]:
     name = ((user or {}).get("first_name") or "").strip()
@@ -71,8 +77,11 @@ async def send_driver_welcome_email(driver: dict[str, Any], user: dict[str, Any]
                     "Upload your driver's licence, vehicle insurance, vehicle inspection, and background "
                     f"check in the {company.app_name} driver app if you haven't already — we'll notify you "
                     "as soon as they've been reviewed.",
-                    f"{company.app_name} takes 0% commission — every dollar of the fare goes to you, the "
-                    "driver. No per-trip cut, ever.",
+                    f"Complete your driver training at {_TRAINING_HOST} before your first ride.",
+                    f"{company.app_name} takes 0% commission — apart from fees and taxes, the trip fare "
+                    "is 100% yours. No per-trip cut, ever.",
+                    "Check the Subscription screen in the driver app for your area's current Spinr Pass "
+                    "status — some areas have no subscription fee right now.",
                     "While you wait, finish your vehicle details in the app so there's nothing left to do "
                     "once you're approved.",
                     f"Questions any time: {company.support_email}",
@@ -81,6 +90,11 @@ async def send_driver_welcome_email(driver: dict[str, Any], user: dict[str, Any]
                     f"Didn't sign up for a {company.app_name} driver account? Contact "
                     f"{company.support_email} and we'll close it."
                 ),
+                # Renders the training address as a real link rather than grey
+                # body text. Written without a scheme so it reads as an address
+                # a driver can also type, which is exactly the form several
+                # clients decline to auto-link — hence the explicit href.
+                links={_TRAINING_HOST: f"https://{_TRAINING_HOST}"},
                 company=company,
             ),
             email_type="driver_welcome",

@@ -49,6 +49,7 @@ Test-only change — no application code modified.
 
 from __future__ import annotations
 
+import contextlib
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1583,6 +1584,10 @@ def _chain(rows):
     m.select.return_value = m
     m.eq.return_value = m
     m.or_.return_value = m
+    # A ride with no service_area_id filters with .is_() — without this the
+    # auto-MagicMock returns a non-chained child and .data is not a list, so
+    # the lookup raises and the assertion under test passes vacuously.
+    m.is_.return_value = m
     m.limit.return_value = m
     m.in_.return_value = m
     m.execute.return_value = MagicMock(data=rows)
@@ -1594,6 +1599,7 @@ def _raising_chain(exc):
     m.select.return_value = m
     m.eq.return_value = m
     m.or_.return_value = m
+    m.is_.return_value = m
     m.limit.return_value = m
     m.in_.return_value = m
     m.execute.side_effect = exc
@@ -1734,6 +1740,49 @@ class TestGetActiveRideEnrichment:
         assert result["total_bonus"] == 5.0
         assert result["quest_hint"]["title"] == "5 rides today"
         assert result["quest_hint"]["progress_pct"] == 60.0
+
+    async def test_in_progress_status_still_includes_incentives(self):
+        """The bonus is claimed at completion, so it belongs on the panel for
+        the whole ride — not just the pre-acceptance offer window.
+
+        rides.driver_earnings is fare-only by design, so when this projection
+        stopped at driver_assigned every post-acceptance screen quoted the bare
+        fare and the driver saw their earnings drop the moment they accepted.
+        """
+        from backend.routes.drivers.ride_reads import get_active_ride
+
+        ride = _ride(status="in_progress", service_area_id="area-1", vehicle_type_id="vt-1")
+        rows = [
+            {
+                "id": "inc-1",
+                "name": "Rush hour bonus",
+                "bonus_amount": "5.00",
+                "incentive_type": "per_ride",
+                "service_area_id": "area-1",
+                "vehicle_type_id": None,
+            }
+        ]
+        fake_supabase = MagicMock()
+        fake_supabase.table.side_effect = lambda name: (
+            _chain(rows) if name == "ride_incentives" else _chain([])
+        )
+
+        with _Patches(
+            *self._base_patches(ride),
+            patch("backend.routes.drivers.ride_reads.db_supabase.supabase", fake_supabase),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(side_effect=lambda fn: fn()),
+            ),
+        ):
+            result = await get_active_ride(current_user={"id": _USER_ID})
+
+        assert result["total_bonus"] == 5.0
+        assert result["incentives"] == [
+            {"name": "Rush hour bonus", "bonus_amount": 5.0, "incentive_type": "per_ride"}
+        ]
+        # Quest hint stays offer-only — it is a dispatch nudge, not earnings.
+        assert result["quest_hint"] is None
 
     async def test_incentive_lookup_exception_is_non_fatal(self):
         from backend.routes.drivers.ride_reads import get_active_ride
@@ -1950,6 +1999,111 @@ class TestGetRideHistoryEnrichment:
             )
         assert result["total"] == 1
         assert any("ride_completed_at" in f for f in captured)
+
+
+class TestGetRideHistoryShowLegacyBadge:
+    """Section 6 gap (docs/migration/2026-08-27-legacy-data-full-migration-
+    approach.md): the list endpoint didn't compute show_legacy_badge at all,
+    only the single-ride detail endpoint did -- a driver scrolling their trip
+    history saw no "Imported" distinction until tapping into a specific ride.
+    Mirrors routes/rides/queries.py's get_ride/{ride_id} gating: flag on AND
+    legacy_import_metadata present."""
+
+    async def test_flag_on_and_metadata_present_sets_badge_true(self):
+        from backend.routes.drivers.ride_reads import get_ride_history
+
+        completed = _ride(status="completed", legacy_import_metadata={"old_booking_id": "b1"})
+
+        async def fake_get_rows(table, filters=None, **kw):
+            return [_driver()] if table == "drivers" else [completed]
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows))
+            )
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.count_documents", AsyncMock(return_value=1))
+            )
+            stack.enter_context(
+                patch(
+                    "backend.settings_loader.get_app_settings",
+                    AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                )
+            )
+            with contextlib.suppress(ModuleNotFoundError, AttributeError):
+                stack.enter_context(
+                    patch(
+                        "settings_loader.get_app_settings",
+                        AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                    )
+                )
+            result = await get_ride_history(limit=20, offset=0, current_user={"id": _USER_ID})
+
+        assert result["rides"][0]["show_legacy_badge"] is True
+
+    async def test_flag_off_keeps_badge_false_even_with_metadata(self):
+        from backend.routes.drivers.ride_reads import get_ride_history
+
+        completed = _ride(status="completed", legacy_import_metadata={"old_booking_id": "b1"})
+
+        async def fake_get_rows(table, filters=None, **kw):
+            return [_driver()] if table == "drivers" else [completed]
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows))
+            )
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.count_documents", AsyncMock(return_value=1))
+            )
+            stack.enter_context(
+                patch(
+                    "backend.settings_loader.get_app_settings",
+                    AsyncMock(return_value={"legacy_ride_badge_enabled": False}),
+                )
+            )
+            with contextlib.suppress(ModuleNotFoundError, AttributeError):
+                stack.enter_context(
+                    patch(
+                        "settings_loader.get_app_settings",
+                        AsyncMock(return_value={"legacy_ride_badge_enabled": False}),
+                    )
+                )
+            result = await get_ride_history(limit=20, offset=0, current_user={"id": _USER_ID})
+
+        assert result["rides"][0]["show_legacy_badge"] is False
+
+    async def test_no_legacy_metadata_keeps_badge_false_even_with_flag_on(self):
+        from backend.routes.drivers.ride_reads import get_ride_history
+
+        completed = _ride(status="completed")  # no legacy_import_metadata key at all
+
+        async def fake_get_rows(table, filters=None, **kw):
+            return [_driver()] if table == "drivers" else [completed]
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows))
+            )
+            stack.enter_context(
+                patch("backend.routes.drivers.ride_reads.db_supabase.count_documents", AsyncMock(return_value=1))
+            )
+            stack.enter_context(
+                patch(
+                    "backend.settings_loader.get_app_settings",
+                    AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                )
+            )
+            with contextlib.suppress(ModuleNotFoundError, AttributeError):
+                stack.enter_context(
+                    patch(
+                        "settings_loader.get_app_settings",
+                        AsyncMock(return_value={"legacy_ride_badge_enabled": True}),
+                    )
+                )
+            result = await get_ride_history(limit=20, offset=0, current_user={"id": _USER_ID})
+
+        assert result["rides"][0]["show_legacy_badge"] is False
 
 
 # ============================================================

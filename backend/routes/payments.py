@@ -7,6 +7,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
+    from ..utils.background import spawn as _spawn
+except ImportError:
+    from utils.background import spawn as _spawn  # type: ignore
+
+try:
     from .. import db_supabase
     from ..core.config import settings as core_settings
     from ..dependencies import get_current_user
@@ -658,12 +663,11 @@ async def confirm_payment(
     # Mock-payment shortcut (non-production only; production rejected above).
     if is_mock:
         if ride_id:
-            _ride = await db_supabase.get_ride(ride_id)
-            if not _ride or _ride.get("rider_id") != current_user["id"]:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Not authorized to confirm payment for this ride",
-                )
+            # Same dead-recheck removal as the non-mock branch below: `ride`
+            # was already fetched & ownership-checked once, above (line
+            # ~626), and is reused here rather than re-fetched — a re-check
+            # against the same object can never fire. See the comment on
+            # `_ride = ride` in the non-mock branch for the full reasoning.
             await db_supabase.update_ride(
                 ride_id,
                 {"payment_status": "paid", "payment_intent_id": payment_intent_id},
@@ -682,12 +686,17 @@ async def confirm_payment(
             raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
 
         if ride_id:
-            _ride = await db_supabase.get_ride(ride_id)
-            if not _ride or _ride.get("rider_id") != current_user["id"]:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Not authorized to confirm payment for this ride",
-                )
+            # Reuse the ride already fetched & ownership-checked above (line
+            # ~626) instead of a second get_ride round-trip. A re-check here
+            # against that same object can never fire — it would need
+            # rider_id to have changed since the fetch a few lines up, and
+            # nothing in this codebase ever updates rides.rider_id after ride
+            # creation (grepped routes/services/repositories to confirm). A
+            # dead re-check here previously masked that fact and cost a test
+            # (test_confirm_payment_real_ride_ownership_mismatch) real
+            # coverage: it scripted a second, different-owner get_ride
+            # response that this code path never actually consumes.
+            _ride = ride
 
             # SECURITY (C1): ownership alone is insufficient — a rider owns
             # many PaymentIntents. Bind the PI to THIS ride and verify it
@@ -1151,7 +1160,7 @@ async def set_default_card(
 
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
-    asyncio.create_task(
+    _spawn(
         _audit_log_user(
             current_user,
             "default_payment_method_set",

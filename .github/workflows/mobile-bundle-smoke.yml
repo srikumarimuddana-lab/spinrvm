@@ -24,7 +24,7 @@ name: Mobile Bundle Smoke Test
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
     paths:
       - "rider-app/**"
       - "driver-app/**"
@@ -32,7 +32,8 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: "20"
+  # Node >=22: engines floor of @supabase/supabase-js@2.112.x and react-native@0.87 (CR #4551)
+  NODE_VERSION: "22"
 
 jobs:
   rider-bundle-smoke:
@@ -55,6 +56,12 @@ jobs:
           # Same key shape as mobile-dep-check.yml: include patches/** so a
           # patch-package change invalidates the cache instead of trying to
           # re-apply a hunk on top of an already-patched node_modules.
+          # SHARED-KEY INVARIANT (2026-08-28): this combined cache action saves
+          # node_modules in a POST step, after every later step has run. Keep this
+          # job free of anything that mutates node_modules after `yarn install
+          # --frozen-lockfile`, or switch to the restore/save split used in
+          # mobile-dep-check.yml — a post-mutation save under this shared key
+          # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
 
       - name: Install dependencies
@@ -83,6 +90,12 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: driver-app/node_modules
+          # SHARED-KEY INVARIANT (2026-08-28): this combined cache action saves
+          # node_modules in a POST step, after every later step has run. Keep this
+          # job free of anything that mutates node_modules after `yarn install
+          # --frozen-lockfile`, or switch to the restore/save split used in
+          # mobile-dep-check.yml — a post-mutation save under this shared key
+          # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
           key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Install dependencies

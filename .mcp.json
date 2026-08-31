@@ -49,6 +49,21 @@
       "env": {
         "GOOGLE_APPLICATION_CREDENTIALS": "${SPINR_FIREBASE_MCP_SERVICE_ACCOUNT_PATH}"
       }
+    },
+
+    "context7": {
+      "$comment": "Upstash, open-source (MIT), read-only doc lookup — no Spinr credentials, no write access, nothing to sandbox. Fetches current version-specific docs/examples for a library (e.g. Next.js App Router, Tailwind v4, Supabase JS) so responses don't rely on stale training data. Works with no API key at low rate limits; optionally set CONTEXT7_API_KEY (from context7.com/dashboard) for a higher limit.",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY:-}"
+      }
+    },
+
+    "chrome-devtools": {
+      "$comment": "Google, official (googlechrome/chrome-devtools-mcp). Launches its OWN Chrome instance (headless by default) and drives it via the Chrome DevTools Protocol — no Spinr credentials, but it CAN navigate to and interact with any URL the agent points it at, so treat it like any other browser: only point it at admin-dashboard's localhost dev server or public, non-authenticated pages, never paste real rider/driver session cookies or tokens into a page it opens. Useful for admin-dashboard debugging (console/network inspection, perf traces) and for authoring/triaging Playwright specs.",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"]
     }
   }
 }

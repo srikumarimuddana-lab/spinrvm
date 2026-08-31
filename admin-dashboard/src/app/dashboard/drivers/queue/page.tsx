@@ -13,6 +13,7 @@ import {
     Camera,
     Check,
     X,
+    UserX,
 } from "lucide-react";
 import {
     getApprovalQueue,
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useAuthStore } from "@/store/authStore";
 import { QueueStats } from "./_components/queue-stats";
 import { DocumentReviewer } from "../_components/document-reviewer";
 
@@ -64,6 +66,7 @@ const QUEUE_TABS = [
     { value: "new", label: "New applicants", icon: UserPlus },
     { value: "resubmitted", label: "Updated documents", icon: FileWarning },
     { value: "photo", label: "Photo review", icon: Camera },
+    { value: "incomplete", label: "Incomplete profiles", icon: UserX },
 ] as const;
 
 type QueueTab = (typeof QUEUE_TABS)[number]["value"];
@@ -73,11 +76,16 @@ const EMPTY_COPY: Record<QueueTab, string> = {
     new: "No first-time applicants waiting for review.",
     resubmitted: "No updated documents waiting for re-review.",
     photo: "No profile photos waiting for review.",
+    incomplete: "No drivers with incomplete profiles in the queue.",
 };
 
 export default function ApprovalQueuePage() {
     const { allowed: moduleAllowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const currentUserRole = useAuthStore((s) => s.user?.role);
+    const isSuperAdmin = (currentUserRole || "").toLowerCase() === "super_admin";
+    const currentUserModules = useAuthStore((s) => s.user?.modules) ?? [];
+    const canReviewDocuments = isSuperAdmin || currentUserModules.includes("documents");
     const [resp, setResp] = useState<ApprovalQueueResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
@@ -134,6 +142,7 @@ export default function ApprovalQueuePage() {
         new_applicants: 0,
         resubmissions: 0,
         photo_review: 0,
+        incomplete_profiles: 0,
     };
 
     const tabCounts: Record<QueueTab, number> = {
@@ -141,6 +150,10 @@ export default function ApprovalQueuePage() {
         new: stats.new_applicants,
         resubmitted: stats.resubmissions,
         photo: stats.photo_review,
+        // From `stats`, like its neighbours, not counted off `items`: the
+        // response trims items to `limit`, so a client-side count would quietly
+        // undercount against the other three once the queue outgrows a page.
+        incomplete: stats.incomplete_profiles,
     };
 
     const visibleItems = useMemo(
@@ -152,7 +165,9 @@ export default function ApprovalQueuePage() {
                       ? it.is_resubmission
                       : tab === "photo"
                         ? it.has_pending_photo
-                        : true,
+                        : tab === "incomplete"
+                          ? it.profile_completeness_score != null && it.profile_completeness_score < 100
+                          : true,
             ),
         [items, tab],
     );
@@ -371,6 +386,7 @@ export default function ApprovalQueuePage() {
                 driverName={reviewerDriver?.name}
                 onClose={() => setReviewerDriver(null)}
                 onAfterAction={load}
+                canReview={canReviewDocuments}
             />
         </div>
     );

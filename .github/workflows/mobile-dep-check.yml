@@ -2,7 +2,7 @@ name: Mobile Dependency Health
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
     paths:
       - 'rider-app/package.json'
       - 'rider-app/yarn.lock'
@@ -15,7 +15,8 @@ on:
       - 'driver-app/package.json'
 
 env:
-  NODE_VERSION: '20'
+  # Node >=22: engines floor of @supabase/supabase-js@2.112.x and react-native@0.87 (CR #4551)
+  NODE_VERSION: '22'
 
 jobs:
   rider-app-dep-check:
@@ -29,8 +30,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache rider-app node_modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # restore/save are split (2026-08-28) instead of the single cache action:
+      # the combined action saves node_modules in a POST step, i.e. after every
+      # later step has run — and `expo install --check` below can mutate
+      # node_modules (it runs the package manager when it applies SDK version
+      # fixes; `jest` is in expo.install.exclude but its dependents are not).
+      # One such post-mutation save is how the shared rider-node cache was
+      # poisoned with a mixed jest 30.4.x/30.3.0 tree that broke every
+      # rider-app-test run repo-wide, main included (2026-08-28; fixed in the
+      # PR that pinned jest to exact 30.3.0). Saving explicitly right after the
+      # clean frozen install captures only a lockfile-faithful tree.
+      - name: Restore rider-app node_modules cache
+        id: rider-node-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: rider-app/node_modules
           # Include patches/** in the key so changes to patch-package files
@@ -45,6 +57,13 @@ jobs:
       - name: Install dependencies
         working-directory: rider-app
         run: yarn install --frozen-lockfile
+
+      - name: Save rider-app node_modules cache (pre-mutation)
+        if: steps.rider-node-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: rider-app/node_modules
+          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
 
       - name: Expo dependency version audit
         working-directory: rider-app
@@ -73,8 +92,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache driver-app node_modules
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # Same restore/save split as the rider job above — never let the
+      # post-`expo install --check` tree be what gets cached.
+      - name: Restore driver-app node_modules cache
+        id: driver-node-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: driver-app/node_modules
           key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
@@ -82,6 +104,13 @@ jobs:
       - name: Install dependencies
         working-directory: driver-app
         run: yarn install --frozen-lockfile
+
+      - name: Save driver-app node_modules cache (pre-mutation)
+        if: steps.driver-node-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: driver-app/node_modules
+          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Expo dependency version audit
         working-directory: driver-app

@@ -131,13 +131,24 @@ class TestGstPstRows:
         assert by_month == {"2026-07": "3.00", "2026-08": "3.00"}
 
     def test_truncation_flag_set_at_row_limit(self):
+        """compliance._gst_pst_rows fetches via _get_all_rows_paginated,
+        which pages through db_supabase.get_rows(limit=, offset=) in a
+        while-loop that only stops once a page comes back shorter than
+        page_size. The mock must honor offset/limit like a real paginated
+        backend would -- an earlier version of this mock always returned
+        the full fake_rides list regardless of offset/limit, so a page
+        exactly _ROW_LIMIT rows long never looked "short" and the loop
+        never terminated (an unbounded, ever-growing in-memory fetch until
+        pytest-timeout finally killed it at 30s -- not a hang on any real
+        I/O, a genuine infinite loop from a mock that didn't model
+        pagination). Found while root-causing ACTION_ITEMS.md C45."""
         fake_rides = [
             {"id": f"r{i}", "ride_completed_at": "2026-07-05T10:00:00Z", "tax_breakdown": {}}
             for i in range(compliance._ROW_LIMIT)
         ]
 
-        async def get_rows_side(table, filters=None, **kw):
-            return fake_rides
+        async def get_rows_side(table, filters=None, limit=None, offset=0, **kw):
+            return fake_rides[offset : offset + limit] if limit else fake_rides[offset:]
 
         with _patch_get_rows(get_rows_side):
             _rows, _gst, _pst, _hst, truncated, _legacy_gst_total = asyncio.run(compliance._gst_pst_rows(_START, _END))

@@ -446,6 +446,159 @@ rushed).
     > This item necessarily follows the Oct 30 import itself, which has not happened. Today's PRs
     > added dry-run-only backfill tooling (SIN/DOB, `duration_estimated`) that itself was never
     > `--apply`'d, so there is nothing yet to reconcile. Still fully open, unchanged.
+11. **Legacy driver-profile import** (`drivers.csv` → real `users`/`drivers` rows) — the un-imported
+    driver population identified in `docs/migration/2026-08-27-legacy-data-full-migration-approach.md`
+    §4 Phase 1. Not covered by items 1-10 above (those cover consent/retention/bookings/vehicle-
+    history/insurance-periods/SIN-DOB/provenance-flags/collection-sign-off/never-import-list/final
+    reconciliation, but not the driver-profile-creation import itself), added as its own item because
+    it turned out to have two of its own batch-blocking findings, same shape as this playbook's
+    existing three-bugs-from-one-root-cause thesis.
+    > **[NEW 2026-08-27 — BUILT AND VALIDATED AGAINST THE REAL EXPORT; BOTH FINDINGS RESOLVED.]**
+    > `backend/services/driver_import_service.py`'s `build_mongo_driver_import_plan`/
+    > `commit_mongo_driver_import_plan` + CLI (`backend/scripts/import_legacy_mongo_drivers.py`),
+    > 25 tests. Full root-cause writeup:
+    > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md`.
+    >
+    > **[SAME DAY — ADMIN ROUTE BUILT.]** `routes/admin/legacy_driver_import.py`:
+    > `POST /api/admin/legacy-drivers/import/validate` and `.../commit`, mirroring
+    > `routes/admin/driver_import.py`'s existing validate/commit-token/rate-limit pattern
+    > exactly (gated on `require_module("drivers")`; commit requires a signed token proving
+    > `/validate` ran against this exact CSV/batch/admin first; `10/hour` commit rate limit,
+    > its own dedicated bucket, not shared with the Saskatoon importer's). New
+    > `read_mongo_export_csv_text()` in the service layer for the admin-upload path (the
+    > existing `read_csv_text()` would corrupt `_id` the same way the file-path reader's own
+    > docstring already documents). 10 HTTP-layer tests. This is the first point in Phase 1
+    > where the importer becomes actually reachable by an admin — CLI-only until now. See
+    > `docs/change-log/2026-08-27-legacy-driver-admin-route.md` for the full Change Impact Log.
+    >
+    > **[2026-08-28 — ADMIN-DASHBOARD UI PAGE BUILT.]** New dedicated page,
+    > `admin-dashboard/src/app/dashboard/drivers/legacy-import/page.tsx`, mirroring the existing
+    > Saskatoon-CSV importer's page exactly (validate → review → commit, same token handling),
+    > cross-linked from that page and from `bulk-operations`. `npx tsc --noEmit`, `eslint`, and a
+    > **real `npm run build`** all clean; smoke test added (25/25 pass). See
+    > `docs/change-log/2026-08-28-legacy-driver-admin-ui.md`. Phase 1 is now reachable end-to-end
+    > from the dashboard, not just via API client.
+    >
+    > **Finding A (resolved):** 588/925 rows (63.6%) have a blank `name` — confirmed, not assumed,
+    > to be abandoned onboarding (100% correlated with `set_up_profile=false`, 0/588 ever referenced
+    > by a `bookings.driver_id`) rather than a data-quality/export bug. Fixed as a warning +
+    > synthetic placeholder name (`"Unnamed Legacy Driver {id[-6:]}"`) + a new
+    > `legacy_import_metadata.incomplete_profile_in_source` flag, instead of the row-level error this
+    > playbook's own Stage 3 "never silently drop a leaf" discipline would otherwise have required
+    > escalating before shipping — escalated to the product owner first, decided, then built. Every
+    > row still lands forced `needs_review`/unverified/offline regardless.
+    >
+    > **Finding B (resolved, same day):** read-only join of the real export's 910 unique driver
+    > phones against live production Supabase (`soavhtdhefowwvforzwb`) found 324/910 (35.6%) already
+    > match an existing `users` row (all riders — almost all from `booking_import_service`'s own
+    > ride-time phone matching) and 212/910 (23.3%) already match an existing `drivers` row. The
+    > original "matching account = error, never silently merge" rule
+    > (`build_mongo_driver_import_plan`'s existing-match branch, same rule as
+    > `booking_import_service.py`'s) was deliberate and correct as a starting-point safety rule, but
+    > at this confirmed scale it was a **second whole-batch blocker of the same shape as Finding A**
+    > under the all-or-nothing `commit_mongo_driver_import_plan`. Put to the product owner (this
+    > doc's first pass recommended, but did not implement, a "skip the `users`-only matches"
+    > shape — reviewed again before building and revised: skipping was the wrong call, since it
+    > throws away exactly the history linkage this importer exists to build), then built as: a
+    > `users`-only match **links** a new driver row to the existing account (`is_driver=True`
+    > additive, no duplicate user — `users.phone` is `UNIQUE`); a `drivers`-row match **enriches**
+    > that driver's `legacy_import_metadata.mongo_driver_history` (additive, append-only list) with
+    > no new row and no live field ever touched. Both merges follow the additive-under-a-namespaced-
+    > key convention already used by `stripe_mapping_import_service.py`/`rider_import_service.py`
+    > elsewhere in this codebase, confirmed safe against real production `legacy_import_metadata`
+    > values (read-only check, phones only, no names) that already carry unrelated prior-importer
+    > keys the merge correctly preserves. A driver/account already linked or enriched by a previous
+    > run of this importer for the same `old_driver_id` resumes (skip, warning) rather than
+    > double-recording. `--apply` against production is still someone else's job (no session in this
+    > repo has live write credentials, per this playbook's own established pattern) — the code is
+    > ready, execution is not this item's job to close.
+    >
+    > **Riders (`customers.csv`) were spot-checked for the same shape, not fixed here:** a 250-of-
+    > 1,233 random-sample phone join found ~81% already match an existing `users` row (same
+    > booking-import phone-matching effect) — so the rider gap is profile *enrichment*, not account
+    > creation, a different-shaped problem than Phase 1's. 64/1,238 (5.2%) rider rows also have a
+    > blank name, but at least one of those *is* referenced by a real booking's `customer_id` —
+    > Finding A's "zero ride linkage, safe to synthesize" reasoning does **not** automatically carry
+    > over to riders without its own check. Both left as open follow-ups, not assumed.
+    >
+    > **[RESOLVED 2026-08-28 — was "Incidental finding ... not chased further here," now chased down
+    > and closed.]** This item used to flag, without chasing it down, that at least some riders
+    > already carried a `legacy_import_metadata.rider_csv_import` marker on real production rows.
+    > That marker is now confirmed to belong to a **single** production batch, `20260817023332`, on
+    > exactly **918** `users` rows (`SELECT count(*) FROM users WHERE legacy_import_metadata->
+    > 'rider_csv_import'->>'source' = 'legacy_rider_csv_import'` against `soavhtdhefowwvforzwb`,
+    > live, 2026-08-28). `git log` traces that batch to commit `76b01fe26` (PR #4004,
+    > `docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`), whose own text says
+    > explicitly: it ran a **direct, one-time SQL `UPDATE` against production**, not
+    > `rider_import_service.py`'s actual `commit_plan`. It stamped only the `rider_csv_import`
+    > provenance sub-key onto 918 pre-existing `users` rows already phone-matched to
+    > `customers.csv` — no other field (email, name, `stripe_customer_id`) was written. Production
+    > data corroborates this: only 263/918 of those rows carry a `stripe_customer_id`, far fewer
+    > than `customers.csv`'s own `customer_id` column would populate had the real importer (which
+    > does write `stripe_customer_id`) ever actually run. **Conclusion: no rider profile enrichment
+    > has happened via any importer** — `rider_import_service.py` has never been executed (validate
+    > or commit) against production. The "riders gap-analysis pass" flagged just above this point
+    > is still fully open; only a provenance/audit-trail marker exists today, not enrichment.
+    > `rider_import_service.py` was also checked for the same `_id`-header-corruption class of bug
+    > as this item's own Finding B/item #6 above (same mechanical behavior — `_id` normalizes to
+    > `id` there too) and found **inert**: `build_plan` never reads that column; its dedup/resume
+    > logic keys on `phone`/`email`, and the one Stripe-linkage column, `customer_id`, is a distinct
+    > header that survives normalization untouched. No fix needed. Full writeup:
+    > `docs/migration/2026-08-27-legacy-driver-blank-name-root-cause.md` §5/§6 (also updated
+    > 2026-08-28).
+    >
+    > **[2026-08-28 — LIST-ROW BADGE "GAP" CORRECTED, NOT A GAP.]** This item's own earlier text
+    > (via §6 of the migration approach doc, not reproduced verbatim here) had flagged rider-app/
+    > driver-app ride-*list*-row UI wiring for `show_legacy_badge` as an open remaining step once the
+    > backend started returning it. It isn't: a 2026-08-13 product decision
+    > (`docs/change-log/2026-08-13-blended-lifetime-earnings.md`) deliberately removed the ride-card
+    > badge from both apps' Activity list rows once driver-app moved to a blended lifetime-earnings
+    > figure, pinned by a driver-app regression test. Discovered when two parallel sub-agents tasked
+    > with building it independently hit the conflict and stopped before committing; confirmed with
+    > the user the 08-13 decision stands. Ride-*detail* screens are unaffected — always showed the
+    > badge, still do. See the migration approach doc's §6 for the full correction.
+    >
+    > **[2026-08-28 — PHASE 2 (SIN/DOB + VEHICLE-HISTORY) ADMIN ROUTE + UI BUILT.]** The CLI-only
+    > backfill scripts referenced in the migration approach doc's §4 Phase 2 now also have an admin
+    > HTTP route + admin-dashboard page each, mirroring this item's own Phase 1 admin-route pattern
+    > for a two-CSV-upload flow: `routes/admin/legacy_sin_dob_backfill.py` (`banks.csv`+
+    > `drivers.csv`) and `routes/admin/legacy_vehicle_history_backfill.py`
+    > (`vehicle_details.csv`+`drivers.csv`), each `POST .../validate` and `.../commit`, same
+    > `require_module("drivers")` gate and commit-token/rate-limit posture as Phase 1 — the token's
+    > single `csv_sha256` binds to a combined hash of both uploaded files so swapping either one
+    > between validate and commit still invalidates it. Admin-dashboard pages at
+    > `dashboard/drivers/legacy-{sin-dob,vehicle-history}-backfill/`. Built as two parallel isolated
+    > worktree tracks (zero file overlap by design — each a full backend+frontend vertical slice);
+    > one small de-duplication cleanup was needed post-merge (both tracks' worktrees were based on a
+    > stale snapshot predating Phase 1's `read_mongo_export_csv_text`, so each had independently
+    > reimplemented that CSV parser locally — both flagged this themselves; swapped for the real
+    > shared function once merged onto a branch that had it, no behavior change). 28/28 backend
+    > tests, 370/370 admin-dashboard tests, real `npm run build` all pass. Not yet run against
+    > production — same "code ready, execution is not this item's job" posture as Phase 1 above.
+    > See `docs/change-log/2026-08-28-legacy-sin-dob-backfill-admin-route.md` and
+    > `docs/change-log/2026-08-28-legacy-vehicle-history-backfill-admin-route.md`.
+    >
+    > **[2026-08-28 — PHASE 1 PRE-FLIGHT COMPUTATION VALIDATED, EXECUTION DEFERRED.]** With
+    > this session's Supabase MCP connection (read/write SQL, but not the application's own
+    > `SUPABASE_SERVICE_ROLE_KEY`), the real, unmodified `build_mongo_driver_import_plan()` was
+    > run locally against real current production match-state to get a fresh, fully-validated
+    > plan rather than trust the earlier phone-match percentages above (computed against an
+    > older export/production snapshot). Result, self-consistent against all 925 rows of the
+    > current 08-22 export: **595 new users, 709 new drivers (595 new-account + 114 linked to an
+    > existing account), 215 existing drivers enriched, 587 blank-name placeholders, 1 row
+    > rejected (invalid phone) — 709 + 215 + 1 = 925, every row accounted for.** The 120 unique
+    > `license_number` values among the planned inserts were also genuinely encrypted via the
+    > production `encrypt_driver_pii` RPC (real ciphertext, not placeholders). No write has been
+    > made to `users`/`drivers` — turning this validated plan into literal SQL and running it hit
+    > the environment's own PII-safety permission classifier twice in a row (writing a batch-SQL
+    > file with ~600 real names/phones/emails, then merely re-reading the already-computed plan),
+    > and was deliberately not pushed through by retrying with other tools. **Decision: defer
+    > actual execution to a session/operator with the real service-role key**, who can re-run the
+    > tested CLI (`python backend/scripts/import_legacy_mongo_drivers.py --drivers-csv <path>
+    > --service-area-id 361d17bb-ec55-4561-943f-e3bbee5d7a55 --apply`) or pick up from this
+    > pre-flight computation directly. The counts above are the validated expectation to check
+    > the eventual run's own printed report against. Full detail:
+    > `docs/migration/2026-08-27-legacy-data-full-migration-approach.md` §4 Phase 1.
 
 ## What this playbook is not
 

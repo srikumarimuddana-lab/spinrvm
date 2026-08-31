@@ -28,11 +28,16 @@ from fastapi.responses import Response
 
 try:
     from .. import db_supabase
+    from ..services.incentive_service import incentive_display_payload, match_ride_incentives
     from ..utils.offer_card import coarsen_address, render_offer_card
     from ..utils.offer_card_token import OfferCardTokenError, verify_offer_card_token
     from ..utils.rate_limiter import default_limiter
 except ImportError:
     import db_supabase
+    from services.incentive_service import (  # type: ignore
+        incentive_display_payload,
+        match_ride_incentives,
+    )
     from utils.offer_card import coarsen_address, render_offer_card
     from utils.offer_card_token import OfferCardTokenError, verify_offer_card_token
     from utils.rate_limiter import default_limiter
@@ -92,8 +97,26 @@ async def _build_offer_card_response(ride_id: str, t: str) -> Response:
         except (TypeError, ValueError):
             return None
 
+    # Area boost / ride incentives — the banner draws them as a "+$X BONUS"
+    # pill beside the fare, so the driver sees the same total the offer panel
+    # and the notification title show. Shares the settlement matcher
+    # (services/incentive_service.py) with dispatch, so all three quote the
+    # bonus completion will actually claim — the lookup takes the db module as
+    # an argument, which was the reason it used to be duplicated here. Fails
+    # open to "no bonus": a missing pill must never cost the driver the banner
+    # itself.
+    _total_bonus = 0.0
+    try:
+        _, _total_bonus = incentive_display_payload(
+            await match_ride_incentives(db_supabase, ride)
+        )
+    except Exception:
+        logger.warning("offer-card: incentive lookup failed for %s", ride_id, exc_info=True)
+        _total_bonus = 0.0
+
     png = render_offer_card(
         fare=_num(ride.get("driver_earnings")) or 0.0,
+        total_bonus=_total_bonus or None,
         distance_km=_num(ride.get("distance_km")),
         duration_minutes=_num(ride.get("duration_minutes")),
         rider_first_name=(rider or {}).get("first_name") or (rider or {}).get("name"),

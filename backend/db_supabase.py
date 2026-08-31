@@ -96,6 +96,7 @@ try:
     from .repositories.corporate_repo import (  # noqa: F401 — re-exported
         accept_member_invite,
         add_allowed_domain,
+        claim_low_balance_notification,
         count_pending_signups_for_user,
         create_active_member,
         create_corporate_subscription_row,
@@ -159,6 +160,7 @@ except ImportError:
     from repositories.corporate_repo import (  # type: ignore  # noqa: F401
         accept_member_invite,
         add_allowed_domain,
+        claim_low_balance_notification,
         count_pending_signups_for_user,
         create_active_member,
         create_corporate_subscription_row,

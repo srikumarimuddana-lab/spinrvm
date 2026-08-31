@@ -584,6 +584,10 @@ class AppSettings(BaseModel):
     # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
     # via GET /api/admin/settings; effective within the 60s settings TTL.
     admin_theme_v2_enabled: bool = False
+    # ── Admin command palette (Cmd+K/Ctrl+K route jumper) ────────────────
+    # Same shape as admin_theme_v2_enabled above — dark-launched, no other
+    # apps read this. See migration 374 and components/command-palette.tsx.
+    admin_command_palette_enabled: bool = False
     # ── Forced-upgrade gate (ACTION_ITEMS.md E3) ──────────────────────────
     # Minimum app version each client must report via the X-App-Version
     # header (see core/middleware.py::ForcedUpgradeMiddleware). Empty string
@@ -626,6 +630,14 @@ class AppSettings(BaseModel):
     # otherwise; corrected alongside migration 356, which also adds the
     # column this flag reads/writes — it didn't exist in the DB before).
     legacy_consent_notice_enabled: bool = False
+    # Dark-launch gate for the legacy-imported-ride "Imported" badge + no-GPS
+    # disclaimer on rider/driver ride-detail screens (routes/rides/queries.py's
+    # GET /{ride_id}, docs/legacy-ride-history-presentation-plan.md). Off
+    # (default): GET /{ride_id} always reports show_legacy_badge=false, even
+    # for a ride with legacy_import_metadata populated -- the underlying
+    # metadata itself is unaffected, this flag only gates the client-visible
+    # badge/disclaimer UX. Migration 364 adds the column this flag reads.
+    legacy_ride_badge_enabled: bool = False
     # ── Demand heatmap v2 (P1 HM-10/HM-13) ──────────────────────────────
     # v2 adds per-cell {live, baseline, scheduled} components + surge mirror
     # to the driver heatmap endpoint. Gated by this flag; legacy `points`

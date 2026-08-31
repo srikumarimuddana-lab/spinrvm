@@ -80,3 +80,31 @@ entropy = 3.5
 keywords = [
     "akia", "asia", "abia", "acca",
 ]
+
+# Canadian SIN / bank-account PII detector — added following the P0 incident (#4547):
+# driver_bank_sin_migration.sql / driver_csv_migration.sql were committed at the repo root
+# with real, plaintext SIN, bank account/transit/institution numbers, DOBs, and home
+# addresses for 157 drivers, live on `main` for 11 days before discovery. gitleaks' built-in
+# ruleset (extended via [extend] above) targets API-key/secret *shapes* — it has no
+# government-ID/PII detector, so this class of leak was invisible to it. This rule is the
+# CI backstop for that gap; see backend/migrations/CLAUDE.md's "One-off data-migration
+# scripts" section for the corresponding process fix (never commit real PII in the first
+# place — this is a safety net, not a substitute for that).
+#
+# A bare 9-digit number alone is too common to flag on its own (postal codes, truncated
+# timestamps, arbitrary IDs) — that would be noise, not signal. Gitleaks only runs a rule's
+# regex against a file that contains at least one of its `keywords` (case-insensitive
+# substring, anywhere in the file), so this only fires in files that also name one of the
+# actual PII column identifiers the incident file used. A file naming a SIN/bank column
+# *and* carrying bare 9-digit literals is exactly the shape of the incident file — worth a
+# human's 30-second look even on an occasional false positive (e.g. a 9-digit test ID in a
+# file that separately mentions `account_number` in an unrelated comment). No real false
+# positives observed yet since this is new — tune keywords/regex if any show up in practice.
+[[rules]]
+id = "spinr-sin-bank-pii"
+description = "Possible Canadian SIN or bank account/transit/institution number literal alongside a PII column identifier — verify this isn't real driver/rider data before merging."
+regex = '''['"]?\b\d{9}\b['"]?'''
+keywords = [
+    "sin_raw", "sin_number", "social_insurance_number", "social_insurance_no",
+    "account_number", "institute_number", "institution_number", "transit_number",
+]

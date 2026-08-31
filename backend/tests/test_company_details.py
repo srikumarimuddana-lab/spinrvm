@@ -225,3 +225,40 @@ async def test_name_sentence_leaves_the_bare_name_alone():
     # not a sentence — they must keep whatever the admin configured.
     details = await _load({"company_name": "Spinr Technologies Inc."})
     assert details.name == "Spinr Technologies Inc."
+
+
+# --- Sync accessor for the synchronous report builders --------------------
+# fpdf2/openpyxl cannot await, which is why report footers used to hardcode
+# the company. These pin that the sync path reads the SAME settings and
+# assembles them the SAME way as the async one.
+
+
+def test_cached_accessor_returns_none_when_the_cache_is_cold():
+    """A cold cache must return None, never block on a load — the caller
+    falls back to constants rather than doing I/O it cannot await."""
+    with patch.object(cd, "logger"):
+        with patch("settings_loader.get_cached_app_settings", return_value=None):
+            assert cd.load_company_details_cached() is None
+
+
+def test_cached_accessor_matches_the_async_path_for_the_same_settings():
+    """The sync and async paths share build_company_details, so they can never
+    disagree about the same settings row."""
+    settings = {
+        "company_name": "Spinr Mobility Inc",
+        "company_address": "Regina,SK",
+        "company_email": "support@spinr.ca",
+        "company_website": "https://spinr.ca",
+    }
+    with patch("settings_loader.get_cached_app_settings", return_value=settings):
+        cached = cd.load_company_details_cached()
+    assert cached is not None
+    assert cached == cd.build_company_details(settings)
+    # And it actually reflects the configured address, not a baked-in city.
+    assert "Regina,SK" in cached.identity_line
+    assert "Saskatoon" not in cached.identity_line
+
+
+def test_build_is_pure_and_empty_settings_still_give_the_constants():
+    assert cd.build_company_details({}).identity_line == COMPANY_LINE
+    assert cd.build_company_details({}).contact_line == COMPANY_CONTACT_LINE

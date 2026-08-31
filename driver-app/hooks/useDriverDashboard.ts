@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { showToast } from './useToast';
+import { createFixFeed } from '@shared/utils/fixFeed';
 import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
@@ -33,6 +34,7 @@ import {
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../utils/backgroundLocation';
+import { shouldDisplayFix } from '../utils/locationDisplayGate';
 import { consumePendingRideOffer } from '../services/pendingRideOffer';
 import { createLocationIntegrityChecker, resetLocationIntegrity } from '../utils/locationIntegrity';
 
@@ -63,11 +65,22 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const AUTH_WATCHDOG_MS = 10000;
 
 const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval: number; accuracy: Location.Accuracy }> = {
-  idle:                  { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
-  ride_offered:          { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
-  navigating_to_pickup:  { timeInterval: 4_000,  distanceInterval: 10, accuracy: Location.Accuracy.High },
+  // Idle-online raised Balanced/10s/30m → High/4s/10m (2026-08-28): Balanced
+  // yields cell/Wi-Fi fixes (±30–100 m) that rendered the car a block off the
+  // road and "sliding" while a driver cruised online without a ride (live
+  //-testing report, Albert St). Online time should look as accurate as trip
+  // time; cost is GNSS power draw only while the driver is online.
+  idle:                  { timeInterval: 4_000,  distanceInterval: 10, accuracy: Location.Accuracy.High },
+  ride_offered:          { timeInterval: 4_000,  distanceInterval: 10, accuracy: Location.Accuracy.High },
+  // Pickup/trip phases tightened 4s/10m + 3s/8m → 2s/5m (2026-08-28): the
+  // rider-side car marker animates between fixes, and a 3-4 s gap between
+  // real positions reads as laggy/teleporting on the rider's map. Cost:
+  // ~1.5-2× trip-location point volume (every trip-phase fix is durably
+  // recorded — see tripLocationRecorder) and a modest battery increase,
+  // accepted for launch-quality live tracking.
+  navigating_to_pickup:  { timeInterval: 2_000,  distanceInterval: 5,  accuracy: Location.Accuracy.High },
   arrived_at_pickup:     { timeInterval: 8_000,  distanceInterval: 20, accuracy: Location.Accuracy.Balanced },
-  trip_in_progress:      { timeInterval: 3_000,  distanceInterval: 8,  accuracy: Location.Accuracy.High },
+  trip_in_progress:      { timeInterval: 2_000,  distanceInterval: 5,  accuracy: Location.Accuracy.High },
   trip_completed:        { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
 };
 
@@ -118,6 +131,8 @@ interface UseDriverDashboardReturn {
   isOnline: boolean;
   connectionState: ConnectionState;
   location: Location.LocationObject | null;
+  /** Un-throttled GPS fix stream for the car marker's playback buffer. */
+  markerFixFeed: import('@shared/utils/fixFeed').FixFeed;
   locationStatus: LocationStatus;
   otpInput: string;
   setOtpInput: (value: string) => void;
@@ -334,10 +349,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Throttle setLocation re-renders: map updates at most every 10 s.
   // WS payloads still fire every watchPositionAsync callback (~5 s).
   const lastRenderMsRef = useRef<number>(0);
+  // Un-throttled fix channel to the CarMarker (see @shared/utils/fixFeed).
+  // createFixFeed is a pure factory (allocates a Set); once-only via useRef.
+  // eslint-disable-next-line react-hooks/purity
+  const markerFixFeedRef = useRef(createFixFeed());
+  // Last coordinate/heading handed to the marker feed and when — read by the
+  // stationary heartbeat below, written every time a real fix is emitted.
+  const lastMarkerFixRef = useRef<{ latitude: number; longitude: number; heading?: number | null } | null>(null);
+  const lastMarkerFixEmitMsRef = useRef<number>(0);
   // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
   const lastIdleDurableMsRef = useRef<number>(0);
+  // When a fix last passed the display accuracy gate — drives the stale
+  // override so the marker can't freeze on persistently poor signal.
+  const lastDisplayedFixMsRef = useRef<number>(0);
   // Tracks whether the REST /drivers/location-batch endpoint is healthy.
   // When false, the WS message is sent durable:true with v1-only fields so
   // the WS handler persists via the legacy path (simple INSERT, no unique
@@ -450,7 +476,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
         if (saved) {
           const { lat, lng } = JSON.parse(saved);
-          setLocation({ coords: { latitude: lat, longitude: lng, heading: 0, speed: 0, accuracy: 100, altitude: 0 }, timestamp: Date.now() } as any);
+          // heading -1 = "unknown" (expo-location convention) — a cached fix has
+          // no direction; 0 would render the car pointing due north across
+          // east-west streets until the first real GPS heading arrived.
+          setLocation({ coords: { latitude: lat, longitude: lng, heading: -1, speed: 0, accuracy: 100, altitude: 0 }, timestamp: Date.now() } as any);
         }
       } catch {}
     }
@@ -570,6 +599,38 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }, 10_000);
     return () => clearInterval(interval);
   }, [foregroundLocationTransport, isOnline]);
+
+  // Marker stationary heartbeat: distanceInterval-gated watchPositionAsync
+  // (see LOCATION_CONFIGS above) goes fully quiet at a genuine standstill —
+  // Android does not fire a fix just because timeInterval elapsed if the
+  // device hasn't moved distanceInterval. With no new fixes, the CarMarker's
+  // playback buffer ran dry and dead-reckoned FORWARD along the last
+  // pre-stop segment's real velocity — the car visibly drove through a red
+  // light it was stopped at, then snapped back once a real fix finally
+  // landed (live-testing report 2026-08-30, screenshots of the reversal).
+  // Fix: while online, re-emit the last known coordinate with a FRESH
+  // timestamp into the marker feed every ~2.5s whenever no real fix has
+  // arrived — zero GPS cost (no poll, this is the cached coordinate) and
+  // zero network cost, purely a JS timer. This keeps the buffer's newest
+  // entry inside the playback/extrapolation window at all times, so a real
+  // stop is represented as a held position instead of an invented one.
+  // Covers every online state, not just trip phases — the report above was
+  // from online-idle, which the pre-existing 30s trip-only GPS watchdog
+  // below never reaches.
+  const MARKER_HEARTBEAT_MS = 2_500;
+  useEffect(() => {
+    if (!isOnline) return;
+    const id = setInterval(() => {
+      if (!lastMarkerFixRef.current) return;
+      if (Date.now() - lastMarkerFixEmitMsRef.current < MARKER_HEARTBEAT_MS) return;
+      lastMarkerFixEmitMsRef.current = Date.now();
+      markerFixFeedRef.current.emit({
+        ...lastMarkerFixRef.current,
+        timestampMs: Date.now(),
+      });
+    }, MARKER_HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [isOnline]);
 
   // GPS heartbeat: during a trip, if the recorder has captured nothing for
   // its 30s watchdog window (standstill under distanceInterval, provider
@@ -731,6 +792,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             console.warn(`[Location] Untrusted fix kept for audit, hidden from display: ${integrity.reason}`);
             return;
           }
+          // ── Display accuracy gate (durable capture above is unconditional).
+          // A cell/Wi-Fi-grade fix (accuracy > 50 m) walks the marker off the
+          // road sideways; skip it for display AND the live WS marker — the
+          // rider's map is fed from the same send, so gating here fixes both
+          // ends with no backend change. shouldDisplayFix's stale override
+          // ensures the marker never freezes when only poor fixes exist.
+          if (!shouldDisplayFix(loc.coords.accuracy, Date.now() - lastDisplayedFixMsRef.current)) {
+            return;
+          }
+          lastDisplayedFixMsRef.current = Date.now();
           // Sensor mismatch: tag the payload instead of dropping the location.
           // Dropping made the driver invisible to dispatch on false positives
           // (phone on soft mount, smooth highway, cup holder vibration).
@@ -740,11 +811,26 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
 
           locationRef.current = loc;
+          // Un-throttled marker feed: the CarMarker's playback buffer needs
+          // EVERY displayed fix with its real measurement time — the render
+          // throttle below stretches inter-fix spacing past the 5 s playback
+          // delay and starves the buffer (freeze-then-jump, live-testing
+          // 2026-09-02). Zero re-renders: subscribers ingest via refs.
+          lastMarkerFixRef.current = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, heading: loc.coords.heading };
+          lastMarkerFixEmitMsRef.current = Date.now();
+          markerFixFeedRef.current.emit({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            heading: loc.coords.heading,
+            timestampMs: loc.timestamp || Date.now(),
+          });
           const now = Date.now();
           // Tighten the render cadence during active trip phases so the driver
-          // UI distance counter and map marker stay responsive; coarse throttle
-          // is fine when idle to avoid unnecessary re-renders.
-          const renderThrottleMs = inTripPhase ? 3000 : 10000;
+          // UI distance counter and map marker stay responsive. Idle was 10s —
+          // visibly laggy for a driver cruising online (the marker + follow
+          // camera stuttered); 3.5s keeps re-renders modest while matching the
+          // 4s idle GPS cadence above.
+          const renderThrottleMs = inTripPhase ? 3000 : 3500;
           if (now - lastRenderMsRef.current >= renderThrottleMs) {
             lastRenderMsRef.current = now;
             setLocation(loc);
@@ -1788,6 +1874,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   return {
     // State
     isOnline,
+    // Stable identity for the life of the hook — safe to read during render.
+    // eslint-disable-next-line react-hooks/refs
+    markerFixFeed: markerFixFeedRef.current,
     connectionState,
     location,
     locationStatus,

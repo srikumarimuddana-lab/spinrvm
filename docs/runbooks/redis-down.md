@@ -15,6 +15,7 @@
 | WebSocket pub/sub channels | CRITICAL | Multi-replica WS fan-out breaks |
 | Active ride-offer state (30s TTL) | HIGH | Dispatch retries; offers may be stale |
 | Session/refresh token cache | MEDIUM | Forces Supabase reads (slower) |
+| Driver marker write-gate windows (`spinr:locwrite:*`, 3s TTL) | LOW | Marker-write coalescing degrades per-process: REST writes every flush (pre-gate behaviour), WS falls back to an in-process 3s floor — write volume never exceeds pre-gate rates. Expect one `location write gate` ERROR line per gated attempt and a rising `spinr_drivers_location_gate_failed_total`; every Redis call the gate makes is bounded at 0.1s, so a hung Redis cannot stall the location-write path. |
 
 See `docs/data-classification.md` § "Redis Keys" for the authoritative list.
 

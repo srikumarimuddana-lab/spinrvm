@@ -287,6 +287,35 @@ describe('map rendering', () => {
   });
 });
 
+describe('legacy-imported ride badge', () => {
+  it('shows the "Imported" badge and no-GPS disclaimer when the backend flags the ride as legacy', async () => {
+    mockGet.mockResolvedValue({
+      data: ride({
+        show_legacy_badge: true,
+        pickup_lat: 52.13, pickup_lng: -106.67, dropoff_lat: 52.14, dropoff_lng: -106.68,
+      }),
+    });
+    const screen = render(<RideDetailScreen />);
+    await waitFor(() => expect(screen.getByText('Imported')).toBeTruthy());
+    expect(screen.getByText('Imported from the previous app — no GPS was recorded for this ride')).toBeTruthy();
+  });
+
+  it('hides the "Imported" badge and disclaimer for an ordinary ride even with legacy_import_metadata present', async () => {
+    // show_legacy_badge is the backend's own flag-gated field — a client must
+    // never derive this from legacy_import_metadata directly, so a ride that
+    // somehow carries metadata but not the flag must stay unbadged.
+    mockGet.mockResolvedValue({
+      data: ride({
+        legacy_import_metadata: { source: 'legacy_mongo_booking_import' },
+        pickup_lat: 52.13, pickup_lng: -106.67, dropoff_lat: 52.14, dropoff_lng: -106.68,
+      }),
+    });
+    const screen = render(<RideDetailScreen />);
+    await waitFor(() => expect(screen.getByTestId('map-view')).toBeTruthy());
+    expect(screen.queryByText('Imported')).toBeNull();
+  });
+});
+
 describe('back navigation', () => {
   it('the map back button navigates back', async () => {
     mockGet.mockResolvedValue({ data: ride({ pickup_lat: 52.13, pickup_lng: -106.67, dropoff_lat: 52.14, dropoff_lng: -106.68 }) });

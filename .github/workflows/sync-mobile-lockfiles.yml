@@ -16,7 +16,7 @@ name: Sync mobile lockfiles
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging]
     paths:
       - rider-app/package.json
       - driver-app/package.json
@@ -41,7 +41,8 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: '20'
+          # Node >=22: engines floor of @supabase/supabase-js@2.112.x and react-native@0.87 (CR #4551)
+          node-version: '22'
 
       - name: Regenerate lockfiles
         # --ignore-scripts: we only need yarn to resolve and write the lock, not
@@ -52,6 +53,11 @@ jobs:
           yarn --cwd driver-app install --ignore-scripts --non-interactive
 
       - name: Commit refreshed lockfiles (if changed)
+        env:
+          # github.head_ref is attacker-influenced on fork PRs; route it
+          # through env instead of interpolating into the script
+          # (semgrep run-shell-injection).
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -60,5 +66,5 @@ jobs:
           else
             git add rider-app/yarn.lock driver-app/yarn.lock
             git commit -m "chore(mobile): sync yarn.lock to package.json"
-            git push origin HEAD:"${{ github.head_ref }}"
+            git push origin HEAD:"$HEAD_REF"
           fi

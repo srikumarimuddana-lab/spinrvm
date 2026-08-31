@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { getDriverStats, getDrivers, getDriverDocuments, downloadDriverDocument, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, refreshDriverStripePayouts, refreshAllDriverStripeKyc, refreshAllDriverStripePayouts, recomputeStatementTotals, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
+import { PageHeader } from "@/components/page-header";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -14,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2 } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2, Tag } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
@@ -87,6 +88,15 @@ export default function DriversPage() {
     const currentUserRole = useAuthStore((s) => s.user?.role);
     const isSuperAdmin = (currentUserRole || "").toLowerCase() === "super_admin";
     const canRevealSin = isSuperAdmin;
+    // The Documents tab / full-screen reviewer call getDriverDocuments,
+    // reviewDocument, downloadDriverDocument — all mounted behind the
+    // backend's require_module("documents") (routes/admin/__init__.py),
+    // a DIFFERENT grant from the "drivers" module this page itself is
+    // gated on above. A staff member can hold one without the other, so
+    // this is checked separately (same pattern as earnings/page.tsx's
+    // canSeeReferrals) rather than assuming "drivers" implies "documents".
+    const currentUserModules = useAuthStore((s) => s.user?.modules) ?? [];
+    const canReviewDocuments = isSuperAdmin || currentUserModules.includes("documents");
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -129,6 +139,13 @@ export default function DriversPage() {
     // Vehicle-type filter on the drivers list (client-side — same
     // shape as serviceAreaId, "" means no filter).
     const [vehicleTypeFilter, setVehicleTypeFilter] = useState<string>("");
+    // Legacy-import filter — "imported"/"not_imported" map to the
+    // legacy_import=true/false query param; "all" sends no filter.
+    const [legacyFilter, setLegacyFilter] = useState<"all" | "imported" | "not_imported">("all");
+    // Pre-launch-flag filter — "hide"/"only" map to the pre_launch=false/true
+    // query param (services/pre_launch_flag_service.py); "all" sends no
+    // filter (default — matches every prior page load, no silent change).
+    const [preLaunchFilter, setPreLaunchFilter] = useState<"all" | "hide" | "only">("all");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
@@ -267,16 +284,24 @@ export default function DriversPage() {
         if (statusFilter === "online") opts.is_online = true;
         else if (statusFilter === "photos_pending") opts.photo_status = "pending_review";
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
-        getDrivers(opts)
+        if (legacyFilter === "imported") opts.legacy_import = true;
+        else if (legacyFilter === "not_imported") opts.legacy_import = false;
+        if (preLaunchFilter === "only") opts.pre_launch = true;
+        else if (preLaunchFilter === "hide") opts.pre_launch = false;
+        // Returns the rendered page so a caller that just mutated a driver can
+        // re-sync the open detail sheet from the refreshed server rows.
+        return getDrivers(opts)
             .then((rows) => {
-                if (reqId !== reqIdRef.current) return;
+                if (reqId !== reqIdRef.current) return [] as any[];
                 const arr = Array.isArray(rows) ? rows : [];
                 setHasNextPage(arr.length > PAGE_SIZE);
-                setDrivers(arr.slice(0, PAGE_SIZE));
+                const pageRows = arr.slice(0, PAGE_SIZE);
+                setDrivers(pageRows);
+                return pageRows;
             })
-            .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } })
+            .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } return [] as any[]; })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
-    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, sortKey, sortDir]);
+    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, sortKey, sortDir]);
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { loadDrivers(); }, [loadDrivers]);
@@ -288,7 +313,7 @@ export default function DriversPage() {
     // Reset to first page whenever anything that changes the result set or its
     // ordering changes — otherwise a new search/sort could land you on a page
     // that no longer exists.
-    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, sortKey, sortDir]);
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, sortKey, sortDir]);
     // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
     // unioned from BOTH pricing stores because admins can configure
     // vehicles for an area either way:
@@ -549,6 +574,16 @@ export default function DriversPage() {
             const updated = merge(selected);
             setSelected(updated);
             setDrivers(prev => prev.map(d => d.id === selected.id ? merge(d) : d));
+            // The completeness score/missing-fields are derived server-side from
+            // the row, so the local merge above cannot refresh them: an admin who
+            // just filled in a field this very panel flagged as missing would keep
+            // seeing it flagged. Refetch and re-sync the open sheet from the
+            // server row, which is authoritative once the save has landed.
+            const savedId = selected.id;
+            loadDrivers().then((rows) => {
+                const fresh = (rows || []).find((r: any) => r.id === savedId);
+                if (fresh) setSelected((cur: any) => (cur?.id === savedId ? fresh : cur));
+            });
             if ("license_number" in changes) {
                 const last4 = String(changes.license_number).slice(-4);
                 setLiveStats(prev => prev ? { ...prev, license_number_last4: last4, license_number_on_file: true } : prev);
@@ -838,11 +873,11 @@ export default function DriversPage() {
 
     return (
         <div className="space-y-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold">Drivers</h1>
-                    <p className="text-sm text-muted-foreground">{data?.stats?.total ?? 0} drivers {serviceAreaId ? `in ${selectedAreaName}` : "overall"}</p>
-                </div>
+            <PageHeader
+                className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
+                title="Drivers"
+                description={`${data?.stats?.total ?? 0} drivers ${serviceAreaId ? `in ${selectedAreaName}` : "overall"}`}
+                actions={
                 <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center gap-1.5">
                         <MapPin className="h-4 w-4 text-muted-foreground" />
@@ -862,12 +897,34 @@ export default function DriversPage() {
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <Upload className="h-4 w-4 text-muted-foreground" />
+                        <Select value={legacyFilter} onValueChange={(v) => setLegacyFilter(v as "all" | "imported" | "not_imported")}>
+                            <SelectTrigger className="h-9 text-xs w-[150px]" aria-label="Filter by legacy import status"><SelectValue placeholder="All Drivers" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Drivers</SelectItem>
+                                <SelectItem value="imported">Imported only</SelectItem>
+                                <SelectItem value="not_imported">Not imported</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <Tag className="h-4 w-4 text-muted-foreground" />
+                        <Select value={preLaunchFilter} onValueChange={(v) => setPreLaunchFilter(v as "all" | "hide" | "only")}>
+                            <SelectTrigger className="h-9 text-xs w-[170px]" aria-label="Filter by pre-launch flag"><SelectValue placeholder="All Drivers" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Drivers</SelectItem>
+                                <SelectItem value="hide">Hide pre-launch test</SelectItem>
+                                <SelectItem value="only">Pre-launch test only</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <CalendarRange className="h-4 w-4 text-muted-foreground" />
                         <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter from date" />
                         <span className="text-xs text-muted-foreground">to</span>
                         <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
                     </div>
-                    {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
+                    {(serviceAreaId || vehicleTypeFilter || legacyFilter !== "all" || preLaunchFilter !== "all" || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setLegacyFilter("all"); setPreLaunchFilter("all"); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
                     {/* Fleet-wide money tools are super_admin server-side —
                         hide them for lower roles instead of surfacing buttons
@@ -887,7 +944,8 @@ export default function DriversPage() {
                     )}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={sorted.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
-            </div>
+                }
+            />
 
             <DriverStatsCards stats={data?.stats || null} loading={loading} />
 
@@ -910,6 +968,13 @@ export default function DriversPage() {
                                 <TableHead className="h-11 pl-5 w-20"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Actions</span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")} tabIndex={0} role="columnheader" aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("name"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")} tabIndex={0} role="columnheader" aria-sort={sortKey === "status" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("status"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
+                                {/* Deliberately NOT sortable. Every other header here sorts at the
+                                    DB over the whole table (sort_by -> _DRIVER_SORT_COLUMNS), but the
+                                    completeness score is computed per-request from row data and is not
+                                    a column — the backend would silently ignore the key and reorder by
+                                    created_at while aria-sort announced a state the table was not in.
+                                    Sorting this needs the score persisted first. */}
+                                <TableHead className="h-11"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Profile</span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("is_online")} tabIndex={0} role="columnheader" aria-sort={sortKey === "is_online" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("is_online"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Online<SortIcon col="is_online" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_type")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_type" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_type"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle Type<SortIcon col="vehicle_type" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_make" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_make"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
@@ -926,6 +991,7 @@ export default function DriversPage() {
                                     <TableCell><div className="h-8 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell className="py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-muted" /><div className="space-y-2"><div className="h-3 w-24 bg-muted rounded" /><div className="h-2 w-16 bg-muted rounded" /></div></div></TableCell>
                                     <TableCell><div className="h-4 w-16 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-4 w-14 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-4 w-12 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-3 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-3 w-20 bg-muted rounded" /></TableCell>
@@ -937,7 +1003,7 @@ export default function DriversPage() {
                                 </TableRow>
                             )) : sorted.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={11} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
+                                    <TableCell colSpan={12} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
                                 </TableRow>
                             ) : sorted.map(driver => {
                                 const areaName = serviceAreas.find(a => a.id === driver.service_area_id)?.name;
@@ -992,6 +1058,17 @@ export default function DriversPage() {
                                                 : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
                                                 <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online && !driver.account_deleted ? "border-success/40 text-success bg-success/10" : ""}`}>{driver.is_online && !driver.account_deleted ? "Online" : "Offline"}</Badge>
                                             </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            {driver.profile_completeness_score === undefined || driver.profile_completeness_score === null ? (
+                                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">—</Badge>
+                                            ) : driver.profile_completeness_score === 100 ? (
+                                                <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800">Complete</Badge>
+                                            ) : driver.profile_completeness_score >= 70 ? (
+                                                <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800">Incomplete ({driver.profile_completeness_score}%)</Badge>
+                                            ) : (
+                                                <Badge variant="default" className="bg-destructive/15 text-destructive text-[10px] px-1.5 py-0">Missing ({driver.profile_completeness_score}%)</Badge>
+                                            )}
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-0.5 items-start">
@@ -1158,6 +1235,38 @@ export default function DriversPage() {
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
                                                 {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
+                                            {/* Profile Completeness Summary */}
+                                            {(() => {
+                                                const score = selected.profile_completeness_score;
+                                                const missingCount = selected.profile_missing_count || 0;
+                                                if (score === undefined || score === null) return null;
+                                                return (
+                                                    <div className="mt-3 p-2.5 rounded-lg border bg-muted/30">
+                                                        <div className="flex items-center justify-between mb-1.5">
+                                                            <span className="text-xs font-medium text-foreground/80">
+                                                                Profile: {score}% complete{missingCount > 0 ? ` (${missingCount} field${missingCount === 1 ? '' : 's'} missing)` : ''}
+                                                            </span>
+                                                        </div>
+                                                        <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                                                            <div
+                                                                className={`h-full rounded-full transition-all ${score === 100 ? 'bg-emerald-500' : score >= 70 ? 'bg-amber-500' : 'bg-destructive'}`}
+                                                                style={{ width: `${Math.min(score, 100)}%` }}
+                                                            />
+                                                        </div>
+                                                        {score === 100 ? (
+                                                            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1"><CheckCircle className="h-3 w-3" />All required fields complete</p>
+                                                        ) : selected.profile_missing_fields && selected.profile_missing_fields.length > 0 ? (
+                                                            <div className="mt-1.5 flex flex-wrap gap-1">
+                                                                {/* Already display labels ("License Plate"), not field
+                                                                    names — the backend sends m["label"]. No un-snaking. */}
+                                                                {selected.profile_missing_fields.map((label: string) => (
+                                                                    <span key={label} className="text-[10px] text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">{label}</span>
+                                                                ))}
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2">
@@ -1647,6 +1756,8 @@ export default function DriversPage() {
                                                 size="sm"
                                                 variant="outline"
                                                 className="h-8"
+                                                disabled={!canReviewDocuments}
+                                                title={canReviewDocuments ? undefined : "Requires the \"Documents\" module — ask an admin to grant it"}
                                                 onClick={() => setOpenReviewerForDriver({ id: selected.id, name: selected.name || selected.email || selected.id })}
                                             >
                                                 <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
@@ -1691,7 +1802,7 @@ export default function DriversPage() {
                                                 return (
                                                     <div key={reqDoc.key}>
                                                         <div className="flex items-center gap-2 mb-3 flex-wrap">
-                                                            <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{reqDoc.label}</h4>
+                                                            <FileText className="h-4 w-4 text-muted-foreground" /><h3 className="text-sm font-semibold">{reqDoc.label}</h3>
                                                             {matchingDocs.length === 0 && <Badge className="bg-destructive/15 text-destructive text-[10px]">Missing</Badge>}
                                                             {counts.pending > 0 && <Badge className="bg-warning/15 text-warning text-[10px]">{counts.pending} pending</Badge>}
                                                             {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-success/15 text-success text-[10px]">Approved</Badge>}
@@ -1713,7 +1824,7 @@ export default function DriversPage() {
                                                 return (
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-3">
-                                                            <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4>
+                                                            <FileText className="h-4 w-4 text-muted-foreground" /><h3 className="text-sm font-semibold">Other Documents</h3>
                                                             <Badge variant="outline" className="text-[10px]">{unmatched.length} uploaded</Badge>
                                                         </div>
                                                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
@@ -1860,6 +1971,7 @@ export default function DriversPage() {
                 driverName={openReviewerForDriver?.name}
                 onClose={() => setOpenReviewerForDriver(null)}
                 onAfterAction={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
+                canReview={canReviewDocuments}
             />
 
             <DocumentUploadDialog
@@ -2016,7 +2128,7 @@ function VerificationSummaryCard({
             <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                     <CheckCircle className={`h-4 w-4 ${allClear ? "text-success" : "text-muted-foreground"}`} />
-                    <h4 className="text-sm font-semibold tracking-tight">Verification</h4>
+                    <h3 className="text-sm font-semibold tracking-tight">Verification</h3>
                     <span className="text-xs text-muted-foreground">{approved} / {total} approved</span>
                 </div>
                 <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onOpenDocumentsTab}>
@@ -2259,7 +2371,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                 <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                     <div className="flex items-center gap-2">
                         <CreditCard className="h-4 w-4 text-muted-foreground" />
-                        <h4 className="text-sm font-semibold">Payout method</h4>
+                        <h3 className="text-sm font-semibold">Payout method</h3>
                     </div>
                     {pm.has_bank_account ? (
                         <Badge className="bg-success/15 text-success text-[10px]">Linked</Badge>
@@ -2330,7 +2442,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                 <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                         <Shield className="h-4 w-4 text-muted-foreground" />
-                        <h4 className="text-sm font-semibold">Tax &amp; Identity</h4>
+                        <h3 className="text-sm font-semibold">Tax &amp; Identity</h3>
                         {data.kyc.payouts_enabled ? (
                             <Badge className="bg-success/15 text-success text-[10px]">Verified</Badge>
                         ) : data.kyc.details_submitted ? (
@@ -2493,7 +2605,7 @@ function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacyImporte
                 <div className="rounded-xl border border-border overflow-x-auto">
                     <div className="px-4 py-3 border-b border-border flex items-center gap-2">
                         <DollarSign className="h-4 w-4 text-muted-foreground" />
-                        <h4 className="text-sm font-semibold">Bonuses &amp; Adjustments</h4>
+                        <h3 className="text-sm font-semibold">Bonuses &amp; Adjustments</h3>
                         <Badge variant="outline" className="text-[10px] ml-auto">{bonuses.length} entries</Badge>
                     </div>
                     <Table>
@@ -2856,7 +2968,7 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
 
             {/* Certificates */}
             <div>
-                <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Award className="w-4 h-4 text-muted-foreground" />Certificates</h4>
+                <h3 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Award className="w-4 h-4 text-muted-foreground" />Certificates</h3>
                 {lms.certificates.length === 0 ? (
                     <p className="text-sm text-muted-foreground py-4 text-center">No certificates issued yet.</p>
                 ) : (
@@ -2884,7 +2996,7 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
             {/* Courses */}
             {t.courses.length > 0 && (
                 <div>
-                    <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><GraduationCap className="w-4 h-4 text-muted-foreground" />Courses</h4>
+                    <h3 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><GraduationCap className="w-4 h-4 text-muted-foreground" />Courses</h3>
                     <div className="space-y-2">
                         {t.courses.map((c, i) => {
                             const coursePct = Math.max(0, Math.min(100, Math.round(c.progress ?? 0)));
@@ -2910,7 +3022,7 @@ function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
 
             {/* History */}
             <div>
-                <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Clock className="w-4 h-4 text-muted-foreground" />History</h4>
+                <h3 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Clock className="w-4 h-4 text-muted-foreground" />History</h3>
                 {quizAttempts.length === 0 && communications.length === 0 ? (
                     <p className="text-sm text-muted-foreground py-4 text-center">No training history yet.</p>
                 ) : (
@@ -3307,7 +3419,7 @@ function DetailSection({ title, icon: Icon, children }: { title: string; icon: a
                 <div className="w-6 h-6 rounded-md bg-muted/60 flex items-center justify-center shrink-0">
                     <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                 </div>
-                <h4 className="text-sm font-semibold tracking-tight">{title}</h4>
+                <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
             </div>
             <div className="bg-muted/10 rounded-xl p-3.5 border border-border/60">
                 {children}

@@ -108,7 +108,7 @@ function rampColor(weight: number, max: number): { fill: string; stroke: string;
 }
 
 /**
- * Props the car host hands the React root. iternio's VirtualRenderer.kt:248 puts
+ * Props the car host hands the React root. iternio's VirtualRenderer.kt:289 (0.5.13) puts
  * `colorScheme` in the initial-properties bundle and MapTemplate.ts:199 passes
  * props straight through to this component — we simply never read them before.
  */

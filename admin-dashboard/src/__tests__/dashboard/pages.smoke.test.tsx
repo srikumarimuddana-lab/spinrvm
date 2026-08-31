@@ -531,6 +531,27 @@ describe("Dashboard page — /dashboard/drivers/import", () => {
   });
 });
 
+describe("Dashboard page — /dashboard/drivers/legacy-import", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/drivers/legacy-import/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+});
+
+describe("Dashboard page — /dashboard/drivers/legacy-sin-dob-backfill", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/drivers/legacy-sin-dob-backfill/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+});
+
+describe("Dashboard page — /dashboard/drivers/legacy-vehicle-history-backfill", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/drivers/legacy-vehicle-history-backfill/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+});
+
 describe("Dashboard page — /dashboard/bulk-operations", () => {
   it("renders without crashing", async () => {
     const { default: Page } = await import("@/app/dashboard/bulk-operations/page");

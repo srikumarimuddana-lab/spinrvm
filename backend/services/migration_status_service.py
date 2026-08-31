@@ -31,7 +31,12 @@ from typing import Any
 
 try:
     from ..supabase_client import supabase
+    from .migration_data_quality_service import build_data_quality_scan_plan, fetch_needs_review_ride_ids
 except ImportError:
+    from services.migration_data_quality_service import (  # type: ignore
+        build_data_quality_scan_plan,
+        fetch_needs_review_ride_ids,
+    )
     from supabase_client import supabase  # type: ignore
 
 # Mirrors the constants in each importer's own service module -- duplicated
@@ -440,8 +445,35 @@ def _tool_16_pre_launch_flag() -> ToolStatus:
     )
 
 
+def _tool_17_data_quality_scan() -> ToolStatus:
+    """Unlike every other tool above, there's no fixed "eligible population"
+    to divide by -- only a fraction of completed rides are ever expected to
+    have an issue at all, so an "X/Y" ratio against total completed rides
+    would misleadingly imply most rides need review. Instead this re-runs
+    the same live, read-only detection scan the admin tool's own Preview
+    button runs (build_data_quality_scan_plan, in
+    migration_data_quality_service.py) to get an honest "still pending"
+    count, and separately counts what's already flagged via
+    fetch_needs_review_ride_ids -- the same function the admin Rides page's
+    "Needs Review" filter uses, so this panel and that filter always agree.
+    """
+    pending = build_data_quality_scan_plan().stats.get("rides_affected", 0)
+    flagged = len(fetch_needs_review_ride_ids())
+    if pending == 0 and flagged == 0:
+        state, detail = "done", "No missing-driver/rider, placeholder-address, or $0-fare rows found"
+    elif pending == 0:
+        state, detail = "done", f"{flagged} row(s) flagged, 0 pending"
+    elif flagged == 0:
+        state, detail = "not_started", f"{pending} row(s) found needing review, not yet flagged"
+    else:
+        state, detail = "partial", f"{flagged} flagged, {pending} more pending"
+    return ToolStatus(
+        17, "data_quality_scan", "Migration Data Quality Scan", state, detail, "/dashboard/bulk-operations"
+    )
+
+
 def get_migration_status() -> MigrationStatusReport:
-    """Read-only. Runs every count query above and returns all 16 tool
+    """Read-only. Runs every count query above and returns all 17 tool
     statuses in the verified dependency order. No writes, no side effects."""
     eligible_ids = _eligible_driver_ids()
     imported_rides = _imported_ride_ids()
@@ -465,5 +497,6 @@ def get_migration_status() -> MigrationStatusReport:
             route_snapshots,
             route_backfill,
             _tool_16_pre_launch_flag(),
+            _tool_17_data_quality_scan(),
         ]
     )

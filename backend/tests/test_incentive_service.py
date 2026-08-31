@@ -1,62 +1,92 @@
 """services/incentive_service.py — the shared "which incentives apply" rule.
 
-The rule used to be copy-pasted five times, and the three display copies had
-drifted looser than the two settlement copies in ways that over-quoted the
-driver. These pin the settlement semantics the shared matcher now encodes:
+Two layers are pinned here:
 
-  - active only
-  - scoped to the ride's service area, or globally scoped when the ride has
-    none (NOT "every area's incentives")
-  - matching the ride's vehicle type, or untyped
-  - worth more than zero
+1. The historical filters (active / service area / vehicle type / amount > 0),
+   which were copy-pasted five times and had drifted looser on the three
+   display paths than on the two settlement paths.
+2. The eligibility columns migration 96 added and NOTHING honoured until
+   migration 375 — start_date/end_date, the conditions JSONB, bonus_type
+   ='percentage' and the max_budget cap. Those are gated on
+   `incentive_eligibility_enforced`, so both flag states are pinned: off must
+   reproduce the pre-375 behaviour exactly.
 """
 
+from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from backend.services.incentive_service import (
+    MatchedIncentive,
     incentive_display_payload,
     match_ride_incentives,
+    record_incentive_claims,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.anyio
+
+# 14:00 in America/Regina (UTC-6, no DST) — outside a 07-09/16-19 peak window.
+NOW = datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)
+
+RIDE = {
+    "service_area_id": "area-1",
+    "vehicle_type_id": "vt-std",
+    "distance_km": 10,
+    "driver_earnings": 15,
+}
 
 
 class _Chain:
-    """Supabase query-builder stand-in that records the filters applied."""
+    """Query-builder stand-in that applies eq/in_ for real, so a filter the code
+    relies on cannot be trivially satisfied by a stub that ignores it."""
 
-    def __init__(self, rows):
-        self._rows = rows
-        self.calls = []
+    def __init__(self, rows, log):
+        self.rows, self.log = list(rows), log
 
     def select(self, *a, **kw):
-        self.calls.append(("select", a))
         return self
 
-    def eq(self, *a, **kw):
-        self.calls.append(("eq", a))
+    def eq(self, col, val, *a, **kw):
+        self.log.append(("eq", (col, val)))
+        if col != "is_active":
+            self.rows = [r for r in self.rows if r.get(col) == val]
         return self
 
     def or_(self, *a, **kw):
-        self.calls.append(("or_", a))
+        self.log.append(("or_", a))
         return self
 
     def is_(self, *a, **kw):
-        self.calls.append(("is_", a))
+        self.log.append(("is_", a))
+        return self
+
+    def in_(self, col, vals, *a, **kw):
+        self.log.append(("in_", (col, tuple(vals))))
+        self.rows = [r for r in self.rows if r.get(col) in set(vals)]
         return self
 
     def execute(self):
-        return MagicMock(data=self._rows)
+        return MagicMock(data=self.rows)
 
 
-def _db(rows):
-    chain = _Chain(rows)
-    db = MagicMock()
-    db.supabase.table = MagicMock(return_value=chain)
-    db.run_sync = AsyncMock(side_effect=lambda fn: fn())
-    return db, chain
+class _DB:
+    def __init__(self, tables=None):
+        self.tables = tables or {}
+        self.log, self.inserted, self.updated = [], [], []
+        self.supabase = MagicMock()
+        self.supabase.table = lambda name: _Chain(self.tables.get(name, []), self.log)
+
+    async def run_sync(self, fn):
+        return fn()
+
+    async def insert_one(self, table, row):
+        self.inserted.append((table, row))
+        self.tables.setdefault(table, []).append(row)
+
+    async def update_one(self, table, filt, updates):
+        self.updated.append((table, filt, updates))
 
 
 def _inc(**kw):
@@ -64,96 +94,254 @@ def _inc(**kw):
         "id": "inc-1",
         "name": "Peak Bonus",
         "bonus_amount": "5.00",
+        "bonus_type": "flat",
         "incentive_type": "per_ride",
+        "conditions": {},
         "service_area_id": None,
         "vehicle_type_id": None,
+        "start_date": None,
+        "end_date": None,
+        "max_budget": None,
     }
     base.update(kw)
     return base
 
 
+async def _match(rows, *, ride=RIDE, claims=None, enforce=True, now=NOW):
+    db = _DB({"ride_incentives": rows, "ride_incentive_claims": claims or []})
+    return db, await match_ride_incentives(db, ride, now=now, enforce=enforce)
+
+
+# ── Historical filters (apply in both flag states) ──────────────────────────
+
+
 async def test_area_scoped_ride_accepts_global_and_own_area():
-    db, chain = _db([_inc()])
-    matched = await match_ride_incentives(
-        db, {"service_area_id": "area-1", "vehicle_type_id": "vt-std"}
-    )
-    assert [m["id"] for m in matched] == ["inc-1"]
-    or_args = [c[1][0] for c in chain.calls if c[0] == "or_"]
+    db, matched = await _match([_inc()], enforce=False)
+    assert [m.id for m in matched] == ["inc-1"]
+    or_args = [c[1][0] for c in db.log if c[0] == "or_"]
     assert or_args == ["service_area_id.is.null,service_area_id.eq.area-1"]
 
 
 async def test_ride_without_service_area_only_matches_global_incentives():
-    """The regression this module exists for.
-
-    Settlement restricts an area-less ride to globally-scoped incentives; the
-    display paths applied no area filter at all and so quoted every area's
-    bonus, none of which would ever be claimed.
-    """
-    db, chain = _db([_inc()])
-    await match_ride_incentives(db, {"service_area_id": None, "vehicle_type_id": "vt-std"})
-    assert ("is_", ("service_area_id", "null")) in chain.calls
-    assert not [c for c in chain.calls if c[0] == "or_"]
+    """Settlement restricted an area-less ride to globally-scoped incentives;
+    the display paths applied no area filter and quoted every area's bonus."""
+    db, _ = await _match([_inc()], ride={**RIDE, "service_area_id": None}, enforce=False)
+    assert ("is_", ("service_area_id", "null")) in db.log
+    assert not [c for c in db.log if c[0] == "or_"]
 
 
-async def test_zero_value_incentive_is_never_quoted():
-    """Settlement skips bonus_amount <= 0; the display paths counted it and
-    rendered a +$0.00 chip for an incentive disabled by zeroing."""
-    db, _ = _db([_inc(id="zero", bonus_amount="0"), _inc(id="live", bonus_amount="2.25")])
-    matched = await match_ride_incentives(db, {"service_area_id": "area-1"})
-    assert [m["id"] for m in matched] == ["live"]
-
-
-async def test_negative_incentive_is_skipped():
-    db, _ = _db([_inc(bonus_amount="-1.00")])
-    assert await match_ride_incentives(db, {"service_area_id": "area-1"}) == []
+async def test_zero_and_negative_incentives_are_never_quoted():
+    _, matched = await _match(
+        [_inc(id="zero", bonus_amount="0"), _inc(id="neg", bonus_amount="-1"), _inc(id="live")],
+        enforce=False,
+    )
+    assert [m.id for m in matched] == ["live"]
 
 
 async def test_other_vehicle_type_is_skipped_and_untyped_is_kept():
-    db, _ = _db([_inc(id="xl", vehicle_type_id="vt-xl"), _inc(id="any", vehicle_type_id=None)])
-    matched = await match_ride_incentives(
-        db, {"service_area_id": "area-1", "vehicle_type_id": "vt-std"}
+    _, matched = await _match(
+        [_inc(id="xl", vehicle_type_id="vt-xl"), _inc(id="any", vehicle_type_id=None)],
+        enforce=False,
     )
-    assert [m["id"] for m in matched] == ["any"]
+    assert [m.id for m in matched] == ["any"]
 
 
 async def test_only_active_incentives_are_queried():
-    db, chain = _db([])
-    await match_ride_incentives(db, {"service_area_id": "area-1"})
-    assert ("eq", ("is_active", True)) in chain.calls
+    db, _ = await _match([], enforce=False)
+    assert ("eq", ("is_active", True)) in db.log
 
 
 async def test_db_failure_raises_rather_than_quoting_zero():
-    """An empty result and a failed lookup mean different things to a driver
-    being quoted a bonus — each caller decides how to degrade, so the matcher
-    must not swallow the error into an empty list."""
-    db = MagicMock()
+    db = _DB()
     db.supabase.table = MagicMock(side_effect=RuntimeError("ride_incentives down"))
     with pytest.raises(RuntimeError):
-        await match_ride_incentives(db, {"service_area_id": "area-1"})
+        await match_ride_incentives(db, RIDE, enforce=False)
+
+
+# ── Flag OFF must reproduce pre-375 behaviour exactly ───────────────────────
+
+
+async def test_flag_off_still_pays_an_expired_over_budget_incentive():
+    """The whole point of the rollout flag: off changes nothing, so this ships
+    dark and can be verified on staging before it moves any money."""
+    _, matched = await _match(
+        [_inc(end_date="2026-01-01T00:00:00Z", max_budget=100)],
+        claims=[{"ride_id": "r0", "incentive_id": "inc-1", "bonus_amount": "999"}],
+        enforce=False,
+    )
+    assert [str(m.bonus) for m in matched] == ["5.00"]
+
+
+async def test_flag_off_pays_a_percentage_incentive_as_dollars():
+    """Pre-375 bug, preserved while the flag is off: bonus_amount=10 on a
+    percentage row was paid as $10, not 10%."""
+    _, matched = await _match([_inc(bonus_amount="10", bonus_type="percentage")], enforce=False)
+    assert matched[0].bonus == Decimal("10.00")
+
+
+# ── Flag ON: date window ────────────────────────────────────────────────────
+
+
+async def test_expired_campaign_is_skipped():
+    _, matched = await _match([_inc(end_date="2026-01-01T00:00:00Z")])
+    assert matched == []
+
+
+async def test_campaign_not_yet_started_is_skipped():
+    _, matched = await _match([_inc(start_date="2026-12-01T00:00:00Z")])
+    assert matched == []
+
+
+async def test_campaign_inside_its_window_is_paid():
+    _, matched = await _match(
+        [_inc(start_date="2026-01-01T00:00:00Z", end_date="2026-12-31T00:00:00Z")]
+    )
+    assert len(matched) == 1
+
+
+async def test_unparseable_date_bound_fails_open():
+    """A malformed date must not silently withhold a bonus a driver was quoted;
+    it logs at error and the bound is treated as open."""
+    _, matched = await _match([_inc(end_date="not-a-date")])
+    assert len(matched) == 1
+
+
+# ── Flag ON: budget cap ─────────────────────────────────────────────────────
+
+
+async def test_budget_cap_is_enforced_from_the_claims_ledger():
+    """budget_used was never incremented by anything, so the ledger — not that
+    column — is the source of truth for how much a campaign has paid out."""
+    _, matched = await _match(
+        [_inc(max_budget=100)],
+        claims=[{"ride_id": "r0", "incentive_id": "inc-1", "bonus_amount": "96"}],
+    )
+    assert matched == []
+
+
+async def test_bonus_that_exactly_reaches_the_cap_is_still_paid():
+    _, matched = await _match(
+        [_inc(max_budget=100)],
+        claims=[{"ride_id": "r0", "incentive_id": "inc-1", "bonus_amount": "95"}],
+    )
+    assert len(matched) == 1
+
+
+async def test_uncapped_incentive_skips_the_ledger_read_entirely():
+    """The budget sum runs on the dispatch hot path, so an uncapped fleet must
+    not pay for a query it cannot use."""
+    db, matched = await _match([_inc(max_budget=None)])
+    assert len(matched) == 1
+    assert not [c for c in db.log if c[0] == "in_"]
+
+
+# ── Flag ON: conditions JSONB ───────────────────────────────────────────────
+
+
+async def test_min_distance_condition_is_enforced_on_the_booked_distance():
+    _, short = await _match([_inc(conditions={"min_distance_km": 20})])
+    _, long_enough = await _match([_inc(conditions={"min_distance_km": 5})])
+    assert short == []
+    assert len(long_enough) == 1
+
+
+async def test_peak_hours_are_evaluated_in_local_time_not_utc():
+    """NOW is 20:00 UTC = 14:00 in America/Regina. A 16-19 window must not
+    match; evaluating in UTC would wrongly place it inside."""
+    _, outside = await _match([_inc(conditions={"peak_hours": [7, 9, 16, 19]})])
+    _, inside = await _match([_inc(conditions={"peak_hours": [12, 15]})])
+    assert outside == []
+    assert len(inside) == 1
+
+
+async def test_malformed_peak_hours_fails_open():
+    _, matched = await _match([_inc(conditions={"peak_hours": [7, 9, 16]})])
+    assert len(matched) == 1
+
+
+async def test_empty_conditions_impose_no_constraint():
+    _, matched = await _match([_inc(incentive_type="min_distance", conditions={})])
+    assert len(matched) == 1
+
+
+# ── Flag ON: percentage bonuses ─────────────────────────────────────────────
+
+
+async def test_percentage_bonus_resolves_against_the_driver_fare_share():
+    _, matched = await _match([_inc(bonus_amount="10", bonus_type="percentage")])
+    assert matched[0].bonus == Decimal("1.50")  # 10% of driver_earnings 15
+
+
+async def test_percentage_bonus_rounding_to_zero_is_dropped():
+    _, matched = await _match(
+        [_inc(bonus_amount="1", bonus_type="percentage")],
+        ride={**RIDE, "driver_earnings": 0.2},
+    )
+    assert matched == []
+
+
+# ── Display payload ─────────────────────────────────────────────────────────
 
 
 def test_display_payload_shape_and_total():
     items, total = incentive_display_payload(
-        [_inc(name="Peak Bonus", bonus_amount="5.00"), _inc(name="Airport", bonus_amount="1.50")]
+        [
+            MatchedIncentive(id="a", name="Peak Bonus", incentive_type="per_ride", bonus=Decimal("5.00")),
+            MatchedIncentive(id="b", name="Airport", incentive_type="area_boost", bonus=Decimal("1.50")),
+        ]
     )
     assert items == [
         {"name": "Peak Bonus", "bonus_amount": 5.0, "incentive_type": "per_ride"},
-        {"name": "Airport", "bonus_amount": 1.5, "incentive_type": "per_ride"},
+        {"name": "Airport", "bonus_amount": 1.5, "incentive_type": "area_boost"},
     ]
     assert total == 6.5
 
 
 def test_display_payload_totals_in_decimal_not_float():
-    """0.1 + 0.2 in binary floats is 0.30000000000000004 — the driver-facing
-    total must not carry that."""
-    items, total = incentive_display_payload(
-        [_inc(bonus_amount="0.10"), _inc(bonus_amount="0.20")]
+    """0.1 + 0.2 in binary floats is 0.30000000000000004."""
+    _, total = incentive_display_payload(
+        [
+            MatchedIncentive(id="a", name="A", incentive_type="per_ride", bonus=Decimal("0.10")),
+            MatchedIncentive(id="b", name="B", incentive_type="per_ride", bonus=Decimal("0.20")),
+        ]
     )
     assert total == 0.30
-    assert Decimal(str(total)) == Decimal("0.30")
 
 
-def test_display_payload_defaults_missing_name_and_type():
-    """Both driver clients type incentive_type as always-present."""
-    items, _ = incentive_display_payload([{"bonus_amount": "3.00"}])
-    assert items == [{"name": "Incentive", "bonus_amount": 3.0, "incentive_type": "per_ride"}]
+# ── Claim recording ─────────────────────────────────────────────────────────
+
+
+async def test_claims_are_written_and_budget_used_refreshed():
+    db = _DB({"ride_incentive_claims": [{"ride_id": "r0", "incentive_id": "inc-1", "bonus_amount": "90"}]})
+    matched = [MatchedIncentive(id="inc-1", name="Peak", incentive_type="per_ride", bonus=Decimal("5.00"))]
+
+    total = await record_incentive_claims(db, "ride-9", "drv-1", matched, now=NOW)
+
+    assert total == Decimal("5.00")
+    assert [r["incentive_id"] for _, r in db.inserted] == ["inc-1"]
+    assert db.inserted[0][1]["ride_id"] == "ride-9"
+    # Recomputed from the ledger (90 prior + 5 new), never incremented in place.
+    assert db.updated == [("ride_incentives", {"id": "inc-1"}, {"budget_used": 95.0})]
+
+
+async def test_a_retried_settlement_never_pays_the_same_bonus_twice():
+    db = _DB({"ride_incentive_claims": [{"ride_id": "ride-9", "incentive_id": "inc-1", "bonus_amount": "5.00"}]})
+    matched = [MatchedIncentive(id="inc-1", name="Peak", incentive_type="per_ride", bonus=Decimal("5.00"))]
+
+    total = await record_incentive_claims(db, "ride-9", "drv-1", matched, now=NOW)
+
+    assert total == Decimal("0")
+    assert db.inserted == []
+
+
+async def test_a_claim_on_another_ride_does_not_block_this_one():
+    db = _DB({"ride_incentive_claims": [{"ride_id": "other", "incentive_id": "inc-1", "bonus_amount": "5.00"}]})
+    matched = [MatchedIncentive(id="inc-1", name="Peak", incentive_type="per_ride", bonus=Decimal("5.00"))]
+
+    assert await record_incentive_claims(db, "ride-9", "drv-1", matched, now=NOW) == Decimal("5.00")
+
+
+async def test_nothing_matched_writes_nothing():
+    db = _DB()
+    assert await record_incentive_claims(db, "ride-9", "drv-1", [], now=NOW) == Decimal("0")
+    assert db.inserted == []

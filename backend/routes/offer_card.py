@@ -111,7 +111,11 @@ async def _build_offer_card_response(ride_id: str, t: str) -> Response:
             await match_ride_incentives(db_supabase, ride)
         )
     except Exception:
-        logger.warning("offer-card: incentive lookup failed for %s", ride_id, exc_info=True)
+        # Still fails open — the banner matters more than the pill — but at
+        # error level: a driver quoted no bonus on a ride that carries one is an
+        # actionable failure, not a recoverable anomaly (CLAUDE.md, "Do not
+        # silently swallow errors").
+        logger.error("offer-card: incentive lookup failed for %s", ride_id, exc_info=True)
         _total_bonus = 0.0
 
     png = render_offer_card(

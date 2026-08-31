@@ -1,7 +1,6 @@
 /**
- * app/login.tsx — broader coverage beyond loginConsentCheckbox.test.tsx
- * (which pins only the explicit unchecked-by-default consent checkbox's
- * gating of the continue button).
+ * app/login.tsx — broader coverage beyond loginClickwrapConsent.test.tsx
+ * (which pins the clickwrap consent disclosure that replaced the checkbox).
  *
  * Pins:
  *  - the focus-effect redirect: already-authenticated (truthy
@@ -24,10 +23,9 @@ jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
-// Resolves to null by default (no device has "authenticated before"), which
-// keeps hasAuthenticatedBefore false and the consent checkbox visible for
-// every existing test below — matches this suite's assumption that the
-// checkbox/legal links are always present unless a test says otherwise.
+// login.tsx itself no longer touches AsyncStorage (the consent checkbox that
+// read it is gone), but modules it pulls in still do, so the mock stays to
+// keep these tests off real device storage.
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(() => Promise.resolve(null)),
   setItem: jest.fn(() => Promise.resolve()),
@@ -91,10 +89,6 @@ function getContinueButton(renderer: TestRenderer.ReactTestRenderer) {
   return renderer.root.findByProps({ accessibilityLabel: 'Send verification code' });
 }
 
-function toggleConsent(renderer: TestRenderer.ReactTestRenderer) {
-  act(() => { renderer.root.findByProps({ accessibilityRole: 'checkbox' }).props.onPress(); });
-}
-
 async function tapContinue(renderer: TestRenderer.ReactTestRenderer) {
   await act(async () => {
     await getContinueButton(renderer).props.onPress();
@@ -133,7 +127,6 @@ describe('handleSendCode branches', () => {
     mockApiPost.mockResolvedValue({ data: { success: false } });
     const r = await renderScreen();
     enterPhone(r, '3065550199');
-    toggleConsent(r);
     await tapContinue(r);
     expect(mockShowToast).toHaveBeenCalledWith('Code Not Sent', 'Could not send verification code. Please try again.', 'danger');
     expect(mockPush).not.toHaveBeenCalled();
@@ -145,7 +138,6 @@ describe('handleSendCode branches', () => {
     mockApiPost.mockRejectedValue(err);
     const r = await renderScreen();
     enterPhone(r, '3065550199');
-    toggleConsent(r);
     await tapContinue(r);
     expect(mockShowToast).toHaveBeenCalledWith('Sign-in Unavailable', 'Verification is temporarily unavailable.', 'danger');
   });
@@ -154,7 +146,6 @@ describe('handleSendCode branches', () => {
     mockApiPost.mockRejectedValue(new Error());
     const r = await renderScreen();
     enterPhone(r, '3065550199');
-    toggleConsent(r);
     await tapContinue(r);
     expect(mockShowToast).toHaveBeenCalledWith('Connection Error', 'Unable to reach server. Please check your connection.', 'danger');
   });
@@ -163,7 +154,6 @@ describe('handleSendCode branches', () => {
     mockApiPost.mockRejectedValue(new Error());
     const r = await renderScreen();
     enterPhone(r, '3065550199');
-    toggleConsent(r);
     await tapContinue(r);
     expect(getContinueButton(r).props.accessibilityState).toMatchObject({ disabled: false });
   });
@@ -173,7 +163,6 @@ describe('handleSendCode branches', () => {
     mockApiPost.mockReturnValue(new Promise((resolve) => { resolveFn = resolve; }));
     const r = await renderScreen();
     enterPhone(r, '3065550199');
-    toggleConsent(r);
     act(() => { getContinueButton(r).props.onPress(); });
     expect(getContinueButton(r).props.accessibilityState).toMatchObject({ disabled: true });
     await act(async () => { resolveFn({ data: { success: true } }); await Promise.resolve(); });

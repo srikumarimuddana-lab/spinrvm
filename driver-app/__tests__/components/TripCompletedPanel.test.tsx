@@ -88,6 +88,43 @@ describe('TripCompletedPanel', () => {
     expect(getAllByText('$12.00').length).toBeGreaterThanOrEqual(1);
   });
 
+  // The offer, the in-trip panel and this screen must quote one number.
+  // driver_earnings is fare-only (the bonus lives in ride_incentive_claims and
+  // reaches the client as incentive_amount / total_earned), so falling back to
+  // it made the headline drop by the bonus the instant the trip ended.
+  describe('incentive bonus', () => {
+    it('shows total_earned, not the fare-only driver_earnings', () => {
+      const { getAllByText, queryByText } = renderWithSafeArea(
+        <TripCompletedPanel
+          {...defaultProps}
+          completedRide={{ ...mockCompletedRide, incentive_amount: 5, total_earned: 17 }}
+        />,
+      );
+      expect(getAllByText('$17.00').length).toBeGreaterThanOrEqual(1);
+      expect(queryByText('$12.00')).toBeNull();
+      expect(getAllByText('tripCompleted.bonus').length).toBeGreaterThanOrEqual(1);
+      expect(getAllByText('$5.00').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('adds the bonus itself when total_earned is absent (legacy response)', () => {
+      const { getAllByText } = renderWithSafeArea(
+        <TripCompletedPanel
+          {...defaultProps}
+          completedRide={{ ...mockCompletedRide, incentive_amount: 5 }}
+        />,
+      );
+      expect(getAllByText('$17.00').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('shows no bonus row and the plain fare when there is no incentive', () => {
+      const { getAllByText, queryByText } = renderWithSafeArea(
+        <TripCompletedPanel {...defaultProps} />,
+      );
+      expect(getAllByText('$12.00').length).toBeGreaterThanOrEqual(1);
+      expect(queryByText('tripCompleted.bonus')).toBeNull();
+    });
+  });
+
   it('shows fare breakdown labels', () => {
     const { getByText, getAllByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
     expect(getByText('tripCompleted.baseFare')).toBeTruthy();

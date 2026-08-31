@@ -45,10 +45,13 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).not.toContain('fetchFallbackRoute');
   });
 
-  it('includes revisioned snapshot and incomplete-quality copy in the client PDF HTML', () => {
-    expect(source).toContain('Actual route (revision ${routeRevision})');
-    expect(source).toContain('Route snapshot unavailable');
-    expect(source).toContain('routeQualityLabel');
+  it('gates the receipt snapshot on a matching revision, without provenance copy', () => {
+    // routeRevision still decides whether the snapshot is the CURRENT one — a
+    // stale image must never reach a receipt. What went away is the caption
+    // that printed the revision number and the GPS-coverage quality beside it.
+    expect(source).toContain('_num(ride?.snapshot_revision) === routeRevision');
+    expect(source).not.toContain('Actual route (revision ${routeRevision})');
+    expect(source).not.toContain('Route snapshot unavailable');
   });
 
   it('keeps route-provenance diagnostics off the rider screen', () => {
@@ -58,11 +61,15 @@ describe('ride-details v2 route rendering contract', () => {
     // the fare line carries the disclosure that matters: the backend relabels it
     // to "Ride fare (X km booked)" whenever the charged distance is the booking
     // estimate rather than a GPS measurement (relabel_booked_distance_lines).
-    expect(source).not.toContain('styles.routeQualityText');
     expect(source).not.toContain('Actual route processing');
     expect(source).not.toContain('Actual route unavailable');
-    // routeQualityLabel itself stays — the emailed receipt still prints it.
-    expect(source).toContain('routeQualityLabel');
+    // The emailed receipt dropped its quality caption too, so the screen no
+    // longer imports the helper at all. It stays in shared/ for admin-dashboard
+    // and driver-app, which are the surfaces that still want the diagnostic.
+    expect(source).not.toContain('routeQualityLabel');
+    // The one line still under the map is the imported-ride notice, which
+    // explains an empty map rather than reporting GPS provenance.
+    expect(source).toContain('Imported from the previous app');
   });
 
   it('shows the GPS-measured distance in the stats tile and labels it as measured', () => {

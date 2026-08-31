@@ -58,9 +58,12 @@ except ImportError:
     from utils.route_finalizer import mark_route_pending  # type: ignore
 
 try:
-    from ...repositories._base import _postgrest_or_value
+    from ...services.incentive_service import match_ride_incentives, record_incentive_claims
 except ImportError:
-    from repositories._base import _postgrest_or_value  # type: ignore
+    from services.incentive_service import (  # type: ignore
+        match_ride_incentives,
+        record_incentive_claims,
+    )
 
 try:
     from ...utils.trip_distance import compute_trip_distances, load_ride_breadcrumbs
@@ -758,40 +761,18 @@ async def complete_ride(
     # at read time by get_ride() and exposed as incentive_amount / total_earned.
     _total_bonus = Decimal("0")
     try:
-        sa_id = ride.get("service_area_id")
-        vt_id = ride.get("vehicle_type_id")
-        iq = (
-            db_supabase.supabase.table("ride_incentives")
-            .select("id, bonus_amount, vehicle_type_id")
-            .eq("is_active", True)
+        # Same matcher the offer, the offer-card banner and the active-ride read
+        # use, evaluated against the ride row as the driver was shown it — so
+        # the bonus quoted at offer time is the bonus claimed here. Eligibility
+        # (dates, conditions, budget cap) is gated on
+        # `incentive_eligibility_enforced`; see services/incentive_service.py.
+        _total_bonus = await record_incentive_claims(
+            db_supabase,
+            ride_id,
+            driver["id"],
+            await match_ride_incentives(db_supabase, ride),
+            now=datetime.now(timezone.utc),
         )
-        if sa_id:
-            # `sa_id` is routed through `_postgrest_or_value` per CLAUDE.md's
-            # "Query filters" convention — the layer owns escaping reserved
-            # `,()"\` characters so a malformed value can't silently corrupt
-            # or widen the or-clause.
-            iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{_postgrest_or_value(sa_id)}")
-        else:
-            iq = iq.is_("service_area_id", "null")
-        inc_result = await db_supabase.run_sync(iq.execute)
-        for inc in inc_result.data or []:
-            if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
-                continue
-            ba = Decimal(str(inc.get("bonus_amount") or 0))
-            if ba <= 0:
-                continue
-            await db_supabase.insert_one(
-                "ride_incentive_claims",
-                {
-                    "id": str(uuid.uuid4()),
-                    "ride_id": ride_id,
-                    "driver_id": driver["id"],
-                    "incentive_id": inc["id"],
-                    "bonus_amount": float(ba.quantize(Decimal("0.01"))),
-                    "claimed_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-            _total_bonus += ba
         if _total_bonus > 0:
             logger.info(
                 "complete_ride: claimed %s incentive bonus for ride %s (driver %s)",
@@ -811,6 +792,7 @@ async def complete_ride(
     # Freeze the full breakdown so totals never drift from recomputation.
     # _total_bonus comes from the incentive block above; default to 0 if
     # the variable wasn't set (incentive block errored before assignment).
+    _earnings_snapshot = None
     try:
         # The driver's ride-fare share = total_fare − booking − airport (the
         # driver keeps the minimum-fare uplift, 0% commission). Derive from the
@@ -835,6 +817,7 @@ async def complete_ride(
             tax=ride.get("tax_amount") or 0,
             cancel_fee=ride.get("cancellation_fee_driver") or 0,
         )
+        _earnings_snapshot = _snapshot
         await db_supabase.update_one("rides", {"id": ride_id}, {"driver_earnings_snapshot": _snapshot})
     except Exception:
         logger.error("complete_ride: driver_earnings_snapshot failed for ride %s", ride_id, exc_info=True)
@@ -996,6 +979,17 @@ async def complete_ride(
         )
 
     response = serialize_ride_for_driver(completed_ride)
+    # rides.driver_earnings is fare-only by design — the bonus lives in
+    # ride_incentive_claims. Without these two fields the post-trip panel has
+    # only the fare to render, so a driver who was quoted fare+bonus at offer
+    # time and through the whole trip watches the figure drop the moment they
+    # tap Complete. Same names get_ride() uses, so both driver screens read one
+    # vocabulary. total_earned comes from the frozen snapshot's exact Decimal
+    # sum; if that write failed above (already logged at error) the field is
+    # omitted and the client falls back to driver_earnings.
+    response["incentive_amount"] = float(_total_bonus.quantize(Decimal("0.01")))
+    if _earnings_snapshot is not None:
+        response["total_earned"] = _earnings_snapshot["total"]
     response["location_ack"] = completion_location.location_ack
     response["legacy_client_missing_tail"] = completion_location.legacy_client_missing_tail
     response["completion_distance_band"] = completion_location.distance_band

@@ -4,6 +4,14 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+try:
+    from ...services.incentive_service import match_ride_incentives, record_incentive_claims
+except ImportError:  # pragma: no cover - dual-import pattern
+    from services.incentive_service import (  # type: ignore
+        match_ride_incentives,
+        record_incentive_claims,
+    )
+
 from . import _deps
 from ._deps import (  # noqa: F401
     EVENT_END,
@@ -221,44 +229,21 @@ async def rider_complete_ride(
     else:
         _quota_offline = None
 
-    # ── Record incentive claims (same logic as drivers.py complete_ride) ──
+    # ── Record incentive claims (shared matcher — see incentive_service.py) ──
+    # This used to hand-roll the same rule as drivers.py complete_ride and had
+    # already drifted from it (unescaped or-clause, and a total that re-derived
+    # the sum from the raw rows rather than from what was actually inserted).
+    # Both settlement paths and all three display paths now evaluate one rule,
+    # so what a driver is quoted is what they are paid.
     _rider_incentive_total = Decimal("0")
     if driver_id:
         try:
-            sa_id = ride.get("service_area_id")
-            vt_id = ride.get("vehicle_type_id")
-            iq = (
-                _deps.db_supabase.supabase.table("ride_incentives")
-                .select("id, bonus_amount, vehicle_type_id")
-                .eq("is_active", True)
-            )
-            if sa_id:
-                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
-            else:
-                iq = iq.is_("service_area_id", "null")
-            inc_result = await _deps.db_supabase.run_sync(iq.execute)
-            for inc in inc_result.data or []:
-                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
-                    continue
-                ba = Decimal(str(inc.get("bonus_amount") or 0))
-                if ba <= 0:
-                    continue
-                await _deps.db_supabase.insert_one(
-                    "ride_incentive_claims",
-                    {
-                        "id": str(uuid.uuid4()),
-                        "ride_id": ride_id,
-                        "driver_id": driver_id,
-                        "incentive_id": inc["id"],
-                        "bonus_amount": float(ba.quantize(Decimal("0.01"))),
-                        "claimed_at": now.isoformat(),
-                    },
-                )
-            _rider_incentive_total = sum(
-                Decimal(str(inc.get("bonus_amount") or 0))
-                for inc in (inc_result.data or [])
-                if (not inc.get("vehicle_type_id") or inc["vehicle_type_id"] == vt_id)
-                and Decimal(str(inc.get("bonus_amount") or 0)) > 0
+            _rider_incentive_total = await record_incentive_claims(
+                _deps.db_supabase,
+                ride_id,
+                driver_id,
+                await match_ride_incentives(_deps.db_supabase, ride),
+                now=now,
             )
         except Exception:
             # Fail-open by design: the ride is ALREADY flipped to `completed` by

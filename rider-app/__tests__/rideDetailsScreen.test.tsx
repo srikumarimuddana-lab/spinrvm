@@ -440,23 +440,45 @@ describe('buildReceiptHtml', () => {
       id: 'r10', route_schema_version: 2, route_revision: 3, snapshot_revision: 3,
       route_snapshot_url: 'https://cdn.example.com/route.png', route_quality: 'good',
     });
-    expect(html).toContain('Actual route (revision 3)');
     expect(html).toContain('https://cdn.example.com/route.png');
+    expect(html).toContain('alt="Actual route"');
+    // Revision number and GPS-coverage copy are operator diagnostics — admin only.
+    expect(html).not.toContain('revision 3');
   });
 
-  it('shows "Route snapshot unavailable" when v2 but the snapshot revision does not match', () => {
+  it('renders no map at all when v2 but the snapshot revision does not match', () => {
     const html = buildReceiptHtml({
       id: 'r11', route_schema_version: 2, route_revision: 3, snapshot_revision: 1,
       route_snapshot_url: 'https://cdn.example.com/stale.png',
     });
-    expect(html).toContain('Route snapshot unavailable');
+    // The never-a-stale-snapshot rule is what matters and is unchanged; the
+    // "Route snapshot unavailable · <quality>" line that used to explain it is
+    // provenance copy and no longer appears on a rider-facing receipt.
     expect(html).not.toContain('stale.png');
+    expect(html).not.toContain('Route snapshot unavailable');
   });
 
   it('falls back to a "Planned route" image for legacy (pre-v2) rides with a snapshot url', () => {
     const html = buildReceiptHtml({ id: 'r12', route_snapshot_url: 'https://cdn.example.com/planned.png' });
-    expect(html).toContain('Planned route');
     expect(html).toContain('planned.png');
+    // Kept as alt text for screen readers, not as visible caption copy.
+    expect(html).toContain('alt="Planned route"');
+    expect(html).not.toContain('>Planned route</p>');
+  });
+
+  it('prints no route-quality copy on the receipt for any route state', () => {
+    for (const ride of [
+      { id: 'q1', route_schema_version: 2, route_revision: 3, snapshot_revision: 3, route_snapshot_url: 'https://cdn.example.com/a.png', route_quality: { observed_distance_ratio: 0.59, inferred_distance_ratio: 0.41 } },
+      { id: 'q2', route_schema_version: 2, route_revision: 3, snapshot_revision: 1, route_quality: { coverage_ratio: 0.4, missing_tail: true } },
+      { id: 'q3', route_snapshot_url: 'https://cdn.example.com/b.png' },
+    ]) {
+      const html = buildReceiptHtml(ride);
+      expect(html).not.toContain('GPS observed');
+      expect(html).not.toContain('GPS coverage');
+      expect(html).not.toContain('Route reconstructed');
+      expect(html).not.toContain('Route verified');
+      expect(html).not.toContain('Route incomplete');
+    }
   });
 
   it('uses "—" as the ride code fallback when neither ride_code nor id is present', () => {
@@ -594,6 +616,14 @@ describe('map rendering (pickup_lat/dropoff_lat present)', () => {
     });
     const rProcessing = await renderScreen();
     forbidden.forEach((s) => expect(allText(rProcessing)).not.toContain(s));
+  });
+
+  it('still explains an imported ride\'s empty map', async () => {
+    // Not provenance copy: the "Imported" badge alone does not tell a rider why
+    // the map is blank, so this notice is deliberately kept (f0e0d5d).
+    mockApiGet.mockResolvedValue({ data: { ...RIDE_WITH_COORDS, show_legacy_badge: true } });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Imported from the previous app — no GPS was recorded for this ride');
   });
 });
 

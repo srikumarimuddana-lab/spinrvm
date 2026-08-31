@@ -82,3 +82,57 @@ describe('CarMarker — mount bounce-in (round 8)', () => {
     });
   });
 });
+
+describe('CarMarker — state-colored presence ring (round 9)', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+
+  it('renders a static ring (pulsing: false) without starting a loop', () => {
+    const { unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />,
+    );
+    act(() => {
+      jest.advanceTimersByTime(6000);
+    });
+    expect(() => unmount()).not.toThrow();
+  });
+
+  it('runs the pulse loop through several cycles and unmounts cleanly (loop.stop() reached)', () => {
+    const { unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#F59E0B', pulsing: true }} />,
+    );
+    // Several 1400ms pulse cycles, well past every other internal timer too.
+    act(() => {
+      jest.advanceTimersByTime(1400 * 4);
+    });
+    expect(() => unmount()).not.toThrow();
+  });
+
+  it('starting without a ring, then re-rendering into a pulsing ring, does not throw', () => {
+    const { rerender, unmount } = render(<CarMarker coordinate={coord} />);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(() =>
+      rerender(<CarMarker coordinate={coord} ring={{ color: '#EF4444', pulsing: true }} />),
+    ).not.toThrow();
+    act(() => {
+      jest.advanceTimersByTime(2800);
+    });
+    // Toggling pulsing off (e.g. a ride transitioning idle -> in-trip) must
+    // stop the loop rather than leaving it running against a stale target.
+    expect(() =>
+      rerender(<CarMarker coordinate={coord} ring={{ color: '#EF4444', pulsing: false }} />),
+    ).not.toThrow();
+    act(() => {
+      jest.advanceTimersByTime(2800);
+    });
+    expect(() => unmount()).not.toThrow();
+  });
+});

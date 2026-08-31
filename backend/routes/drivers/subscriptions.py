@@ -1758,6 +1758,40 @@ async def check_expiring_subscriptions():
                     if not driver or not driver.get("is_online"):
                         continue
 
+                    # #4597: never force a driver offline mid-trip. Flipping
+                    # is_online=False here writes an insurance Period 0
+                    # (personal auto) transition; doing that while the driver
+                    # is en route to pickup (Period 2) or carrying a passenger
+                    # (Period 3) misclassifies a live commercial trip as
+                    # personal-auto-only coverage — a regulatory/insurance
+                    # liability. Mirror the go_online offline guard
+                    # (routes/drivers/status.py): if the driver is on a ride
+                    # they are already obligated to, defer enforcement to a
+                    # later tick (the sub stays 'expired', so once the ride
+                    # completes and they next go offline/online the gate still
+                    # applies).
+                    active_ride = await _deps.db.get_rows(
+                        "rides",
+                        {
+                            "driver_id": driver["id"],
+                            "status": {
+                                "$in": [
+                                    RideStatus.DRIVER_ASSIGNED,
+                                    RideStatus.DRIVER_ACCEPTED,
+                                    RideStatus.DRIVER_ARRIVED,
+                                    RideStatus.IN_PROGRESS,
+                                ]
+                            },
+                        },
+                        limit=1,
+                    )
+                    if active_ride:
+                        logger.info(
+                            f"[SUB-EXPIRY] Deferred offline flip for driver {driver['id']}: "
+                            "active ride in progress (insurance-period guard #4597)"
+                        )
+                        continue
+
                     try:
                         await _deps.db.update_one(
                             "drivers",

@@ -56,6 +56,7 @@ import {
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import AllowanceDialog from "./allowance-dialog";
 import { useToast } from "@/components/ui/use-toast";
+import { isInviteEmailProvided, isInviteEmailFormatValid } from "@/lib/companyMemberInviteSchema";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -192,9 +193,8 @@ export default function CompanyMembersPage() {
 
     async function handleInvite(e: React.FormEvent) {
         e.preventDefault();
-        if (!inviteEmail) return;
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(inviteEmail.trim())) {
+        if (!isInviteEmailProvided(inviteEmail)) return;
+        if (!isInviteEmailFormatValid(inviteEmail)) {
             toast({ title: "Invalid email address", description: "Please enter a valid email", variant: "destructive" });
             return;
         }

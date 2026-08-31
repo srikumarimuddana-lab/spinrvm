@@ -11866,6 +11866,29 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 13 candidates from the broader sweep (6
   driver-app candidates; 6 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 23 done: `admin-dashboard/src/app/dashboard/corporate-accounts/[id]/members/page.tsx`'s
+  invite-email validation (seventh admin-dashboard candidate,
+  invite-email regex).** Extracted `handleInvite`'s two sequential
+  checks (non-empty; matches the page's hand-rolled email-shape regex)
+  into new `admin-dashboard/src/lib/companyMemberInviteSchema.ts`
+  (`isInviteEmailProvided`, `isInviteEmailFormatValid` + a documentation
+  zod schema — the original regex was kept as-is rather than swapped for
+  zod's built-in `.email()`, since that validator accepts/rejects a
+  different string set). Pure extraction, byte-for-byte identical to the
+  original checks — no bug found, no behavior change; the first check
+  stays a silent no-op return, exactly as before. New
+  `admin-dashboard/src/lib/__tests__/companyMemberInviteSchema.test.ts`
+  (11 accept/reject cases). Verification: 11/11 new tests pass; full
+  admin-dashboard suite (`vitest run`) 51/51 suites, 526/526 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 1 pre-existing warning, unchanged
+  by this diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed no other file uses this
+  exact regex pattern. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-member-invite-zod-step23.md`.
+  **Still open:** the remaining 12 candidates from the broader sweep (6
+  driver-app candidates; 5 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -1,0 +1,59 @@
+-- 379_enable_rls_settings_document_files_driver_imports.sql
+-- ACTION_ITEMS.md C43: enable ENABLE ROW LEVEL SECURITY on the 4 production
+-- tables currently missing it — `settings` (holds Stripe/Twilio/Google Maps
+-- API keys), `document_files` (driver license/insurance documents,
+-- PIPEDA-sensitive), `driver_csv_import` and `driver_bank_import` (bulk
+-- driver import staging tables; the latter carries banking info).
+--
+-- PREPARED, NOT APPLIED. This file exists so the fix is ready to run the
+-- moment the deferral below is lifted — it must NOT be run against
+-- production before that. See docs/runbooks/c43-rls-enable-readiness.md for
+-- the required re-confirmation step before anyone passes --apply, and
+-- CLAUDE.md's "spinr-migration-reviewer" pass recorded there.
+--
+-- Deferral status (as of 2026-08-31, reconfirmed this session): the product
+-- owner explicitly decided on 2026-08-25 to hold off enabling RLS on these
+-- 4 tables until the legacy-migration/A41-family work (docs/migration/,
+-- docs/runbooks/legacy-backfill-scripts-rollout.md,
+-- docs/runbooks/legacy-migration-playbook.md) concludes, to avoid stacking
+-- an unrelated production security change on top of an active data-migration
+-- effort. Asked again directly this session (2026-08-31): that work is NOT
+-- concluded yet — keep deferred. Do not remove this comment or apply this
+-- migration until a future session confirms the deferral has actually been
+-- lifted by the product owner.
+--
+-- Why this is believed low-regression-risk once applied (ACTION_ITEMS.md
+-- C43's own blast-radius check, performed before recommending the fix):
+-- grepping rider-app, driver-app, and admin-dashboard found zero real
+-- `createClient(...)` usage reading these 4 tables with an anon/publishable
+-- key — the only anon-key `createClient` call anywhere in the repo is a
+-- dead scaffold file (frontend/config/supabase.ts, literal placeholder
+-- strings, not wired into any shipped app). Every real read/write to these
+-- 4 tables goes through the backend's SUPABASE_SERVICE_ROLE_KEY, which
+-- bypasses RLS regardless of whether it is enabled. Enabling RLS with zero
+-- policies (deny-all to anon/authenticated) therefore matches what is
+-- already true in practice today. This was verified only by static grep,
+-- not independently confirmed in staging/canary — treat "low risk" as a
+-- strong hypothesis to re-check, not a guarantee, before actually applying.
+--
+-- No new policies are added by this migration, deliberately — see the
+-- reasoning above. If a legitimate anon/authenticated read path against any
+-- of these 4 tables is ever added, it needs its own explicit RLS policy in
+-- a follow-up migration at that time; this migration does not anticipate
+-- one.
+--
+-- Rollback plan:
+--   ALTER TABLE public.document_files      DISABLE ROW LEVEL SECURITY;
+--   ALTER TABLE public.settings            DISABLE ROW LEVEL SECURITY;
+--   ALTER TABLE public.driver_csv_import   DISABLE ROW LEVEL SECURITY;
+--   ALTER TABLE public.driver_bank_import  DISABLE ROW LEVEL SECURITY;
+--
+-- Forward-compatible: no table/column changes, no new policies, safe to run
+-- against production traffic in flight — `ENABLE ROW LEVEL SECURITY` with
+-- zero policies only affects anon/authenticated-role access (deny-all),
+-- which the backend's service-role connections never use.
+
+ALTER TABLE public.document_files     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.settings           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.driver_csv_import  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.driver_bank_import ENABLE ROW LEVEL SECURITY;

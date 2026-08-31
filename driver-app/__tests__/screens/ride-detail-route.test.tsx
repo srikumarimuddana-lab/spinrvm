@@ -40,7 +40,6 @@ describe('driver ride detail route presentation contract', () => {
   it('does not let a generated snapshot replace drawable actual geometry', () => {
     expect(source).not.toContain('isActualSnapshot');
     expect(source).not.toContain('ride?.route_snapshot_url');
-    expect(source).toContain('Actual route unavailable');
   });
 
   it('keeps planned geometry out of the v2 solid line — dashed underlay only', () => {
@@ -51,8 +50,17 @@ describe('driver ride detail route presentation contract', () => {
     expect(source).toContain('const showPlannedUnderlay =');
     expect(source).toContain("(!hasActualRoute || ride?.route_geometry_status !== 'complete')");
     expect(source).toContain(') : isV2Route ? null : (');
-    expect(source).toContain("? (showPlannedUnderlay ? 'Booked route' : 'Actual route')");
-    expect(source).toContain("? 'Actual route processing'");
-    expect(source).toContain('routeQualityLabel');
+  });
+
+  it('keeps route-provenance diagnostics off the driver screen', () => {
+    // Coverage percentages and reconstruction status are operator diagnostics;
+    // they live on the admin ride-detail modal, which still calls
+    // routeQualityLabel(). The imported-ride notice is NOT provenance copy — it
+    // explains an empty map — so it stays.
+    expect(source).not.toContain('routeQualityLabel');
+    expect(source).not.toContain('Actual route processing');
+    expect(source).not.toContain('Actual route unavailable');
+    expect(source).not.toContain('Planned route preview');
+    expect(source).toContain('Imported from the previous app');
   });
 });

@@ -61,13 +61,15 @@ describe('ride-details v2 route rendering contract', () => {
     // the fare line carries the disclosure that matters: the backend relabels it
     // to "Ride fare (X km booked)" whenever the charged distance is the booking
     // estimate rather than a GPS measurement (relabel_booked_distance_lines).
-    expect(source).not.toContain('styles.routeQualityText');
     expect(source).not.toContain('Actual route processing');
     expect(source).not.toContain('Actual route unavailable');
     // The emailed receipt dropped its quality caption too, so the screen no
     // longer imports the helper at all. It stays in shared/ for admin-dashboard
     // and driver-app, which are the surfaces that still want the diagnostic.
     expect(source).not.toContain('routeQualityLabel');
+    // The one line still under the map is the imported-ride notice, which
+    // explains an empty map rather than reporting GPS provenance.
+    expect(source).toContain('Imported from the previous app');
   });
 
   it('shows the GPS-measured distance in the stats tile and labels it as measured', () => {

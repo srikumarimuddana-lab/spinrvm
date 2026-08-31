@@ -419,6 +419,11 @@ export default function RideDetailsScreen() {
             </MapView>
           </View>
         )}
+        {isCompleted && isImported && (
+          <Text style={styles.routeQualityText}>
+            Imported from the previous app — no GPS was recorded for this ride
+          </Text>
+        )}
 
         {/* Route Details */}
         <View style={styles.routeCard}>
@@ -615,6 +620,7 @@ function createStyles(colors: ThemeColors) {
 
         mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: 16, backgroundColor: colors.border },
         map: { flex: 1 },
+        routeQualityText: { color: colors.textDim, fontSize: 12, marginTop: -10, marginBottom: 16 },
 
     routeCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
     routeRow: { flexDirection: 'row' },

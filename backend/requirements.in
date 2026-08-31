@@ -132,7 +132,7 @@ pytest-timeout>=0.4.0
 redis[asyncio]>=5.0.0
 
 # Additional dependencies
-certifi>=2026.2.25
+certifi>=2026.7.22
 idna>=3.11
 urllib3>=2.6.3
 charset-normalizer>=3.5.1

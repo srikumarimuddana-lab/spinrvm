@@ -1,3 +1,4 @@
+/// <reference types="geojson" />
 // src/app/dashboard/monitoring/toolbar.tsx
 "use client";
 

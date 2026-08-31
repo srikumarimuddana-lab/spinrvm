@@ -496,6 +496,16 @@ async def compute_ride_estimates(
                 road_km - haversine_km,
             )
 
+    # Fetch area_fees once for the matched area — it's identical on every
+    # iteration below (calculate_all_fees is called once per vehicle type
+    # for the same pickup), so without this each vehicle type re-issued the
+    # same area_fees query (#4588).
+    _est_area_fees = None
+    if _est_matched_area:
+        _est_area_fees = await _deps.db_supabase.get_rows(
+            "area_fees", {"service_area_id": _est_matched_area["id"], "is_active": True}, limit=50
+        )
+
     estimates = []
     for fare_info in fares:
         surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
@@ -519,6 +529,7 @@ async def compute_ride_estimates(
                 _f(fb.total_fare),
                 _all_areas=_est_all_areas,
                 _matched_area=_est_matched_area,
+                _area_fees=_est_area_fees,
             )
         except Exception as e:
             logger.error("[estimate] calculate_all_fees failed: %s", e, exc_info=True)

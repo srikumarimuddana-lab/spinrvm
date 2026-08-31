@@ -80,6 +80,43 @@ async def test_adjustment_routes_through_rpc_with_floor():
 
 
 @pytest.mark.asyncio
+async def test_adjustment_threads_client_idempotency_key():
+    """#4602 finding 2: ad-hoc adjustments now support a caller-supplied
+    dedup key (migration 376), mirroring apply_topup's client_idempotency_key."""
+    rows = [{"transaction_id": "t3", "balance_after": "50.00"}]
+    rpc = _build_rpc(rows)
+    with patch("services.corporate_wallet_service.supabase") as mock_sb:
+        mock_sb.rpc = rpc
+        from services.corporate_wallet_service import apply_adjustment
+
+        await apply_adjustment(
+            wallet_id="w1",
+            amount=25,
+            notes="support credit",
+            actor_user_id="admin_1",
+            client_idempotency_key="corp-adjust-w1-2500-abc123-999",
+        )
+    params = rpc.call_args.args[1]
+    assert params["p_client_idempotency_key"] == "corp-adjust-w1-2500-abc123-999"
+
+
+@pytest.mark.asyncio
+async def test_adjustment_omits_client_idempotency_key_when_not_supplied():
+    """Existing callers that don't pass one (none did, before #4602 finding 2)
+    keep sending None -- the RPC's new short-circuit only engages when a key
+    is actually supplied."""
+    rows = [{"transaction_id": "t4", "balance_after": "50.00"}]
+    rpc = _build_rpc(rows)
+    with patch("services.corporate_wallet_service.supabase") as mock_sb:
+        mock_sb.rpc = rpc
+        from services.corporate_wallet_service import apply_adjustment
+
+        await apply_adjustment(wallet_id="w1", amount=25, notes="bonus", actor_user_id="admin_1")
+    params = rpc.call_args.args[1]
+    assert params["p_client_idempotency_key"] is None
+
+
+@pytest.mark.asyncio
 async def test_topup_rejects_non_positive_amount():
     from services.corporate_wallet_service import apply_topup
 

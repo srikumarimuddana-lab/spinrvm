@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from datetime import datetime, timezone
@@ -152,6 +153,7 @@ class AdjustRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: Decimal = Field(..., ge=Decimal("-100000.00"), le=Decimal("100000.00"))
     notes: str = Field(..., min_length=1, max_length=500)
+    client_idempotency_key: Optional[str] = None
 
 
 @router.post("/{company_id}/wallet/topup")
@@ -268,12 +270,25 @@ async def manual_adjust(
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
     await _check_daily_adjust_cap(current_admin["id"], body.amount)
+    # #4602 finding 2: mirror manual_topup's idempotency-key fallback so a
+    # dashboard timeout-retry or double-submit of this same adjustment
+    # reuses the original transaction instead of double-applying real
+    # money. Client may supply one; fall back to a 1-minute time-bucket
+    # keyed on wallet + amount + notes (notes included since two distinct,
+    # same-amount adjustments in the same minute — e.g. two separate
+    # support cases — must NOT collide with each other the way a bare
+    # wallet+amount key would).
+    idempotency_key = body.client_idempotency_key or (
+        f"corp-adjust-{wallet['id']}-{dollars_to_cents(body.amount)}-"
+        f"{hashlib.sha256(body.notes.encode()).hexdigest()[:16]}-{int(time.time() // 60)}"
+    )
     result = await apply_adjustment(
         wallet_id=wallet["id"],
         amount=body.amount,
         notes=body.notes,
         actor_user_id=current_admin["id"],
         floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
+        client_idempotency_key=idempotency_key,
     )
 
     # See manual_topup above — Finding 9: same audit-trail gap.

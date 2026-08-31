@@ -42,6 +42,7 @@ async def _apply(
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
     floor: Optional[Decimal] = None,
+    client_idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     params = {
         "p_wallet_id": wallet_id,
@@ -54,6 +55,7 @@ async def _apply(
         "p_actor_user_id": actor_user_id,
         "p_notes": notes,
         "p_floor": _money_str(floor) if floor is not None else None,
+        "p_client_idempotency_key": client_idempotency_key,
     }
 
     def _fn():
@@ -96,6 +98,7 @@ async def apply_adjustment(
     actor_user_id: str,
     floor: Optional[_Numeric] = None,
     ride_id: Optional[str] = None,
+    client_idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Signed adjustment to the master wallet (support/refund). Notes required.
 
@@ -103,6 +106,11 @@ async def apply_adjustment(
     (migration 297) — a retried settle_corporate call for the same ride is a
     no-op instead of a second debit. Omit for ad-hoc admin adjustments that
     aren't tied to a specific ride.
+
+    ``client_idempotency_key`` (migration 376) is the ad-hoc-adjustment
+    equivalent for callers with no ride_id at all — a dashboard timeout-retry
+    or double-submit of the same admin adjustment reuses the original
+    transaction instead of double-applying real money (#4602 finding 2).
     """
     delta = Decimal(str(amount))
     if delta == 0:
@@ -116,6 +124,7 @@ async def apply_adjustment(
         actor_user_id=actor_user_id,
         notes=notes,
         floor=Decimal(str(floor)) if floor is not None else None,
+        client_idempotency_key=client_idempotency_key,
     )
 
 

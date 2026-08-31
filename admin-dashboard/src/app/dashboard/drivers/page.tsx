@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2, Tag, UserX } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2, Tag, UserX, Globe } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
@@ -48,6 +48,12 @@ const STATUS_TABS = [
     // can never dispatch) and they outnumber the real fleet ~2:1, which is why
     // every other tab excludes them and this one exists to reach them.
     { value: "legacy_incomplete", label: "Legacy incomplete", icon: UserX },
+    // Legacy-imported rows whose phone is not a Canadian number. The old app's
+    // database was a shared, multi-tenant SaaS export, so it carried in other
+    // tenants' drivers alongside Spinr's. This is a REVIEW queue, not a verdict:
+    // the classification is inferred from the area code (the export's own
+    // country_code was never stored), so an admin confirms before acting.
+    { value: "legacy_review", label: "Non-Canadian number", icon: Globe },
 ];
 
 const PAGE_SIZE = 50;
@@ -293,7 +299,12 @@ export default function DriversPage() {
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
         // Legacy shells are hidden from every tab but their own. They are not
         // deleted or hidden from the database — the dedicated tab reaches them.
-        opts.onboarding_complete = statusFilter !== "legacy_incomplete";
+        // The review tab is also exempt: some flagged rows are themselves
+        // shells, and sending onboarding_complete=true would hide them from the
+        // very queue that exists to surface them.
+        if (statusFilter === "legacy_incomplete") opts.onboarding_complete = false;
+        else if (statusFilter !== "legacy_review") opts.onboarding_complete = true;
+        if (statusFilter === "legacy_review") opts.legacy_review = true;
         if (legacyFilter === "imported") opts.legacy_import = true;
         else if (legacyFilter === "not_imported") opts.legacy_import = false;
         if (preLaunchFilter === "only") opts.pre_launch = true;
@@ -663,6 +674,7 @@ export default function DriversPage() {
         // shells too, and showing that made the fleet read ~3x its true size.
         if (s === "all") return stats.onboarded_total ?? stats.total ?? 0;
         if (s === "legacy_incomplete") return stats.legacy_incomplete ?? 0;
+        if (s === "legacy_review") return stats.legacy_review ?? 0;
         if (s === "online") return stats.online ?? 0;
         if (s === "photos_pending") return stats.pending_photos ?? 0;
         return stats[s] ?? 0;

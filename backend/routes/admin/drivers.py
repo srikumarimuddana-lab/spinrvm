@@ -18,7 +18,9 @@ try:
     from ...services.driver_import_service import (
         dob_source,
         fetch_incomplete_onboarding_driver_ids,
+        fetch_suspect_legacy_driver_ids,
         is_incomplete_onboarding_row,
+        is_suspect_legacy_import_row,
         sin_source,
     )
     from ...services.pre_launch_flag_service import fetch_pre_launch_flagged_ids
@@ -43,7 +45,9 @@ except ImportError:
     from services.driver_import_service import (  # type: ignore
         dob_source,
         fetch_incomplete_onboarding_driver_ids,
+        fetch_suspect_legacy_driver_ids,
         is_incomplete_onboarding_row,
+        is_suspect_legacy_import_row,
         sin_source,
     )
     from services.pre_launch_flag_service import fetch_pre_launch_flagged_ids  # type: ignore
@@ -472,6 +476,7 @@ async def admin_get_drivers(
     legacy_import: Optional[bool] = None,
     pre_launch: Optional[bool] = None,
     onboarding_complete: Optional[bool] = None,
+    legacy_review: Optional[bool] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = None,
 ):
@@ -498,6 +503,12 @@ async def admin_get_drivers(
     `services/driver_import_service.is_incomplete_onboarding_row`). True =
     real driver profiles only, False = only the shells, omitted = no filter
     (default, matches every prior behavior).
+
+    `legacy_review`: surfaces legacy-imported rows whose phone is not a
+    Canadian number — the shared multi-tenant export brought in other tenants'
+    drivers (see `services/driver_import_service.is_suspect_legacy_import_row`).
+    True = only those, False = hide them, omitted = no filter. A review signal
+    for a human, never a gate on anything.
     """
 
     filters = {}
@@ -557,6 +568,19 @@ async def admin_get_drivers(
             exclude_ids |= incomplete_ids
         else:
             include_ids = _restrict_to(incomplete_ids)
+
+    # Suspect-legacy-number review filter. True = only rows whose phone is not
+    # a Canadian number, False = hide them, omitted = no filter. See
+    # services/driver_import_service.is_suspect_legacy_import_row: the legacy
+    # export is a shared multi-tenant database, and this surfaces the rows that
+    # look like another tenant's for a human to look at. A review signal only —
+    # it gates nothing.
+    if legacy_review is not None:
+        suspect_ids = fetch_suspect_legacy_driver_ids()
+        if legacy_review:
+            include_ids = _restrict_to(suspect_ids)
+        else:
+            exclude_ids |= suspect_ids
 
     if include_ids is not None:
         remaining = include_ids - exclude_ids
@@ -884,6 +908,10 @@ async def admin_get_driver_stats(
     # placeholder into. Classify the stored row, not its rendering.
     legacy_incomplete_count = sum(1 for d in all_drivers if is_incomplete_onboarding_row(d))
     onboarded_total = total - legacy_incomplete_count
+    # Review queue, not a subtraction: these rows stay inside `total` and
+    # `onboarded_total`. Flagging is a heuristic (see the predicate), so it
+    # must never silently remove a row from the fleet count.
+    legacy_review_count = sum(1 for d in all_drivers if is_suspect_legacy_import_row(d))
     # A deleted account is never "online", whatever its stale intent flag says.
     online = sum(1 for d in enriched_drivers if d.get("is_online") and d.get("status") != "deleted")
     active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
@@ -1038,6 +1066,8 @@ async def admin_get_driver_stats(
             # docstring for why the raw count alone was misleading.
             "onboarded_total": onboarded_total,
             "legacy_incomplete": legacy_incomplete_count,
+            # Overlaps the two above by design — a review queue, not a bucket.
+            "legacy_review": legacy_review_count,
             "online": online,
             "active": active_count,
             "pending": pending_count,

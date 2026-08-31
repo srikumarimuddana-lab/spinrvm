@@ -17469,6 +17469,10 @@ how much they de-risk a public launch._
   version, bump the dependency and confirm `G4b` goes green on both
   apps — at that point this item's checkbox above should finally be
   ticked.
+- **Re-verified 2026-08-31** (manual/on-demand, per the note above):
+  `npm view image-size versions` still tops out at `2.0.2` — no new
+  release since the 2026-08-18 check. Still accepted, still open, no
+  action needed.
 
 ### C31. `privacySettingsToggles.test.tsx` leaked an unflushed/unmounted renderer, causing an intermittent `rider-app-test` full-suite failure in an unrelated file
 

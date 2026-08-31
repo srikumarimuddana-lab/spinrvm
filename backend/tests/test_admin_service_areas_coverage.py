@@ -39,6 +39,7 @@ from backend.routes.admin.service_areas import (
     admin_get_area_fees,
     admin_get_area_heatmap_config,
     admin_get_area_tax,
+    admin_get_service_area_tax_history,
     admin_get_service_areas,
     admin_get_surge_status,
     admin_get_vehicle_pricing,
@@ -1060,3 +1061,116 @@ class TestPerAreaHeatmapConfig:
             with pytest.raises(HTTPException) as exc:
                 await admin_get_area_heatmap_config("area-1")
         assert exc.value.status_code == 503
+
+
+# ── A29 (ACTION_ITEMS.md): service_area_tax_history append-only write path ──
+
+
+class TestServiceAreaTaxHistory:
+    @pytest.mark.anyio
+    async def test_tax_change_appends_history_row_with_old_and_new_values(self):
+        """admin_update_service_area must write a service_area_tax_history row
+        (additive to the existing tax_config_updated audit_logs write) capturing
+        both the pre-change and post-change GST/PST/HST values."""
+        insert_one = AsyncMock()
+        log_admin_action = AsyncMock(return_value="audit-log-123")
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(
+                    return_value={
+                        "id": "area-1",
+                        "gst_enabled": True,
+                        "gst_rate": 5.0,
+                        "pst_enabled": False,
+                        "pst_rate": 0.0,
+                    }
+                ),
+                insert_one=insert_one,
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", log_admin_action),
+        ):
+            req = ServiceAreaUpdateRequest(
+                pst_enabled=True, pst_rate=6.0, tax_justification="SK PST enablement, approved by finance"
+            )
+            result = await admin_update_service_area("area-1", req, admin=_ADMIN)
+
+        assert result == {"message": "Service area updated"}
+        history_call = next(c for c in insert_one.await_args_list if c.args[0] == "service_area_tax_history")
+        row = history_call.args[1]
+        assert row["service_area_id"] == "area-1"
+        assert row["old_pst_enabled"] is False
+        assert row["old_pst_rate"] == 0.0
+        assert row["new_pst_enabled"] is True
+        assert row["new_pst_rate"] == 6.0
+        # Untouched tax fields carry the existing value forward as both old/new.
+        assert row["old_gst_rate"] == 5.0
+        assert row["new_gst_rate"] == 5.0
+        assert row["changed_by"] == _ADMIN["id"]
+        assert row["changed_by_role"] == _ADMIN["role"]
+        assert row["justification"] == "SK PST enablement, approved by finance"
+        assert row["audit_log_id"] == "audit-log-123"
+
+    @pytest.mark.anyio
+    async def test_history_write_failure_does_not_fail_the_tax_change(self):
+        """Losing the history row must not roll back the operator's tax
+        change — mirrors `_record_manual_surge_history`'s swallow-but-log
+        contract."""
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(side_effect=RuntimeError("db down")),
+                insert_one=AsyncMock(),
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock(return_value="audit-log-1")),
+        ):
+            req = ServiceAreaUpdateRequest(pst_enabled=True, pst_rate=6.0, tax_justification="test")
+            result = await admin_update_service_area("area-1", req, admin=_ADMIN)
+        # The tax change itself still succeeds even though the history-row
+        # fetch of old values raised.
+        assert result == {"message": "Service area updated"}
+
+    @pytest.mark.anyio
+    async def test_non_tax_update_does_not_write_history_row(self):
+        insert_one = AsyncMock()
+        with (
+            patch.multiple(
+                "backend.routes.admin.service_areas.db_supabase",
+                update_one=AsyncMock(),
+                find_one=AsyncMock(return_value=None),
+                insert_one=insert_one,
+            ),
+            patch("backend.routes.admin.service_areas.invalidate_fare_cache", AsyncMock()),
+            patch("backend.routes.admin.service_areas.log_admin_action", AsyncMock()),
+        ):
+            req = ServiceAreaUpdateRequest(name="Saskatoon Renamed")
+            await admin_update_service_area("area-1", req, admin=_ADMIN)
+        assert not any(c.args[0] == "service_area_tax_history" for c in insert_one.await_args_list)
+
+
+class TestServiceAreaTaxHistoryEndpoint:
+    @pytest.mark.anyio
+    async def test_returns_rows_newest_first_scoped_to_area(self):
+        rows = [
+            {"id": "h2", "service_area_id": "area-1", "new_pst_rate": 6.0},
+            {"id": "h1", "service_area_id": "area-1", "new_pst_rate": 0.0},
+        ]
+        get_rows = AsyncMock(return_value=rows)
+        with patch("backend.routes.admin.service_areas.db_supabase.get_rows", get_rows):
+            result = await admin_get_service_area_tax_history("area-1", limit=100, admin=_ADMIN)
+
+        assert result == {"area_id": "area-1", "history": rows}
+        call_kwargs = get_rows.await_args.kwargs
+        assert call_kwargs["filters"] == {"service_area_id": "area-1"}
+        assert call_kwargs["desc"] is True
+
+    @pytest.mark.anyio
+    async def test_limit_is_clamped_to_500(self):
+        get_rows = AsyncMock(return_value=[])
+        with patch("backend.routes.admin.service_areas.db_supabase.get_rows", get_rows):
+            await admin_get_service_area_tax_history("area-1", limit=99999, admin=_ADMIN)
+        assert get_rows.await_args.kwargs["limit"] == 500

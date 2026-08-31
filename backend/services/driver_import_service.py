@@ -1846,6 +1846,99 @@ def fetch_incomplete_onboarding_driver_ids() -> set[str]:
     return out
 
 
+# Every geographic area code (NPA) assigned to Canada by the North American
+# Numbering Plan Administrator. Used only to flag a legacy-imported row for
+# human review -- never to reject a row, block a driver, or gate dispatch.
+#
+# Keep sorted by value so an addition is easy to spot in review. The NANP does
+# add Canadian NPAs over time (relief codes); a missing one produces a
+# false-positive review flag, never a false negative on a real driver, which
+# is the safe direction for a review queue.
+CANADIAN_AREA_CODES: frozenset[str] = frozenset(
+    {
+        "204", "226", "236", "249", "250", "263", "289", "306", "343", "354",
+        "365", "367", "368", "382", "387", "403", "416", "418", "428", "431",
+        "437", "438", "450", "468", "474", "506", "514", "519", "548", "579",
+        "581", "584", "587", "604", "613", "639", "647", "672", "683", "705",
+        "709", "742", "753", "778", "780", "782", "807", "819", "825", "867",
+        "873", "879", "902", "905", "942",
+    }
+)  # fmt: skip
+
+
+def is_suspect_legacy_import_row(driver_row: dict[str, Any]) -> bool:
+    """True if this legacy-imported ``drivers`` row's phone is not a Canadian
+    number -- a review signal, not a verdict.
+
+    Why this exists: the legacy Mongo export is a *shared, multi-tenant* SaaS
+    database, not Spinr-only (docs/audit/2026-08-14-mongodb-legacy-extract-
+    audit.md finding 1). ``booking_import_service.py`` filters its rows on the
+    export's own ``country_code`` column for exactly this reason;
+    ``build_mongo_driver_import_plan`` never read that column, so other-tenant
+    driver rows came in with everything else.
+
+    ``country_code`` is not stored on the rows we already hold, so this infers
+    from the area code instead. Measured against production when added: 11
+    rows flagged, **0 of them verified, 0 ever assigned a ride, and 0 organic
+    (non-imported) signups** -- so it currently mislabels no real driver.
+    Corroboration that these are genuinely other-tenant/test rows rather than
+    Canadians with a foreign mobile: every disposable-email (``yopmail.com``)
+    account and every structurally-malformed phone in the imported population
+    falls inside this same set, and 6 of the 10 distinct flagged area codes
+    (700, 736, 750, 797, 981, 991) are not assignable NANP codes at all --
+    the shape of a foreign number squeezed into ten digits.
+
+    Deliberately phone-only. The email and malformed-phone signals are strict
+    subsets of this one, so adding them would flag no additional row while
+    requiring a join onto ``users`` and touching email PII for nothing.
+
+    Scoped to legacy-imported rows: an organic Spinr signup with a foreign
+    mobile is a real driver, and nothing about this heuristic should reach
+    them.
+    """
+    if not (driver_row.get("legacy_import_metadata") or {}):
+        return False
+    phone = (driver_row.get("phone") or "").strip()
+    # Stored E.164 for NANP is "+1" + 10 digits; the area code is chars 3-5.
+    # A phone that is missing or too short to carry one is itself anomalous
+    # for an imported row, so it flags for review rather than passing.
+    if not phone.startswith("+1") or len(phone) < 5:
+        return True
+    return phone[2:5] not in CANADIAN_AREA_CODES
+
+
+def fetch_suspect_legacy_driver_ids() -> set[str]:
+    """Every ``drivers`` id ``is_suspect_legacy_import_row`` flags for review.
+    Read-only.
+
+    Same shape and pagination rationale as
+    ``fetch_incomplete_onboarding_driver_ids`` above -- classification runs in
+    Python off the shared predicate so a DB-side and an in-memory answer can
+    never disagree.
+    """
+    out: set[str] = set()
+    offset = 0
+    page = 500
+    while True:
+        rows = (
+            supabase.table("drivers")
+            .select("id, phone, legacy_import_metadata")
+            .range(offset, offset + page - 1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            break
+        for r in rows:
+            if r.get("id") and is_suspect_legacy_import_row(r):
+                out.add(r["id"])
+        if len(rows) < page:
+            break
+        offset += page
+    return out
+
+
 def validate_required_mongo_driver_columns(rows: list[dict[str, str]], plan: MongoDriverImportPlan) -> None:
     if not rows:
         plan.errors.append(ImportErrorItem("<file>", "drivers_csv", "drivers CSV is empty"))

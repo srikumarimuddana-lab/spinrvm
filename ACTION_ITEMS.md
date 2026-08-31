@@ -783,10 +783,21 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     effect until the owner slots in each are filled and the policy/plan is
     approved — do not treat either as closing this item.
   - **STILL OPEN, unchanged**: open $16.63 Stripe dispute needs a response;
-    rider-referral velocity/identity-cross-check gap unchanged (checked
-    `utils/referral_payout.py` 2026-08-24 — confirmed zero legacy/signup-recency
-    awareness, same as the audit found; whether it's actively being exploited
-    needs live account data this session doesn't have); 22 unmarked drivers
+    **rider-referral legacy-signup gap FIXED 2026-08-31** (was: "rider-referral
+    velocity/identity-cross-check gap unchanged (checked `utils/referral_payout.py`
+    2026-08-24 — confirmed zero legacy/signup-recency awareness, same as the
+    audit found; whether it's actively being exploited needs live account data
+    this session doesn't have)"). `utils/referral_payout.py` now blocks a
+    legacy-imported referee (rider: `users.legacy_import_metadata
+    .rider_csv_import`; driver: the referee's own `drivers.legacy_import_metadata
+    .source`) from qualifying for a referral bonus at all, mirroring the
+    already-fixed `routes/promotions.py::_is_legacy_imported_rider` /
+    PR #4132 pattern — see `docs/change-log/2026-08-31-referral-legacy-signup-guard.md`.
+    This closes the code gap going forward; it does NOT retroactively detect
+    or reclaim any already-paid legacy-referee payout — whether any exist is
+    still a live-data question this session couldn't check (no
+    staging/production Supabase access), same boundary the prior note named.
+    22 unmarked drivers
     (checked whether `driver_import_service.py` has the same
     update-path metadata-loss bug PR #4132 fixed for riders — it doesn't; driver
     updates only ever touch rows already carrying the provenance stamp, so

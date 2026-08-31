@@ -69,6 +69,14 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
 
 try:
+    from ..services import driver_import_service as _driver_import_service  # type: ignore
+except ImportError:
+    from services import driver_import_service as _driver_import_service  # type: ignore
+
+_DRIVER_LEGACY_SOURCE = _driver_import_service.IMPORT_SOURCE
+_DRIVER_LEGACY_MONGO_SOURCE = _driver_import_service.MONGO_IMPORT_SOURCE
+
+try:
     from .loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
 except ImportError:
     try:
@@ -106,6 +114,33 @@ _RIDES_FETCH_LIMIT = 10_000
 # redis_expire only on the first increment of a key).
 _VELOCITY_WINDOW_SECONDS = 24 * 60 * 60  # 24h
 _DEFAULT_VELOCITY_CAP_PER_REFERRER = 5  # app_settings.referral_payout_velocity_cap_per_day overrides
+
+# ── Legacy-import guard (ACTION_ITEMS.md A34) ────────────────────────────────
+# A legacy-imported account's referral_applied_at/created_at reflects import
+# time, not a genuine new signup -- an old-app customer could apply a referral
+# code post-import and collect the "new user" referral bonus (both sides of
+# the rider $5/$5, or the driver referrer's $10) it was never eligible for.
+# Same shape as the already-fixed rider_import_service.py `created_at=now()`
+# gap (PR #4132) that let old-app customers pass as new signups for promos;
+# mirrors routes/promotions.py::_is_legacy_imported_rider's fix for that gap.
+_DRIVER_LEGACY_SOURCES = (_DRIVER_LEGACY_SOURCE, _DRIVER_LEGACY_MONGO_SOURCE)
+
+
+def _is_legacy_referral_referee(kind: str, referee: dict, driver_row: dict | None = None) -> bool:
+    """True when the REFEREE side of a referral is a legacy-imported account,
+    ineligible for referral-bonus qualification regardless of ride count or
+    referral_applied_at recency.
+
+    Rider provenance lives on users.legacy_import_metadata.rider_csv_import
+    (rider_import_service.IMPORT_SOURCE, same marker promotions.py checks).
+    Driver provenance lives on the driver's OWN legacy_import_metadata.source
+    (driver_import_service.IMPORT_SOURCE / MONGO_IMPORT_SOURCE) -- not the user
+    row -- so the caller must pass the referee's driver row for kind='driver'.
+    """
+    if kind == "rider":
+        return bool((referee.get("legacy_import_metadata") or {}).get("rider_csv_import"))
+    meta = (driver_row or {}).get("legacy_import_metadata") or {}
+    return meta.get("source") in _DRIVER_LEGACY_SOURCES
 
 
 def _d(v) -> Decimal:
@@ -260,7 +295,9 @@ async def _tick() -> None:
     users = await db_supabase.get_rows(
         "users",
         {"referral_code_used": {"$notnull": True}},
-        columns="id,referral_code_used,referred_by,referral_applied_at",
+        # legacy_import_metadata: A34 legacy-import referee guard, see
+        # _is_legacy_referral_referee.
+        columns="id,referral_code_used,referred_by,referral_applied_at,legacy_import_metadata",
         limit=10000,
     )
     candidates = [u for u in users if u.get("referral_code_used")]
@@ -352,7 +389,9 @@ async def _prefetch_chunk(chunk: list, terms_cache: dict) -> dict:
         rows = await db_supabase.get_rows(
             "drivers",
             {"user_id": {"$in": referee_ids}},
-            columns="id,user_id,service_area_id",
+            # legacy_import_metadata: A34 legacy-import referee guard, see
+            # _is_legacy_referral_referee.
+            columns="id,user_id,service_area_id,legacy_import_metadata",
             limit=len(referee_ids),
         )
         for r in rows:
@@ -451,6 +490,14 @@ async def _process_one(referee: dict, code: str, ctx: dict | None = None) -> Non
     if not referrer_user_id or referrer_user_id == referee_id:
         return  # unresolved or self — nothing to pay
 
+    # A34: a legacy-imported REFEREE never qualifies for a referral bonus, no
+    # matter how recent referral_applied_at is or how many rides they take —
+    # see _is_legacy_referral_referee. Rider check happens here (the marker is
+    # on the user row we already have); the driver check happens once
+    # ref_as_driver is resolved below (the marker is on the driver row).
+    if is_rider and _is_legacy_referral_referee("rider", referee):
+        return
+
     # Never pay retroactively for rides that predate the referral. (Legacy rows
     # with no referral_applied_at fall back to a lifetime count.)
     applied_at = referee.get("referral_applied_at")
@@ -480,6 +527,10 @@ async def _process_one(referee: dict, code: str, ctx: dict | None = None) -> Non
                 await db_supabase.get_rows("drivers", {"user_id": referee_id}, limit=1)
             )
         if not ref_as_driver:
+            return
+        # A34: driver-side legacy-import referee guard (marker lives on the
+        # driver row, not the user row — see _is_legacy_referral_referee).
+        if _is_legacy_referral_referee("driver", referee, ref_as_driver):
             return
         area_id = ref_as_driver.get("service_area_id")
         ride_filter = {"driver_id": ref_as_driver["id"], "status": "completed"}

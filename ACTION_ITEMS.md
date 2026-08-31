@@ -12001,7 +12001,7 @@ record of what was assumed vs. what was actually true</summary>
   (different internal field/predicate naming, same behavior) is already
   live and tested. See PR #4758's closing comment for detail. Branch
   restarted from `main` (which now includes #4757) before continuing.
-- **2026-08-31 update — step 28 done: `rider-app/app/become-driver.tsx`'s
+- **2026-08-31 update — step 28 done (this session): `rider-app/app/become-driver.tsx`'s
   `validateStep` (first rider-app compliance/KYC-tier candidate; second
   rider-app candidate overall, after step 15's custom-tip fix).**
   Extracted the 3-step validation (Personal: name/email/city presence;
@@ -12034,11 +12034,43 @@ record of what was assumed vs. what was actually true</summary>
   --platform web`) completed successfully. Blast-radius grep confirmed
   no other file duplicates this pattern. Full Change Impact Log:
   `docs/change-log/2026-08-31-b39-rider-become-driver-zod-step28.md`.
+- **2026-08-31 update — step 28 done (parallel session, same step
+  number — a numbering collision, not duplicate work):
+  `ride-complaint-form.tsx` + `ride-flag-form.tsx` silent no-op fix
+  (last two admin-dashboard candidates).** Unlike every other B39 step,
+  **not a pure extraction**: both forms guarded a required field with a
+  bare `if (!x) return;` — silent, no toast, no message — while every
+  other error path on both forms already used the shared `toast(...)`
+  pattern. Extracted into new
+  `admin-dashboard/src/lib/rideComplaintFormSchema.ts`
+  (`getRideComplaintFormError`) and
+  `admin-dashboard/src/lib/rideFlagFormSchema.ts`
+  (`getRideFlagFormError`), and wired both `handleSubmit`s to show a
+  destructive toast instead of silently returning. In ordinary use this
+  path was already unreachable (the Submit/Flag button's `disabled` prop
+  blocks the click) — the fix only becomes visible on the abnormal paths
+  the `disabled` prop doesn't cover (a state-update race, Enter-key
+  submit, a future direct call). New
+  `admin-dashboard/src/lib/__tests__/rideComplaintFormSchema.test.ts` (4
+  cases) and `.../rideFlagFormSchema.test.ts` (2 cases). Verification:
+  6/6 new tests pass; full admin-dashboard suite (`vitest run`) 57/57
+  suites, 555/555 tests passing, 0 regressions; `npx tsc --noEmit` clean
+  (repo-wide); `npx eslint` on touched files: 0 errors, 5 pre-existing
+  `jsx-a11y/label-has-associated-control` warnings, unchanged by this
+  diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed both new error strings are
+  unique to their new files, and both forms have exactly one importer
+  (`ride-detail-modal.tsx`), unaffected. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-silent-noop-forms-step28.md`.
+  **This closes every admin-dashboard candidate from the 2026-08-31
+  broader sweep.**
 
-  **Still open:** 10 candidates from the broader sweep — rider-app 2
-  (`manage-cards.tsx`, `emergency-contacts.tsx`); driver-app 6; admin-
-  dashboard 2 silent no-ops. No ADR/migration-order doc written yet.
-  Checkbox stays `[ ]`.
+  **Still open:** 8 candidates from the broader sweep — rider-app 2
+  (`manage-cards.tsx`, `emergency-contacts.tsx`); driver-app 6
+  (`become-driver.tsx`, `emergency-contacts.tsx`, `report-safety.tsx`,
+  `(tabs)/profile.tsx`, `settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`). Admin-dashboard is now fully
+  closed. No ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

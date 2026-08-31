@@ -1,6 +1,15 @@
 -- ============================================================
 -- Migration 376: idempotency key for ad-hoc corporate wallet adjustments
 --
+-- migration-override-ok: this migration intentionally redefines
+-- corporate_wallet_apply_delta (first defined in 28, last redefined in
+-- 297) to add a third, client-supplied dedup short-circuit -- see "WHAT"
+-- below. Body is copied verbatim from migration 297 with only the
+-- documented additions (new p_client_idempotency_key param + its
+-- short-circuit + threading it into the INSERT); same redefinition
+-- pattern migrations 214/297/319 used for the same function, for the same
+-- reason.
+--
 -- WHY
 -- ---
 -- corporate_wallet_apply_delta (migrations 27/297) already dedupes on

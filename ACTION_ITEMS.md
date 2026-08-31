@@ -11978,11 +11978,67 @@ record of what was assumed vs. what was actually true</summary>
   `setDeleteError`) — same shape as the `resolveDispute` gap fixed in
   #4754. Queued as a task suggestion, not folded into this step.
 
-  **Still open:** 8 candidates from the broader sweep — 6 driver-app,
-  plus admin-dashboard's `ride-complaint-form.tsx`/`ride-flag-form.tsx`
-  (silent no-op UX gaps needing a small behavior addition, not a pure
-  extraction — tracked as their own step). No ADR/migration-order doc
-  written yet. Checkbox stays `[ ]`.
+  **Still open:** 11 candidates from the broader sweep, not 8 — this
+  entry's own count dropped rider-app's 3 remaining candidates entirely
+  (`become-driver.tsx`, `manage-cards.tsx`, `emergency-contacts.tsx` —
+  confirmed none are migrated: `rider-app/utils/` has no
+  `becomeDriverSchema.ts`/`manageCardsSchema.ts`/
+  `emergencyContactsSchema.ts`, and no other schema file's predicates
+  match this form's checks). Corrected here 2026-08-31. The 11: rider-app
+  3 (above); driver-app 6 (`become-driver.tsx`, `emergency-contacts.tsx`,
+  `report-safety.tsx`, `(tabs)/profile.tsx`, `settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx` — `vehicle-info.tsx` already
+  done, step 16); admin-dashboard 2 (`ride-complaint-form.tsx`/
+  `ride-flag-form.tsx` — silent no-op UX gaps needing a small behavior
+  addition, not a pure extraction — tracked as their own step). No
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — PR #4758 (this session's own step 19,
+  admin-dashboard promotions form) closed as superseded.** A parallel
+  session independently completed the equivalent extraction — and 8
+  more admin-dashboard candidates (steps 20-27) — in PR #4757, which
+  merged to `main` first. Reconciling two functionally-equivalent
+  implementations wasn't worth the merge effort; `main`'s version
+  (different internal field/predicate naming, same behavior) is already
+  live and tested. See PR #4758's closing comment for detail. Branch
+  restarted from `main` (which now includes #4757) before continuing.
+- **2026-08-31 update — step 28 done: `rider-app/app/become-driver.tsx`'s
+  `validateStep` (first rider-app compliance/KYC-tier candidate; second
+  rider-app candidate overall, after step 15's custom-tip fix).**
+  Extracted the 3-step validation (Personal: name/email/city presence;
+  Vehicle: SGI's <10-year-old rule + make/model/color/plate/VIN/type
+  presence; Docs: per-requirement front/back/expiry presence) into new
+  `rider-app/utils/becomeDriverSchema.ts` (`isPersonalStepValid`,
+  `isVehicleYearValid`, `isVehicleDetailsValid`,
+  `getMissingDriverDocuments`). Pure extraction, byte-for-byte identical
+  to the original `switch` block — no bug found, no behavior change,
+  **including preserving the original's own toast asymmetry**: only the
+  vehicle-year check shows an "Invalid Year" toast on failure; every
+  other check (personal-step fields, vehicle-details fields) silently
+  blocks the "Next" button with no error message. This asymmetry was
+  deliberately left as-is, not "fixed," since adding a new toast where
+  none existed would itself be a behavior change on an already-shipped
+  screen, out of scope for a pure extraction (flagged here for
+  visibility, not queued as a task — it's a UX-completeness nit, not a
+  money/compliance-adjacent bug like the two authorized fixes in steps
+  15/16). New `rider-app/utils/__tests__/becomeDriverSchema.test.ts` (16
+  accept/reject cases across all 4 predicates, including the SGI
+  9-year-window boundary and the mandatory/optional + front/back/expiry
+  document-requirement matrix). Verification: 16/16 new tests pass; full
+  rider-app suite (`jest`) 136/136 suites, 1916/1916 tests passing on a
+  clean re-run (an initial run showed 1 failure in an unrelated file,
+  `__tests__/rideOptionsScreen.test.tsx` — a test timeout; confirmed a
+  flake, not caused by this diff: that file passes 119/119 in isolation,
+  and a full-suite re-run with this exact diff passed 136/136 with zero
+  failures); `npx tsc --noEmit` clean; `npx eslint` clean on touched
+  files; **real production build** (`npm run build:web` → `expo export
+  --platform web`) completed successfully. Blast-radius grep confirmed
+  no other file duplicates this pattern. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-rider-become-driver-zod-step28.md`.
+
+  **Still open:** 10 candidates from the broader sweep — rider-app 2
+  (`manage-cards.tsx`, `emergency-contacts.tsx`); driver-app 6; admin-
+  dashboard 2 silent no-ops. No ADR/migration-order doc written yet.
+  Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

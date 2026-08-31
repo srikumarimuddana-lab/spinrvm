@@ -1,0 +1,105 @@
+name: Label run-maestro on native changes
+
+# ACTION_ITEMS.md B25 action item #3: maestro-e2e.yml is opt-in-only today
+# (workflow_dispatch, or pull_request `types: [labeled]` gated on the
+# "run-maestro" label being applied manually) -- easy to forget on a PR
+# that actually needs native-device coverage. This workflow closes that
+# gap by applying the "run-maestro" label automatically when a PR's diff
+# looks native-relevant, so maestro-e2e.yml's own `labeled` trigger fires
+# without a human remembering to add the label by hand.
+#
+# WHAT THIS DOES NOT DO (read before assuming this unblocks B25):
+#   - It never runs maestro-e2e.yml's EAS build or Maestro Cloud run
+#     itself, and never touches maestro-e2e.yml. Applying the label only
+#     fires maestro-e2e.yml's existing `pull_request: types: [labeled]`
+#     trigger -- and that job still fails immediately at its EXPO_TOKEN /
+#     MAESTRO_CLOUD_API_KEY login step until those secrets are added
+#     (B25 items #1/#2/#4 -- EAS/Maestro Cloud secrets, Apple credentials,
+#     actually dispatching a run -- all need org/repo-admin access this
+#     session does not have, and remain blocked).
+#   - This job itself costs a few seconds of ubuntu-latest CI time (a
+#     paths-filter diff + a label API call) -- not an EAS build, not a
+#     Maestro Cloud run, no billed mobile-build minutes.
+#
+# PATH FILTER (adjust here if native-relevant surfaces change -- keep this
+# comment in sync with the `filters:` block below):
+#   Included : anything under rider-app/** or driver-app/**
+#   Excluded : rider-app/e2e/**, driver-app/e2e/** (Playwright-only, already
+#              covered by ci.yml's driver-app-test/rider-app-test jobs --
+#              see maestro-e2e.yml's own header comment on why those don't
+#              catch native-only bugs, but a change confined to those dirs
+#              doesn't touch native code either way)
+#              **/*.md (docs)
+#              **/__tests__/** (Jest-only, non-native test code)
+#              **/*.test.ts, **/*.test.tsx (Jest/Playwright test files
+#              anywhere, including outside __tests__/)
+#   Conservative by design (CLAUDE.md pre-merge gate #4/#9): a false
+#   positive here just costs one label + a currently-failing (missing-
+#   secret) maestro-e2e.yml run once those secrets exist -- cheap. A false
+#   negative defeats the point of B25 #3. When genuinely unsure whether a
+#   changed path is native-relevant, prefer including it.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: label-run-maestro-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  detect-and-label:
+    name: Detect native changes and label
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        with:
+          filters: |
+            native:
+              - 'rider-app/**'
+              - 'driver-app/**'
+              - '!rider-app/e2e/**'
+              - '!driver-app/e2e/**'
+              - '!**/*.md'
+              - '!**/__tests__/**'
+              - '!**/*.test.ts'
+              - '!**/*.test.tsx'
+
+      - name: Ensure run-maestro label exists and apply it
+        if: steps.filter.outputs.native == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const LABEL = 'run-maestro';
+
+            // Idempotent create: a 422 here means the label already
+            // exists -- that's the expected steady-state, not a failure.
+            try {
+              await github.rest.issues.createLabel({
+                owner, repo,
+                name: LABEL,
+                color: 'ededed',
+                description: 'Auto/manually applied to trigger maestro-e2e.yml real-device native E2E (see ACTION_ITEMS.md B25)',
+              });
+            } catch (err) {
+              if (err.status !== 422) throw err;
+            }
+
+            // Idempotent apply: adding a label the PR already carries is
+            // a harmless no-op per the GitHub API, so no need to check
+            // first.
+            await github.rest.issues.addLabels({
+              owner, repo,
+              issue_number: context.issue.number,
+              labels: [LABEL],
+            });

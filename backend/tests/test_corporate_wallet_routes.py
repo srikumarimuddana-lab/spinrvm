@@ -161,6 +161,53 @@ def test_adjust_applies_via_wallet_service(test_client, admin_override):
     assert kwargs["floor"] == -50
 
 
+def test_adjust_generates_fallback_idempotency_key_when_client_omits_one(test_client, admin_override):
+    """#4602 finding 2: mirrors manual_topup's fallback pattern. A retry of
+    the identical request within the same minute must produce the same
+    fallback key, so a client-side timeout-retry actually dedupes."""
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "100.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.apply_adjustment",
+            AsyncMock(return_value={"transaction_id": "t1", "balance_after": "75.00"}),
+        ) as m_adjust,
+    ):
+        for _ in range(2):
+            resp = test_client.post(
+                "/api/admin/corporate-accounts/c1/wallet/adjust",
+                json={"amount": -25, "notes": "manual correction"},
+            )
+            assert resp.status_code == 200, resp.text
+
+    assert m_adjust.await_count == 2
+    key_1 = m_adjust.call_args_list[0].kwargs["client_idempotency_key"]
+    key_2 = m_adjust.call_args_list[1].kwargs["client_idempotency_key"]
+    assert key_1 == key_2
+    assert key_1
+
+
+def test_adjust_uses_client_supplied_idempotency_key_when_given(test_client, admin_override):
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "balance": "100.00", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_wallet.apply_adjustment",
+            AsyncMock(return_value={"transaction_id": "t1", "balance_after": "75.00"}),
+        ) as m_adjust,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/wallet/adjust",
+            json={"amount": -25, "notes": "manual correction", "client_idempotency_key": "case-4821-refund"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert m_adjust.call_args.kwargs["client_idempotency_key"] == "case-4821-refund"
+
+
 def test_adjust_404_when_no_wallet(test_client, admin_override):
     with patch(
         "routes.corporate_wallet.get_corporate_wallet_by_company",

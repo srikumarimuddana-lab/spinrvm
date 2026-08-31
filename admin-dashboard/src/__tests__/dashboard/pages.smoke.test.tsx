@@ -113,7 +113,7 @@ vi.mock("lucide-react", () => {
     Car: Icon, Check: Icon, CheckCircle: Icon, CheckIcon: Icon,
     ChevronDown: Icon, ChevronDownIcon: Icon, ChevronLeft: Icon,
     ChevronRight: Icon, ChevronRightIcon: Icon, ChevronUp: Icon, ChevronUpIcon: Icon,
-    CircleIcon: Icon, Clock: Icon, Copy: Icon, CreditCard: Icon, DollarSign: Icon,
+    Circle: Icon, CircleIcon: Icon, Clock: Icon, Copy: Icon, CreditCard: Icon, DollarSign: Icon,
     Download: Icon, Edit: Icon, ExternalLink: Icon, Eye: Icon, EyeOff: Icon,
     FileCheck: Icon, FileQuestion: Icon, FileText: Icon, FileWarning: Icon,
     Flag: Icon, Gift: Icon, GitCompareArrows: Icon, Globe: Icon, HelpCircle: Icon,

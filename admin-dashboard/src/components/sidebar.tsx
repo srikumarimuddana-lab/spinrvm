@@ -39,6 +39,15 @@ interface NavItem {
      *  nav entry, clicks it, and gets 403'd on every API call. `module` is
      *  still required by the type but ignored when this is set. */
     superAdminOnly?: boolean;
+    /** Backend requires ALL of these modules together (an AND, not the
+     *  usual single-module OR-with-super-admin check) — set this instead of
+     *  relying on `module` alone when the endpoint's mount-level module
+     *  differs from its per-handler one. Without this, a role holding only
+     *  `module` (but not the other required grants) sees the link and gets
+     *  a 403 on every call (#4605 finding 2 — audit-logs endpoints require
+     *  both "audit" and "dashboard", but the nav only checked "audit").
+     *  `module` is still required by the type but ignored when this is set. */
+    requiresAllModules?: string[];
     /** Gives the icon a distinct (amber) color even when not the active
      *  route, instead of the default muted grey every other item shares.
      *  Reserved for genuinely higher-severity destinations (currently just
@@ -186,7 +195,15 @@ const NAV_GROUPS: NavGroup[] = [
             // "admin"-role user would see the entry and 403 on every call.
             { href: "/dashboard/sentry-logs", label: "Sentry Issues", icon: Bug, module: "settings", superAdminOnly: true },
             { href: "/dashboard/stripe-events", label: "Stripe Events", icon: Zap, module: "settings", superAdminOnly: true },
-            { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "audit" },
+            {
+                href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "audit",
+                // #4605 finding 2: the two audit-log endpoints require
+                // require_module("audit") per-handler while their router is
+                // mounted under require_module("dashboard") — FastAPI ANDs
+                // them. A role granted "audit" alone previously saw this
+                // link and 403'd on every call.
+                requiresAllModules: ["audit", "dashboard"],
+            },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             // Super-admin-only, stated with the flag rather than implied by a
             // module string no role can hold. The previous spelling —
@@ -332,6 +349,9 @@ function SidebarInner() {
                             // content inside another module's page.
                             if (item.hideIfModule && (isSuperAdmin || userModules.includes(item.hideIfModule))) return false;
                             if (item.superAdminOnly) return user?.role === "super_admin";
+                            if (item.requiresAllModules) {
+                                return isSuperAdmin || item.requiresAllModules.every(m => userModules.includes(m));
+                            }
                             return isSuperAdmin || userModules.includes(item.module);
                         });
                         if (visibleItems.length === 0) return null;

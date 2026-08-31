@@ -43,6 +43,16 @@ class FakeReconcilerDB:
         self.updates.append((filters, update))
         return {**update, "id": filters["id"]} if self.claim_returns_row else None
 
+    async def get_rows_batched_in(self, table: str, column: str, values, extra_filters: dict | None = None, **kwargs):
+        # The real repositories._base.get_rows_batched_in compiles a $in
+        # filter and pages through get_rows — reconciler.py's rec.db is
+        # this fake wholesale (not the db_supabase module), so route
+        # through this same fake's get_rows rather than needing a second,
+        # separately-maintained fake implementation.
+        filters = dict(extra_filters or {})
+        filters[column] = {"$in": list(values)}
+        return await self.get_rows(table, filters, **kwargs)
+
 
 @pytest.fixture
 def patched(monkeypatch):

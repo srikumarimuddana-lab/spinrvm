@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
 import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -42,7 +42,7 @@ import {
 } from '../../../hooks/liveRouteShared';
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
-import { bearingDegrees, destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
+import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -640,13 +640,24 @@ function DriverDashboard() {
   // Collapsed: the peek is just the drag handle + status header row —
   // generous estimate, same rigor as IDLE_PANEL_HEIGHT_DP above.
   const ACTIVE_SHEET_COLLAPSED_HEIGHT_DP = 110;
-  // Camera bearing derives from actual movement between camera ticks — the
-  // reported GPS heading is a placeholder 0 on Android when course is
-  // unknown (see @shared/utils/vehicleTracking selectBearing), so it must
-  // never rotate the map on its own. Holds the last value while stopped so
+  // Camera bearing: sourced from CarMarker's own onBearingChange callback,
+  // NOT recomputed independently here. An earlier version derived its own
+  // bearing from raw two-fix GPS chords (≥8m apart, zero delay), while
+  // CarMarker computes its icon's bearing from a 5s-delayed, spline-
+  // smoothed, route-snap-aware playback buffer (3m threshold) — two
+  // different algorithms on two different schedules that inevitably
+  // disagree, most visibly through turns. That mismatch made the course-up
+  // camera and the car icon point different directions simultaneously (live-
+  // testing reports 2026-08-31: "map orientation does not set to North" +
+  // "icon transition is still an issue" — one root cause, two symptoms).
+  // Sharing one source of truth means the icon is always oriented "up" on a
+  // course-up map by construction, not by coincidence. Holds the last value
+  // while stopped (CarMarker's own ticker just doesn't fire a new one) so
   // the map doesn't spin back to north at a red light.
-  const camPrevRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const camBearingRef = useRef<number | null>(null);
+  const handleMarkerBearingChange = useCallback((bearing: number) => {
+    camBearingRef.current = bearing;
+  }, []);
   useEffect(() => {
     if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
@@ -654,14 +665,6 @@ function DriverDashboard() {
     const tier = zoomTierForSpeed(c.speed, followZoomTierRef.current);
     followZoomTierRef.current = tier;
     const zoom = FOLLOW_ZOOM_TIERS[tier].zoom;
-
-    const prev = camPrevRef.current;
-    if (prev && haversineMeters(prev.latitude, prev.longitude, c.latitude, c.longitude) >= 8) {
-      camBearingRef.current = bearingDegrees(
-        prev.latitude, prev.longitude, c.latitude, c.longitude,
-      );
-    }
-    camPrevRef.current = { latitude: c.latitude, longitude: c.longitude };
 
     const mapHeading = courseUp && camBearingRef.current != null ? camBearingRef.current : 0;
     // Pin the car low: shift the center ahead of the car along the travel
@@ -929,6 +932,7 @@ function DriverDashboard() {
             imageUri={markerImageUri}
             routeCoordinates={routeCoords.length > 1 ? routeCoords : null}
             ring={ownMarkerRing}
+            onBearingChange={handleMarkerBearingChange}
           />
         )}
         <RoutePins pickup={pickupPoint} dropoff={dropoffPoint} />
@@ -1240,11 +1244,22 @@ function DriverDashboard() {
         }}
         courseUpEnabled={courseUp}
         onToggleCourseUp={() => {
+          // Re-arm following on every toggle, not just recenter — otherwise
+          // a driver who panned the map even once (onPanDrag sets
+          // followRef.current = false) finds the compass button does
+          // nothing until they also tap recenter, since the follow-camera
+          // effect below exits early on that guard in either direction.
+          followRef.current = true;
           setCourseUp((prev) => {
             const next = !prev;
-            // Returning to north-up should straighten the map immediately,
-            // not on the next GPS tick.
-            if (!next) mapRef.current?.animateCamera?.({ heading: 0 }, { duration: 400 });
+            // Straighten/rotate immediately, not on the next GPS tick —
+            // matters most when stationary or between fixes, where the
+            // next tick could be seconds away. Uses the same bearing the
+            // car icon is already rendering (camBearingRef, populated by
+            // CarMarker's onBearingChange) so the camera and the icon never
+            // show two different "forward" directions.
+            const heading = next && camBearingRef.current != null ? camBearingRef.current : 0;
+            mapRef.current?.animateCamera?.({ heading }, { duration: 400 });
             return next;
           });
         }}

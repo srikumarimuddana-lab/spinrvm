@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
 import { CarMarker } from '../../components/CarMarker';
+import { playbackPosition } from '@shared/utils/markerPlayback';
 
 // react-native-maps requires native modules Jest can't load — stub with
 // components that support everything CarMarker actually uses: a ref with
@@ -29,7 +30,9 @@ jest.mock('react-native-maps', () => {
 // the real module), so stub the minimal surface CarMarker calls.
 jest.mock('@shared/utils/markerPlayback', () => ({
   PLAYBACK_DELAY_MS: 300,
-  playbackPosition: () => null, // no buffered fix yet — ticker becomes a no-op
+  // jest.fn() (not a plain arrow) so individual tests can override the
+  // return value to exercise the ticker's bearing-selection path.
+  playbackPosition: jest.fn(() => null), // default: no buffered fix, ticker is a no-op
   pushFix: jest.fn(),
   shouldResetBuffer: () => false,
 }));
@@ -134,5 +137,48 @@ describe('CarMarker — state-colored presence ring (round 9)', () => {
       jest.advanceTimersByTime(2800);
     });
     expect(() => unmount()).not.toThrow();
+  });
+});
+
+describe('CarMarker — onBearingChange (shared bearing source for map camera + icon)', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const mockPlaybackPosition = playbackPosition as jest.Mock;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    // ~89m north of `coord` — clears both the ticker's 0.5m churn guard and
+    // selectBearing's MIN_BEARING_MOVE_M(3m), so the ticker actually selects
+    // and applies a bearing this tick instead of no-op'ing.
+    mockPlaybackPosition.mockReturnValue({
+      coordinate: { latitude: 50.446, longitude: -104.6189 },
+      bearing: 42,
+      mode: 'interpolating',
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    mockPlaybackPosition.mockReturnValue(null);
+  });
+
+  it('fires onBearingChange with the same bearing applied to the icon rotation, every tick a bearing is selected', () => {
+    const onBearingChange = jest.fn();
+    const { unmount } = render(
+      <CarMarker coordinate={coord} onBearingChange={onBearingChange} />,
+    );
+    act(() => {
+      jest.advanceTimersByTime(500); // one TICK_MS
+    });
+    // A caller (the map camera) reading this callback's value sees exactly
+    // what the marker's own icon just rotated to — the fix this test guards:
+    // before it, the camera computed a second, independent bearing that
+    // could (and did) disagree with the icon.
+    expect(onBearingChange).toHaveBeenCalledWith(42);
+    unmount();
+  });
+
+  it('is optional — omitting it does not throw even though the ticker still selects a bearing', () => {
+    const { unmount } = render(<CarMarker coordinate={coord} />);
+    expect(() => act(() => jest.advanceTimersByTime(500))).not.toThrow();
+    unmount();
   });
 });

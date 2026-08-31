@@ -11889,6 +11889,28 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 12 candidates from the broader sweep (6
   driver-app candidates; 5 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 24 done: `admin-dashboard/src/app/dashboard/drivers/page.tsx`'s
+  photo-upload MIME check (eighth admin-dashboard candidate).**
+  Extracted `handlePhotoUpload`'s single inline
+  `file.type.startsWith("image/")` check into new
+  `admin-dashboard/src/lib/driverPhotoUploadSchema.ts`
+  (`isPhotoFileTypeValid` — a plain predicate, not a zod schema, since a
+  single MIME-prefix check has nothing for zod's parsing machinery to
+  add). Pure extraction, byte-for-byte identical to the original check —
+  no bug found, no behavior change. New
+  `admin-dashboard/src/lib/__tests__/driverPhotoUploadSchema.test.ts` (9
+  accept/reject cases). Verification: 9/9 new tests pass; full
+  admin-dashboard suite (`vitest run`) 52/52 suites, 535/535 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors — 45 pre-existing warnings
+  throughout this large file, none near the touched lines; **real
+  production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file uses this exact check. Full
+  Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-driver-photo-upload-zod-step24.md`.
+  **Still open:** the remaining 11 candidates from the broader sweep (6
+  driver-app candidates; 4 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

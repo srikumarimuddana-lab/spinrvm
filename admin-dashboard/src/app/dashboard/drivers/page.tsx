@@ -31,6 +31,7 @@ import DriverDistance from "./_components/driver-distance";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
+import { isPhotoFileTypeValid } from "@/lib/driverPhotoUploadSchema";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -613,7 +614,7 @@ export default function DriversPage() {
     const [photoUploading, setPhotoUploading] = useState(false);
     const handlePhotoUpload = async (file: File) => {
         if (!selected || photoUploading) return;
-        if (!file.type.startsWith("image/")) {
+        if (!isPhotoFileTypeValid(file)) {
             toast({ title: "Invalid file", description: "Please choose an image (JPEG, PNG, WebP, or GIF).", variant: "destructive" });
             return;
         }

@@ -97,7 +97,11 @@ def test_skipped_files_never_mixed_with_normal_pending_and_applied():
 
     # _checksum reads real bytes off disk; use a real, non-skip-listed file
     # for the "already applied" case so the checksum comparison is real.
-    applied_path = Path("backend/migrations") / "24_schema_migrations.sql"
+    # Anchored to this file, not the cwd: CI runs pytest with
+    # `working-directory: backend` (.github/workflows/ci.yml), so a relative
+    # "backend/migrations/..." resolves to backend/backend/migrations/... and
+    # raises FileNotFoundError. parents[1] is the backend/ root either way.
+    applied_path = Path(__file__).resolve().parents[1] / "migrations" / "24_schema_migrations.sql"
     files[2] = applied_path
     applied = {applied_path.name: _checksum(applied_path)}
 

@@ -8,8 +8,8 @@ anthropic==0.109.1        # via -r requirements.in
 anyio==4.13.0             # via -r requirements.in, anthropic, httpx, mcp, openai, sse-starlette, starlette, watchfiles
 attrs==26.1.0             # via aiohttp, jsonschema, referencing
 bcrypt==5.0.0             # via -r requirements.in
-boto3==1.42.96            # via -r requirements.in
-botocore==1.42.96         # via boto3, s3transfer
+boto3==1.43.80            # via -r requirements.in
+botocore==1.43.83         # via boto3, s3transfer
 cachecontrol==0.14.4      # via firebase-admin
 cachetools==6.2.6         # via pyiceberg
 certifi==2026.4.22        # via -r requirements.in, cloudinary, httpcore, httpx, requests, sentry-sdk
@@ -116,7 +116,7 @@ referencing==0.37.0       # via jsonschema, jsonschema-specifications
 requests==2.34.2          # via -r requirements.in, cachecontrol, google-api-core, google-cloud-storage, pyiceberg, staticmap, stripe, twilio
 rich==14.3.4              # via -r requirements.in, pyiceberg, typer
 rpds-py==2026.5.1         # via jsonschema, referencing
-s3transfer==0.16.1        # via boto3
+s3transfer==0.19.2        # via boto3
 sentry-sdk==2.59.0        # via -r requirements.in
 shellingham==1.5.4        # via typer
 six==1.17.0               # via cloudinary, python-dateutil

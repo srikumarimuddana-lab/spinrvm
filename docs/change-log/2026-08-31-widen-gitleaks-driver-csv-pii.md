@@ -136,3 +136,27 @@ in this session, only a working-tree scan. The existing G5a history scan in
 `security-gates.yml` is advisory-only (not blocking), so a history false positive here would
 surface as CI noise, not a hard failure, consistent with how `spinr-sin-bank-pii` was rolled
 out — but CI's own run on this PR is still the first true full-history check.
+
+## 11. Tier 7 · Conflict & Debug Log — Merge conflicts
+
+Two `origin/main` merges into this branch (`b5cf3ff94`, `b2aaee5b4`). Only the second hit a
+real content conflict — worth stating precisely rather than describing both as conflicted:
+
+**Merge 1 (commit `b5cf3ff94`)** — this branch had drifted onto a stale local `main`
+mid-session (a git-state slip: local `main` hadn't been fetched/reset since session start).
+Merging the real `origin/main` in was **clean, no conflict** — at that point this branch
+hadn't touched `.gitleaks.toml` yet (the rule was added in a later commit), so there was
+nothing to conflict on. Confirmed by diffing `.gitleaks.toml` between the merge-base and this
+branch's pre-merge tip: empty diff.
+
+**Merge 2 (commit `b2aaee5b4`)** — `.gitleaks.toml` conflicted against **#4733**
+(`spinr-driver-export-pii`), a parallel session's independently-shipped rule closing the same
+#4596 detection gap this branch was working on, merged to `main` first. Files conflicted:
+`.gitleaks.toml` only. **Decision: kept theirs** — dropped this branch's
+`spinr-driver-csv-pii` rule entirely rather than keeping both (would have meant two
+overlapping detectors for the same PII shape, redundant scaffolding CLAUDE.md's
+simplicity-first principle argues against). Independently re-verified #4733's shipped rule
+against the real gitleaks 8.18.4 binary before accepting the drop: compiles cleanly, fires
+189/189 times against the true original incident file (see §0, §4). Nothing of substance
+from "theirs" was dropped in this merge — the reverse: theirs was kept in full, mine was the
+one dropped.

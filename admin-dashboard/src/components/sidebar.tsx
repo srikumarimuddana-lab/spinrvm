@@ -1,7 +1,9 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
@@ -247,6 +249,10 @@ function SidebarInner() {
     const collapsed = useSidebarStore((s) => s.collapsed);
     const hydrateSidebar = useSidebarStore((s) => s.hydrate);
     const { user } = useAuthStore();
+    // Theme-adaptive brand mark below — same resolvedTheme-from-useTheme
+    // pattern already used throughout (e.g. analytics/page.tsx,
+    // driver-charts.tsx) rather than a bespoke hydration guard.
+    const { resolvedTheme } = useTheme();
 
     const userModules = user?.modules || [];
     // Corporate + admin portal review, Admin #4: this used to also treat
@@ -333,12 +339,28 @@ function SidebarInner() {
                 collapsed ? "w-[68px]" : "w-60",
                 mobileOpen ? "translate-x-0 w-60" : "-translate-x-full md:translate-x-0"
             )}>
-                {/* Brand */}
-                <div className={cn("flex shrink-0 h-14 items-center border-b border-sidebar-border", collapsed ? "justify-center px-2" : "gap-2.5 px-4")}>
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary shrink-0">
-                        <span className="text-sm font-bold text-primary-foreground">S</span>
-                    </div>
-                    {!collapsed && <span className="text-base font-bold tracking-tight text-sidebar-foreground">Spinr</span>}
+                {/* Brand — real wordmark (was a fake "S" placeholder square).
+                    The mark already renders "spinr" as part of the image, so
+                    there's no separate text label alongside it. Two
+                    pre-generated assets carry the theme-adaptive ink color
+                    (dark ink for light mode, --sidebar-foreground-equivalent
+                    light ink for dark mode); the red mark is unchanged
+                    between them. Native 384x156 intrinsic size passed to
+                    Image, display size constrained via className so the
+                    aspect ratio is preserved automatically. Collapsed rail
+                    (w-[68px], px-2 padding either side ⇒ ~52px available)
+                    shows the same full wordmark scaled down rather than a
+                    cropped icon-only slice — avoids brittle pixel-crop math
+                    tied to this specific asset's layout. */}
+                <div className={cn("flex shrink-0 h-14 items-center border-b border-sidebar-border", collapsed ? "justify-center px-2" : "px-4")}>
+                    <Image
+                        src={resolvedTheme === "dark" ? "/spinr-logo-dark.png" : "/spinr-logo-light.png"}
+                        alt="Spinr"
+                        width={384}
+                        height={156}
+                        priority
+                        className={collapsed ? "h-[18px] w-auto" : "h-7 w-auto"}
+                    />
                 </div>
 
                 {/* Nav */}

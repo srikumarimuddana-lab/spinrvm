@@ -50,4 +50,20 @@ describe('buildLocationChoiceMessage', () => {
     expect(buildLocationChoiceMessage({ ...candidate, address: null, name: null }, 'dropoff')).toBeNull();
     expect(buildLocationChoiceMessage({ ...candidate, address: '', name: undefined }, 'dropoff')).toBeNull();
   });
+
+  it('appends an approximate-location marker when precise is false', () => {
+    const msg = buildLocationChoiceMessage({ ...candidate, precise: false }, 'dropoff');
+    expect(msg).toBe(
+      'Use 655 Albert St, Regina, SK S4R 2P4, Canada [50.44079,-104.61802] as my dropoff' +
+        ' (approximate location — Google could not match an exact address).',
+    );
+  });
+
+  it('does not append a marker when precise is true (same as undefined)', () => {
+    const msg = buildLocationChoiceMessage({ ...candidate, precise: true }, 'dropoff');
+    expect(msg).toBe(
+      'Use 655 Albert St, Regina, SK S4R 2P4, Canada [50.44079,-104.61802] as my dropoff.',
+    );
+    expect(msg).not.toContain('approximate');
+  });
 });

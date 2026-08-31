@@ -11936,6 +11936,27 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 10 candidates from the broader sweep (6
   driver-app candidates; 3 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 26 done: `admin-dashboard/src/app/dashboard/venues/page.tsx`'s
+  venue-name requiredness check (tenth admin-dashboard candidate).**
+  Extracted the Save button's inline `!d.name.trim()` disabled-guard
+  check into new `admin-dashboard/src/lib/venueFormSchema.ts`
+  (`isVenueNameValid` — a plain predicate, not a zod schema). Pure
+  extraction, byte-for-byte identical to the original check — no bug
+  found, no behavior change. Left the page's raw `alert`/`confirm` usage
+  untouched (a UX-pattern finding from the same sweep, not this item's
+  validation-logic scope). New
+  `admin-dashboard/src/lib/__tests__/venueFormSchema.test.ts` (4
+  accept/reject cases). Verification: 4/4 new tests pass; full
+  admin-dashboard suite (`vitest run`) 54/54 suites, 543/543 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 1 pre-existing warning, unrelated;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file uses this exact expression.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-venue-name-zod-step26.md`.
+  **Still open:** the remaining 9 candidates from the broader sweep (6
+  driver-app candidates; 2 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -295,6 +295,7 @@ export {
     adminCommitVehicleHistoryBackfill,
     adminValidateSavedAddressBackfill,
     adminCommitSavedAddressBackfill,
+    adminGetMigrationStatus,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -359,6 +360,9 @@ export type {
     SavedAddressBackfillCommitResult,
     SavedAddressBackfillFiles,
     SavedAddressBackfillOptions,
+    MigrationToolState,
+    MigrationToolStatus,
+    MigrationStatusReport,
 } from "./api/imports";
 export {
     getCloudMessages,

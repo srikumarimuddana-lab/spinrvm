@@ -409,6 +409,15 @@ A returning user never sees it again after their first successful login.
 
 ## 7. Recommended sequencing
 
+**Superseded 2026-08-31**: the section below only ever named 4 of the 17 tools
+that exist today (drivers/vehicle-history/saved-addresses/wallet import) and
+predates most of the rest (Bulk Rider Import, Legacy Booking Import, Stripe
+Mapping Import, Tax-ID Import, Pre-Launch Flag, Route Snapshots/Backfill, and
+the three "Fix ..." repair tools). `docs/runbooks/migration-tool-order.md` is
+now the canonical, verified-against-code tool-by-tool order — read that
+instead. This section is kept as-is for historical context on the Phase
+1-6 framing, not as current guidance.
+
 1. **You answer Section 2** (cancelled/failed bookings — honor the earlier instruction, or
    revisit it).
 2. Phase 1 (driver profiles) → Phase 2 (vehicle history) — foundational, regulatory-flagged,

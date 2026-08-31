@@ -12110,6 +12110,27 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** 2 driver-app candidates (`settings.tsx`,
   `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
   written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 33 done: `driver-app/app/driver/settings.tsx`'s
+  account-deletion confirmation validation (fifth driver-app candidate,
+  PIPEDA-adjacent).** Extracted `executeDelete`'s type-DELETE
+  confirmation check into new
+  `driver-app/utils/accountDeletionSchema.ts`
+  (`isDeleteConfirmationValid` — a plain predicate, not a zod schema).
+  Pure extraction, byte-for-byte identical to the original check — no
+  bug found, no behavior change. New
+  `driver-app/utils/__tests__/accountDeletionSchema.test.ts` (7
+  accept/reject cases). Verification: 7/7 new tests pass; full
+  driver-app suite (`jest`) 125/125 suites, 1409/1409 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses this
+  exact check expression. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-account-deletion-zod-step33.md`.
+  **Still open:** 1 driver-app candidate
+  (`addresses.tsx`/`destination-mode.tsx` — the last item in the entire
+  21-candidate broader sweep); no ADR/migration-order doc written yet.
+  Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -144,6 +144,25 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 > same duplicate-number pattern as the two `A34`s above; not renumbered
 > because this one had already merged. Treat the heading text as the
 > disambiguator.
+  **RESOLVED 2026-08-31** (decision-log row "Corporate payment-source
+  cascade": correct `domain-payments.md`'s "wallet → allowance → master →
+  card" language to describe payment-method choice, or build the literal
+  cascade — due 2026-08-29, owner Product/Eng lead). Doc-correction chosen
+  over building the literal cascade: re-read `routes/rides/payments.py`
+  (`settle_wallet`/`settle_corporate`/`settle_card` dispatch) and confirmed
+  `domain-payments.md`'s "Corporate billing" section already states this
+  accurately (payment method chosen once at booking, settlement dispatches
+  on that single field with no cross-method fallback; the only real
+  fallback is allowance→master-wallet inside `company_allowance` rides,
+  which itself hard-fails rather than reaching the rider's card) — no edit
+  needed there. The same stale "rider wallet → corporate allowance →
+  master wallet → rider card" cascade phrasing was still live in
+  `.claude/agents/spinr-money-auditor.md`, `.claude/agents/spinr-corporate-
+  billing-reviewer.md`, and `.claude/commands/corporate-check.md` — all
+  three corrected to match the verified code behavior. `CLAUDE.md` itself
+  does not use the cascade phrasing (its "Payment source selection ...
+  happens at fare settlement" line lists the four sources without implying
+  a fallback order) so was left unchanged.
 - [ ] **Status:** open, 2 of 17 baseline blockers fixed 2026-08-18 (same day,
   later sessions), plus the finding #11 unpinned-actions regression fixed
   2026-08-19 — see below. Of the baseline's 17 ranked blockers as

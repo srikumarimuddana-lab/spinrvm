@@ -16,6 +16,7 @@ import {
   getVenues, createVenue, updateVenue, deleteVenue, getServiceAreas,
   type Venue, type VenueUpsert, type VenuePickupPoint,
 } from "@/lib/api";
+import { isVenueNameValid } from "@/lib/venueFormSchema";
 
 const EMPTY: VenueUpsert = {
   name: "", center_lat: 0, center_lng: 0, radius_m: 150, pickup_points: [], service_area_id: null, is_active: true,
@@ -324,7 +325,7 @@ export default function VenuesPage() {
 
             <div className="flex justify-end gap-2 pt-2">
               <button onClick={() => { setEditing(null); setSelectedPoint(null); }} className="text-sm border rounded-lg px-4 py-2 hover:bg-muted">Cancel</button>
-              <button onClick={save} disabled={saving || !d.name.trim()} className="flex items-center gap-1.5 text-sm font-semibold bg-primary text-primary-foreground rounded-lg px-4 py-2 disabled:opacity-50 hover:bg-primary/90">
+              <button onClick={save} disabled={saving || !isVenueNameValid(d.name)} className="flex items-center gap-1.5 text-sm font-semibold bg-primary text-primary-foreground rounded-lg px-4 py-2 disabled:opacity-50 hover:bg-primary/90">
                 <Save className="h-4 w-4" /> {saving ? "Saving…" : "Save venue"}
               </button>
             </div>

@@ -76,7 +76,11 @@ class TestMiddlewareAdditionalBranches:
 
         scope = {"type": "http", "headers": [(b"authorization", b"Bearer sometoken")]}
         with (
-            patch.object(mcp_server, "get_app_settings", AsyncMock(return_value={"ai_mcp_enabled": True})),
+            patch.object(
+                mcp_server,
+                "get_app_settings",
+                AsyncMock(return_value={"ai_mcp_enabled": True, "ai_assistant_enabled": True}),
+            ),
             patch.object(mcp_server, "get_current_user", AsyncMock(side_effect=RuntimeError("boom"))),
             caplog.at_level(logging.ERROR),
         ):

@@ -304,6 +304,7 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 "spinr_alert": "refresh_token_reuse",
                 "audience": audience or "unknown",
                 "domain": "auth",
+                "surface": "backend",
             },
             contexts={
                 "refresh_token_reuse": {

@@ -5,6 +5,7 @@ import { createRideComplaint } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { FileWarning } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { getRideComplaintFormError } from "@/lib/rideComplaintFormSchema";
 
 const CATEGORIES = [
     { value: "safety", label: "Safety" },
@@ -29,7 +30,11 @@ export default function RideComplaintForm({ open, onClose, rideId, onCreated }: 
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async () => {
-        if (!category || !description) return;
+        const formError = getRideComplaintFormError(category, description);
+        if (formError) {
+            toast({ ...formError, variant: "destructive" });
+            return;
+        }
         setLoading(true);
         try {
             await createRideComplaint(rideId, { against_type: againstType, category, description });

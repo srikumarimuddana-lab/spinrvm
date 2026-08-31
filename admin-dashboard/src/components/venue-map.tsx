@@ -1,7 +1,8 @@
+/// <reference types="geojson" />
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Crosshair, Maximize2 } from "lucide-react";
 import { MAP_STYLE_URL, addStandardControls, makeCircleMarkerEl } from "@/lib/map/maplibre-base";

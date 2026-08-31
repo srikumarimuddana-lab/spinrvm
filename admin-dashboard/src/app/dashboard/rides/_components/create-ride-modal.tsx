@@ -26,6 +26,7 @@ import {
 import { useAdminLocation } from "@/hooks/useAdminLocation";
 import { usePlacesAutocomplete } from "@/hooks/usePlacesAutocomplete";
 import { Search, MapPin, User, Car } from "lucide-react";
+import { getCreateRideFormError } from "@/lib/createRideFormSchema";
 
 function useDebounce<T>(value: T, delay: number): T {
     const [debouncedValue, setDebouncedValue] = useState<T>(value);
@@ -287,26 +288,24 @@ export function CreateRideModal({
         e.preventDefault();
         setError("");
 
-        if (!selectedRider) return setError("Please select a rider.");
-        if (!selectedPickup) return setError("Please select a valid pickup location from the suggestions.");
-        if (!selectedDropoff) return setError("Please select a valid dropoff location from the suggestions.");
+        const formError = getCreateRideFormError({ rider: selectedRider, pickup: selectedPickup, dropoff: selectedDropoff, finalFare });
+        if (formError) return setError(formError);
 
         const totalNum = parseFloat(finalFare || "0");
-        if (Number.isNaN(totalNum) || totalNum < 0) {
-            return setError("Total fare must be a non-negative number.");
-        }
 
         setLoading(true);
         try {
             await adminCreateRide({
-                rider_id: selectedRider.id,
+                // Non-null: getCreateRideFormError above already confirmed
+                // rider/pickup/dropoff are selected.
+                rider_id: selectedRider!.id,
                 driver_id: selectedDriver?.id,
-                pickup_address: selectedPickup.address,
-                pickup_lat: selectedPickup.lat,
-                pickup_lng: selectedPickup.lng,
-                dropoff_address: selectedDropoff.address,
-                dropoff_lat: selectedDropoff.lat,
-                dropoff_lng: selectedDropoff.lng,
+                pickup_address: selectedPickup!.address,
+                pickup_lat: selectedPickup!.lat,
+                pickup_lng: selectedPickup!.lng,
+                dropoff_address: selectedDropoff!.address,
+                dropoff_lat: selectedDropoff!.lat,
+                dropoff_lng: selectedDropoff!.lng,
                 vehicle_type_id: vehicleTypeId || undefined,
                 subtotal_fare: estimate ? estimate.grand_total.toFixed(2) : undefined,
                 discount_amount: appliedPromo ? appliedPromo.discount.toFixed(2) : undefined,

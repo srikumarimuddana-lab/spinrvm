@@ -19,6 +19,7 @@ import { showToast } from '../../hooks/useToast';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { getEmergencyContactFormError } from '../../utils/emergencyContactSchema';
 
 const MAX_CONTACTS = 3;
 
@@ -68,17 +69,13 @@ export default function EmergencyContactsScreen() {
   }, [fetchContacts]);
 
   const handleAdd = async () => {
+    const formError = getEmergencyContactFormError(name, phone);
+    if (formError) {
+      showToast('warning', formError.title, formError.message);
+      return;
+    }
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim().replace(/\D/g, '');
-
-    if (!trimmedName) {
-      showToast('warning', 'Missing Name', 'Please enter a contact name.');
-      return;
-    }
-    if (trimmedPhone.length < 10) {
-      showToast('warning', 'Invalid Phone', 'Please enter a valid phone number (at least 10 digits).');
-      return;
-    }
 
     setSaving(true);
     try {

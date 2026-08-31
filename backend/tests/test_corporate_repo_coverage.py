@@ -1168,7 +1168,10 @@ class TestListCompanyRidePaymentSources:
         )
         sb.eq.assert_any_call("member_id", "m1")
         sb.gte.assert_any_call("created_at", "2026-07-01T00:00:00Z")
-        sb.lte.assert_any_call("created_at", "2026-08-01T00:00:00Z")
+        # Half-open bound (#4639 finding 2) -- .lt, not .lte, so a
+        # created_at landing exactly on to_iso isn't double-counted into
+        # the next period's statement too.
+        sb.lt.assert_any_call("created_at", "2026-08-01T00:00:00Z")
         sb.range.assert_any_call(10, 59)
 
 

@@ -418,6 +418,36 @@ class TestReplayNewDocuments:
         result = await bundle_document_uploader.replay_new_documents("driver-1", docs, {})
         assert result == 1
 
+    @pytest.mark.anyio
+    async def test_existing_documents_beyond_one_page_are_not_truncated(self, monkeypatch):
+        """#4590: a plain unbounded get_rows() silently caps at 1,000 rows.
+        A driver with more than one page of existing driver_documents rows
+        must still have every one of them counted against the incoming
+        bundle — not just the first page — or a document already on file
+        could be wrongly treated as new."""
+        from backend.services.data_transfer import bundle_document_uploader
+
+        page_size = bundle_document_uploader._EXISTING_ROWS_PAGE_SIZE
+        # Two full pages plus a partial third — proves the loop walks past
+        # a single page and stops correctly once a short page is returned.
+        db_rows = [{"document_type": "license", "side": f"side-{i}"} for i in range(page_size * 2 + 7)]
+        pages = [db_rows[i : i + page_size] for i in range(0, len(db_rows), page_size)]
+        get_rows_mock = AsyncMock(side_effect=pages)
+        monkeypatch.setattr(bundle_document_uploader.db_supabase, "get_rows", get_rows_mock)
+        replay_mock = AsyncMock(return_value=0)
+        monkeypatch.setattr(bundle_document_uploader, "replay_documents", replay_mock)
+
+        # One incoming doc matches the LAST row of the LAST page — only
+        # reachable if pagination actually fetched every page.
+        last_existing = db_rows[-1]
+        docs = [{"id": "doc-x", "document_type": last_existing["document_type"], "side": last_existing["side"]}]
+        await bundle_document_uploader.replay_new_documents("driver-1", docs, {})
+
+        assert get_rows_mock.await_count == len(pages)
+        replay_mock.assert_awaited_once()
+        _, called_docs, _ = replay_mock.call_args.args
+        assert called_docs == []  # correctly filtered out as already-existing
+
 
 # ── replay_new_insurance_periods ──────────────────────────────────────────
 
@@ -461,3 +491,31 @@ class TestReplayNewInsurancePeriods:
         assert result == 3
         _, called_periods = replay_mock.call_args.args
         assert len(called_periods) == 3
+
+    @pytest.mark.anyio
+    async def test_existing_periods_beyond_one_page_are_not_truncated(self, monkeypatch):
+        """#4590: driver_insurance_periods is a 7-year SGI/TNC regulatory
+        audit trail — a driver with more than one page of existing rows
+        must still have every one of them checked, not just the first
+        page, or an already-recorded period could be silently missed and
+        re-inserted."""
+        from backend.services.data_transfer import bundle_document_uploader
+
+        page_size = bundle_document_uploader._EXISTING_ROWS_PAGE_SIZE
+        db_rows = [{"period": 2, "started_at": f"2020-01-01T00:00:{i:02d}Z"} for i in range(page_size + 3)]
+        pages = [db_rows[i : i + page_size] for i in range(0, len(db_rows), page_size)]
+        get_rows_mock = AsyncMock(side_effect=pages)
+        monkeypatch.setattr(bundle_document_uploader.db_supabase, "get_rows", get_rows_mock)
+        replay_mock = AsyncMock(return_value=0)
+        monkeypatch.setattr(bundle_document_uploader, "replay_insurance_periods", replay_mock)
+
+        # Matches the last row of the last page — only found if every page
+        # was fetched.
+        last_existing = db_rows[-1]
+        periods = [{"period": last_existing["period"], "started_at": last_existing["started_at"]}]
+        await bundle_document_uploader.replay_new_insurance_periods("driver-1", periods)
+
+        assert get_rows_mock.await_count == len(pages)
+        replay_mock.assert_awaited_once()
+        _, called_periods = replay_mock.call_args.args
+        assert called_periods == []  # correctly filtered out as already-existing

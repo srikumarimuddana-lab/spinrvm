@@ -28,6 +28,12 @@ import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import {
+  isPersonalStepValid,
+  isVehicleYearValid,
+  isVehicleDetailsValid,
+  getMissingDriverDocuments,
+} from '../utils/becomeDriverSchema';
 
 const DRIVER_APP_SCHEME = 'spinr-driver://';
 const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id0000000000';
@@ -166,36 +172,15 @@ export default function BecomeDriverScreen() {
   const validateStep = (step: number) => {
     switch (step) {
       case 1: // Personal
-        return firstName && lastName && email && city;
+        return isPersonalStepValid(firstName, lastName, email, city);
       case 2: // Vehicle
-        const year = parseInt(vehicleYear);
-        const currentYear = new Date().getFullYear();
-        if (!vehicleYear || isNaN(year) || year < currentYear - 9) {
+        if (!isVehicleYearValid(vehicleYear)) {
           showToast('Invalid Year', 'Vehicle must be 9 years old or newer.', 'warning');
           return false;
         }
-        return vehicleMake && vehicleModel && vehicleColor && licensePlate && vehicleVin && vehicleType;
+        return isVehicleDetailsValid(vehicleMake, vehicleModel, vehicleColor, licensePlate, vehicleVin, vehicleType);
       case 3: // Docs
-        const missing: string[] = [];
-        if (!licenseNumber) missing.push('Driver License Number');
-
-        requirements.forEach(req => {
-          if (req.is_mandatory) {
-            const uploaded = docs[req.id];
-            if (!uploaded?.front) {
-              missing.push(`${req.name} (Front)`);
-            }
-            if (req.requires_back_side && !uploaded?.back) {
-              missing.push(`${req.name} (Back)`);
-            }
-            // Check expiry if we want to enforce it for everything
-            // For now, let's enforce expiry only for License and Insurance which are critical
-            if (['Driving License', 'Vehicle Insurance'].includes(req.name) && !uploaded?.expiry) {
-              missing.push(`${req.name} Expiry Date`);
-            }
-          }
-        });
-
+        const missing = getMissingDriverDocuments(licenseNumber, requirements, docs);
         if (missing.length > 0) {
           showToast('Missing Documents', `Please provide: ${missing.join(', ')}`, 'warning');
           return false;

@@ -24,6 +24,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../hooks/useToast';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
+import { getReportSafetyFormError } from '../utils/reportSafetySchema';
 
 type SafetyCategory = 'Road Hazard' | 'Passenger Behaviour' | 'Vehicle Issue' | 'Other';
 
@@ -79,12 +80,9 @@ export default function ReportSafetyScreen() {
     const removePhoto = (index: number) => setPhotos(prev => prev.filter((_, i) => i !== index));
 
     const handleSubmit = async () => {
-        if (!category) {
-            showToast('warning', 'Category Required', 'Please select a category for your safety report.');
-            return;
-        }
-        if (!issue.trim()) {
-            showToast('warning', 'Description Required', 'Please describe the safety issue before submitting.');
+        const formError = getReportSafetyFormError(category, issue);
+        if (formError) {
+            showToast('warning', formError.title, formError.message);
             return;
         }
 

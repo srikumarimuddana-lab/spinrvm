@@ -46,6 +46,8 @@ import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal, backfillStripeCustomerEmails } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
+import { getWalletActionError } from "@/lib/userWalletActionSchema";
+import { isModerationReasonValid } from "@/lib/userModerationSchema";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -107,12 +109,9 @@ export default function UsersPage() {
     // Validation step — runs on button click. On pass, opens confirm dialog;
     // actual mutation runs in confirmWalletAction below.
     const requestWalletAction = (action: "credit" | "debit") => {
-        if (!selectedUser?.id || !walletAmount || !/^\d+(\.\d{1,2})?$/.test(walletAmount.trim()) || parseFloat(walletAmount) <= 0) {
-            setWalletError("Enter a positive amount");
-            return;
-        }
-        if (!walletReason.trim() || walletReason.trim().length < 3) {
-            setWalletError("Reason must be at least 3 characters");
+        const error = !selectedUser?.id ? "Enter a positive amount" : getWalletActionError(walletAmount, walletReason);
+        if (error) {
+            setWalletError(error);
             return;
         }
         setWalletError("");
@@ -1156,10 +1155,10 @@ export default function UsersPage() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            disabled={!moderationReason.trim() || statusUpdating === pendingStatusChange?.id}
+                            disabled={!isModerationReasonValid(moderationReason) || statusUpdating === pendingStatusChange?.id}
                             onClick={async (e) => {
                                 if (!pendingStatusChange) return;
-                                if (!moderationReason.trim()) { e.preventDefault(); return; }
+                                if (!isModerationReasonValid(moderationReason)) { e.preventDefault(); return; }
                                 const change = pendingStatusChange;
                                 const reason = moderationReason.trim();
                                 const suspended_until =

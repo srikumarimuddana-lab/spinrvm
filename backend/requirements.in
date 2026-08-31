@@ -6,7 +6,7 @@ uvicorn[standard]>=0.52.3
 slowapi>=0.1.9
 
 # Configuration
-python-dotenv>=1.0.0
+python-dotenv>=1.2.3
 pydantic>=2.13.4
 pydantic-settings>=2.15.0
 
@@ -33,7 +33,7 @@ google-auth>=2.0.0
 pyotp>=2.9.0
 
 # HTTP clients
-requests>=2.33.1
+requests>=2.34.2
 httpx[http2]>=0.28.1
 aiohttp>=3.13.5
 
@@ -54,7 +54,7 @@ anthropic>=0.40.0
 openai>=1.60.0
 mcp>=1.9.0
 google-api-python-client>=2.194.0
-google-cloud-storage>=3.4.1
+google-cloud-storage>=3.13.1
 google-cloud-firestore>=2.27.0
 
 
@@ -83,7 +83,7 @@ stripe>=15.5.1
 twilio>=9.10.5
 
 # Cloud
-boto3>=1.42.89
+boto3>=1.43.80
 
 # Map snapshot rendering (ride route PNG for drawer + email invoice).
 # staticmap composites OSM tiles + our phase_polylines server-side.
@@ -93,7 +93,7 @@ Pillow>=12.3.0
 
 # CRA T4A PDF generation (pure-Python, no system deps).
 # Used by backend/utils/t4a_pdf.py for on-demand driver tax slip download.
-fpdf2>=2.8.0
+fpdf2>=2.8.8
 
 # Admin Data Transfer module (export/import users+drivers between Spinr's
 # own environments; see backend/services/data_transfer/).

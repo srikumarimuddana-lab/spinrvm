@@ -156,9 +156,15 @@ async def reconcile_stale_intent(now_utc: datetime | None = None) -> dict[str, i
             logger.warning("stale_intent: presence store unreachable — tick aborted")
             return stats
 
-        active_rides = await db.get_rows(
+        # Batched: `$in` over every candidate driver compiles to a
+        # `driver_id=in.(...)` URL parameter, and at fleet size that request
+        # line exceeded the edge proxy's limit and came back as a plain-text
+        # 400 — this lookup returned nothing and the tick aborted.
+        active_rides = await db.get_rows_batched_in(
             "rides",
-            {"driver_id": {"$in": ids}, "status": {"$in": ACTIVE_RIDE_STATUSES}},
+            "driver_id",
+            ids,
+            {"status": {"$in": ACTIVE_RIDE_STATUSES}},
             limit=CANDIDATE_LIMIT,
             columns="id,driver_id",
         )

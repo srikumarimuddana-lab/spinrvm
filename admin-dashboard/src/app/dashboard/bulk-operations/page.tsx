@@ -55,7 +55,6 @@ import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
 import { LegacyWalletImport } from "./_components/LegacyWalletImport";
 import { PreLaunchDataFlag } from "./_components/PreLaunchDataFlag";
-import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -527,8 +526,6 @@ export default function BulkOperationsPage() {
                     backfill for riders created via Bulk Rider Import below.
                 </p>
             </div>
-
-            <MigrationChecklist />
 
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                 <CreditCard className="h-4 w-4" />

@@ -21,6 +21,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { newPlacesSessionToken } from '@shared/utils/placesSession';
+import { isAddressNameAndAddressValid, isGeocodeResultValid } from '../../utils/addressGeocodeSchema';
 
 interface AutocompletePrediction {
     place_id: string;
@@ -117,7 +118,7 @@ export default function AddressesScreen() {
     };
 
     const handleAddAddress = async () => {
-        if (!newAddress.name.trim() || !newAddress.address.trim()) {
+        if (!isAddressNameAndAddressValid(newAddress.name, newAddress.address)) {
             showToast('error', 'Missing Fields', 'Please fill in both fields');
             return;
         }
@@ -125,7 +126,7 @@ export default function AddressesScreen() {
         try {
             // Geocode the address to get real coordinates
             const coords = await geocodeAddress(newAddress.address.trim());
-            if (!coords) {
+            if (!isGeocodeResultValid(coords)) {
                 showToast('warning', 'Address not found', 'We could not locate that address on the map. Please enter a more specific address (include city/province).');
                 return;
             }
@@ -133,8 +134,9 @@ export default function AddressesScreen() {
             await api.post('/addresses', {
                 name: newAddress.name.trim(),
                 address: newAddress.address.trim(),
-                lat: coords.lat,
-                lng: coords.lng,
+                // Non-null: isGeocodeResultValid above already confirmed coords resolved.
+                lat: coords!.lat,
+                lng: coords!.lng,
                 icon: 'home',
             });
             setShowAddModal(false);

@@ -20,6 +20,7 @@ import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { newPlacesSessionToken } from '@shared/utils/placesSession';
+import { isAddressInputValid, isGeocodeResultValid } from '../../utils/addressGeocodeSchema';
 
 interface AutocompletePrediction {
     place_id: string;
@@ -112,7 +113,7 @@ export default function DestinationModeScreen() {
 
     const handleSave = async () => {
         const trimmed = addressInput.trim();
-        if (!trimmed) {
+        if (!isAddressInputValid(addressInput)) {
             showToast('warning', t('destinationMode.missingAddressTitle'), t('destinationMode.missingAddressMsg'));
             return;
         }
@@ -120,21 +121,22 @@ export default function DestinationModeScreen() {
         setSaving(true);
         try {
             const coords = await geocodeAddress(trimmed);
-            if (!coords) {
+            if (!isGeocodeResultValid(coords)) {
                 showToast('warning', t('destinationMode.notFoundTitle'), t('destinationMode.notFoundMsg'));
                 return;
             }
 
+            // Non-null: isGeocodeResultValid above already confirmed coords resolved.
             await api.post('/drivers/destination', {
                 address: trimmed,
-                lat: coords.lat,
-                lng: coords.lng,
+                lat: coords!.lat,
+                lng: coords!.lng,
             });
             setState({
                 destination_mode: true,
                 destination_address: trimmed,
-                destination_lat: coords.lat,
-                destination_lng: coords.lng,
+                destination_lat: coords!.lat,
+                destination_lng: coords!.lng,
             });
             showToast('success', t('destinationMode.savedTitle'), t('destinationMode.savedMsg'));
         } catch (err: any) {

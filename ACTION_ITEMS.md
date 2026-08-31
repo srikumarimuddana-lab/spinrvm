@@ -12131,6 +12131,39 @@ record of what was assumed vs. what was actually true</summary>
   (`addresses.tsx`/`destination-mode.tsx` — the last item in the entire
   21-candidate broader sweep); no ADR/migration-order doc written yet.
   Checkbox stays `[ ]`.
+- **2026-08-31 update — step 34 done, closing the entire 21-candidate
+  broader sweep: `driver-app/app/driver/addresses.tsx` +
+  `destination-mode.tsx`'s saved-address/geocode-failure validation.**
+  Extracted the shared predicates (`isAddressNameAndAddressValid`,
+  `isAddressInputValid`, `isGeocodeResultValid`) into new
+  `driver-app/utils/addressGeocodeSchema.ts` — one shared extraction of
+  the *logic*, per this item's own note, while each screen kept its own
+  toast-copy source (`addresses.tsx` literal strings,
+  `destination-mode.tsx` i18n `t(...)` keys) at its own call site rather
+  than forcing them into one shared copy function. Pure extraction,
+  byte-for-byte identical to the originals on both screens — no bug
+  found, no behavior change; non-null assertions added at four
+  `lat`/`lng` payload/state fields that lost TS narrowing (type-only,
+  same pattern as step 20). New
+  `driver-app/utils/__tests__/addressGeocodeSchema.test.ts` (9
+  accept/reject cases). Verification: 9/9 new tests pass; full
+  driver-app suite (`jest`) 126/126 suites, 1418/1418 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed isolation. Full Change
+  Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-address-geocode-zod-step34.md`.
+
+  **The 2026-08-31 broader-sweep 21-candidate list (steps 15-34) is now
+  fully closed** — every rider-app, driver-app, and admin-dashboard
+  candidate the sweep identified has been migrated. Checkbox stays `[ ]`
+  regardless: this item's own scope was always "adopt zod, migrate one
+  form at a time," not "migrate every form in the codebase," and no
+  ADR/migration-order doc for the overall effort has been written (a
+  standing gap carried since step 1) — forms outside this specific sweep
+  were never exhaustively enumerated, so this checkbox does not claim
+  the item itself is complete, only that this sweep's scope is done.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

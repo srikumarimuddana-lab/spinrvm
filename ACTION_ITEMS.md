@@ -11480,6 +11480,52 @@ record of what was assumed vs. what was actually true</summary>
   `!airportForm.name || airportForm.polygon.length < 3`) are two more
   real inline checks found during this sweep but not yet migrated —
   candidates for a future step. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 14 done: `service-areas/page.tsx`'s
+  create-service-area form and airport-zone form** — the two candidates
+  named at the end of step 13. `handleCreate` gated a new top-level
+  service area with `if (!createForm.name) return;` (silent no-op, no
+  message). `handleCreateAirportSubRegion` gated a new airport sub-region
+  with `if (!airportForm.name || airportForm.polygon.length < 3) { ... }`
+  (a "Missing airport boundary" toast). Both call `createServiceArea`, so
+  a validation gap here could create a malformed or unnamed dispatch
+  area.
+
+  New colocated `admin-dashboard/src/lib/serviceAreaFormSchema.ts`
+  (`isServiceAreaNameValid`, `isAirportZoneValid`,
+  `MIN_AIRPORT_ZONE_POLYGON_POINTS = 3`) reproduces both checks as
+  byte-for-byte equivalent predicates. New
+  `admin-dashboard/src/lib/__tests__/serviceAreaFormSchema.test.ts` (7
+  accept/reject cases, including the exact 3-point polygon boundary).
+  Verification: 7/7 new tests pass; full admin-dashboard suite 432/432
+  tests, 44/44 files, exit 0 (`npm run test:coverage`, the exact CI
+  invocation — the 432/423 jump from step 13's count reflects other
+  merged work landing on `main` in between, not this change);
+  `npx tsc --noEmit` clean; `npx eslint` on touched files: 0 errors, 65
+  pre-existing warnings on unrelated lines (confirmed via `git diff` that
+  none fall on the 3 lines this diff touches); **real production build**
+  (`npm run build`) completed successfully, exit code 0, full route
+  manifest generated including `/dashboard/service-areas`; blast-radius
+  grep confirmed `createForm.name`/`airportForm.name`/`airportForm.polygon`
+  appear nowhere else in `admin-dashboard/src`. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-service-area-forms-zod-step14.md`.
+
+  **Environment note:** `main` had picked up an unrelated Storybook
+  addition (PR #4724) between step 13 and this step whose
+  `node_modules` wasn't installed in this session — `tsc`/`eslint` both
+  failed with module-not-found errors on `.stories.tsx` files /
+  `eslint-plugin-storybook` before a plain `npm install` (no
+  `package.json`/lockfile drift — confirmed via `git status`) resolved
+  it. Documented here since it briefly blocked verification and isn't
+  this change's own doing.
+
+  **Still open:** every other admin-dashboard corporate/billing form not
+  yet named remains unmigrated; no ADR/migration-order doc written yet;
+  no ADR/migration-order doc for the overall B39 effort exists. The
+  duplicate-Spinr-Pass-plan-form finding from step 13 remains
+  unaddressed (a de-duplication decision, not an extraction). Checkbox
+  stays `[ ]` — B39 is scoped as an ongoing "migrate one form at a time"
+  backlog item per its own text, not a finite checklist with a
+  completion state.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

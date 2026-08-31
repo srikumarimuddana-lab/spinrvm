@@ -80,7 +80,7 @@ numpy>=2.4.4
 stripe>=15.5.1
 
 # SMS
-twilio>=9.10.5
+twilio>=9.11.0
 
 # Cloud
 boto3>=1.43.80

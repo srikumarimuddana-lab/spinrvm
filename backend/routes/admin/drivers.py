@@ -42,6 +42,8 @@ except ImportError:
     from services import lms_service  # type: ignore
     from services.driver_import_service import (  # type: ignore
         dob_source,
+        fetch_incomplete_onboarding_driver_ids,
+        is_incomplete_onboarding_row,
         sin_source,
     )
     from services.pre_launch_flag_service import fetch_pre_launch_flagged_ids  # type: ignore

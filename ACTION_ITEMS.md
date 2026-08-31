@@ -15675,7 +15675,13 @@ record of what was assumed vs. what was actually true</summary>
 
 ### G8. No code-side or Zoho-side enforcement confirmed for the P1 2-hour support-response SLA
 - [ ] **Status:** open — identified 2026-08-22, following up on the existing Zoho Desk
-  integration and AI-escalation surface.
+  integration and AI-escalation surface. **Update 2026-08-31:** the code-side
+  tracking/enforcement half (deadline computation, breach sweep loop, metric, dashboard
+  surfacing) was built — see `docs/change-log/2026-08-31-g8-support-sla-tracking.md`.
+  **The Zoho-console-side SLA policy config below remains completely undone** — this item
+  stays open for that half and for the `ai_escalation_creates_ticket` production-value
+  confirmation, neither of which this session had the access to do (no Zoho admin console
+  credentials, no DB access to read the live `app_settings` row).
 - **Issue/gap:** CLAUDE.md's KPI table and `saskatoon-launch.md` §K-2 both state a P1
   support-ticket response target (≤ 2 hours), but grepping the actual support-ticket
   code turned up nothing that tracks it: `routes/admin/support_tickets.py` has
@@ -15697,6 +15703,27 @@ record of what was assumed vs. what was actually true</summary>
   necessarily a backend change. If Zoho's SLA/breach data should also be visible in
   Spinr's admin dashboard (e.g. surfaced next to the existing priority/status
   columns), that's a follow-up scoped separately once the Zoho-side policy exists.
+  **This Zoho-console step is still not done** — nothing in this repo configures Zoho
+  Desk's own SLA feature, and it requires a human with Zoho admin access, which this
+  session did not have (no Zoho MCP tool was available). Don't read the 2026-08-31
+  code-side build below as having closed this action item.
+- **2026-08-31 update — code-side tracking/enforcement built (independent of the Zoho
+  action above):** `backend/utils/support_sla.py` computes a P1 (mapped to Zoho's
+  `priority == "Urgent"` — no code anywhere names a literal "P1" value, so this is a
+  stated assumption, not a confirmed product definition; see the module's docstring)
+  SLA deadline as `created_time + 2h` (no first-response-timestamp field exists in the
+  mirror or live Zoho payload to anchor on instead), a new
+  `support_sla_breach_sweep (5min)` background loop (registered in
+  `core/lifespan.py` / `_WATCHDOG_LOOP_NAMES`) that atomically claims each breached-
+  and-not-yet-alerted ticket (new nullable `zoho_desk_tickets.sla_breach_alerted_at`
+  column, migration `377_zoho_desk_tickets_sla_breach_alerted.sql`) and emits
+  `spinr_support_ticket_sla_breach_total{priority}` + a `warning` log, and an additive
+  "SLA" column on `admin-dashboard/.../support-tickets/tickets/page.tsx` computed
+  client-side. Tests in `backend/tests/test_support_sla.py`. Full rationale, risk, and
+  what-was/wasn't-verified: `docs/change-log/2026-08-31-g8-support-sla-tracking.md`.
+  This closes the "no code tracks it" half of the issue/gap above; the Zoho-console
+  policy and the `ai_escalation_creates_ticket` production-value confirmation are
+  unaffected by it and remain open.
 - **Also worth confirming while in this area:** `ai_escalation_creates_ticket`
   defaults to `false` in code (migration 145, `schemas.py:546`,
   `test_ai_settings.py:58` asserts the default) and is admin-togglable

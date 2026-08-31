@@ -603,6 +603,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import Zoho Desk sync loop: {e}")
 
+    # Support-ticket P1 SLA breach sweep (ACTION_ITEMS.md G8) — every 5 min,
+    # finds open P1 (Urgent-priority) tickets past the 2h response target and
+    # not yet alerted, increments spinr_support_ticket_sla_breach_total, and
+    # logs a warning. Reads the zoho_desk_tickets mirror (migration 123), so
+    # it depends on the Zoho sync loop above having populated it — a quiet
+    # mirror (integration disabled / not yet synced) just yields zero
+    # candidates. Replay-safe: per-ticket atomic claim on
+    # sla_breach_alerted_at (migration 377).
+    try:
+        from utils.support_sla import support_sla_breach_sweep_loop
+
+        _spawn("support_sla_breach_sweep (5min)", support_sla_breach_sweep_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import support SLA breach sweep loop: {e}")
+
     # Capacity watchdog — samples DB thread-pool saturation, DB call
     # rejections, and rate-limit violation rate every 60 s and alerts via
     # ALERT_WEBHOOK_URL. Read-only (no DB/Redis writes), so it is replay-safe
@@ -673,6 +688,7 @@ async def lifespan(app: FastAPI):
             "suspension_reactivation (10min)",
             "push_retry (30s)",
             "zoho_desk_sync (10min)",
+            "support_sla_breach_sweep (5min)",
             "capacity_watchdog (60s)",
             "auto_payout (1h, Sundays)",
             # Insurance/GPS pipeline loops added with the tracking overhaul.

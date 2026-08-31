@@ -33,6 +33,7 @@ import { showToast } from '../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { otaVersionLabel } from '@shared/utils/otaVersion';
+import { isDeleteConfirmationValid } from '../../utils/accountDeletionSchema';
 
 export default function SettingsScreen() {
     const router = useRouter();
@@ -192,7 +193,7 @@ export default function SettingsScreen() {
     };
 
     const executeDelete = async () => {
-        if (deleteInput.trim().toUpperCase() !== 'DELETE') {
+        if (!isDeleteConfirmationValid(deleteInput)) {
             showToast('warning', t('settings.notConfirmedTitle'), t('settings.notConfirmedMsg'));
             return;
         }

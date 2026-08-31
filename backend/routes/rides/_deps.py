@@ -77,6 +77,7 @@ try:
         ride_read_limit,
         ride_request_limit,
     )
+    from ...utils.surge_engine import SURGE_CAP
     from ...validators import validate_ride_location
 except ImportError:
     import db_supabase
@@ -129,6 +130,7 @@ except ImportError:
         ride_read_limit,
         ride_request_limit,
     )
+    from utils.surge_engine import SURGE_CAP
     from validators import validate_ride_location
 
 

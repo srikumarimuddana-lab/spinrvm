@@ -18,6 +18,7 @@ Layer 1 — pure contract (always runnable). Layer 2 — integration (CI).
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -230,6 +231,92 @@ def test_driver_noshow_returns_409_and_charges_nothing_on_race():
     assert exc_info.value.status_code == 409
     fee_calc.assert_not_called()  # nothing charged — claim failed before fee calc
     assert upd.await_count == 1  # only the atomic claim ran (no wallet debit)
+
+
+def test_driver_noshow_skips_period1_when_driver_already_offline():
+    """#4597 Finding 4 (P3): mark_rider_noshow wrote Period 1 unconditionally
+    after set_driver_available, ignoring that set_driver_available clamps
+    is_available->False when the driver had already gone offline before this
+    no-show cancel landed (raceable against the subscription-expiry loop or
+    an admin ban). Mirrors the same guard already applied to
+    cancellation.py's rider-cancel path (#4597 Finding 3)."""
+    from backend.routes import drivers as drv
+
+    driver = {"id": "drv-1", "user_id": "user-1"}
+    arrived = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    ride = {
+        "id": "ride-1",
+        "status": "driver_arrived",
+        "driver_id": "drv-1",
+        "rider_id": None,
+        "driver_arrived_at": arrived,
+        "service_area_id": None,
+    }
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={"noshow_wait_seconds": 300})),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": "ride-1"})),
+        patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock(return_value={"id": "ride-1"})),
+        patch(
+            "backend.services.cancellation_service.calculate_noshow_fee",
+            MagicMock(return_value=(Decimal("0"), Decimal("0"))),
+        ),
+        # Driver had already gone offline -- clamped to is_available: False.
+        patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": "drv-1", "is_available": False}),
+        ),
+        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()) as period_mock,
+        patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+    ):
+        asyncio.run(drv.mark_rider_noshow(ride_id="ride-1", current_user={"id": "user-1"}))
+
+    period_mock.assert_not_awaited()
+
+
+def test_driver_noshow_records_period1_when_driver_still_online():
+    """Regression guard for the fix above: when the release actually makes
+    the driver available (the normal case), Period 1 must still be
+    recorded as before -- the guard must not over-suppress."""
+    from backend.routes import drivers as drv
+
+    driver = {"id": "drv-1", "user_id": "user-1"}
+    arrived = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    ride = {
+        "id": "ride-1",
+        "status": "driver_arrived",
+        "driver_id": "drv-1",
+        "rider_id": None,
+        "driver_arrived_at": arrived,
+        "service_area_id": None,
+    }
+
+    with (
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={"noshow_wait_seconds": 300})),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": "ride-1"})),
+        patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock(return_value={"id": "ride-1"})),
+        patch(
+            "backend.services.cancellation_service.calculate_noshow_fee",
+            MagicMock(return_value=(Decimal("0"), Decimal("0"))),
+        ),
+        patch(
+            "backend.routes.drivers._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"id": "drv-1", "is_available": True}),
+        ),
+        patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()) as period_mock,
+        patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+    ):
+        asyncio.run(drv.mark_rider_noshow(ride_id="ride-1", current_user={"id": "user-1"}))
+
+    period_mock.assert_awaited_once_with("drv-1", 1)
 
 
 def test_driver_cancel_logs_hold_release_db_error_loudly(caplog):

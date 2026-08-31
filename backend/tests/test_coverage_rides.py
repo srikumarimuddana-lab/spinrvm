@@ -295,7 +295,7 @@ async def test_estimate_ride_allows_dropoff_matched_by_polygon_fallback():
         # Simulates production rows where the PostGIS geography column is empty
         # or stale even though the admin-visible polygon contains both points.
         mock_db.get_service_area_for_point = AsyncMock(return_value=None)
-        mock_db.get_rows = AsyncMock(side_effect=[[active_area], []])
+        mock_db.get_rows = AsyncMock(side_effect=[[active_area], [], []])
 
         result = await estimate_ride(
             body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),

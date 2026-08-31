@@ -192,7 +192,7 @@ async def test_parent_cascade_map_fetch_failure_is_non_fatal():
         patch("backend.routes.rides.estimates._deps.get_app_settings", AsyncMock(return_value={})),
         patch("backend.routes.rides.estimates._deps._metric_inc"),
     ):
-        mock_db.get_rows = AsyncMock(side_effect=[[matched_area], []])
+        mock_db.get_rows = AsyncMock(side_effect=[[matched_area], [], []])
         mock_db.find_one = AsyncMock(side_effect=RuntimeError("db down"))
 
         result = await compute_ride_estimates(_body(), _RIDER_ID, include_polyline=False)
@@ -225,7 +225,7 @@ async def test_cascade_fallback_marks_vehicle_available_via_upgrade_type():
         patch("backend.routes.rides.estimates._deps.get_app_settings", AsyncMock(return_value={})),
         patch("backend.routes.rides.estimates._deps._metric_inc"),
     ):
-        mock_db.get_rows = AsyncMock(side_effect=[[matched_area], [cascade_driver]])
+        mock_db.get_rows = AsyncMock(side_effect=[[matched_area], [cascade_driver], []])
 
         result = await compute_ride_estimates(_body(), _RIDER_ID, include_polyline=False)
 

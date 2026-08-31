@@ -938,11 +938,24 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   rateRide: async (rideId: string, rating: number, comment?: string, tipAmount?: number) => {
     try {
-      await api.post(`/rides/${rideId}/rate`, {
-        rating,
-        comment,
-        tip_amount: tipAmount || 0,
-      });
+      // #4604 finding 3: the backend declares @idempotent_endpoint(scope=
+      // "ride_rate") but this call never sent the Idempotency-Key header the
+      // decorator needs, so it fell through as a permanent no-op. The only
+      // thing preventing a double-tip on the client's automatic 401/503
+      // retry was the rider_rating-already-set 409 guard happening to sit
+      // before the tip-charging block -- safe by ordering luck, not by the
+      // declared mechanism. Mirrors createRide's key shape above.
+      const userId = useAuthStore.getState().user?.id ?? 'anon';
+      const idempotencyKey = `rate-${userId}-${rideId}-${Date.now()}`;
+      await api.post(
+        `/rides/${rideId}/rate`,
+        {
+          rating,
+          comment,
+          tip_amount: tipAmount || 0,
+        },
+        { headers: { 'Idempotency-Key': idempotencyKey } }
+      );
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'rateRide' });
       set({ error: getApiErrorMessage(error, 'Failed to rate ride') });

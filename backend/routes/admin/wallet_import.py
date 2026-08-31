@@ -19,11 +19,10 @@ Money safety: every delta goes through ``wallet_apply_delta`` (migration
 type)``, and enforces the $0 floor. See ``services/wallet_import_service.py``
 and ``docs/change-log/2026-08-24-wallet-import-service-built.md``.
 
-**Column-name caveat** (see the service module's own docstring in full):
-the expected CSV columns are inferred from this same Mongo export's sibling
-collections, not confirmed against a real ``wallets.csv`` header row. The
-first real ``/validate`` call is the first time that assumption is actually
-tested — read its ``errors`` before ever calling ``/commit``.
+**Column-name note (2026-08-30):** the legacy type column is ``wallet_type``,
+not ``type`` — the original guess was wrong and blocked every real
+``/validate`` call until fixed against the real 07-26 export's header. See
+the service module's own docstring for the full correction.
 
 Super-admin only, matching the legacy booking importer: it applies real
 money deltas to riders'/drivers' wallets.

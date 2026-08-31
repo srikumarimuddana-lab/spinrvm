@@ -48,3 +48,6 @@ next-env.d.ts
 
 # Generated at install time by postinstall script (node_modules copy)
 /public/maplibre-gl-csp-worker.js
+
+*storybook.log
+storybook-static

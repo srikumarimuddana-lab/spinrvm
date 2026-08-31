@@ -17,6 +17,7 @@ import {
 import { Pagination } from "@/components/ui/pagination";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import {
     Table,
@@ -304,27 +305,25 @@ export default function CorporateAccountsPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Corporate Accounts</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Manage corporate clients and billing.
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <Button asChild variant="outline">
-                        <Link href="/dashboard/corporate-accounts/kyb-queue">
-                            <ShieldCheck className="mr-2 h-4 w-4" /> KYB Queue
-                        </Link>
-                    </Button>
-                    <Button variant="outline" size="icon" onClick={fetchAccounts} aria-label="Refresh">
-                        <RefreshCw className="h-4 w-4" />
-                    </Button>
-                    <Button onClick={handleOpenCreate}>
-                        <Plus className="mr-2 h-4 w-4" /> Add Account
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                title="Corporate Accounts"
+                description="Manage corporate clients and billing."
+                actions={
+                    <div className="flex gap-2">
+                        <Button asChild variant="outline">
+                            <Link href="/dashboard/corporate-accounts/kyb-queue">
+                                <ShieldCheck className="mr-2 h-4 w-4" /> KYB Queue
+                            </Link>
+                        </Button>
+                        <Button variant="outline" size="icon" onClick={fetchAccounts} aria-label="Refresh">
+                            <RefreshCw className="h-4 w-4" />
+                        </Button>
+                        <Button onClick={handleOpenCreate}>
+                            <Plus className="mr-2 h-4 w-4" /> Add Account
+                        </Button>
+                    </div>
+                }
+            />
 
             {/* Wallet risk portfolio — flags across every company at once,
                 so a risk doesn't require opening each account individually. */}

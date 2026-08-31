@@ -276,6 +276,8 @@ export {
     adminCommitBookingImport,
     adminValidateWalletImport,
     adminCommitWalletImport,
+    adminPreviewPreLaunchFlag,
+    adminCommitPreLaunchFlag,
     adminDiscoverStripeDriverAccounts,
     adminValidateStripeImport,
     adminCommitStripeImport,
@@ -290,6 +292,8 @@ export {
     adminCommitSinDobBackfill,
     adminValidateVehicleHistoryBackfill,
     adminCommitVehicleHistoryBackfill,
+    adminValidateSavedAddressBackfill,
+    adminCommitSavedAddressBackfill,
 } from "./api/imports";
 export type {
     DriverImportReportItem,
@@ -316,6 +320,10 @@ export type {
     WalletImportCommitResult,
     WalletImportFiles,
     WalletImportOptions,
+    PreLaunchFlagCounts,
+    PreLaunchFlagReport,
+    PreLaunchFlagCommitResult,
+    PreLaunchFlagOptions,
     StripeDiscoveryMatch,
     StripeDiscoveryReport,
     StripeImportKind,
@@ -344,6 +352,12 @@ export type {
     VehicleHistoryBackfillCommitResult,
     VehicleHistoryBackfillFiles,
     VehicleHistoryBackfillOptions,
+    SavedAddressBackfillReportItem,
+    SavedAddressBackfillCounts,
+    SavedAddressBackfillReport,
+    SavedAddressBackfillCommitResult,
+    SavedAddressBackfillFiles,
+    SavedAddressBackfillOptions,
 } from "./api/imports";
 export {
     getCloudMessages,

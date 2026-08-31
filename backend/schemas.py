@@ -588,6 +588,10 @@ class AppSettings(BaseModel):
     # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
     # via GET /api/admin/settings; effective within the 60s settings TTL.
     admin_theme_v2_enabled: bool = False
+    # ── Admin command palette (Cmd+K/Ctrl+K route jumper) ────────────────
+    # Same shape as admin_theme_v2_enabled above — dark-launched, no other
+    # apps read this. See migration 374 and components/command-palette.tsx.
+    admin_command_palette_enabled: bool = False
     # ── Forced-upgrade gate (ACTION_ITEMS.md E3) ──────────────────────────
     # Minimum app version each client must report via the X-App-Version
     # header (see core/middleware.py::ForcedUpgradeMiddleware). Empty string

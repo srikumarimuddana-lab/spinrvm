@@ -144,7 +144,14 @@ async def check_expiring_documents():
             try:
                 _docs_page = await db.get_rows(
                     "driver_documents",
-                    {"driver_id": {"$in": _driver_ids}, "status": "approved"},
+                    # No driver_id filter on purpose. _driver_ids is EVERY row of
+                    # the drivers table, so filtering by it selected the same rows
+                    # while compiling to a `driver_id=in.(910 uuids)` URL — a
+                    # 35 KB request line the edge proxy rejected with a plain-text
+                    # 400 (95 of them in 24h), leaving this sweep with zero
+                    # documents on every tick. Rows for a driver_id with no
+                    # drivers row are simply never looked up below.
+                    {"status": "approved"},
                     # Every name here must be a REAL driver_documents column:
                     # PostgREST rejects the whole query on the first unknown one
                     # ("column driver_documents.X does not exist"), and the

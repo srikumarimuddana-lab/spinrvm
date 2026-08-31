@@ -142,6 +142,25 @@ def _ride_tax(r: dict) -> Decimal:
     return tax
 
 
+def _ride_tax_by_type(r: dict) -> dict[str, Decimal]:
+    """Per-type (GST/PST) tax breakdown for one ride, from rides.tax_breakdown
+    — same field and shape routes/corporate_company.py::_aggregate_rows and
+    utils/receipt_pdf.py/email_receipt.py already render separate lines from.
+    #4639: this statement previously only summed the combined tax_amount, so
+    a driver receiving it — captioned as a CRA remittance reminder — had no
+    way to tell how much was GST vs PST to file correctly. Empty when the
+    breakdown is genuinely absent (legacy rows); callers fall back to the
+    combined total in that case."""
+    breakdown = r.get("tax_breakdown") or {}
+    out: dict[str, Decimal] = {}
+    if isinstance(breakdown, dict):
+        for label, payload in breakdown.items():
+            if not isinstance(payload, dict):
+                continue
+            out[label] = out.get(label, _ZERO) + _d(payload.get("amount"))
+    return out
+
+
 _PAYOUT_TYPE_LABELS = {
     "standard": "Standard payout",
     "instant": "Instant payout",
@@ -262,6 +281,10 @@ async def _build(
     ride_earnings = sum((_ride_income(r) for r in rides), _ZERO)
     tips = sum((_d(r.get("tip_amount")) for r in rides), _ZERO)
     tax_collected = sum((_ride_tax(r) for r in rides), _ZERO)
+    tax_by_type: dict[str, Decimal] = {}
+    for r in rides:
+        for label, amt in _ride_tax_by_type(r).items():
+            tax_by_type[label] = tax_by_type.get(label, _ZERO) + amt
     cancel_fees = sum((_d(r.get("cancellation_fee_driver")) for r in cancelled), _ZERO)
     bonus_total = sum((_d(b.get("amount")) for b in bonuses), _ZERO)
     incentive_total = sum((_d(c.get("bonus_amount")) for c in incentive_claims), _ZERO)
@@ -343,6 +366,7 @@ async def _build(
             "bonuses": _money(bonus_total),
             "cancellation_fees": _money(cancel_fees),
             "tax_collected": _money(tax_collected),
+            "tax_by_type": {label: _money(amt) for label, amt in tax_by_type.items()},
             "total": _money(total),
         },
         "payouts": payouts_out,

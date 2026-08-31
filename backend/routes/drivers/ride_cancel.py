@@ -431,8 +431,18 @@ async def mark_rider_noshow(
         logger.warning(f"[NOSHOW] extended fields write failed; retrying minimal: {exc}")
         await db_supabase.update_ride(ride_id, {"updated_at": _fee_now})
 
-    await db_supabase.set_driver_available(driver["id"], True)
-    await _deps.record_period_transition(driver["id"], 1)
+    # Use the returned row (not just fire-and-forget) so the invariant
+    # is_available ⇒ is_online is respected below — mirrors the same
+    # guard already applied to matching.py's offer-timeout handler and
+    # cancellation.py's rider-cancel path (#4597 Finding 3).
+    _noshow_released = await db_supabase.set_driver_available(driver["id"], True)
+    # #4597 Finding 4: only record Period 1 if the release actually made
+    # the driver available. A driver who already went offline before this
+    # no-show cancel landed (raceable against the subscription-expiry
+    # loop or an admin ban) would otherwise get a false Period 1
+    # (TNC contingent) row written over what should be Period 0.
+    if isinstance(_noshow_released, dict) and _noshow_released.get("is_available"):
+        await _deps.record_period_transition(driver["id"], 1)
 
     rider_id = ride.get("rider_id")
     if rider_id:

@@ -94,12 +94,14 @@ from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
 from .legacy_driver_import import router as legacy_driver_import_router
+from .legacy_saved_address_backfill import router as legacy_saved_address_backfill_router
 from .legacy_sin_dob_backfill import router as legacy_sin_dob_backfill_router
 from .legacy_vehicle_history_backfill import router as legacy_vehicle_history_backfill_router
 from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
 from .monitoring import router as monitoring_router
+from .pre_launch_flag import router as pre_launch_flag_router
 from .promotions import router as promotions_router
 from .rider_import import router as rider_import_router
 from .rides import router as rides_router
@@ -235,6 +237,11 @@ admin_router.include_router(booking_import_router, dependencies=[Depends(require
 # credit -> wallet_apply_delta). Same require_super_admin boundary as the
 # booking importer, for the same reason: it applies real money deltas.
 admin_router.include_router(wallet_import_router, dependencies=[Depends(require_super_admin)])
+# Pre-launch legacy data flagging (2026-08-30) -- additive-only, flags
+# dormant pre-launch driver/ride rows in legacy_import_metadata. Bulk write
+# across core drivers/rides tables, same require_super_admin boundary as
+# the importers above.
+admin_router.include_router(pre_launch_flag_router, dependencies=[Depends(require_super_admin)])
 # Bulk driver tax-ID import (SIN + GST BN migration for drivers who predate
 # in-app collection). Writes Vault-encrypted SINs, so it takes the reveal-sin
 # posture: require_super_admin at the mount AND re-checked in each handler.
@@ -249,6 +256,9 @@ admin_router.include_router(dispute_evidence_submission_router, dependencies=[De
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(rider_import_router, dependencies=[Depends(require_module("users"))])
+# Phase 4 of the 2026-08-27 migration plan -- rider-owned data, same gate as
+# rider_import_router above.
+admin_router.include_router(legacy_saved_address_backfill_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
 admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
 # Dispute-evidence-pack download (C23 item 4) -- same "support" gate as the
@@ -257,8 +267,10 @@ admin_router.include_router(support_router, dependencies=[Depends(require_module
 # inherit that broader ops/dispatch grant (security-auditor finding).
 admin_router.include_router(dispute_pack_download_router, dependencies=[Depends(require_module("support"))])
 # support_tickets sub-router enforces require_module("support_tickets") per-handler
-# (the dashboard/trends/ticket routes carry it explicitly); config routes use
-# get_admin_user so any admin can connect the integration.
+# on every route, config routes included (there is no get_admin_user-only path
+# here — a prior version of this comment claimed otherwise; corrected 2026-08-31,
+# see #4605 finding 3, to avoid a future "fix" loosening credential-test access
+# to match the stale comment instead of the actual, stricter code).
 admin_router.include_router(support_tickets_router)
 admin_router.include_router(safety_router, dependencies=[Depends(require_module("support"))])
 admin_router.include_router(faqs_router, dependencies=[Depends(require_module("support"))])

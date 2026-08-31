@@ -1,4 +1,4 @@
--- 373: rollout flag for real ride-incentive eligibility enforcement.
+-- 375: rollout flag for real ride-incentive eligibility enforcement.
 --
 -- Context: ride_incentives has carried start_date, end_date, max_budget,
 -- budget_used, bonus_type and conditions since migration 96, and NOTHING

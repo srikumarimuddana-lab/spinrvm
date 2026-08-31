@@ -6,6 +6,8 @@ import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
     ResponsiveContainer, CartesianGrid,
 } from "recharts";
+import { useTheme } from "next-themes";
+import { chartColors } from "@/components/analytics/chart-palette";
 
 interface ChartData {
     daily_joins: { date: string; date_raw: string; count: number }[];
@@ -32,15 +34,9 @@ function ChartCard({ title, subtitle, icon: I, children }: {
     );
 }
 
-const tooltipStyle = {
-    fontSize: 12,
-    borderRadius: 10,
-    border: '1px solid hsl(var(--border))',
-    background: 'hsl(var(--card))',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-};
-
 export default function DriverCharts({ charts, loading }: { charts: ChartData | null; loading: boolean }) {
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
     if (loading || !charts) {
         return (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -69,7 +65,7 @@ export default function DriverCharts({ charts, loading }: { charts: ChartData | 
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} axisLine={false} tickLine={false} />
-                        <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 600 }} cursor={{ fill: 'hsl(var(--muted))', radius: 4 }} />
+                        <Tooltip contentStyle={c.tooltip} labelStyle={{ fontWeight: 600 }} cursor={{ fill: 'hsl(var(--muted))', radius: 4 }} />
                         <Bar dataKey="count" name="Joins" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
                     </BarChart>
                 </ResponsiveContainer>
@@ -82,8 +78,8 @@ export default function DriverCharts({ charts, loading }: { charts: ChartData | 
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} axisLine={false} tickLine={false} />
-                        <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 600 }} cursor={{ fill: 'hsl(var(--muted))', radius: 4 }} />
-                        <Bar dataKey="count" name="Rides" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                        <Tooltip contentStyle={c.tooltip} labelStyle={{ fontWeight: 600 }} cursor={{ fill: 'hsl(var(--muted))', radius: 4 }} />
+                        <Bar dataKey="count" name="Rides" fill={c.accent} radius={[4, 4, 0, 0]} />
                     </BarChart>
                 </ResponsiveContainer>
             </ChartCard>
@@ -96,9 +92,9 @@ export default function DriverCharts({ charts, loading }: { charts: ChartData | 
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false}
                             tickFormatter={(v) => `$${v}`} />
-                        <Tooltip contentStyle={tooltipStyle} labelStyle={{ fontWeight: 600 }}
+                        <Tooltip contentStyle={c.tooltip} labelStyle={{ fontWeight: 600 }}
                             formatter={(value: any) => [formatCurrency(Number(value || 0)), "Earnings"]} />
-                        <Line type="monotone" dataKey="amount" name="Earnings" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                        <Line type="monotone" dataKey="amount" name="Earnings" stroke={c.good} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                     </LineChart>
                 </ResponsiveContainer>
             </ChartCard>

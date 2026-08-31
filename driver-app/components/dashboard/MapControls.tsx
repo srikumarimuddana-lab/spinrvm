@@ -55,25 +55,31 @@ export const MapControls: React.FC<MapControlsProps> = ({
     }
   };
 
-  const handleRecenter = async () => {
-    // Fetch a fresh GPS fix first — just animating to the cached `location`
-    // prop would only zoom in on yesterday's position.
-    let fresh: LocationLike | null = null;
-    try {
-      const result = await onRecenter?.();
-      if (result && typeof result === 'object' && 'coords' in result) {
-        fresh = result as LocationLike;
-      }
-    } catch {}
-    const target = fresh ?? location;
-    if (target && mapRef.current) {
+  // Live-testing report 2026-08-30: recenter "does not work that responsive".
+  // The previous version awaited onRecenter() — a fresh GPS fetch
+  // (Location.getCurrentPositionAsync, up to a 15s timeout) — before
+  // animating the camera AT ALL, so every tap visibly did nothing for
+  // however long that fetch took. But the app already tracks a live,
+  // continuously-updating position via watchPositionAsync — `location` is
+  // rarely more than a few seconds stale. Snap to it INSTANTLY, then let
+  // onRecenter's fresh fetch run in the background purely to correct the
+  // rare stale/cold-start case; the ordinary follow-camera effect (course-up
+  // rotation) picks up that correction on its own once it lands, so a
+  // second manual animate isn't needed here.
+  const handleRecenter = () => {
+    if (location && mapRef.current) {
       mapRef.current.animateToRegion({
-        latitude: target.coords.latitude,
-        longitude: target.coords.longitude,
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
-      }, 500);
+      }, 400);
     }
+    // Fire-and-forget: resets followRef + refreshes the fix in the
+    // background (useDriverDashboard.refreshLocation). Swallow rejection —
+    // a failed background refresh isn't user-facing when the instant snap
+    // above already ran.
+    void Promise.resolve(onRecenter?.()).catch(() => {});
   };
 
   return (

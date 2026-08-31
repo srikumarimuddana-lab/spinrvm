@@ -45,6 +45,11 @@ try:
 except ImportError:
     from backend import db_supabase
 
+try:
+    from utils.pii import geohash
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -79,11 +84,9 @@ async def _fetch_osrm_route(
         data = resp.json()
         if data.get("code") != "Ok" or not data.get("routes"):
             logger.warning(
-                "OSRM non-Ok response for (%s,%s)->(%s,%s): %s",
-                pickup_lat,
-                pickup_lng,
-                dest_lat,
-                dest_lng,
+                "OSRM non-Ok response for %s->%s: %s",
+                geohash(pickup_lat, pickup_lng),
+                geohash(dest_lat, dest_lng),
                 data.get("code"),
             )
             return None
@@ -100,7 +103,12 @@ async def _fetch_osrm_route(
         distance_km = round(route["distance"] / 1000, 2)
         return distance_km, latlon
     except Exception as e:
-        logger.error("OSRM request failed for (%s,%s)->(%s,%s): %s", pickup_lat, pickup_lng, dest_lat, dest_lng, e)
+        logger.error(
+            "OSRM request failed for %s->%s: %s",
+            geohash(pickup_lat, pickup_lng),
+            geohash(dest_lat, dest_lng),
+            e,
+        )
         return None
 
 

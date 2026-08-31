@@ -496,6 +496,16 @@ async def compute_ride_estimates(
                 road_km - haversine_km,
             )
 
+    # Fetch area_fees once for the matched area — it's identical on every
+    # iteration below (calculate_all_fees is called once per vehicle type
+    # for the same pickup), so without this each vehicle type re-issued the
+    # same area_fees query (#4588).
+    _est_area_fees = None
+    if _est_matched_area:
+        _est_area_fees = await _deps.db_supabase.get_rows(
+            "area_fees", {"service_area_id": _est_matched_area["id"], "is_active": True}, limit=50
+        )
+
     estimates = []
     for fare_info in fares:
         surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
@@ -519,6 +529,7 @@ async def compute_ride_estimates(
                 _f(fb.total_fare),
                 _all_areas=_est_all_areas,
                 _matched_area=_est_matched_area,
+                _area_fees=_est_area_fees,
             )
         except Exception as e:
             logger.error("[estimate] calculate_all_fees failed: %s", e, exc_info=True)
@@ -574,7 +585,14 @@ async def compute_ride_estimates(
             pickup_lng=body.pickup_lng,
             dropoff_lat=body.dropoff_lat,
             dropoff_lng=body.dropoff_lng,
-            surge_multiplier=round(float(surge), 2),
+            # Decimal->float order matters: round the Decimal first, then
+            # convert (#4604 finding 2). round(float(surge), 2) converts
+            # to float BEFORE rounding -- clean auto-tier values round-trip
+            # safely, but a non-2dp admin manual override (1.0-10.0 allowed)
+            # is a genuine precision-loss vector on the token's `sm` field,
+            # which booking.py reads back verbatim to compute the actually
+            # -charged fare (the P0-4 surge-lock mechanism).
+            surge_multiplier=_f(_round(surge)),
             total_fare=_f(fb.total_fare),
             # Carry the quoted road distance + basis to /rides so booking charges
             # exactly what the rider was shown, not a re-derived haversine.
@@ -600,7 +618,7 @@ async def compute_ride_estimates(
                 "distance_fare": _money_str(fb.distance_fare),
                 "time_fare": _money_str(fb.time_fare),
                 "booking_fee": _money_str(fb.booking_fee),
-                "surge_multiplier": round(float(surge), 2),
+                "surge_multiplier": _f(_round(surge)),  # round Decimal first, then convert (#4604 finding 2)
                 "total_fare": _money_str(fb.total_fare),
                 "area_fees": fees_result.get("fees", []),
                 "area_fees_total": area_fees_total,

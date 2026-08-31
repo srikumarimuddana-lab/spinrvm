@@ -41,15 +41,13 @@ def hash_otp(code: str) -> str:
     return hmac.new(_otp_pepper(), code.encode(), hashlib.sha256).hexdigest()
 
 
-def _legacy_sha256(code: str) -> str:
-    """Pre-pepper unsalted digest. Retained only so codes issued in the ~5-min
-    TTL window straddling a deploy still verify; new codes use hash_otp()."""
-    return hashlib.sha256(code.encode()).hexdigest()
-
-
 def verify_otp_hash(stored_hash: str, input_otp: str) -> bool:
-    """Constant-time OTP verification. Accepts the new keyed hash and, as a
-    transition fallback, the legacy unsalted SHA-256 for in-flight codes."""
-    if hmac.compare_digest(stored_hash, hash_otp(input_otp)):
-        return True
-    return hmac.compare_digest(stored_hash, _legacy_sha256(input_otp))
+    """Constant-time OTP verification against the keyed hash.
+
+    The pre-pepper unsalted-SHA-256 fallback (`_legacy_sha256`) was removed
+    2026-08-31: it existed only to verify codes issued in the ~5-min TTL
+    window straddling the 2026-08-22 pepper deploy, and OTPs are short-lived
+    (~5 min) — any legacy-hashed code has long since expired, so the fallback
+    was dead code kept alive as an unnecessary weaker-verification path.
+    """
+    return hmac.compare_digest(stored_hash, hash_otp(input_otp))

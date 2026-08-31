@@ -49,6 +49,21 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/compliance", tags=["Admin Compliance"])
 
 
+def _require_super_admin(admin: dict) -> None:
+    """403 unless super_admin. This router is mounted with
+    ``dependencies=[Depends(require_super_admin)]`` in admin/__init__.py,
+    but per-handler defense-in-depth is the convention every sibling
+    router in this sensitivity class follows (stripe_payout_sync,
+    stripe_connect_ledger, tax_id_import, booking_import, wallet_import,
+    sentry, ai_console, …) — these handlers decrypt full driver PII
+    (_decrypt_driver_pii) and expose GST/PST remittance and T4A
+    legal-name/mailing-address data, so the guard must survive a future
+    re-mount or refactor, not depend solely on where this router happens
+    to be included today."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Compliance reports require super_admin")
+
+
 def _d(v) -> Decimal:
     if v in (None, ""):
         return Decimal("0")
@@ -511,6 +526,7 @@ async def get_gst_pst_remittance(
     rides in the requested date range. Spinr-branded (never a fixed
     regulator format — CRA remittance filing has no prescribed layout,
     unlike SGI's forms)."""
+    _require_super_admin(admin)
     start_date, end_date = _resolve_date_window(date_from, date_to)
     area_ids = _parse_service_area_ids(service_area_ids)
 
@@ -737,6 +753,7 @@ async def get_driver_roster(
     Drivers who deleted their account are excluded unless `include_deleted`
     is set — see `_driver_roster_rows` for why a status filter alone does not
     catch them."""
+    _require_super_admin(admin)
     area_ids = _parse_service_area_ids(service_area_ids)
 
     try:
@@ -918,8 +935,7 @@ async def get_t4a_filer_handoff(
     Canada-wide, so an area-scoped slice of it is never a valid filing —
     a driver working out of two areas would be split across two partial
     exports and under-reported in each."""
-    if (admin.get("role") or "").lower() != "super_admin":
-        raise HTTPException(status_code=403, detail="t4a_filer_handoff requires super_admin role")
+    _require_super_admin(admin)
 
     try:
         rows, truncated, qualifying_count = await _t4a_filer_handoff_rows(year)
@@ -1347,6 +1363,7 @@ async def get_insurance_billing_sgi(
     at SGI's contracted rate ($0.11/km), for reconciling SGI's invoice.
     Spinr-branded; this is Spinr's own reconciliation report, not a fixed
     insurer form."""
+    _require_super_admin(admin)
     return await _render_insurance_billing_report(
         admin,
         "SGI",
@@ -1380,6 +1397,7 @@ async def get_insurance_billing_knight_archer(
     """Knight Archer usage-based insurance billing — per-trip, per-phase
     insured km at Knight Archer's contracted rate ($0.011/km), for
     reconciling their invoice. Spinr-branded, not a fixed insurer form."""
+    _require_super_admin(admin)
     return await _render_insurance_billing_report(
         admin,
         "Knight Archer",
@@ -1543,6 +1561,7 @@ async def get_airport_trips(
     that reconciliation). Spinr-branded; not any specific airport
     authority's fixed form (see module docstring for why: general
     TNC-airport reporting convention, not a confirmed published spec)."""
+    _require_super_admin(admin)
     start_date, end_date = _resolve_date_window(date_from, date_to)
     area_ids = _parse_service_area_ids(service_area_ids)
 

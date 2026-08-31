@@ -6,10 +6,10 @@ Two layers are pinned here:
    which were copy-pasted five times and had drifted looser on the three
    display paths than on the two settlement paths.
 2. The eligibility columns migration 96 added and NOTHING honoured until
-   migration 373 — start_date/end_date, the conditions JSONB, bonus_type
+   migration 375 — start_date/end_date, the conditions JSONB, bonus_type
    ='percentage' and the max_budget cap. Those are gated on
    `incentive_eligibility_enforced`, so both flag states are pinned: off must
-   reproduce the pre-373 behaviour exactly.
+   reproduce the pre-375 behaviour exactly.
 """
 
 from datetime import datetime, timezone
@@ -158,7 +158,7 @@ async def test_db_failure_raises_rather_than_quoting_zero():
         await match_ride_incentives(db, RIDE, enforce=False)
 
 
-# ── Flag OFF must reproduce pre-373 behaviour exactly ───────────────────────
+# ── Flag OFF must reproduce pre-375 behaviour exactly ───────────────────────
 
 
 async def test_flag_off_still_pays_an_expired_over_budget_incentive():
@@ -173,7 +173,7 @@ async def test_flag_off_still_pays_an_expired_over_budget_incentive():
 
 
 async def test_flag_off_pays_a_percentage_incentive_as_dollars():
-    """Pre-373 bug, preserved while the flag is off: bonus_amount=10 on a
+    """Pre-375 bug, preserved while the flag is off: bonus_amount=10 on a
     percentage row was paid as $10, not 10%."""
     _, matched = await _match([_inc(bonus_amount="10", bonus_type="percentage")], enforce=False)
     assert matched[0].bonus == Decimal("10.00")

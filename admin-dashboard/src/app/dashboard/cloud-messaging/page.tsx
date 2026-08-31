@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { getBroadcastFormError, getSuppressionFormError, isParticularAudience } from "@/lib/cloudMessagingFormSchema";
 import {
     getCloudMessages, sendCloudMessage, getCloudMessageStats,
     deleteCloudMessage, adminSearchUsers, adminSearchDrivers, getServiceAreas,
@@ -259,7 +260,8 @@ export default function CloudMessagingPage() {
     }, [activeTab, fetchSuppressions]);
 
     const handleAddSuppression = async () => {
-        if (!newSupp.target.trim()) { toast({ title: "Missing value", description: "Enter an email or phone to suppress.", variant: "destructive" }); return; }
+        const suppressionError = getSuppressionFormError(newSupp.target);
+        if (suppressionError) { toast({ ...suppressionError, variant: "destructive" }); return; }
         try {
             await addMarketingSuppression({ channel: newSupp.channel, target: newSupp.target.trim(), reason: "manual" });
             setNewSupp({ channel: newSupp.channel, target: "" });
@@ -307,15 +309,23 @@ export default function CloudMessagingPage() {
     const { sorted: sortedSuppressions, sort: suppSort, toggle: suppToggle } = useTableSort(suppressions);
 
     const handleSend = async () => {
-        if (!form.title.trim() || !form.description.trim()) { toast({ title: "Missing fields", description: "Please fill in title and description.", variant: "destructive" }); return; }
-        const isParticular = form.audience === "particular_customer" || form.audience === "particular_driver";
-        if (isParticular && form.particular_ids.length === 0) { toast({ title: "No recipients selected", description: "Please select at least one user/driver.", variant: "destructive" }); return; }
-        if (form.is_scheduled && !form.scheduled_at) { toast({ title: "Missing schedule time", description: "Please select a date and time.", variant: "destructive" }); return; }
+        const formError = getBroadcastFormError({
+            title: form.title,
+            description: form.description,
+            audience: form.audience,
+            particularIds: form.particular_ids,
+            isScheduled: form.is_scheduled,
+            scheduledAt: form.scheduled_at,
+            sendPush: form.send_push,
+            sendEmail: form.send_email,
+            sendSms: form.send_sms,
+        });
+        if (formError) { toast({ ...formError, variant: "destructive" }); return; }
+        const isParticular = isParticularAudience(form.audience);
         const channels: string[] = [];
         if (form.send_push) channels.push("push");
         if (form.send_email) channels.push("email");
         if (form.send_sms) channels.push("sms");
-        if (channels.length === 0) { toast({ title: "No delivery channel", description: "Please select at least one delivery channel.", variant: "destructive" }); return; }
 
         setSending(true);
         try {

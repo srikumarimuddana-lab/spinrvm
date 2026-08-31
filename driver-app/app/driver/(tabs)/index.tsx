@@ -13,6 +13,8 @@ import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import {
   DriverTopBar,
   DriverIdlePanel,
+  HUD_EXPANDED_HEIGHT_DP,
+  HUD_COLLAPSED_HEIGHT_DP,
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
@@ -39,7 +41,8 @@ import {
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
-import { bearingDegrees, destinationPoint } from '@shared/utils/vehicleTracking';
+import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
+import { bearingDegrees, destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -52,6 +55,11 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
+
+// Ride states the follow-car camera (course-up rotation + speed-adaptive
+// zoom) actively drives. See the effect below for why the other ride
+// states are excluded.
+const COURSE_UP_RIDE_STATES = new Set(['idle', 'navigating_to_pickup', 'trip_in_progress']);
 
 // Distance in metres between two lat/lng pairs. Used by the Directions
 // refresh ticker to decide whether the driver has moved far enough to
@@ -155,6 +163,7 @@ function DriverDashboard() {
     isOnline,
     connectionState,
     location,
+    markerFixFeed,
     locationStatus,
     otpInput,
     setOtpInput,
@@ -169,6 +178,28 @@ function DriverDashboard() {
     wsLatency,
     refreshLocation,
   } = useDriverDashboard();
+
+  // Own-vehicle presence ring — colors mirror the insurance-period grouping
+  // in CLAUDE.md (Period 1 available / Period 2 en route-to-pickup, offer
+  // through arrival / Period 3 passenger aboard), for a visual that a driver
+  // already reads as "available / heading to a rider / on a trip" rather
+  // than inventing a fourth, unrelated color language. Pulsing is reserved
+  // for Period 2 only — idle can last minutes to hours online, so a
+  // continuous loop there would force Android to re-snapshot this marker
+  // for the whole shift (see CarMarker's `ring` prop doc comment); trip-in-
+  // progress doesn't need extra attention-drawing motion once already under
+  // way. This screen renders exactly one CarMarker (the driver's own
+  // vehicle), so pulsing here is the single-marker case the ring feature is
+  // scoped to — never wire `ring` onto a multi-marker screen.
+  const ownMarkerRing = !isOnline
+    ? null
+    : rideState === 'idle'
+    ? { color: colors.success, pulsing: false }
+    : rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup'
+    ? { color: colors.warning, pulsing: true }
+    : rideState === 'trip_in_progress'
+    ? { color: colors.primary, pulsing: false }
+    : null;
 
   // Unread notification count — fetched on mount, refreshed every 60s
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
@@ -229,15 +260,29 @@ function DriverDashboard() {
   // native layer fully drops leftover polyline overlays and the CarMarker
   // re-snapshots cleanly. Without this, after rating/Done the driver sees
   // a ghost polyline near the destination and a blank car marker.
+  //
+  // Also bumped on going back ONLINE (offline→online), which turned out to
+  // be the same failure class: live-testing report 2026-08-30 — after going
+  // offline then online again, tapping recenter correctly moved the camera
+  // (it reads the raw location fix directly) but the car icon itself never
+  // reappeared. The camera and the marker are separate native pipelines;
+  // Android's Google Maps view can leave the marker's underlying native
+  // reference stale across a foreground GPS-services interruption the same
+  // way it does across a ride ending, and the existing remount-on-idle fix
+  // above doesn't cover this transition since rideState stays 'idle' the
+  // whole time a driver goes offline and back online.
   const [mapKey, setMapKey] = useState(0);
   const prevRideStateRef = useRef(rideState);
+  const prevIsOnlineRef = useRef(isOnline);
   useEffect(() => {
-    const prev = prevRideStateRef.current;
-    if (rideState === 'idle' && prev !== 'idle') {
+    const prevRideState = prevRideStateRef.current;
+    const prevOnline = prevIsOnlineRef.current;
+    if ((rideState === 'idle' && prevRideState !== 'idle') || (isOnline && !prevOnline)) {
       setMapKey((k) => k + 1);
     }
     prevRideStateRef.current = rideState;
-  }, [rideState]);
+    prevIsOnlineRef.current = isOnline;
+  }, [rideState, isOnline]);
 
   // Live ETA from Google Directions — refreshed every 60s, with a stationary
   // skip so a parked driver doesn't burn API calls when nothing has changed.
@@ -548,20 +593,53 @@ function DriverDashboard() {
     return () => sub.remove();
   }, []);
 
-  // ── Idle follow-car camera: speed-adaptive zoom + course-up rotation ──
-  // While online without a ride the camera tracks the car: zoomed in near
-  // intersections/stops (street names, one-ways, turn restrictions render on
-  // the vector map at ≥17 — zero extra API calls), zoomed out while cruising.
-  // With course-up on (default), the map rotates so the direction of travel
-  // points to the top of the screen and the car sits in the lower third —
-  // the universal navigation-app framing ("driving bottom→up", live-testing
-  // ask 2026-08-31). The compass button toggles back to north-up. Panning
-  // hands control to the driver; the recenter button resumes follow.
-  // Active-ride phases keep their deliberate route-overview framing — turn-by
-  //-turn/lane detail comes from the Google Maps/Waze handoff, not this map.
+  // ── Follow-car camera: speed-adaptive zoom + course-up rotation ──
+  // The camera tracks the car: zoomed in near intersections/stops (street
+  // names, one-ways, turn restrictions render on the vector map at ≥17 —
+  // zero extra API calls), zoomed out while cruising. With course-up on
+  // (default), the map rotates so the direction of travel points to the top
+  // of the screen and the car sits in the lower third — the universal
+  // navigation-app framing ("driving bottom→up", live-testing asks
+  // 2026-08-31 and 2026-08-30). The compass button toggles back to
+  // north-up. Panning hands control to the driver; the recenter button
+  // resumes follow.
+  //
+  // Runs in COURSE_UP_RIDE_STATES (module-level, below): online-idle
+  // (cruising, no ride) plus the two states where the driver is actually
+  // navigating — navigating_to_pickup and trip_in_progress.
+  // `arrived_at_pickup` (PIN entry, stationary) and
+  // `ride_offered`/`trip_completed` (brief, non-driving) keep their
+  // existing one-time route-overview fitToCoordinates instead — there's no
+  // ongoing travel direction to orient toward.
   const followRef = useRef(true);
   const followZoomTierRef = useRef<number | null>(null);
   const [courseUp, setCourseUp] = useState(true);
+  // DriverIdlePanel's own content height, minus its collapsible hud block
+  // (the GO/STOP button + its container margins/padding) — the hud itself
+  // now auto-collapses ~2s after going online (round 7), reported back via
+  // onExpandedChange below so mapPadding can shrink accordingly instead of
+  // always reserving the full expanded height. Approximated from
+  // DriverIdlePanel.tsx's styles; deliberately generous rather than exact —
+  // this only needs to keep the map's own "center" concept out from under
+  // the panel, not pixel-match it.
+  const IDLE_PANEL_BASE_HEIGHT_DP = 140;
+  const [idleHudExpanded, setIdleHudExpanded] = useState(true);
+  // ActiveRidePanel's draggable sheet reports its own open/collapsed state
+  // (see onExpandedChange below) so mapPadding can track it instead of
+  // guessing — without this, extending the follow camera's "pin the car
+  // low" framing to navigating_to_pickup/trip_in_progress would reproduce
+  // the exact idle-panel-hides-the-marker bug just fixed (2026-08-30), this
+  // time under the bigger active-ride sheet. Sheet always re-opens on a
+  // phase change (ActiveRidePanel's own effect), so default true here
+  // matches its real initial state.
+  const [activeSheetExpanded, setActiveSheetExpanded] = useState(true);
+  // Expanded: matches ActiveRidePanel's own `maxPanelHeight` cap for these
+  // two states exactly (0.65 * window height — see ActiveRidePanel.tsx;
+  // if that fraction ever changes for navigating_to_pickup/trip_in_progress
+  // it must change here too), so this is a real bound, not a guess.
+  // Collapsed: the peek is just the drag handle + status header row —
+  // generous estimate, same rigor as IDLE_PANEL_HEIGHT_DP above.
+  const ACTIVE_SHEET_COLLAPSED_HEIGHT_DP = 110;
   // Camera bearing derives from actual movement between camera ticks — the
   // reported GPS heading is a placeholder 0 on Android when course is
   // unknown (see @shared/utils/vehicleTracking selectBearing), so it must
@@ -570,7 +648,7 @@ function DriverDashboard() {
   const camPrevRef = useRef<{ latitude: number; longitude: number } | null>(null);
   const camBearingRef = useRef<number | null>(null);
   useEffect(() => {
-    if (rideState !== 'idle' || !followRef.current) return;
+    if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
     if (!c || !mapRef.current) return;
     const tier = zoomTierForSpeed(c.speed, followZoomTierRef.current);
@@ -621,6 +699,77 @@ function DriverDashboard() {
     // mapRef is a stable useRef object from useDriverDashboard() — adding it
     // doesn't change when this effect fires.
   }, [location, rideState, mapRef]);
+
+  // ── Route-deviation detection ──
+  // Three consecutive displayed fixes farther than 60 m from the active
+  // route polyline (~10 s of genuinely being elsewhere — GPS scatter and the
+  // odd wide corner don't trigger) surface a quiet heads-up. Detection only:
+  // no auto-reroute (navigating_to_pickup already refreshes Directions on
+  // movement; trip_in_progress renders the planned line). Also the
+  // client-side groundwork for rider-facing off-route safety alerts.
+  const OFF_ROUTE_M = 60;
+  const offRouteStreakRef = useRef(0);
+  const offRouteToastMsRef = useRef(0);
+  useEffect(() => {
+    const onRouteState = rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress';
+    if (!onRouteState || routeCoords.length < 2 || !location?.coords) {
+      offRouteStreakRef.current = 0;
+      return;
+    }
+    const c = location.coords;
+    const snapped = snapToRoute(
+      { latitude: c.latitude, longitude: c.longitude },
+      routeCoords,
+      OFF_ROUTE_M,
+    );
+    if (snapped) {
+      offRouteStreakRef.current = 0;
+      return;
+    }
+    offRouteStreakRef.current += 1;
+    if (offRouteStreakRef.current >= 3 && Date.now() - offRouteToastMsRef.current > 60_000) {
+      offRouteToastMsRef.current = Date.now();
+      showToast('info', 'Off Route', 'You have left the planned route.');
+    }
+  }, [location, rideState, routeCoords]);
+
+  // ── Arrival geofence auto-detect ──
+  // When navigating to pickup, two consecutive displayed fixes inside the
+  // geofence (~6-8 s dwell at the 3-3.5 s render cadence — a drive-past
+  // doesn't trigger) auto-mark arrival via the SAME arriveAtPickup action as
+  // the manual button, so the store's pickup-radius guard and the backend
+  // state machine still validate the transition. Removes a tap made in
+  // traffic and starts honest wait-time from actual arrival. One attempt per
+  // ride: a rejection (e.g. server-side radius disagreement) leaves the
+  // manual button as the path, never a retry loop.
+  const ARRIVAL_GEOFENCE_M = 60;
+  const arrivalAttemptedRideRef = useRef<string | null>(null);
+  const arrivalDwellRef = useRef(0);
+  useEffect(() => {
+    if (rideState !== 'navigating_to_pickup') {
+      arrivalDwellRef.current = 0;
+      return;
+    }
+    const rid = activeRide?.ride?.id;
+    const c = location?.coords;
+    const pLat = activeRide?.ride?.pickup_lat;
+    const pLng = activeRide?.ride?.pickup_lng;
+    if (!rid || !c || pLat == null || pLng == null) return;
+    if (arrivalAttemptedRideRef.current === rid) return;
+    if (haversineMeters(c.latitude, c.longitude, pLat, pLng) <= ARRIVAL_GEOFENCE_M) {
+      arrivalDwellRef.current += 1;
+      if (arrivalDwellRef.current >= 2) {
+        arrivalAttemptedRideRef.current = rid;
+        arriveAtPickup(rid, c.latitude, c.longitude).then((res) => {
+          if (res.success) {
+            showToast('success', "You've Arrived", 'Marked as arrived at the pickup spot.');
+          }
+        });
+      }
+    } else {
+      arrivalDwellRef.current = 0;
+    }
+  }, [location, rideState, activeRide, arriveAtPickup]);
 
   // Error handling. `error` is destructured from the top-level useDriverStore()
   // call above (full-store subscription, not a selector), so this component
@@ -713,6 +862,38 @@ function DriverDashboard() {
         style={styles.map}
         provider={MAP_PROVIDER}
         userInterfaceStyle={isDark ? "dark" : "light"}
+        // userInterfaceStyle only darkens Apple Maps; Google (Android) needs
+        // an explicit night style or the map stays daylight-white after dark.
+        customMapStyle={isDark ? (DARK_MAP_STYLE as any) : undefined}
+        // Reserves the bottom strip whichever bottom panel is showing
+        // occupies, so the SDK's own notion of "center" — what
+        // animateCamera({center}) below actually renders in the middle of —
+        // excludes that strip. Without this the follow camera's "pin the
+        // car low" framing pins it directly under the panel (live-testing
+        // report 2026-08-30, screenshot: car hidden behind the "You're
+        // Online" pill and vehicle card — the same risk applies to
+        // ActiveRidePanel's bigger sheet during navigating_to_pickup/
+        // trip_in_progress, tracked via activeSheetExpanded). Every other
+        // ride state keeps its existing route-overview framing unpadded.
+        mapPadding={
+          rideState === 'idle'
+            ? {
+                top: 0, right: 0, left: 0,
+                bottom:
+                  IDLE_PANEL_BASE_HEIGHT_DP +
+                  (idleHudExpanded ? HUD_EXPANDED_HEIGHT_DP : HUD_COLLAPSED_HEIGHT_DP) +
+                  insets.bottom,
+              }
+            : rideState === 'navigating_to_pickup' || rideState === 'trip_in_progress'
+            ? {
+                top: 0, right: 0, left: 0,
+                bottom:
+                  (activeSheetExpanded
+                    ? Dimensions.get('window').height * 0.65
+                    : ACTIVE_SHEET_COLLAPSED_HEIGHT_DP) + insets.bottom,
+              }
+            : { top: 0, right: 0, left: 0, bottom: 0 }
+        }
         initialRegion={{
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
@@ -741,10 +922,13 @@ function DriverDashboard() {
               longitude: location.coords.longitude,
             }}
             heading={location.coords.heading}
+            fixTimestampMs={location.timestamp}
+            fixFeed={markerFixFeed}
             isOnline={isOnline}
             variant={markerVariant}
             imageUri={markerImageUri}
             routeCoordinates={routeCoords.length > 1 ? routeCoords : null}
+            ring={ownMarkerRing}
           />
         )}
         <RoutePins pickup={pickupPoint} dropoff={dropoffPoint} />
@@ -1032,6 +1216,18 @@ function DriverDashboard() {
         )
       )}
 
+      {/* Current speed — GPS-derived (coords.speed, m/s), shown while
+          online and actually moving. Throttled location state is fine for a
+          readout; hidden when stationary to keep the map minimal. */}
+      {isOnline && (location.coords.speed ?? 0) >= 1.5 && (
+        <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
+          <Text style={styles.speedChipValue} allowFontScaling={false}>
+            {Math.round((location.coords.speed ?? 0) * 3.6)}
+          </Text>
+          <Text style={styles.speedChipUnit} allowFontScaling={false}>km/h</Text>
+        </View>
+      )}
+
       {/* Map Controls */}
       <MapControls
         mapRef={mapRef}
@@ -1060,6 +1256,7 @@ function DriverDashboard() {
           isOnline={isOnline}
           onToggleOnline={toggleOnline}
           pulseAnim={pulseAnim}
+          onExpandedChange={setIdleHudExpanded}
         />
       )}
       {rideState === 'ride_offered' && incomingRide && (
@@ -1089,6 +1286,7 @@ function DriverDashboard() {
         rideState === 'trip_in_progress') && (
         <ActiveRidePanel
           rideState={rideState}
+          onExpandedChange={setActiveSheetExpanded}
           ride={activeRide?.ride as unknown as any || null}
           rider={activeRide?.rider || null}
           totalBonus={activeRide?.total_bonus ?? null}
@@ -1172,6 +1370,32 @@ function DriverDashboard() {
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
+    speedChip: {
+      position: 'absolute',
+      left: 16,
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: 24,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 10,
+      elevation: 6,
+    },
+    speedChipValue: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+      lineHeight: 20,
+    },
+    speedChipUnit: {
+      fontSize: 10,
+      color: colors.textDim,
+    },
     container: {
       flex: 1,
       backgroundColor: colors.background,

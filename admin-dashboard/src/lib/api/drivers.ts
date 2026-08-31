@@ -26,6 +26,10 @@ export const getDrivers = (opts: {
     /** true = pre-launch-flagged drivers only, false = hide flagged, omitted = no filter.
      * See services/pre_launch_flag_service.py for what "flagged" means. */
     pre_launch?: boolean;
+    /** true = real driver profiles only, false = only the abandoned-legacy-onboarding
+     * shells, omitted = no filter. See services/driver_import_service.py's
+     * is_incomplete_onboarding_row for why those rows exist. */
+    onboarding_complete?: boolean;
     sort_by?: string;
     sort_dir?: "asc" | "desc";
 } = {}) => {
@@ -43,6 +47,7 @@ export const getDrivers = (opts: {
     if (opts.missing_license != null) sp.set("missing_license", String(opts.missing_license));
     if (opts.legacy_import != null) sp.set("legacy_import", String(opts.legacy_import));
     if (opts.pre_launch != null) sp.set("pre_launch", String(opts.pre_launch));
+    if (opts.onboarding_complete != null) sp.set("onboarding_complete", String(opts.onboarding_complete));
     if (opts.sort_by) sp.set("sort_by", opts.sort_by);
     if (opts.sort_dir) sp.set("sort_dir", opts.sort_dir);
     const qs = sp.toString();
@@ -622,7 +627,12 @@ export const getDriverStats = (params?: {
     if (params?.end_date) sp.set("end_date", params.end_date);
     return request<{
         stats: {
+            /** Every driver row. Unchanged meaning — see admin_get_driver_stats. */
             total: number;
+            /** Real driver profiles; with legacy_incomplete always sums to total. */
+            onboarded_total: number;
+            /** Abandoned-legacy-onboarding shells carried over by the import. */
+            legacy_incomplete: number;
             online: number;
             verified: number;
             unverified: number;

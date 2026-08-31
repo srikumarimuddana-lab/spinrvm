@@ -24,6 +24,21 @@ const badgeVariants = cva(
         // uses this variant, so it has zero effect until adopted.
         "outline-accent":
           "border-primary text-primary [a&]:hover:bg-primary/10",
+        // Three more quiet/outline siblings, reusing the app's EXISTING
+        // semantic tokens (--success/--warning/--destructive — already
+        // WCAG-verified, not new colors) rather than the ad-hoc bright
+        // bg-{color}-100 fills scattered across ~24 files (#2816-adjacent).
+        // Meant to replace those call sites: real semantic status (a
+        // driver's document approved/pending/rejected, a ride
+        // completed/cancelled) keeps a distinguishable color, just muted
+        // and outlined instead of a filled pastel chip — the fix is fewer,
+        // shared, quieter treatments, not stripping status color entirely.
+        "outline-success":
+          "border-success text-success [a&]:hover:bg-success/10",
+        "outline-warning":
+          "border-warning text-warning [a&]:hover:bg-warning/10",
+        "outline-destructive":
+          "border-destructive text-destructive [a&]:hover:bg-destructive/10",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
       },

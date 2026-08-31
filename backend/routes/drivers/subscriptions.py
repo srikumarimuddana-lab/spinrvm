@@ -1758,19 +1758,18 @@ async def check_expiring_subscriptions():
                     if not driver or not driver.get("is_online"):
                         continue
 
-                    # M-5 fix (ranked P0, #4597 Finding 1): never force a
-                    # driver offline mid-trip. Same active-ride status list
-                    # as the client-facing go_online toggle's offline guard
-                    # (routes/drivers/status.py) — DRIVER_ASSIGNED is
-                    # included because Period 2 starts at assignment, not
-                    # acceptance (CLAUDE.md). Forcing offline here would
-                    # close an open Period 2/3 row and write Period 0 (a
-                    # live commercial trip reclassified as personal-auto-
-                    # only) while a passenger may be aboard. Defer
-                    # enforcement to ride completion: the driver stays
-                    # online (and their subscription row is already marked
-                    # 'expired' above), so the next go_online/status check
-                    # re-gates them once the trip ends.
+                    # #4597: never force a driver offline mid-trip. Flipping
+                    # is_online=False here writes an insurance Period 0
+                    # (personal auto) transition; doing that while the driver
+                    # is en route to pickup (Period 2) or carrying a passenger
+                    # (Period 3) misclassifies a live commercial trip as
+                    # personal-auto-only coverage — a regulatory/insurance
+                    # liability. Mirror the go_online offline guard
+                    # (routes/drivers/status.py): if the driver is on a ride
+                    # they are already obligated to, defer enforcement to a
+                    # later tick (the sub stays 'expired', so once the ride
+                    # completes and they next go offline/online the gate still
+                    # applies).
                     active_ride = await _deps.db.get_rows(
                         "rides",
                         {
@@ -1788,8 +1787,8 @@ async def check_expiring_subscriptions():
                     )
                     if active_ride:
                         logger.info(
-                            "[SUB-EXPIRY] deferring offline-flip for driver %s — active ride in progress",
-                            driver["id"],
+                            f"[SUB-EXPIRY] Deferred offline flip for driver {driver['id']}: "
+                            "active ride in progress (insurance-period guard #4597)"
                         )
                         continue
 

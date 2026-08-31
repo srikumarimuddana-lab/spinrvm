@@ -1701,23 +1701,27 @@ class TestCheckExpiringSubscriptionsMainLoopBranches:
         # Enforcement aborted before the insurance-period transition ran.
         period_mock.assert_not_awaited()
 
-    async def test_active_ride_defers_offline_flip_and_period_transition(self):
-        """#4597 Finding 1 (P0): a driver mid-trip when their subscription
-        expires must NOT be forced offline / dropped to Period 0 — that
-        would misclassify a live commercial trip as personal-auto-only.
-        The sub row still gets marked expired; only the offline-flip +
-        period-transition are deferred to ride completion."""
+    async def test_expired_online_driver_on_active_ride_is_not_flipped_offline(self):
+        """#4597: an expired subscription must NOT force a driver offline while
+        they are on an active ride. Flipping is_online=False writes an
+        insurance Period 0 (personal-auto) transition; doing that mid-trip
+        (Period 2 en route, or Period 3 passenger aboard) misclassifies a live
+        commercial trip. The row is still marked expired, but the offline flip
+        and period transition are deferred to a later tick."""
         from datetime import datetime, timedelta, timezone
+
+        from backend.models.ride_status import RideStatus
 
         now = datetime.now(timezone.utc)
         sub = {"id": "sub-1", "driver_id": "d1", "expires_at": (now - timedelta(hours=1)).isoformat()}
         driver = {"id": "d1", "user_id": "u1", "is_online": True}
-        active_ride = {"id": "ride-1", "driver_id": "d1", "status": "in_progress"}
+        active_ride = {"id": "r1", "driver_id": "d1", "status": RideStatus.IN_PROGRESS}
 
         def fake_get_rows(table, filters, **kw):
             if table == "driver_subscriptions" and filters.get("status") == "active":
                 return [sub]
-            if table == "rides" and filters.get("driver_id") == "d1":
+            if table == "rides":
+                # Driver is carrying a passenger — the guard must fire.
                 return [active_ride]
             return []
 
@@ -1729,7 +1733,9 @@ class TestCheckExpiringSubscriptionsMainLoopBranches:
         update_mock = AsyncMock()
         period_mock = AsyncMock()
         manager_mock = MagicMock()
+        manager_mock.broadcast_to_admins = AsyncMock()
         manager_mock.disconnect = MagicMock()
+
         await _run_once(
             **{
                 "backend.db_supabase.get_rows": AsyncMock(side_effect=fake_get_rows),
@@ -1738,54 +1744,24 @@ class TestCheckExpiringSubscriptionsMainLoopBranches:
                 "backend.settings_loader.get_app_settings": AsyncMock(
                     return_value={"require_driver_subscription": True}
                 ),
-                "backend.routes.drivers._deps.record_period_transition": period_mock,
                 "backend.routes.drivers._deps.manager": manager_mock,
+                "backend.routes.drivers._deps.record_period_transition": period_mock,
             }
         )
-        # Sub row still marked expired (unconditional).
-        expired_calls = [c for c in update_mock.await_args_list if c.args and c.args[0] == "driver_subscriptions"]
-        assert expired_calls
-        # But the driver was never flipped offline, no period-0 write, no disconnect.
-        driver_flip_calls = [c for c in update_mock.await_args_list if c.args and c.args[0] == "drivers"]
-        assert not driver_flip_calls
+
+        # Row still marked expired...
+        expired_calls = [c for c in update_mock.await_args_list if c.args and c.args[2] == {"status": "expired"}]
+        assert {c.args[1]["id"] for c in expired_calls} == {"sub-1"}
+        # ...but the driver was NOT flipped offline mid-trip.
+        offline_flip = [
+            c
+            for c in update_mock.await_args_list
+            if c.args and c.args[0] == "drivers" and c.args[2].get("is_online") is False
+        ]
+        assert not offline_flip, "driver must not be forced offline during an active ride"
+        # ...and no insurance Period-0 transition was written.
         period_mock.assert_not_awaited()
         manager_mock.disconnect.assert_not_called()
-
-    async def test_no_active_ride_still_enforces_offline_flip(self):
-        """Regression guard for the fix above: a driver with NO active ride
-        at subscription expiry must still be flipped offline and dropped to
-        Period 0 as before — the guard must not over-defer."""
-        from datetime import datetime, timedelta, timezone
-
-        now = datetime.now(timezone.utc)
-        sub = {"id": "sub-1", "driver_id": "d1", "expires_at": (now - timedelta(hours=1)).isoformat()}
-        driver = {"id": "d1", "user_id": "u1", "is_online": True}
-
-        def fake_get_rows(table, filters, **kw):
-            if table == "driver_subscriptions" and filters.get("status") == "active":
-                return [sub]
-            if table == "rides" and filters.get("driver_id") == "d1":
-                return []  # no active ride
-            return []
-
-        def fake_find_one(table, filters, **kw):
-            if table == "drivers":
-                return driver
-            return None
-
-        period_mock = AsyncMock()
-        await _run_once(
-            **{
-                "backend.db_supabase.get_rows": AsyncMock(side_effect=fake_get_rows),
-                "backend.db_supabase.find_one": AsyncMock(side_effect=fake_find_one),
-                "backend.db_supabase.update_one": AsyncMock(),
-                "backend.settings_loader.get_app_settings": AsyncMock(
-                    return_value={"require_driver_subscription": True}
-                ),
-                "backend.routes.drivers._deps.record_period_transition": period_mock,
-            }
-        )
-        period_mock.assert_awaited_once_with("d1", 0)
 
     async def test_24h_warning_push_failure_is_swallowed_flag_still_set(self):
         from datetime import datetime, timedelta, timezone

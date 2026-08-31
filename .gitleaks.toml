@@ -126,10 +126,19 @@ keywords = [
 # literal test email inside a driver-table INSERT) is an accepted trade-off —
 # worth a human's 30-second look, per backend/migrations/CLAUDE.md's "One-off
 # data-migration scripts" section.
+#
+# {0,800} not {0,4000}: gitleaks compiles rules with Go's RE2 engine, which
+# caps repetition counts at 1000 by default — {0,4000} fails the whole
+# binary at startup ("invalid repetition size"), taking every other rule
+# down with it, not just this one. Caught via CI's G5a run on this rule's
+# own PR (#4735). 800 chars comfortably covers the real incident file (322
+# chars from `INSERT INTO driver_csv_import (...)` to its first embedded
+# email literal, measured directly against the breach-start commit) while
+# staying well under RE2's limit.
 [[rules]]
 id = "spinr-driver-csv-pii"
 description = "Possible driver PII data dump (literal email address inside an INSERT INTO ...driver... statement) — verify this isn't a real committed migration export before merging."
-regex = '''(?i)insert\s+into\s+\w*driver\w*[\s\S]{0,4000}?['"][^'",]*@[^'",]*\.[^'",]{2,}['"]'''
+regex = '''(?i)insert\s+into\s+\w*driver\w*[\s\S]{0,800}?['"][^'",]*@[^'",]*\.[^'",]{2,}['"]'''
 keywords = [
     "insert into", "license_number", "driver_csv_import", "driver_bank_sin_migration",
 ]

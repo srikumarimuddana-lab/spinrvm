@@ -83,7 +83,7 @@ stripe>=15.5.1
 twilio>=9.10.5
 
 # Cloud
-boto3>=1.42.89
+boto3>=1.43.80
 
 # Map snapshot rendering (ride route PNG for drawer + email invoice).
 # staticmap composites OSM tiles + our phase_polylines server-side.

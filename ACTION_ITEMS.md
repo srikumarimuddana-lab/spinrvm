@@ -16234,7 +16234,43 @@ Remaining, roughly in order of user impact:
 - [ ] **N11c. Delete the pre-retrofit receipt/invoice shell and its flag** —
   once the branded version has been seen in real inboxes. Two shells and a
   switch are a real carrying cost; both `_LEGACY_*` constants are commented
-  to say so.
+  to say so. **Investigated 2026-08-31, still not deleted — precondition
+  only partially confirmed, not enough to act on.** Checked live production
+  (`settings`/`audit_logs`/`email_send_log` tables via read-only Supabase
+  MCP against project `soavhtdhefowwvforzwb`), not just docs:
+  - `settings.branded_receipt_enabled` is `true` in production, and has been
+    since migration `288_settings_branded_receipt_enabled.sql` applied
+    (2026-08-18 21:55:59 UTC, column default `true`) — no `audit_logs` row
+    with `action='settings_updated'` has ever listed `branded_receipt_enabled`
+    in `changed_keys`, so it has never been toggled off. (`settings` is a
+    single-row table and its `updated_at` reflects the last write to *any*
+    column, not this one specifically — `audit_logs.changed_keys` is the
+    only column-level signal available, and it shows no touch to this flag.)
+  - **Ride receipts**: `email_send_log` shows 10 successful (`status='sent'`)
+    `email_type='receipt'` sends since the flag went live, spanning
+    2026-08-18 23:01 through 2026-08-28 22:52 — real inboxes, real
+    evidence, but only a ~10-day window, short of the "several weeks" bar
+    this item's own wording implies. Zero `receipt` failures logged in that
+    window.
+  - **Spinr Pass invoice** (the other shell gated by the same flag, per
+    `backend/utils/subscription_invoice.py` ~line 68 and
+    `backend/utils/subscription_invoice_pdf.py` ~line 238): **zero**
+    `email_type='subscription_invoice'` sends of any status since the flag
+    was created. The last successful send was 2026-07-15 (over a month
+    before the flag existed), and the last activity of any kind was a
+    failure run ending 2026-07-29 — three weeks *before* migration 288. The
+    invoice half of the "seen in real inboxes" precondition is currently
+    unconfirmed, not merely under-confirmed: there is no evidence the
+    branded invoice shell has gone through the branded path in production
+    at all.
+  - Conclusion: did not delete `_LEGACY_*`, the `branded_receipt_enabled`
+    flag check, or any admin toggle. The receipt shell has partial, recent,
+    real evidence; the invoice shell has none. Before revisiting, re-check
+    `email_send_log` for `subscription_invoice` sends after 2026-08-18 —
+    once both shells show several weeks of clean branded sends with no
+    rollback, this becomes a same-shape removal to N8's
+    `utils/receipt_email.py` deletion. See
+    `docs/change-log/2026-08-31-n11c-legacy-receipt-shell-investigation.md`.
 - [x] **N12. No visual/snapshot regression tooling for email** — **partially
   closed (2026-08-12).** The "nothing pins the whole rendered document" half
   is fixed: new `backend/tests/_html_snapshot.py` (golden-file diffing

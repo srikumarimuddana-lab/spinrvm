@@ -109,36 +109,28 @@ keywords = [
     "account_number", "institute_number", "institution_number", "transit_number",
 ]
 
-# Driver-migration CSV-dump PII detector — widening the #4547 backstop above to
-# cover the incident's *second* file (#4596, driver_csv_migration.sql, 189
-# drivers). That file's PII column shape (name/email/phone/license_number/
-# latitude/longitude) has no SIN/bank/institution keyword, so spinr-sin-bank-pii
-# never matched it — it went undetected from 2026-08-16 until a later manual
-# audit found it (see docs/audit/breach-record.md Incident 1). The signal this
-# rule keys on isn't the column names alone (too common — "email"/"phone" would
-# gate almost every file in the repo and provide no real filtering), it's an
-# *email-address literal* appearing inside a `INSERT INTO ...driver...` SQL
-# statement — application code never embeds a literal PII email in a committed
-# SQL string; only a hand-authored one-off data-migration dump does. `[\s\S]`
-# (not `(?s)`) lets the match span the newlines inside a multi-line INSERT/
-# VALUES statement without needing a Go regex mode flag. As with
-# spinr-sin-bank-pii, an occasional false positive (a fixture/seed file with a
-# literal test email inside a driver-table INSERT) is an accepted trade-off —
-# worth a human's 30-second look, per backend/migrations/CLAUDE.md's "One-off
-# data-migration scripts" section.
+# Driver-export PII detector — added following #4596, a second file from the same
+# incident as spinr-sin-bank-pii above: driver_csv_migration.sql carried real
+# name/email/phone/license_number/lat/lng for 189 drivers and was NOT caught by that
+# rule, because it names none of the SIN/bank column identifiers — its column shape is
+# entirely different (a plain contact/identity export, not a financial one). Confirmed
+# via git history (commit 41356340d, the file's real first-appearance commit — #4596's
+# and the breach record's citation of commit `dea8ea5`/`3c336ff` as the origin is
+# incorrect, neither touches this file; see the correction landed alongside this rule).
 #
-# {0,800} not {0,4000}: gitleaks compiles rules with Go's RE2 engine, which
-# caps repetition counts at 1000 by default — {0,4000} fails the whole
-# binary at startup ("invalid repetition size"), taking every other rule
-# down with it, not just this one. Caught via CI's G5a run on this rule's
-# own PR (#4735). 800 chars comfortably covers the real incident file (322
-# chars from `INSERT INTO driver_csv_import (...)` to its first embedded
-# email literal, measured directly against the breach-start commit) while
-# staying well under RE2's limit.
+# Same design as spinr-sin-bank-pii: a bare quoted email address is too common
+# to flag globally (test fixtures, admin seed data, comments), so this only fires in
+# files that also name one of the actual staging-table identifiers this incident's
+# file used (`license_number`, `driver_csv_import`, `matched_driver_id`,
+# `old_driver_id`) — column/table names that only show up in a one-off migration
+# script, not in application code (which reads these fields from the DB/request body,
+# never hardcodes them as SQL identifiers). A file naming one of these *and* carrying a
+# literal quoted email address is exactly the shape of the incident file.
 [[rules]]
-id = "spinr-driver-csv-pii"
-description = "Possible driver PII data dump (literal email address inside an INSERT INTO ...driver... statement) — verify this isn't a real committed migration export before merging."
-regex = '''(?i)insert\s+into\s+\w*driver\w*[\s\S]{0,800}?['"][^'",]*@[^'",]*\.[^'",]{2,}['"]'''
+id = "spinr-driver-export-pii"
+description = "Possible driver export row (name/email/phone/license) alongside a driver-migration column identifier — verify this isn't real driver/rider data before merging."
+regex = '''['"][^'"@]+@[^'"@]+\.[^'"]{2,}['"]'''
 keywords = [
-    "insert into", "license_number", "driver_csv_import", "driver_bank_sin_migration",
+    "license_number", "driver_license_number", "driver_csv_import",
+    "old_driver_id", "matched_driver_id",
 ]

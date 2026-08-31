@@ -479,6 +479,7 @@ class SettingsUpdateRequest(BaseModel):
     location_health_push_nudge_enabled: Optional[bool] = None
     stale_p3_autoclose_enabled: Optional[bool] = None
     route_booked_dropoff_anchor_enabled: Optional[bool] = None
+    incentive_eligibility_enforced: Optional[bool] = None
     # 24h floor: below one day the purge loop would eat evidence the route
     # finalizer's late-tail revisions still need. 90 days (2160h) default per
     # the owner's retention decision, ceiling matches the blanket GPS purge.

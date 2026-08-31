@@ -159,6 +159,10 @@ class AuthResponse(BaseModel):
 
 class AppSettings(BaseModel):
     id: str = "app_settings"
+    # Migration 373. Off = is_active is the only gate on a ride incentive,
+    # which is the pre-373 behaviour. On = start/end dates, the conditions
+    # JSONB, bonus_type=percentage and the max_budget cap are all enforced.
+    incentive_eligibility_enforced: bool = False
     google_maps_api_key: str = ""
     stripe_publishable_key: str = ""
     stripe_secret_key: str = ""

@@ -67,12 +67,12 @@ function ageSeverity(minutes: number | null): "destructive" | "secondary" | "out
 function eventTypeBadge(eventType: string | null): string {
     if (!eventType) return "bg-muted text-muted-foreground";
     if (eventType.includes("succeeded") || eventType.includes("paid"))
-        return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300";
+        return "bg-success/15 text-success";
     if (eventType.includes("failed") || eventType.includes("dispute"))
-        return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
+        return "bg-destructive/15 text-destructive";
     if (eventType.includes("refund"))
-        return "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
-    return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
+        return "bg-warning/15 text-warning";
+    return "bg-info/15 text-info";
 }
 
 export default function StripeEventsPage() {
@@ -238,7 +238,7 @@ export default function StripeEventsPage() {
             <Card>
                 <CardHeader className="pb-3">
                     <CardTitle className="text-lg flex items-center gap-2">
-                        <AlertTriangle className="h-5 w-5 text-amber-500" />
+                        <AlertTriangle className="h-5 w-5 text-warning" />
                         Stuck Events
                         {events.length > 0 && (
                             <Badge variant="destructive" className="ml-2">
@@ -254,7 +254,7 @@ export default function StripeEventsPage() {
                         </div>
                     ) : events.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-12 text-center">
-                            <CheckCircle2 className="h-10 w-10 text-emerald-500 mb-3" />
+                            <CheckCircle2 className="h-10 w-10 text-success mb-3" />
                             <p className="text-lg font-medium">All clear</p>
                             <p className="text-muted-foreground text-sm mt-1">
                                 No stuck Stripe events found.
@@ -308,7 +308,7 @@ export default function StripeEventsPage() {
                                                     <Button
                                                         variant="ghost"
                                                         size="sm"
-                                                        className="text-emerald-600 hover:text-emerald-700"
+                                                        className="text-success hover:text-success/80"
                                                         onClick={() => setReplayTarget(evt.event_id)}
                                                     >
                                                         <Play className="h-4 w-4" />

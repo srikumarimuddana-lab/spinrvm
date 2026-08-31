@@ -1082,9 +1082,9 @@ export default function DriversPage() {
                                             {driver.profile_completeness_score === undefined || driver.profile_completeness_score === null ? (
                                                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">—</Badge>
                                             ) : driver.profile_completeness_score === 100 ? (
-                                                <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800">Complete</Badge>
+                                                <Badge variant="default" className="bg-success/15 text-success hover:bg-success/15 text-[10px] px-1.5 py-0 border-success/30">Complete</Badge>
                                             ) : driver.profile_completeness_score >= 70 ? (
-                                                <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800">Incomplete ({driver.profile_completeness_score}%)</Badge>
+                                                <Badge variant="default" className="bg-warning/15 text-warning hover:bg-warning/15 text-[10px] px-1.5 py-0 border-warning/30">Incomplete ({driver.profile_completeness_score}%)</Badge>
                                             ) : (
                                                 <Badge variant="default" className="bg-destructive/15 text-destructive text-[10px] px-1.5 py-0">Missing ({driver.profile_completeness_score}%)</Badge>
                                             )}
@@ -1268,12 +1268,12 @@ export default function DriversPage() {
                                                         </div>
                                                         <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
                                                             <div
-                                                                className={`h-full rounded-full transition-all ${score === 100 ? 'bg-emerald-500' : score >= 70 ? 'bg-amber-500' : 'bg-destructive'}`}
+                                                                className={`h-full rounded-full transition-all ${score === 100 ? 'bg-success' : score >= 70 ? 'bg-warning' : 'bg-destructive'}`}
                                                                 style={{ width: `${Math.min(score, 100)}%` }}
                                                             />
                                                         </div>
                                                         {score === 100 ? (
-                                                            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1"><CheckCircle className="h-3 w-3" />All required fields complete</p>
+                                                            <p className="text-[11px] text-success mt-1.5 flex items-center gap-1"><CheckCircle className="h-3 w-3" />All required fields complete</p>
                                                         ) : selected.profile_missing_fields && selected.profile_missing_fields.length > 0 ? (
                                                             <div className="mt-1.5 flex flex-wrap gap-1">
                                                                 {/* Already display labels ("License Plate"), not field

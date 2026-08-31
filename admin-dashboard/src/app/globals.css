@@ -30,6 +30,7 @@
   --color-destructive: var(--destructive);
   --color-warning: var(--warning);
   --color-success: var(--success);
+  --color-info: var(--info);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -85,6 +86,15 @@
      bar --primary's #d32f2f pick used. */
   --warning: #b45309;
   --success: #15803d;
+  /* Same gap as --warning/--success above (#2816): "info"-status badges
+     (pending/processing states, e.g. driver docs under review) had no
+     token either and fell back to raw Tailwind blue-* classes per call
+     site. Tailwind blue-500 (#3b82f6, the shade admin's ad hoc badges
+     mostly reached for) is only ~3.7:1 as text on white — fails AA. Picked
+     blue-700 (#1d4ed8) the same way warning/success used their own -700
+     step: 6.70:1 on --card, 6.44:1 on --background, both comfortably
+     clearing the 4.5:1 AA-normal-text bar. */
+  --info: #1d4ed8;
   --border: #e5e7eb;
   --input: #e5e7eb;
   --ring: #ff3b30;
@@ -146,6 +156,11 @@
      needed dedicated darker hex values instead of reusing chart-4/2). */
   --warning: #f59e0b;
   --success: #30d158;
+  /* Reused verbatim from shared/theme/index.ts darkColors.info (iOS system
+     blue, dark) — same precedent as --warning/--success dark above, which
+     also reuse the mobile app's dark palette rather than independently
+     re-deriving. 5.42:1 as text on --card (#0a0a0c), clears AA. */
+  --info: #0a84ff;
   --border: #27272a;
   --input: #27272a;
   --ring: #ff453a;

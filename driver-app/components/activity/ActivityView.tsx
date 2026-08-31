@@ -12,6 +12,17 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-ico
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from "expo-router/react-navigation";
 import { useDriverStore } from '../../store/driverStore';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
+
+// Two accent colors with no equivalent in the shared theme token set (purple
+// for bonus/quest amounts, sky blue for the "Avg per Trip" stat) — matches
+// the same literal values RideOfferPanel.tsx already uses for its quest/
+// bonus badges elsewhere in this app. Left as fixed literals rather than
+// inventing new shared/theme tokens for two decorative icon accents; both
+// read fine against either surface color, unlike a background fill would.
+const BONUS_PURPLE = '#8B5CF6';
+const AVG_TRIP_BLUE = '#38BDF8';
 
 const toMoney = (s: string | number | null | undefined): string => {
   const n = Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
@@ -37,6 +48,8 @@ const PAGE_SIZE = 50;
 
 export default function ActivityView() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   // Filter pills wrap onto a second row rather than scrolling horizontally, so
   // every option stays visible and tappable without a discovery gesture (same
   // reasoning as payout-history.tsx). On narrow phones the pills also tighten
@@ -268,8 +281,10 @@ export default function ActivityView() {
   const renderRideCard = useCallback(({ item: ride }: { item: any }) => {
     const isCompleted = ride.status === 'completed';
     const isCancelled = ride.status === 'cancelled';
-    const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
-    const statusBg = isCompleted ? 'rgba(16,185,129,0.1)' : isCancelled ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+    const statusColor = isCompleted ? colors.success : isCancelled ? colors.danger : colors.warning;
+    // successBg/dangerBg/warningBg are exactly the "background behind status
+    // icons / pill badges" tokens shared/theme/index.ts documents them for.
+    const statusBg = isCompleted ? colors.successBg : isCancelled ? colors.dangerBg : colors.warningBg;
     const statusLabel = isCompleted ? 'Completed' : isCancelled ? 'Cancelled' : 'Scheduled';
     const statusIcon = isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time';
 
@@ -304,9 +319,9 @@ export default function ActivityView() {
           {/* Route: pickup → dropoff */}
           <View style={styles.routeContainer}>
             <View style={styles.routeDots}>
-              <View style={[styles.dot, { backgroundColor: '#ef4444' }]} />
+              <View style={[styles.dot, { backgroundColor: colors.danger }]} />
               <View style={styles.routeLine} />
-              <View style={[styles.dot, { backgroundColor: '#10b981' }]} />
+              <View style={[styles.dot, { backgroundColor: colors.success }]} />
             </View>
             <View style={styles.routeAddresses}>
               <View>
@@ -330,13 +345,13 @@ export default function ActivityView() {
             <View style={styles.tripMeta}>
               {ride.distance_km != null && (
                 <View style={styles.metaBadge}>
-                  <Ionicons name="map-outline" size={13} color="#9ca3af" />
+                  <Ionicons name="map-outline" size={13} color={colors.textDim} />
                   <Text style={styles.metaText}>{ride.distance_km.toFixed(1)} km</Text>
                 </View>
               )}
               {ride.duration_minutes != null && (
                 <View style={styles.metaBadge}>
-                  <Ionicons name="time-outline" size={13} color="#9ca3af" />
+                  <Ionicons name="time-outline" size={13} color={colors.textDim} />
                   <Text style={styles.metaText}>{ride.duration_minutes} min</Text>
                 </View>
               )}
@@ -357,7 +372,7 @@ export default function ActivityView() {
               ) : isCancelled ? (
                 parseMoney((ride as any).cancel_fee_earned) > 0 ? (
                   <>
-                    <Text style={[styles.fareAmount, { color: '#f59e0b' }]}>
+                    <Text style={[styles.fareAmount, { color: colors.warning }]}>
                       +${toMoney((ride as any).cancel_fee_earned)}
                     </Text>
                     <Text style={styles.cancelFeeText}>
@@ -365,7 +380,7 @@ export default function ActivityView() {
                     </Text>
                   </>
                 ) : (
-                  <Text style={[styles.fareAmount, { color: '#9ca3af', fontSize: 16 }]}>$0.00</Text>
+                  <Text style={[styles.fareAmount, { color: colors.textDim, fontSize: 16 }]}>$0.00</Text>
                 )
               ) : (
                 <Text style={styles.fareAmount}>Est. ${toMoney(parseMoney((ride as any).driver_earnings))}</Text>
@@ -375,11 +390,10 @@ export default function ActivityView() {
         </TouchableOpacity>
       </View>
     );
-    // styles is a module-level `StyleSheet.create()` constant (declared
-    // below the component), not component/render state — removed per the
-    // linter's own guidance ("outer scope values... aren't valid
-    // dependencies"); it never changes, so this is a pure no-op.
-  }, [router]);
+    // styles/colors come from useTheme()/useMemo above (component-level, not
+    // recreated per render except on an actual theme change) — router is the
+    // only other external dependency this callback reads.
+  }, [router, styles, colors]);
 
   // #6: FlatList virtualizes the (potentially long, 'all'-period) ride history
   // that was previously a filteredRides.map() inside a ScrollView — rendering
@@ -414,10 +428,10 @@ export default function ActivityView() {
       </View>
 
       {loading ? (
-        <ActivityIndicator color="#ef4444" style={{ marginTop: 60 }} />
+        <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
       ) : error ? (
         <View style={styles.errorState}>
-          <Ionicons name="cloud-offline-outline" size={48} color="#9ca3af" />
+          <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
           <Text style={styles.errorTitle}>Couldn&apos;t load your earnings</Text>
           <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
           <TouchableOpacity
@@ -451,7 +465,7 @@ export default function ActivityView() {
                 reconcile. */}
             <View style={styles.breakdownList}>
               <View style={styles.breakdownRow}>
-                <Ionicons name="cash-outline" size={18} color="#ef4444" style={styles.breakdownIcon} />
+                <Ionicons name="cash-outline" size={18} color={colors.primary} style={styles.breakdownIcon} />
                 <Text style={styles.label}>Fare</Text>
                 {fareMismatch ? (
                   <Text style={[styles.value, styles.valueMismatch]} numberOfLines={1}>
@@ -462,26 +476,26 @@ export default function ActivityView() {
                 )}
               </View>
               <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
-                <Ionicons name="gift-outline" size={18} color="#f59e0b" style={styles.breakdownIcon} />
+                <Ionicons name="gift-outline" size={18} color={colors.warning} style={styles.breakdownIcon} />
                 <Text style={styles.label}>Tips</Text>
-                <Text style={[styles.value, { color: '#f59e0b' }]} numberOfLines={1}>${toMoney(totalTips)}</Text>
+                <Text style={[styles.value, { color: colors.warning }]} numberOfLines={1}>${toMoney(totalTips)}</Text>
               </View>
               <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
-                <Ionicons name="flash" size={18} color="#8b5cf6" style={styles.breakdownIcon} />
+                <Ionicons name="flash" size={18} color={BONUS_PURPLE} style={styles.breakdownIcon} />
                 {/* Per-ride incentives + quest rewards (referral shown separately). */}
                 <Text style={styles.label}>Bonus</Text>
-                <Text style={[styles.value, { color: '#8b5cf6' }]} numberOfLines={1}>${toMoney(totalIncentives + (totalBonuses - totalReferralBonuses))}</Text>
+                <Text style={[styles.value, { color: BONUS_PURPLE }]} numberOfLines={1}>${toMoney(totalIncentives + (totalBonuses - totalReferralBonuses))}</Text>
               </View>
               <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
-                <Ionicons name="people-outline" size={18} color="#10b981" style={styles.breakdownIcon} />
+                <Ionicons name="people-outline" size={18} color={colors.success} style={styles.breakdownIcon} />
                 {/* Referral rewards paid into payable_balance (kind='referral'). */}
                 <Text style={styles.label}>Referral</Text>
-                <Text style={[styles.value, { color: '#10b981' }]} numberOfLines={1}>${toMoney(totalReferralBonuses)}</Text>
+                <Text style={[styles.value, { color: colors.success }]} numberOfLines={1}>${toMoney(totalReferralBonuses)}</Text>
               </View>
               <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
-                <Ionicons name="receipt-outline" size={18} color="#6b7280" style={styles.breakdownIcon} />
+                <Ionicons name="receipt-outline" size={18} color={colors.textSecondary} style={styles.breakdownIcon} />
                 <Text style={styles.label}>Tax</Text>
-                <Text style={[styles.value, { color: '#6b7280' }]} numberOfLines={1}>${toMoney(totalTax)}</Text>
+                <Text style={[styles.value, { color: colors.textSecondary }]} numberOfLines={1}>${toMoney(totalTax)}</Text>
               </View>
             </View>
           </View>
@@ -489,8 +503,8 @@ export default function ActivityView() {
           {/* Stats grid */}
           <View style={styles.statsGrid}>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
-                <FontAwesome5 name="car" size={16} color="#ef4444" />
+              <View style={[styles.iconWrap, { backgroundColor: colors.dangerBg }]}>
+                <FontAwesome5 name="car" size={16} color={colors.danger} />
               </View>
               <View>
                 <Text style={styles.statValue}>{totalRides}</Text>
@@ -498,8 +512,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
-                <MaterialCommunityIcons name="calendar-today" size={18} color="#ef4444" />
+              <View style={[styles.iconWrap, { backgroundColor: colors.dangerBg }]}>
+                <MaterialCommunityIcons name="calendar-today" size={18} color={colors.danger} />
               </View>
               <View>
                 <Text style={styles.statValue}>{avgTripsPerDay.toFixed(1)}</Text>
@@ -507,8 +521,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
-                <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
+              <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
+                <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
               </View>
               <View>
                 <Text style={styles.statValue}>{totalDistanceKm.toFixed(1)}</Text>
@@ -516,8 +530,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
-                <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
+              <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
+                <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
               </View>
               <View>
                 <Text style={styles.statValue}>{avgDistancePerDay.toFixed(1)} km</Text>
@@ -525,8 +539,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
-                <Ionicons name="time" size={18} color="#10b981" />
+              <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
+                <Ionicons name="time" size={18} color={colors.success} />
               </View>
               <View>
                 <Text style={styles.statValue}>{formatDurationMinutes(totalDurationMinutes)}</Text>
@@ -534,8 +548,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
-                <Ionicons name="time-outline" size={18} color="#10b981" />
+              <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
+                <Ionicons name="time-outline" size={18} color={colors.success} />
               </View>
               <View>
                 <Text style={styles.statValue}>{formatDurationMinutes(avgOnlineMinutesPerDay)}</Text>
@@ -543,8 +557,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(56,189,248,0.1)' }]}>
-                <Ionicons name="trending-up" size={18} color="#38bdf8" />
+              <View style={[styles.iconWrap, { backgroundColor: colors.infoBg }]}>
+                <Ionicons name="trending-up" size={18} color={AVG_TRIP_BLUE} />
               </View>
               <View>
                 <Text style={styles.statValue}>${toMoney(avgPerTrip)}</Text>
@@ -552,8 +566,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: 'rgba(139,92,246,0.1)' }]}>
-                <MaterialCommunityIcons name="map-marker-distance" size={18} color="#8b5cf6" />
+              <View style={[styles.iconWrap, { backgroundColor: `${BONUS_PURPLE}1A` }]}>
+                <MaterialCommunityIcons name="map-marker-distance" size={18} color={BONUS_PURPLE} />
               </View>
               <View>
                 <Text style={styles.statValue}>{avgDistancePerTrip.toFixed(1)} km</Text>
@@ -618,7 +632,7 @@ export default function ActivityView() {
         loading ? null : (
           <View style={styles.ridesSection}>
             <View style={styles.emptyState}>
-              <Ionicons name="car-sport-outline" size={48} color="#d1d5db" />
+              <Ionicons name="car-sport-outline" size={48} color={colors.textDim} />
               <Text style={styles.emptyTitle}>No Rides Found</Text>
               <Text style={styles.emptyDesc}>No rides match this filter for the selected period.</Text>
             </View>
@@ -635,7 +649,7 @@ export default function ActivityView() {
               onPress={loadMoreHistory}
             >
               {loadingMore ? (
-                <ActivityIndicator color="#ef4444" />
+                <ActivityIndicator color={colors.primary} />
               ) : (
                 <Text style={styles.loadMoreText}>Load more rides</Text>
               )}
@@ -651,423 +665,435 @@ export default function ActivityView() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
-    paddingBottom: 40,
-  },
-  // Period pills
-  pillRow: {
-    flexDirection: 'row',
-    // Wrap so the last pill ("All Time") is never pushed off-screen and
-    // untappable on a 360dp/375dp phone.
-    flexWrap: 'wrap',
-    paddingHorizontal: 16,
-    gap: 10,
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  pill: {
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 24,
-    backgroundColor: '#f3f4f6',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    // Never let a pill squeeze its own label; wrap the row instead.
-    flexShrink: 0,
-    // MIN_TOUCH from shared/utils/responsive.ts — the old 8px padding + 13px
-    // text was ~34pt tall, under the WCAG 2.1 AA target size.
-    minHeight: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // Narrow phones: tighten padding/type so the row wraps later.
-  pillCompact: {
-    paddingHorizontal: 12,
-  },
-  pillActive: {
-    backgroundColor: '#ef4444',
-    borderColor: '#ef4444',
-  },
-  pillText: {
-    color: '#6b7280',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  pillTextCompact: {
-    fontSize: 12,
-  },
-  pillTextActive: {
-    // No fontSize here — it would override pillTextCompact (12px) and render
-    // the selected pill larger than the rest on narrow screens.
-    color: '#fff',
-    fontWeight: '700',
-  },
-  // Earnings-fetch error state — same shape as driver/referral.tsx's
-  // established error/retry pattern, using this screen's own hardcoded
-  // palette (ActivityView doesn't consume useTheme()) instead of theme tokens.
-  errorState: {
-    alignItems: 'center',
-    paddingHorizontal: 32,
-    paddingVertical: 48,
-  },
-  errorTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#374151',
-    marginTop: 16,
-    textAlign: 'center',
-  },
-  errorSub: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginTop: 8,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  retryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 24,
-    backgroundColor: '#ef4444',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 25,
-    minHeight: 44,
-  },
-  retryBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  // Earnings card
-  card: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    marginBottom: 16,
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  totalRow: {
-    alignItems: 'center',
-    marginBottom: 14,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  totalLabel: {
-    color: '#6b7280',
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  totalValue: {
-    color: '#10b981',
-    fontSize: 28,
-    fontWeight: '900',
-  },
-  breakdownList: {
-    // Vertical stack of full-width category rows.
-  },
-  breakdownRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  breakdownRowBorder: {
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-  },
-  breakdownIcon: {
-    width: 22,
-    textAlign: 'center',
-  },
-  label: {
-    flex: 1,
-    marginLeft: 10,
-    color: '#374151',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  value: {
-    color: '#111827',
-    fontSize: 16,
-    fontWeight: '800',
-    marginLeft: 12,
-  },
-  // Fare row only, when the component breakdown doesn't reconcile with Total
-  // Earned by more than rounding noise — signals a real discrepancy instead
-  // of a plausible-but-wrong "$0.00".
-  valueMismatch: {
-    color: '#f59e0b',
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'right',
-  },
-  // Stats grid
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    marginBottom: 24,
-  },
-  statCard: {
-    flexBasis: '47%',
-    flexGrow: 1,
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  statValue: {
-    color: '#111827',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  statLabel: {
-    color: '#6b7280',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 1,
-  },
-  // Rides section
-  ridesSection: {
-    paddingHorizontal: 16,
-  },
-  ridesSectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    color: '#111827',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  rideCount: {
-    color: '#9ca3af',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  // Status filter pills
-  statusPillRow: {
-    // Was a horizontal ScrollView's contentContainerStyle; now a plain wrapping
-    // row so every status stays visible, matching the period row above. The
-    // 16px inset comes from the parent `ridesSection`.
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 16,
-  },
-  statusPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: '#f3f4f6',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    flexShrink: 0,
-    minHeight: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  statusPillCompact: {
-    paddingHorizontal: 10,
-  },
-  statusPillActive: {
-    backgroundColor: '#1f2937',
-    borderColor: '#1f2937',
-  },
-  statusPillText: {
-    color: '#6b7280',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  statusPillTextCompact: {
-    fontSize: 11,
-  },
-  statusPillTextActive: {
-    color: '#fff',
-    fontWeight: '700',
-  },
-  // Ride cards
-  rideCard: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 18,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    elevation: 2,
-  },
-  rideTopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  dateText: {
-    color: '#6b7280',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  rideCodeText: {
-    color: '#9ca3af',
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: 2,
-    letterSpacing: 0.5,
-  },
-  // Route
-  routeContainer: {
-    flexDirection: 'row',
-    marginBottom: 16,
-  },
-  routeDots: {
-    alignItems: 'center',
-    width: 20,
-    paddingTop: 4,
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  routeLine: {
-    width: 2,
-    flex: 1,
-    backgroundColor: '#e5e7eb',
-    marginVertical: 4,
-  },
-  routeAddresses: {
-    flex: 1,
-    marginLeft: 8,
-  },
-  routeLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#9ca3af',
-    letterSpacing: 1,
-    marginBottom: 2,
-  },
-  routeAddress: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  // Bottom row
-  rideBottomRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-  },
-  tripMeta: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  metaBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#f9fafb',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 8,
-  },
-  metaText: {
-    color: '#6b7280',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  fareAmount: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#10b981',
-  },
-  tipText: {
-    color: '#f59e0b',
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  cancelFeeText: {
-    color: '#f59e0b',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  // Empty state
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#374151',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptyDesc: {
-    fontSize: 13,
-    color: '#9ca3af',
-    textAlign: 'center',
-  },
-  loadMoreButton: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#ef4444',
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  loadMoreButtonDisabled: {
-    opacity: 0.7,
-  },
-  loadMoreText: {
-    color: '#ef4444',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+    },
+    content: {
+      paddingBottom: 40,
+    },
+    // Period pills
+    pillRow: {
+      flexDirection: 'row',
+      // Wrap so the last pill ("All Time") is never pushed off-screen and
+      // untappable on a 360dp/375dp phone.
+      flexWrap: 'wrap',
+      paddingHorizontal: 16,
+      gap: 10,
+      marginTop: 12,
+      marginBottom: 4,
+    },
+    pill: {
+      paddingHorizontal: 18,
+      paddingVertical: 8,
+      borderRadius: 24,
+      backgroundColor: colors.surfaceLight,
+      borderWidth: 1,
+      borderColor: colors.border,
+      // Never let a pill squeeze its own label; wrap the row instead.
+      flexShrink: 0,
+      // MIN_TOUCH from shared/utils/responsive.ts — the old 8px padding + 13px
+      // text was ~34pt tall, under the WCAG 2.1 AA target size.
+      minHeight: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    // Narrow phones: tighten padding/type so the row wraps later.
+    pillCompact: {
+      paddingHorizontal: 12,
+    },
+    pillActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    pillText: {
+      color: colors.textSecondary,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    pillTextCompact: {
+      fontSize: 12,
+    },
+    pillTextActive: {
+      // No fontSize here — it would override pillTextCompact (12px) and render
+      // the selected pill larger than the rest on narrow screens.
+      // White stays literal: this is foreground text on a solid brand-primary
+      // fill (pillActive), not a themed surface — always needs max contrast
+      // against that one fixed color, in both themes.
+      color: '#fff',
+      fontWeight: '700',
+    },
+    // Earnings-fetch error state — same shape as driver/referral.tsx's
+    // established error/retry pattern, now themed via useTheme() like the
+    // rest of this file.
+    errorState: {
+      alignItems: 'center',
+      paddingHorizontal: 32,
+      paddingVertical: 48,
+    },
+    errorTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+      marginTop: 16,
+      textAlign: 'center',
+    },
+    errorSub: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      marginTop: 8,
+      textAlign: 'center',
+      lineHeight: 20,
+    },
+    retryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 24,
+      backgroundColor: colors.primary,
+      paddingHorizontal: 24,
+      paddingVertical: 12,
+      borderRadius: 25,
+      minHeight: 44,
+    },
+    retryBtnText: {
+      color: '#fff',
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    // Earnings card
+    card: {
+      marginHorizontal: 16,
+      marginTop: 12,
+      marginBottom: 16,
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    totalRow: {
+      alignItems: 'center',
+      marginBottom: 14,
+      paddingBottom: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.surfaceLight,
+    },
+    totalLabel: {
+      color: colors.textSecondary,
+      fontSize: 12,
+      fontWeight: '600',
+      marginBottom: 4,
+    },
+    totalValue: {
+      color: colors.success,
+      fontSize: 28,
+      fontWeight: '900',
+    },
+    breakdownList: {
+      // Vertical stack of full-width category rows.
+    },
+    breakdownRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 12,
+    },
+    breakdownRowBorder: {
+      borderTopWidth: 1,
+      borderTopColor: colors.surfaceLight,
+    },
+    breakdownIcon: {
+      width: 22,
+      textAlign: 'center',
+    },
+    label: {
+      flex: 1,
+      marginLeft: 10,
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    value: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: '800',
+      marginLeft: 12,
+    },
+    // Fare row only, when the component breakdown doesn't reconcile with Total
+    // Earned by more than rounding noise — signals a real discrepancy instead
+    // of a plausible-but-wrong "$0.00".
+    valueMismatch: {
+      color: colors.warning,
+      fontSize: 12,
+      fontWeight: '700',
+      textAlign: 'right',
+    },
+    // Stats grid
+    statsGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 12,
+      paddingHorizontal: 16,
+      paddingTop: 8,
+      marginBottom: 24,
+    },
+    statCard: {
+      flexBasis: '47%',
+      flexGrow: 1,
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      padding: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    iconWrap: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    statValue: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: '800',
+    },
+    statLabel: {
+      color: colors.textSecondary,
+      fontSize: 11,
+      fontWeight: '600',
+      marginTop: 1,
+    },
+    // Rides section
+    ridesSection: {
+      paddingHorizontal: 16,
+    },
+    ridesSectionHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 12,
+    },
+    sectionTitle: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: '800',
+    },
+    rideCount: {
+      color: colors.textDim,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    // Status filter pills
+    statusPillRow: {
+      // Was a horizontal ScrollView's contentContainerStyle; now a plain wrapping
+      // row so every status stays visible, matching the period row above. The
+      // 16px inset comes from the parent `ridesSection`.
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 16,
+    },
+    statusPill: {
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+      borderRadius: 20,
+      backgroundColor: colors.surfaceLight,
+      borderWidth: 1,
+      borderColor: colors.border,
+      flexShrink: 0,
+      minHeight: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    statusPillCompact: {
+      paddingHorizontal: 10,
+    },
+    // Deliberately NOT colors.text: this needs to always be a dark solid fill
+    // (with white text on top, statusPillTextActive below) regardless of
+    // theme, the same fixed-selected-state language pillActive uses with
+    // colors.primary — colors.text flips to near-white in dark mode, which
+    // would put white-on-white here instead.
+    statusPillActive: {
+      backgroundColor: '#1F2937',
+      borderColor: '#1F2937',
+    },
+    statusPillText: {
+      color: colors.textSecondary,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    statusPillTextCompact: {
+      fontSize: 11,
+    },
+    statusPillTextActive: {
+      color: '#fff',
+      fontWeight: '700',
+    },
+    // Ride cards
+    rideCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 20,
+      padding: 18,
+      marginBottom: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
+      // Shadow color stays a literal black — a themed shadow color reads as a
+      // colored glow rather than a shadow at low opacity like this.
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.04,
+      shadowRadius: 12,
+      elevation: 2,
+    },
+    rideTopRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    statusBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 12,
+    },
+    statusText: {
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    dateText: {
+      color: colors.textSecondary,
+      fontSize: 12,
+      fontWeight: '500',
+    },
+    rideCodeText: {
+      color: colors.textDim,
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: 2,
+      letterSpacing: 0.5,
+    },
+    // Route
+    routeContainer: {
+      flexDirection: 'row',
+      marginBottom: 16,
+    },
+    routeDots: {
+      alignItems: 'center',
+      width: 20,
+      paddingTop: 4,
+    },
+    dot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+    },
+    routeLine: {
+      width: 2,
+      flex: 1,
+      backgroundColor: colors.border,
+      marginVertical: 4,
+    },
+    routeAddresses: {
+      flex: 1,
+      marginLeft: 8,
+    },
+    routeLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textDim,
+      letterSpacing: 1,
+      marginBottom: 2,
+    },
+    routeAddress: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    // Bottom row
+    rideBottomRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-end',
+      paddingTop: 14,
+      borderTopWidth: 1,
+      borderTopColor: colors.surfaceLight,
+    },
+    tripMeta: {
+      flexDirection: 'row',
+      gap: 10,
+    },
+    metaBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: colors.surfaceLight,
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      borderRadius: 8,
+    },
+    metaText: {
+      color: colors.textSecondary,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    fareAmount: {
+      fontSize: 20,
+      fontWeight: '900',
+      color: colors.success,
+    },
+    tipText: {
+      color: colors.warning,
+      fontSize: 11,
+      fontWeight: '700',
+      marginTop: 2,
+    },
+    cancelFeeText: {
+      color: colors.warning,
+      fontSize: 11,
+      fontWeight: '600',
+      marginTop: 2,
+    },
+    // Empty state
+    emptyState: {
+      alignItems: 'center',
+      paddingVertical: 40,
+    },
+    emptyTitle: {
+      fontSize: 18,
+      fontWeight: '800',
+      color: colors.text,
+      marginTop: 16,
+      marginBottom: 8,
+    },
+    emptyDesc: {
+      fontSize: 13,
+      color: colors.textDim,
+      textAlign: 'center',
+    },
+    loadMoreButton: {
+      marginTop: 8,
+      borderWidth: 1,
+      borderColor: colors.primary,
+      borderRadius: 14,
+      paddingVertical: 14,
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+    },
+    loadMoreButtonDisabled: {
+      opacity: 0.7,
+    },
+    loadMoreText: {
+      color: colors.primary,
+      fontSize: 14,
+      fontWeight: '700',
+    },
+  });
+}

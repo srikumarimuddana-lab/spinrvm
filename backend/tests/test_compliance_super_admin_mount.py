@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 _ADMIN_INIT = Path(__file__).resolve().parents[1] / "routes" / "admin" / "__init__.py"
+_COMPLIANCE = Path(__file__).resolve().parents[1] / "routes" / "admin" / "compliance.py"
 
 _SUPER_ADMIN = {"id": "admin-001", "role": "super_admin", "email": "admin@spinr.app"}
 # A plain "admin" role holding every other grantable module. In this codebase
@@ -87,4 +88,35 @@ def test_super_admin_passes_the_mount_gate(test_client, app_fixture):
     assert resp.status_code != 403, (
         "GET /api/admin/compliance/gst-pst-remittance returned 403 for a super_admin caller — "
         "the mount gate should have passed."
+    )
+
+
+def test_every_route_also_enforces_in_its_own_body():
+    """Defence in depth (#4605 finding 1): the per-route calls stay even with
+    the mount gate. The mount is the structural guarantee; these are what
+    keeps the router safe if it is ever included somewhere else (a test app,
+    a future sub-mount) without the dependency — these handlers decrypt full
+    driver PII and expose GST/PST remittance and T4A legal-name/mailing-
+    address data. Mirrors test_ai_console_super_admin_mount.py's identically-
+    named test for the same reason."""
+    lines = _COMPLIANCE.read_text(encoding="utf-8").splitlines()
+    unguarded = []
+    pending = None
+
+    for i, line in enumerate(lines):
+        route = re.match(r'@api_router\.(get|post|put|delete|patch)\("([^"]+)"', line.strip())
+        if route:
+            pending = f"{route.group(1).upper()} {route.group(2)}"
+            continue
+        if pending and re.match(r"\s*(async )?def ", line):
+            # The guard is called early in the body; 30 lines covers a long
+            # docstring plus the first statements without reaching the next route.
+            if "_require_super_admin" not in "\n".join(lines[i : i + 30]):
+                unguarded.append(pending)
+            pending = None
+
+    assert not unguarded, (
+        f"compliance route(s) with no _require_super_admin() call in the body: {unguarded}. "
+        "The mount-level gate covers them today, but this router's own routes are the "
+        "second layer — keep both."
     )

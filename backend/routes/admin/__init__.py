@@ -267,8 +267,10 @@ admin_router.include_router(support_router, dependencies=[Depends(require_module
 # inherit that broader ops/dispatch grant (security-auditor finding).
 admin_router.include_router(dispute_pack_download_router, dependencies=[Depends(require_module("support"))])
 # support_tickets sub-router enforces require_module("support_tickets") per-handler
-# (the dashboard/trends/ticket routes carry it explicitly); config routes use
-# get_admin_user so any admin can connect the integration.
+# on every route, config routes included (there is no get_admin_user-only path
+# here — a prior version of this comment claimed otherwise; corrected 2026-08-31,
+# see #4605 finding 3, to avoid a future "fix" loosening credential-test access
+# to match the stale comment instead of the actual, stricter code).
 admin_router.include_router(support_tickets_router)
 admin_router.include_router(safety_router, dependencies=[Depends(require_module("support"))])
 admin_router.include_router(faqs_router, dependencies=[Depends(require_module("support"))])

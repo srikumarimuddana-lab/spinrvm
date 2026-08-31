@@ -1,7 +1,8 @@
+/// <reference types="geojson" />
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Pencil, Check, Trash2, X } from "lucide-react";
 import {

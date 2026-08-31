@@ -52,7 +52,7 @@ from __future__ import annotations
 import contextlib
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -796,6 +796,81 @@ class TestDeclineRideSuccessBranches:
             result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
         assert result == {"success": True}
         period_transition.assert_not_awaited()
+
+
+class TestDeclineAdminAssignedRideRecovery:
+    """#4598 finding 1: an admin-direct-assigned ride (status=driver_assigned,
+    driver_id set, no ride_offers row) must not be stranded forever on
+    decline — the rides row must be atomically reverted to searching, the
+    rider notified, and re-dispatch triggered, same as a normal offer
+    timeout."""
+
+    def _base_patches(self, ride, *, update_one_return):
+        return (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            # No ride_offers row exists for an admin-assigned ride -- the
+            # UPDATE matches zero rows in production; here it raises the
+            # same way the existing suite simulates that ("no offer row").
+            patch(
+                "backend.routes.drivers._deps.db_supabase.run_sync",
+                AsyncMock(side_effect=RuntimeError("no offer row")),
+            ),
+            patch("backend.repositories.driver_repo.update_acceptance_rate", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.reset_miss_streak", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", AsyncMock()),
+            patch("backend.utils.redis_client.redis_set", AsyncMock()),
+            patch("backend.routes.drivers._deps.spawn", side_effect=_spawn_close),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=update_one_return)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides.match_driver_to_ride", AsyncMock()),
+        )
+
+    async def test_reverts_to_searching_notifies_rider_and_redispatches(self):
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        ride = _ride(status="driver_assigned")
+        reverted_row = {**ride, "status": "searching", "driver_id": None}
+        with _Patches(*self._base_patches(ride, update_one_return=reverted_row)) as mocks:
+            update_one, notify, rematch = mocks[10], mocks[11], mocks[12]
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+
+        assert result == {"success": True}
+        update_one.assert_awaited_once_with(
+            "rides",
+            {"id": _RIDE_ID, "status": "driver_assigned", "driver_id": _DRIVER_ID},
+            {
+                "$set": {
+                    "status": "searching",
+                    "driver_id": None,
+                    "driver_notified_at": None,
+                    "updated_at": ANY,
+                }
+            },
+        )
+        notify.assert_awaited_once()
+        notify_payload, notify_channel = notify.await_args.args
+        assert notify_payload["type"] == "driver_timeout"
+        assert notify_channel == f"rider_{_RIDER_ID}"
+        rematch.assert_called_once_with(_RIDE_ID)
+
+    async def test_no_op_when_ride_already_progressed_past_driver_assigned(self):
+        """The filtered update matches zero rows if the ride moved on
+        (accepted, cancelled, etc.) between decline validation and this
+        write -- must not notify or re-dispatch a ride that already has a
+        different driver or state."""
+        from backend.routes.drivers.ride_flow import decline_ride
+
+        ride = _ride(status="driver_assigned")
+        with _Patches(*self._base_patches(ride, update_one_return=None)) as mocks:
+            notify, rematch = mocks[11], mocks[12]
+            result = await decline_ride(ride_id=_RIDE_ID, current_user={"id": _USER_ID})
+
+        assert result == {"success": True}
+        notify.assert_not_awaited()
+        rematch.assert_not_called()
 
 
 # ============================================================

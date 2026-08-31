@@ -1040,7 +1040,12 @@ async def list_company_ride_payment_sources(
         if from_iso:
             q = q.gte("created_at", from_iso)
         if to_iso:
-            q = q.lte("created_at", to_iso)
+            # Half-open [from_iso, to_iso) -- matches _month_bounds()'s
+            # documented contract (routes/corporate_company.py), which every
+            # caller here feeds this as an exclusive upper bound. `.lte` let
+            # a created_at landing exactly on the month boundary get counted
+            # into BOTH months' statement totals (#4639 finding 2).
+            q = q.lt("created_at", to_iso)
         res = q.order("created_at", desc=True).range(offset, upper).execute()
         return _rows_from_res(res)
 

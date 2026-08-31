@@ -170,11 +170,16 @@ describe('RideDetailsScreen', () => {
     expect(allText(r2)).toContain('disputed');
   });
 
-  it('shows the "Imported" badge and no-GPS disclaimer when the backend flags the ride as legacy', async () => {
+  it('shows the "Imported" badge when the backend flags the ride as legacy', async () => {
+    // The inline "Imported from the previous app — no GPS was recorded"
+    // disclaimer (and the route-quality caption it was folded into) was
+    // deliberately removed from this screen in 327d3e8 — an operator
+    // diagnostic, not something a rider can act on; the badge alone is the
+    // rider-facing signal. See ride-details-route.test.tsx's "keeps
+    // route-provenance diagnostics off the rider screen".
     mockApiGet.mockResolvedValue({ data: { ...RIDE_COMPLETED, show_legacy_badge: true } });
     const r = await renderScreen();
     expect(allText(r)).toContain('Imported');
-    expect(allText(r)).toContain('Imported from the previous app — no GPS was recorded for this ride');
   });
 
   it('hides the "Imported" badge and disclaimer for an ordinary ride even with legacy_import_metadata present', async () => {
@@ -554,35 +559,68 @@ describe('map rendering (pickup_lat/dropoff_lat present)', () => {
     expect(polylines.length).toBe(2);
     await act(async () => { MapViewNode.props.onMapReady(); await flush(); });
     expect(mockFitToCoordinates).toHaveBeenCalled();
-    // The map draws; no route-provenance caption accompanies it (see below).
-    expect(allText(r)).not.toContain('Actual route');
   });
 
-  it('renders no route-provenance caption in any route state', async () => {
-    // Coverage percentages, "Actual route processing" / "unavailable" and the
-    // legacy "Planned route preview" label were operator diagnostics on a rider
-    // screen. They live on the admin ride-detail modal now. The rider still
-    // gets the disclosure that matters from the fare line itself, which the
-    // backend relabels to "Ride fare (X km booked)" whenever the charged
-    // distance is the booking estimate rather than a GPS measurement.
-    for (const data of [
-      { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'complete' },
-      { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'processing' },
-      RIDE_COMPLETED,
-    ]) {
-      mockApiGet.mockResolvedValue({ data });
-      const r = await renderScreen();
-      const text = allText(r);
-      expect(text).not.toContain('Actual route');
-      expect(text).not.toContain('Planned route');
-      expect(text).not.toContain('GPS observed');
-      expect(text).not.toContain('GPS coverage');
-    }
+  // The "Actual route · <quality>" / "Actual route unavailable" / "Planned
+  // route · Planned route preview" / "Actual route processing" caption below
+  // the map was deliberately removed in 327d3e8 (owner directive — coverage
+  // percentages and reconstruction status are an operator diagnostic, not
+  // something a rider can act on; the same info stays on the admin panel via
+  // routeQualityLabel()). This pins that removal stays in place across each
+  // of the geometry-status branches that used to drive the caption text, so
+  // a future edit to this screen doesn't silently reintroduce it. See
+  // ride-details-route.test.tsx's "keeps route-provenance diagnostics off
+  // the rider screen" for the source-level version of the same pin.
+  it('never shows the removed route-quality diagnostic caption, in any geometry-status branch', async () => {
+    const forbidden = [
+      'Actual route ·', 'Actual route unavailable',
+      'Planned route · Planned route preview', 'Actual route processing',
+    ];
+
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_WITH_COORDS,
+        route_schema_version: 2,
+        route_geometry_status: 'processing',
+        actual_route_segments: [
+          { phase: 'trip_in_progress', coordinates: [[52.13, -106.67], [52.14, -106.65]] },
+        ],
+      },
+    });
+    // Each render below is unmounted before the next is created — renderScreen()
+    // assigns to a single shared module-level `renderer`, and this test (unlike
+    // every other one in this file) renders more than once, so only unmounting
+    // at the very end (the file's own afterEach) would leave the earlier
+    // instances' fetchRide effects running past the end of the test.
+    const rHasActual = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rHasActual)).not.toContain(s));
+    act(() => { rHasActual.unmount(); });
+
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'complete' },
+    });
+    const rUnavailable = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rUnavailable)).not.toContain(s));
+    act(() => { rUnavailable.unmount(); });
+
+    // RIDE_COMPLETED: no route_schema_version, no actual_route_segments —
+    // explicitly reset (this describe block's own beforeEach defaults to
+    // RIDE_WITH_COORDS, not RIDE_COMPLETED).
+    mockApiGet.mockResolvedValue({ data: RIDE_COMPLETED });
+    const rLegacyPlanned = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rLegacyPlanned)).not.toContain(s));
+    act(() => { rLegacyPlanned.unmount(); });
+
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'processing' },
+    });
+    const rProcessing = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rProcessing)).not.toContain(s));
   });
 
   it('still explains an imported ride\'s empty map', async () => {
     // Not provenance copy: the "Imported" badge alone does not tell a rider why
-    // the map is blank, so this notice is deliberately kept.
+    // the map is blank, so this notice is deliberately kept (f0e0d5d).
     mockApiGet.mockResolvedValue({ data: { ...RIDE_WITH_COORDS, show_legacy_badge: true } });
     const r = await renderScreen();
     expect(allText(r)).toContain('Imported from the previous app — no GPS was recorded for this ride');

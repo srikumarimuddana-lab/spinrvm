@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
+import { getEmergencyContactFormError } from '../utils/emergencyContactSchema';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -76,12 +77,9 @@ export default function EmergencyContactsScreen() {
     const trimmedName = name.trim();
     const trimmedPhone = phone.trim().replace(/\D/g, '');
 
-    if (!trimmedName) {
-      showToast('Missing Name', 'Please enter a contact name.', 'warning');
-      return;
-    }
-    if (trimmedPhone.length < 10) {
-      showToast('Invalid Phone', 'Please enter a valid phone number (at least 10 digits).', 'warning');
+    const validationError = getEmergencyContactFormError(name, phone);
+    if (validationError) {
+      showToast(validationError.title, validationError.message, 'warning');
       return;
     }
 

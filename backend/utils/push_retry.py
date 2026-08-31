@@ -23,6 +23,15 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
     from utils.redis_client import try_acquire_leader_lock  # type: ignore
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:  # pragma: no cover
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+_LOOP_NAME = "push_retry (30s)"
 _LOOP_INTERVAL = 30  # seconds between ticks
 _MAX_ATTEMPTS = 5  # give up after this many failures
 _BACKOFF_BASE = 60  # seconds; doubled for each subsequent attempt
@@ -75,12 +84,14 @@ async def push_retry_loop() -> None:
         # TTL < the minimum sleep below, or a pod finds its own key alive and
         # halves the cadence.
         if not await try_acquire_leader_lock("push_retry", int(_LOOP_INTERVAL * 0.85)):
+            _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(_LOOP_INTERVAL)
             continue
         try:
             await _tick()
         except Exception:
             logger.opt(exception=True).error("push_retry_loop tick failed")
+        _record_heartbeat(_LOOP_NAME)
         await asyncio.sleep(_LOOP_INTERVAL)
 
 

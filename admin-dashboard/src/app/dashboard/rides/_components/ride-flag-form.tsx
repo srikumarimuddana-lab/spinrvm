@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { AlertTriangle } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { getRideFlagFormError } from "@/lib/rideFlagFormSchema";
 
 const FLAG_REASONS = [
     { value: "vomited_in_car", label: "Vomited in car" },
@@ -32,7 +33,11 @@ export default function RideFlagForm({ open, onClose, rideId, targetType, target
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async () => {
-        if (!reason) return;
+        const formError = getRideFlagFormError(reason);
+        if (formError) {
+            toast({ ...formError, variant: "destructive" });
+            return;
+        }
         setLoading(true);
         try {
             const result = await flagRideParticipant(rideId, { target_type: targetType, reason, description: description || undefined });

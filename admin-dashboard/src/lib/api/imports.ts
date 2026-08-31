@@ -408,6 +408,57 @@ export const adminCommitWalletImport = (files: WalletImportFiles, opts?: WalletI
         body: walletImportFormData(files, opts),
     });
 
+/* ── Pre-Launch Legacy Data Flagging (no files) ───── */
+// Super-admin-only (backend/routes/admin/pre_launch_flag.py). Unlike every
+// other tool on this page, this one has no CSV to upload — it operates
+// entirely on already-migrated production data (drivers/rides), flagging
+// dormant pre-launch driver profiles and pre-launch rides so admin views/
+// KPIs can filter them out. Additive only: sets
+// legacy_import_metadata.pre_launch_test = true. Never deletes anything.
+export interface PreLaunchFlagCounts {
+    driver_candidates: number;
+    ride_candidates: number;
+}
+export interface PreLaunchFlagReport {
+    batch: string;
+    counts: PreLaunchFlagCounts;
+    can_commit: boolean;
+}
+export interface PreLaunchFlagCommitResult extends PreLaunchFlagReport {
+    committed: boolean;
+    drivers_flagged?: number;
+    rides_flagged?: number;
+    driver_conflicts?: number;
+    ride_conflicts?: number;
+}
+export interface PreLaunchFlagOptions {
+    batch?: string;
+}
+
+function preLaunchFlagFormData(opts?: PreLaunchFlagOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the plan and return counts. No writes. */
+export const adminPreviewPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
+    request<PreLaunchFlagReport>("/api/admin/legacy/pre-launch-flag/preview", {
+        method: "POST",
+        body: preLaunchFlagFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if there's anything to flag, applies it.
+ * Safe to re-send: an already-flagged row is skipped, never re-flagged or
+ * double-written.
+ */
+export const adminCommitPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
+    request<PreLaunchFlagCommitResult>("/api/admin/legacy/pre-launch-flag/commit", {
+        method: "POST",
+        body: preLaunchFlagFormData(opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout
@@ -820,5 +871,79 @@ export const adminCommitVehicleHistoryBackfill = (files: VehicleHistoryBackfillF
     request<VehicleHistoryBackfillCommitResult>("/api/admin/legacy-drivers/vehicle-history-backfill/commit", {
         method: "POST",
         body: vehicleHistoryBackfillFormData(files, opts),
+    });
+
+/* ── Legacy Saved-Address Backfill (2 CSVs) ── */
+// Users-module-gated (backend/routes/admin/legacy_saved_address_backfill.py).
+// Phase 4 of the 2026-08-27 migration plan: backfills rider saved addresses
+// into the existing, live `saved_addresses` table (the same destination a
+// rider's own self-serve "save an address" action writes to) from the
+// previous app's raw Mongo export. Takes two files — customer_addresses.csv
+// (Mongo ObjectId-keyed) and customers.csv (the same export's customer
+// collection, used only to resolve that ObjectId to a phone number).
+export interface SavedAddressBackfillReportItem {
+    row_num: number;
+    field: string;
+    message: string;
+}
+export interface SavedAddressBackfillCounts {
+    address_rows: number;
+    addresses_to_insert: number;
+    skipped_out_of_province: number;
+    skipped_unmatched_customer: number;
+    skipped_no_rider: number;
+    skipped_already_imported: number;
+}
+export interface SavedAddressBackfillReport {
+    batch: string;
+    can_commit: boolean;
+    counts: SavedAddressBackfillCounts;
+    warnings: SavedAddressBackfillReportItem[];
+    errors: SavedAddressBackfillReportItem[];
+    // Proves a /validate call happened for this exact (batch, both files'
+    // bytes, admin) — /commit requires it back. Binds
+    // sha256(addresses_bytes + "|" + customers_bytes), so swapping either
+    // file between validate and commit invalidates it.
+    validation_token?: string;
+}
+export interface SavedAddressBackfillCommitResult {
+    batch: string;
+    committed: boolean;
+    addresses_inserted?: number;
+    warnings?: SavedAddressBackfillReportItem[];
+    can_commit?: boolean;
+    counts?: SavedAddressBackfillCounts;
+    errors?: SavedAddressBackfillReportItem[];
+}
+export interface SavedAddressBackfillFiles {
+    addresses: File;
+    customers: File;
+}
+export interface SavedAddressBackfillOptions {
+    batch?: string;
+    validationToken?: string;
+}
+
+function savedAddressBackfillFormData(files: SavedAddressBackfillFiles, opts?: SavedAddressBackfillOptions): FormData {
+    const fd = new FormData();
+    fd.append("addresses_csv", files.addresses);
+    fd.append("customers_csv", files.customers);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
+    return fd;
+}
+
+/** Dry-run: parse + validate both CSVs and return the report (no writes). */
+export const adminValidateSavedAddressBackfill = (files: SavedAddressBackfillFiles, opts?: SavedAddressBackfillOptions) =>
+    request<SavedAddressBackfillReport>("/api/admin/riders/saved-address-backfill/validate", {
+        method: "POST",
+        body: savedAddressBackfillFormData(files, opts),
+    });
+
+/** Commit the backfill. Returns committed=false + errors if the CSVs no longer validate. */
+export const adminCommitSavedAddressBackfill = (files: SavedAddressBackfillFiles, opts?: SavedAddressBackfillOptions) =>
+    request<SavedAddressBackfillCommitResult>("/api/admin/riders/saved-address-backfill/commit", {
+        method: "POST",
+        body: savedAddressBackfillFormData(files, opts),
     });
 

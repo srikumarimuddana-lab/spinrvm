@@ -26,6 +26,7 @@ import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh
 import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { onRideRated } from '@shared/utils/appRating';
+import { getCustomTipAmount } from '../utils/customTipSchema';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -307,7 +308,7 @@ function RideCompletedScreenContent() {
           // Carry the ride + the already-chosen tip + whether we've rated so the
           // re-charge collects the same tip and doesn't re-rate (Codex 62i6).
           ? () => {
-              const _tip = effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0);
+              const _tip = effectiveTip || getCustomTipAmount(customTip);
               router.push(
                 `/manage-cards?rideId=${rideId}&forPayment=1&tip=${_tip}&rated=${hasRatedRef.current ? 1 : 0}` as any,
               );
@@ -334,7 +335,7 @@ function RideCompletedScreenContent() {
     setIsSubmitting(true);
     setSubmitPhase('rating');
     try {
-      const tipAmount = effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0);
+      const tipAmount = effectiveTip || getCustomTipAmount(customTip);
 
       // 1. Rate the driver first — fire-and-forget, and ONLY once across
       //    retries. /rate accumulates tip into driver_earnings on every call,
@@ -427,7 +428,7 @@ function RideCompletedScreenContent() {
   // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
   const handleGooglePay = async () => {
     if (isSubmitting || sheetLoading || alreadyPaid) return;
-    const tipAmount = effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const tipAmount = effectiveTip || getCustomTipAmount(customTip);
     const result = await presentSheet({
       rideId: rideId as string,
       amount: toNum(currentRide?.total_fare),
@@ -857,7 +858,7 @@ function RideCompletedScreenContent() {
               <Text style={styles.submitBtnText}>
                 {alreadyPaid
                   ? 'Rate & Done'
-                  : `Pay $${(fare + (effectiveTip || (customTip ? parseFloat(customTip) || 0 : 0))).toFixed(2)} & Done`
+                  : `Pay $${(fare + (effectiveTip || getCustomTipAmount(customTip))).toFixed(2)} & Done`
                 }
               </Text>
               <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />

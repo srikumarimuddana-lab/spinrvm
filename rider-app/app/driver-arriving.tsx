@@ -493,7 +493,11 @@ function DriverArrivingScreenContent() {
             <CarMarker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
               heading={(currentDriver as any).heading}
               routeCoordinates={driverRouteCoords.length > 1 ? driverRouteCoords : null}
-              size={44} zIndex={105} />
+              size={44} zIndex={105}
+              // Single marker on this screen (the assigned driver) — safe
+              // to pulse. Matches the same "en route to pickup" amber used
+              // for the driver's own marker in driver-app.
+              ring={{ color: colors.warning, pulsing: true }} />
           )}
           {serviceAreaPolygons.map((coords, idx) => (
             <Polygon

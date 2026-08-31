@@ -1,6 +1,6 @@
 """Coverage for utils/push_retry.py (A1c, Sub-tier B).
 
-Push notification retry queue (push_retry_queue table). One of the 17
+Push notification retry queue (push_retry_queue table). One of the 40
 background loops referenced in core/lifespan.py ("push retry" loop): a
 30-second tick that leases due rows via compare-and-swap, sends via Expo or
 native FCM, and gives up (deletes the row) after _MAX_ATTEMPTS failures with
@@ -137,6 +137,49 @@ class TestPushRetryLoop:
 
         tick.assert_awaited_once()
         assert sleep_calls == [push_retry._LOOP_INTERVAL]
+
+    @pytest.mark.anyio
+    async def test_loop_records_heartbeat_every_iteration(self, monkeypatch):
+        """#4601 finding 1: push_retry was the only production loop among 39
+        with zero calls to record_heartbeat -- loop_alert.check_and_alert()
+        only fires on a 'stale' (previously-ticked) heartbeat, so a crashed/
+        deadlocked push_retry loop was indistinguishable from one that
+        simply hadn't ticked yet, and the watchdog stayed silent forever."""
+        from backend.utils import push_retry
+
+        tick = AsyncMock()
+        monkeypatch.setattr(push_retry, "_tick", tick)
+        heartbeat = MagicMock()
+        monkeypatch.setattr(push_retry, "_record_heartbeat", heartbeat)
+
+        async def fake_sleep(secs):
+            raise asyncio.CancelledError()
+
+        with patch.object(push_retry.asyncio, "sleep", fake_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await push_retry.push_retry_loop()
+
+        heartbeat.assert_called_once_with(push_retry._LOOP_NAME)
+
+    @pytest.mark.anyio
+    async def test_loop_records_heartbeat_even_when_lock_not_won(self, monkeypatch):
+        """A replica that loses the leader-lock race still ticked -- it just
+        skipped the DB work -- so it must still report alive to the watchdog,
+        same as driver_claim_reaper's identical pattern."""
+        from backend.utils import push_retry
+
+        monkeypatch.setattr(push_retry, "try_acquire_leader_lock", AsyncMock(return_value=False))
+        heartbeat = MagicMock()
+        monkeypatch.setattr(push_retry, "_record_heartbeat", heartbeat)
+
+        async def fake_sleep(secs):
+            raise asyncio.CancelledError()
+
+        with patch.object(push_retry.asyncio, "sleep", fake_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await push_retry.push_retry_loop()
+
+        heartbeat.assert_called_once_with(push_retry._LOOP_NAME)
 
 
 # ── _tick ────────────────────────────────────────────────────────────────

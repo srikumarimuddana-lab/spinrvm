@@ -46,7 +46,10 @@ async def test_pay_driver_cancellation_fee_notifies_driver_app():
             "backend.services.cancellation_service.db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER_ROW)
         ),
         patch("backend.services.cancellation_service.db_supabase.find_one", AsyncMock(return_value=_WALLET_ROW)),
-        patch("backend.services.cancellation_service.db_supabase.update_one", AsyncMock()),
+        patch(
+            "backend.services.cancellation_service.db_supabase.wallet_apply_delta",
+            AsyncMock(return_value={"transaction_id": "txn_1", "balance_after": "15.00", "applied_delta": "5.00"}),
+        ),
         patch("backend.services.cancellation_service.db_supabase.insert_one", AsyncMock()),
         patch("backend.services.cancellation_service.send_push_notification", push),
     ):
@@ -58,6 +61,40 @@ async def test_pay_driver_cancellation_fee_notifies_driver_app():
     assert args[0] == DRIVER_USER_ID
     assert kwargs["target_app"] == "driver"
     assert kwargs["data"]["type"] == "cancellation_fee_paid"
+
+
+async def test_pay_driver_cancellation_fee_uses_atomic_wallet_apply_delta():
+    """#4604 finding 1: the driver credit must route through the atomic
+    row-locked wallet_apply_delta RPC (WS-6), not a read-then-write on the
+    wallets table -- with reference_id=ride_id so a replay is deduped
+    inside the lock instead of double-crediting."""
+    push = AsyncMock()
+    apply_delta = AsyncMock(
+        return_value={"transaction_id": "txn_1", "balance_after": "15.00", "applied_delta": "5.00"}
+    )
+    with (
+        patch(
+            "backend.services.cancellation_service.db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER_ROW)
+        ),
+        patch("backend.services.cancellation_service.db_supabase.find_one", AsyncMock(return_value=_WALLET_ROW)),
+        patch("backend.services.cancellation_service.db_supabase.wallet_apply_delta", apply_delta),
+        patch("backend.services.cancellation_service.db_supabase.insert_one", AsyncMock()),
+        patch("backend.services.cancellation_service.send_push_notification", push),
+        # A plain update_one on the wallets table must never be called again
+        # -- the old lost-update pattern this fix removes.
+        patch("backend.services.cancellation_service.db_supabase.update_one", AsyncMock()) as update_one,
+    ):
+        result = await _run(fee=Decimal("5.00"))
+
+    assert result is True
+    apply_delta.assert_awaited_once()
+    _, kwargs = apply_delta.await_args
+    assert kwargs["wallet_id"] == "wallet_1"
+    assert kwargs["user_id"] == DRIVER_USER_ID
+    assert kwargs["type_"] == "cancellation_fee"
+    assert kwargs["delta"] == Decimal("5.00")
+    assert kwargs["reference_id"] == RIDE_ID
+    update_one.assert_not_awaited()
 
 
 async def test_pay_driver_cancellation_fee_no_driver_row_skips_push():

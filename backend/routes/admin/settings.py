@@ -371,6 +371,10 @@ class SettingsUpdateRequest(BaseModel):
     # the shared shell/typography/radius restyle. Not a credential, no
     # special masking/super-admin gate needed.
     admin_theme_v2_enabled: Optional[bool] = None
+    # Admin command palette (Cmd+K/Ctrl+K route jumper) — same shape as
+    # admin_theme_v2_enabled above. Not a credential, no masking/
+    # super-admin gate needed. See migration 374.
+    admin_command_palette_enabled: Optional[bool] = None
     # Driver SOS discreet-hold-shield rollout gate (ACTION_ITEMS.md B16) —
     # dark-launched, driver-app only. Not a credential, no masking/
     # super-admin gate needed.

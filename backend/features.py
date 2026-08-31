@@ -437,10 +437,16 @@ async def admin_reset_surge_to_auto(area_id: str):
     # gate on. Without this, an area that was previously disabled would stay
     # gated off: the surge engine would keep skipping it and fare calc would
     # keep ignoring surge, even though this endpoint returned success.
+    #
+    # Also reset surge_multiplier to 1.0 (#4638 finding 3): leaving a parked
+    # manual multiplier in place meant it stayed live — still clamped to
+    # SURGE_CAP, so never a cap breach, but a transient wrong-tier price that
+    # doesn't reflect current demand — until the surge engine's next ~2-minute
+    # tick recalculates it from scratch.
     await db.update_one(
         "service_areas",
         {"id": area_id},
-        {"$set": {"surge_source": "auto", "surge_active": True, "surge_enabled": True}},
+        {"$set": {"surge_source": "auto", "surge_active": True, "surge_enabled": True, "surge_multiplier": 1.0}},
     )
     updated = await db.find_one("service_areas", {"id": area_id})
     return updated
@@ -640,14 +646,18 @@ async def calculate_all_fees(
     *,
     _all_areas: Optional[List[Dict[str, Any]]] = None,
     _matched_area: Optional[Dict[str, Any]] = None,
+    _area_fees: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Calculate all area fees + taxes for a ride based on pickup/dropoff location.
 
     ``_all_areas`` and ``_matched_area`` let in-process callers pass
     pre-computed state from an earlier service_areas fetch / polygon
     resolution so this function does not re-query or re-run the
-    point-in-polygon loop. When either is None the behaviour is
-    unchanged.
+    point-in-polygon loop. ``_area_fees`` similarly lets a caller that
+    already knows the matched area (e.g. the fare-estimate endpoint,
+    which calls this once per vehicle type for the same pickup) pass in
+    the ``area_fees`` rows so they aren't re-fetched on every call. When
+    any of these is None the behaviour is unchanged.
 
     Returns {'fees': [...], 'fees_total': float, 'tax_amount': float, 'tax_breakdown': {...}, 'grand_total': float}
     """
@@ -681,10 +691,13 @@ async def calculate_all_fees(
     if not matched_area:
         return result
 
-    # Get all active fees for this area
-    area_fees_list = await db_supabase.get_rows(
-        "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
-    )
+    # Get all active fees for this area (unless caller already fetched them
+    # for this exact matched_area — see _area_fees docstring above).
+    area_fees_list = _area_fees
+    if area_fees_list is None:
+        area_fees_list = await db_supabase.get_rows(
+            "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
+        )
 
     # Pre-compute airport zone check once (reuses all_areas already fetched above).
     # Mirror the strict filter from calculate_airport_fee — a soft-deactivated
@@ -846,7 +859,12 @@ async def compute_fare_estimate(
             break
     matched_area_id = matched_area.get("id") if matched_area else None
     if surge_override is not None:
-        surge = surge_override
+        # Clamp here too (#4638 finding 2) — both current callers hardcode
+        # Decimal("1") today, but this unconditionally overwrote the
+        # already-clamped area surge above with no cap of its own, so a
+        # future computed/admin-supplied override would silently exceed
+        # SURGE_CAP with nothing catching it.
+        surge = min(_fare_d(surge_override), _fare_d(SURGE_CAP))
 
     fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge)
     subtotal = _fare_f(fb.total_fare)

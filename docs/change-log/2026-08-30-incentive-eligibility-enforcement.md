@@ -10,7 +10,7 @@
 | Domain (Sentry tag) | drivers / payments |
 | PR / commit link | branch `claude/rider-textbox-visibility-d4w9lv` |
 | Related issue or gap ID | The three escalated findings in `2026-08-30-driver-incentive-review-fixes.md` §10 |
-| Migration | `373_incentive_eligibility_enforcement_flag.sql` |
+| Migration | `375_incentive_eligibility_enforcement_flag.sql` |
 
 ## 1. Issue / gap identified
 
@@ -59,7 +59,7 @@ produces both the quoted figure and the paid figure, so they cannot diverge.
   settlement path had this before.
 
 **All of it is gated on the new `incentive_eligibility_enforced` setting,
-default false.** Flag off reproduces the pre-373 behaviour exactly (§9).
+default false.** Flag off reproduces the pre-375 behaviour exactly (§9).
 
 ## 4. Risk & impact on existing functionality
 
@@ -106,7 +106,7 @@ default false.** Flag off reproduces the pre-373 behaviour exactly (§9).
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/373_…sql` | `settings.incentive_eligibility_enforced` + two indexes on `ride_incentive_claims` | Ship dark; the ledger reads by `incentive_id` and `ride_id` were unindexed |
+| `backend/migrations/375_…sql` | `settings.incentive_eligibility_enforced` + two indexes on `ride_incentive_claims` | Ship dark; the ledger reads by `incentive_id` and `ride_id` were unindexed |
 | `backend/services/incentive_service.py` | Dates, conditions, percentage, budget cap, `MatchedIncentive`, `record_incentive_claims`, `_refresh_budget_used` | One rule, one evaluation, quoted == paid |
 | `backend/routes/drivers/ride_complete.py` | Settlement uses the shared matcher + claim writer | Was hand-rolling its own rule |
 | `backend/routes/rides/lifecycle.py` | Same | Was hand-rolling a *third*, already-drifted variant |
@@ -141,7 +141,7 @@ _total_bonus = await record_incentive_claims(
 
 **Setting revert, no deploy:** flip `incentive_eligibility_enforced` back to
 false in admin settings. Enforcement stops within the 60-second settings cache
-TTL and behaviour returns to pre-373 exactly. This is the intended rollback and
+TTL and behaviour returns to pre-375 exactly. This is the intended rollback and
 the reason the flag exists.
 
 Code rollback (`git revert` + the migration's documented `DROP COLUMN`/`DROP
@@ -164,7 +164,7 @@ builder **applies `eq`/`in_` filters for real**, so a check that depends on
       but the assertions themselves ran.
 - [x] **Flag-off differential test: 400 randomised configurations** (varying
       area, vehicle type, amount, `bonus_type`, both dates, conditions and cap)
-      compared against an independently reimplemented pre-373 rule — **0
+      compared against an independently reimplemented pre-375 rule — **0
       mismatches**. This is the evidence for "off changes nothing".
 - [x] **Running the tests caught a real design bug**: percentage resolution was
       initially applied unconditionally, so merging would have changed payouts

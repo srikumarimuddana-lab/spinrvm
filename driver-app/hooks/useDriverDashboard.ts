@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { showToast } from './useToast';
+import { createFixFeed } from '@shared/utils/fixFeed';
 import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
@@ -130,6 +131,8 @@ interface UseDriverDashboardReturn {
   isOnline: boolean;
   connectionState: ConnectionState;
   location: Location.LocationObject | null;
+  /** Un-throttled GPS fix stream for the car marker's playback buffer. */
+  markerFixFeed: import('@shared/utils/fixFeed').FixFeed;
   locationStatus: LocationStatus;
   otpInput: string;
   setOtpInput: (value: string) => void;
@@ -346,6 +349,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Throttle setLocation re-renders: map updates at most every 10 s.
   // WS payloads still fire every watchPositionAsync callback (~5 s).
   const lastRenderMsRef = useRef<number>(0);
+  // Un-throttled fix channel to the CarMarker (see @shared/utils/fixFeed).
+  // createFixFeed is a pure factory (allocates a Set); once-only via useRef.
+  // eslint-disable-next-line react-hooks/purity
+  const markerFixFeedRef = useRef(createFixFeed());
+  // Last coordinate/heading handed to the marker feed and when — read by the
+  // stationary heartbeat below, written every time a real fix is emitted.
+  const lastMarkerFixRef = useRef<{ latitude: number; longitude: number; heading?: number | null } | null>(null);
+  const lastMarkerFixEmitMsRef = useRef<number>(0);
   // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
@@ -589,6 +600,38 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => clearInterval(interval);
   }, [foregroundLocationTransport, isOnline]);
 
+  // Marker stationary heartbeat: distanceInterval-gated watchPositionAsync
+  // (see LOCATION_CONFIGS above) goes fully quiet at a genuine standstill —
+  // Android does not fire a fix just because timeInterval elapsed if the
+  // device hasn't moved distanceInterval. With no new fixes, the CarMarker's
+  // playback buffer ran dry and dead-reckoned FORWARD along the last
+  // pre-stop segment's real velocity — the car visibly drove through a red
+  // light it was stopped at, then snapped back once a real fix finally
+  // landed (live-testing report 2026-08-30, screenshots of the reversal).
+  // Fix: while online, re-emit the last known coordinate with a FRESH
+  // timestamp into the marker feed every ~2.5s whenever no real fix has
+  // arrived — zero GPS cost (no poll, this is the cached coordinate) and
+  // zero network cost, purely a JS timer. This keeps the buffer's newest
+  // entry inside the playback/extrapolation window at all times, so a real
+  // stop is represented as a held position instead of an invented one.
+  // Covers every online state, not just trip phases — the report above was
+  // from online-idle, which the pre-existing 30s trip-only GPS watchdog
+  // below never reaches.
+  const MARKER_HEARTBEAT_MS = 2_500;
+  useEffect(() => {
+    if (!isOnline) return;
+    const id = setInterval(() => {
+      if (!lastMarkerFixRef.current) return;
+      if (Date.now() - lastMarkerFixEmitMsRef.current < MARKER_HEARTBEAT_MS) return;
+      lastMarkerFixEmitMsRef.current = Date.now();
+      markerFixFeedRef.current.emit({
+        ...lastMarkerFixRef.current,
+        timestampMs: Date.now(),
+      });
+    }, MARKER_HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [isOnline]);
+
   // GPS heartbeat: during a trip, if the recorder has captured nothing for
   // its 30s watchdog window (standstill under distanceInterval, provider
   // hiccup, watcher silently dead), actively request one fix so the durable
@@ -768,6 +811,19 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
 
           locationRef.current = loc;
+          // Un-throttled marker feed: the CarMarker's playback buffer needs
+          // EVERY displayed fix with its real measurement time — the render
+          // throttle below stretches inter-fix spacing past the 5 s playback
+          // delay and starves the buffer (freeze-then-jump, live-testing
+          // 2026-09-02). Zero re-renders: subscribers ingest via refs.
+          lastMarkerFixRef.current = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, heading: loc.coords.heading };
+          lastMarkerFixEmitMsRef.current = Date.now();
+          markerFixFeedRef.current.emit({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            heading: loc.coords.heading,
+            timestampMs: loc.timestamp || Date.now(),
+          });
           const now = Date.now();
           // Tighten the render cadence during active trip phases so the driver
           // UI distance counter and map marker stay responsive. Idle was 10s —
@@ -1818,6 +1874,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   return {
     // State
     isOnline,
+    // Stable identity for the life of the hook — safe to read during render.
+    // eslint-disable-next-line react-hooks/refs
+    markerFixFeed: markerFixFeedRef.current,
     connectionState,
     location,
     locationStatus,

@@ -45,7 +45,7 @@
 
 This Master Services Agreement ("Agreement") is entered into as of the date
 signed on the applicable Order Form ("Effective Date") between Spinr
-Technologies Inc., a corporation existing under the laws of
+Mobility Inc., a corporation existing under the laws of
 [PROVINCE/JURISDICTION OF INCORPORATION] with its principal place of
 business at [SPINR REGISTERED ADDRESS] ("Spinr"), and the business entity
 identified on the Order Form ("Company"). Spinr and Company are each a

@@ -17,7 +17,7 @@ client.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -143,9 +143,7 @@ async def test_rotation_replay_minutes_later_within_window_does_not_cascade():
     from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS
 
     # Half a window ago — comfortably inside the grace period.
-    revoked_at = datetime.now(timezone.utc) - timedelta(
-        seconds=REFRESH_REUSE_GRACE_SECONDS / 2
-    )
+    revoked_at = datetime.now(timezone.utc) - timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS / 2)
     row = _recently_revoked_rotated_row(revoked_at=revoked_at.isoformat())
     cascade_mock = AsyncMock()
 
@@ -170,9 +168,7 @@ async def test_rotation_replay_past_grace_window_still_cascades():
 
     from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS
 
-    revoked_at = datetime.now(timezone.utc) - timedelta(
-        seconds=REFRESH_REUSE_GRACE_SECONDS + 120
-    )
+    revoked_at = datetime.now(timezone.utc) - timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS + 120)
     row = _recently_revoked_rotated_row(revoked_at=revoked_at.isoformat())
     cascade_mock = AsyncMock()
 
@@ -532,8 +528,32 @@ async def test_cascade_swallows_sentry_capture_failure():
 
         # MUST NOT raise, and the rest of the cascade must still complete.
         await _handle_refresh_token_reuse(_revoked_row())
-
     insert_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_sentry_capture_carries_surface_tag():
+    """#4601 finding 3: the token-theft capture carried domain but no
+    surface tag, unlike every other reviewed capture site -- a
+    surface:backend-scoped Sentry search/dashboard would silently miss the
+    token-theft detector."""
+    capture_mock = MagicMock()
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
+        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("sentry_sdk.capture_message", capture_mock),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        await _handle_refresh_token_reuse(_revoked_row())
+
+    capture_mock.assert_called_once()
+    _, kwargs = capture_mock.call_args
+    assert kwargs["tags"]["surface"] == "backend"
+    assert kwargs["tags"]["domain"] == "auth"
 
 
 @pytest.mark.asyncio

@@ -89,6 +89,150 @@ account terms, and does not make the staggering decision in §4.4. Those
 are finance/founder decisions requiring real account access and real
 numbers this session doesn't have.
 
+## 6. Concrete cash-flow model (added 2026-08-31)
+
+**Purpose:** turn §1–5 above into an actual dollar range, using the real
+figures that exist in Spinr's own launch/growth docs today, so finance has
+a starting number to bring to the Stripe conversation in §4.2 rather than
+an open-ended risk statement. This section extends the document; it does
+not replace §1–5.
+
+### 6.1 What's real vs. what's a modeling assumption
+
+Spinr's own docs are honest about not having committed numbers yet
+(`rider-acquisition-strategy.md` §5 explicitly declines to publish a CAC
+or promo-budget figure, calling anything here "modeled, not audited").
+This model respects that split — every input below is tagged:
+
+| Input | Value used | Status |
+|---|---|---|
+| Active drivers, first 2 weeks | 5–10 | **Real** — `saskatoon-launch.md` D-1 / §J-2 |
+| Per-driver milestone bonus | $200–$1,500 | **Real, but not Spinr's number** — Uride's published BC-market bonus range, cited in `driver-acquisition-strategy.md` §4 as the nearest same-country small-market precedent; Spinr has not set its own figure yet |
+| Rider promo budget | *(none available)* | **Not modeled with a dollar figure** — `rider-acquisition-strategy.md` §5 has no committed number and explicitly says publishing a placeholder would get "quoted as fact." This model does not invent one; see §6.4 for how rider promo still factors in without a budget number |
+| Rides/driver/day at launch | 10 | **Assumption** — not sourced from any Spinr doc (pricing config, S-2, is still TBD in `app_settings`). A placeholder for early-stage utilization in a 5–10-driver pilot; replace once real ride data exists |
+| Average fare | $15 CAD | **Assumption** — same reason; a plausible short-urban-trip figure for Saskatoon, not a Spinr number |
+| Window modeled | 14 days | **Real** — matches both Stripe's stated first-payout-delay ceiling (§1) and D-1's "first 2 weeks" driver-supply gate |
+
+Two of six inputs (rides/day, average fare) are placeholders because
+Spinr has no real ride-volume or fare data yet — S-2 pricing config isn't
+finalized. **This is the same caveat the rider-acquisition doc already
+states about its own CAC section: replace these two inputs with real
+numbers the moment they exist (first week of real ride data), and treat
+the resulting dollar ranges below as directional, not a number to build a
+cash policy on unchanged.**
+
+### 6.2 Gross Stripe-processed volume at launch scale
+
+```
+Gross 14-day rider fare volume = drivers × rides/driver/day × avg fare × 14 days
+Low  (5 drivers):  5 × 10 × $15 × 14 = $10,500
+High (10 drivers): 10 × 10 × $15 × 14 = $21,000
+```
+
+This is the volume Stripe's reserve-hold policy (§1) would apply against.
+
+### 6.3 Reserve-hold exposure by scenario
+
+Stripe doesn't publish the exact percentage it would apply to a new
+account's volume spike — §1 confirms only that a spike is a named trigger,
+not a rate. Modeling a range, per this task's instruction:
+
+| Reserve % | Held on $10,500 (5 drivers) | Held on $21,000 (10 drivers) |
+|---|---|---|
+| 10% | $1,050 | $2,100 |
+| 25% | $2,625 | $5,250 |
+| 50% | $5,250 | $10,500 |
+
+### 6.4 Driver bonus exposure (the part with a real comparable)
+
+Bonuses are a Spinr-side cash commitment, independent of whether they're
+disbursed via Stripe Connect transfer or another rail — either way they
+draw on the same operating cash this document is about, and they land in
+the *same* week Stripe's reserve hold would bite (D-1's first-2-weeks
+window overlaps directly with the blitz).
+
+```
+Bonus exposure = drivers × per-driver bonus (Uride range)
+Low  (5 drivers × $200 low-tier):    $1,000
+High (10 drivers × $1,500 top-tier): $15,000
+```
+
+**Rider promo is not added as a dollar line here** because no committed
+budget exists (§6.1) — but it is not cash-flow-neutral either: any
+first-ride discount or flat-fare promo increases ride *count*, which
+increases the gross volume in §6.2/§6.3 that the reserve percentage is
+computed against. A rider promo makes the reserve-hold row worse, not the
+bonus row — that's the mechanism to flag to finance, even without a
+budget figure to plug in.
+
+### 6.5 Combined cash gap Spinr would need to cover
+
+Adding §6.3 (reserve-held fare volume) and §6.4 (driver bonus commitments)
+gives the total operating-cash cushion needed to keep paying drivers on
+time through a launch week where both the blitz and Stripe's first-payout
+delay/reserve hold are live simultaneously:
+
+| Scenario | Reserve-held volume | Bonus exposure | **Total cash gap** |
+|---|---|---|---|
+| Low (5 drivers, 10% reserve) | $1,050 | $1,000 | **≈ $2,050** |
+| Mid (7–8 drivers, 25% reserve) | ≈ $3,900 | ≈ $8,000 | **≈ $11,900** |
+| High (10 drivers, 50% reserve) | $10,500 | $15,000 | **≈ $25,500** |
+
+**The headline finding:** because Saskatoon launch is deliberately a
+5–10-driver, single-city pilot (not a multi-market blitz), the absolute
+dollar exposure is modest — low thousands to roughly $25K in the modeled
+worst case, not six figures. That is genuinely reassuring relative to how
+alarming §1's "7–14 days, up to 180 days" language reads in isolation.
+**It is not a reason to skip the mitigations below** — $25K uncovered on a
+promise made directly to a driver in week 1 is still a real reputational
+failure at exactly the wrong moment (§3), and this math scales linearly
+(and non-trivially) the moment the pilot expands past 10 drivers or a
+second city.
+
+### 6.6 Mitigation options, with tradeoffs (extends §4)
+
+1. **Stagger the driver blitz and rider promo by 1–2 weeks instead of
+   running both in week 1.**
+   - *Tradeoff:* slower dual-sided growth, and per §6.4 it doesn't reduce
+     bonus exposure (drivers still get bonuses on their own onboarding
+     schedule) — it only avoids compounding the *rider*-side volume spike
+     with the driver-side one in the same reserve-hold window. Cheapest
+     option (no cash held back), costs calendar time instead.
+2. **Hold an explicit cash reserve sized to the modeled gap** — e.g.
+   $12,000–$26,000 (mid-to-high scenario in §6.5) set aside as
+   launch-week working capital before committing to any bonus timeline.
+   - *Tradeoff:* ties up real operating cash that could fund something
+     else pre-revenue; but it's the only option that lets the blitz and
+     promo run concurrently as currently planned without depending on
+     Stripe's cooperation.
+3. **Request a Stripe custom account review / expedited payout terms
+   before launch**, framing Spinr as a known, small, single-city entrant
+   (not an anonymous new account) — per §4.2, this requires the Stripe
+   relationship owner, not this session.
+   - *Tradeoff:* no guarantee Stripe grants it, and it's the one
+     mitigation that can't be executed from inside this repo or by
+     engineering — it has to happen as an actual conversation, and should
+     start now given P-5's position in the launch checklist, not the week
+     of launch.
+
+None of these are mutually exclusive — the realistic plan is likely (2)
+sized against the mid scenario as a floor, combined with (1) as the
+default sequencing unless (3) comes back with better terms in time.
+
+### 6.7 What this section still does not resolve
+
+This is a planning model built from Spinr's own real driver-count and
+Uride's real comparable-market bonus figures, plus two explicitly-flagged
+placeholder assumptions (rides/day, avg fare) standing in for ride-volume
+and pricing data that don't exist yet. **It is not a substitute for the
+actual Stripe conversation in §4.2 / `saskatoon-launch.md` P-5.** This
+session has no Stripe dashboard or API access (Stripe MCP tools require
+OAuth not available here) and has not obtained, and does not claim to
+have obtained, Spinr-specific reserve-percentage or payout-timeline terms
+from Stripe. The dollar ranges in §6.5 exist so that conversation has a
+concrete number to react to ("is 25–50% realistic for our account, and is
+$12–26K enough cushion") — not to close out P-5 or G1 on their own.
+
 ## Sources (external research, not Spinr-verified)
 
 Stripe Connect public documentation on new-account payout delays and

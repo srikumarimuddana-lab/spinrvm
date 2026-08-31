@@ -11755,7 +11755,34 @@ record of what was assumed vs. what was actually true</summary>
 
   **Still open:** the remaining 17 candidates from the broader sweep (6
   driver-app candidates; 10 more admin-dashboard candidates); the
-  `resolveDispute` silent-error-swallow gap above (`task_916f2e38`); no
+  `resolveDispute` silent-error-swallow gap above (fixed separately in
+  #4754, unrelated to this checkbox); no ADR/migration-order doc written
+  yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 19 done: `admin-dashboard/src/app/dashboard/promotions/page.tsx`'s
+  `handleSave` discount/expiry validation (third admin-dashboard
+  candidate, money tier — the largest single ad hoc block found in the
+  sweep).** Extracted the six sequential checks (discount value
+  required/positive/within its type's cap; optional max-discount cap
+  required/positive/within its own $500 cap; max uses required/positive;
+  expiry date must be in the future) into new
+  `admin-dashboard/src/lib/promotionFormSchema.ts`
+  (`getPromotionFormError` + one predicate per check + a documentation
+  zod schema). Pure extraction, byte-for-byte identical to the original
+  six `if` blocks + `toast(...)` calls — no bug found, no behavior
+  change. New `admin-dashboard/src/lib/__tests__/promotionFormSchema.test.ts`
+  (21 accept/reject cases). Verification: 21/21 new tests pass; full
+  admin-dashboard suite (`vitest run`) 47/47 suites, 473/473 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 5 pre-existing
+  `react-hooks/set-state-in-effect` warnings, unchanged by this diff;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file duplicates this form's
+  distinctive error copy. Save button's `disabled` prop duplicates only
+  two of the six checks (partial, not exact, overlap) and was left
+  untouched, same discipline as prior steps. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-promotions-zod-step19.md`.
+  **Still open:** the remaining 16 candidates from the broader sweep (6
+  driver-app candidates; 9 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and

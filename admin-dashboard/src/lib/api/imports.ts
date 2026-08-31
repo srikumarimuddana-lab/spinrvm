@@ -508,6 +508,62 @@ export const adminCommitDataQualityScan = (opts?: DataQualityScanOptions) =>
         body: dataQualityScanFormData(opts),
     });
 
+/* ── Driver-Repair Pass (Step 18) ───── */
+// Super-admin-only endpoints (backend/routes/admin/migration_driver_repair.py).
+// Re-matches completed rides still missing a driver against the CURRENT
+// drivers table (via legacy_import_metadata.old_driver_id) -- a driver
+// added in a later import batch than the ride itself. Unlike Data Quality
+// Scan, commit here writes rides.driver_id plus reconstructed
+// driver_insurance_periods and an offsetting payout row, so it carries the
+// same confirm-phrase gate as Legacy Wallet Import / Pre-Launch Data
+// Flagging. Driver-side only -- there is no rider-side equivalent (no
+// old-system customer-id linkage exists anywhere in Supabase yet).
+export interface DriverRepairCounts {
+    rides_missing_driver_with_old_id: number;
+    repairable: number;
+    still_unmatched: number;
+    ambiguous_old_driver_id_skipped: number;
+}
+export interface DriverRepairReport {
+    batch: string;
+    counts: DriverRepairCounts;
+    can_commit: boolean;
+}
+export interface DriverRepairCommitResult extends DriverRepairReport {
+    committed: boolean;
+    rides_repaired?: number;
+    conflicts?: number;
+    drivers_recounted?: number;
+}
+export interface DriverRepairOptions {
+    batch?: string;
+}
+
+function driverRepairFormData(opts?: DriverRepairOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the repair plan and return counts. No writes. */
+export const adminPreviewDriverRepair = (opts?: DriverRepairOptions) =>
+    request<DriverRepairReport>("/api/admin/legacy/driver-repair/preview", {
+        method: "POST",
+        body: driverRepairFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if anything's repairable, applies it:
+ * sets driver_id, reconstructs Period 2/3 insurance rows, and writes one
+ * offsetting payout per driver. Safe to re-send: an already-repaired ride
+ * (driver_id no longer null) simply drops out of the next plan.
+ */
+export const adminCommitDriverRepair = (opts?: DriverRepairOptions) =>
+    request<DriverRepairCommitResult>("/api/admin/legacy/driver-repair/commit", {
+        method: "POST",
+        body: driverRepairFormData(opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout

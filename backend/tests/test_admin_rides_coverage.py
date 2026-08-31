@@ -703,6 +703,27 @@ class TestAdminRegenerateImportedSnapshots:
         # audit call; nothing happened, so nothing to log.
         audit_mock.assert_not_awaited()
 
+    def test_regenerate_preview_mode_makes_no_writes(self, client, as_super_admin):
+        """preview=True returns the eligible count without rendering,
+        uploading, or writing anything -- the dry-run step this route was
+        missing (2026-08-31)."""
+        rides = [{"id": "ride-1", "pickup_lat": 50.4, "pickup_lng": -104.6, "dropoff_lat": 50.5, "dropoff_lng": -104.7}]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.update_one", AsyncMock()) as update_mock,
+            patch("routes.admin.rides.log_admin_action", AsyncMock()) as audit_mock,
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-snapshots", json={"preview": True})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {
+            "total": 1,
+            "preview": True,
+            "message": "Would attempt to regenerate 1 snapshot(s). No writes made.",
+        }
+        update_mock.assert_not_awaited()
+        audit_mock.assert_not_awaited()
+
     def test_regenerate_happy_path_audits_totals(self, client, as_super_admin):
         rides = [
             {
@@ -817,6 +838,36 @@ class TestAdminRegenerateImportedRoutes:
             resp = client.post("/api/admin/rides/regenerate-imported-routes", json={})
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
+        audit_mock.assert_not_awaited()
+
+    def test_regenerate_routes_preview_mode_makes_no_writes(self, client, as_super_admin):
+        """preview=True returns the count of rides that need a route backfill
+        (after the same _needs_route filter) without calling OSRM/Google or
+        writing anything."""
+        rides = [
+            {
+                "id": "ride-needs-route",
+                "pickup_lat": 50.4,
+                "pickup_lng": -104.6,
+                "dropoff_lat": 50.5,
+                "dropoff_lng": -104.7,
+                "planned_route_polyline": None,
+            }
+        ]
+        with (
+            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.update_one", AsyncMock()) as update_mock,
+            patch("routes.admin.rides.log_admin_action", AsyncMock()) as audit_mock,
+        ):
+            resp = client.post("/api/admin/rides/regenerate-imported-routes", json={"preview": True})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {
+            "total": 1,
+            "preview": True,
+            "message": "Would attempt to backfill 1 route(s). No writes made.",
+        }
+        update_mock.assert_not_awaited()
         audit_mock.assert_not_awaited()
 
     def test_regenerate_routes_skips_rides_that_already_have_a_real_route(self, client, as_super_admin):

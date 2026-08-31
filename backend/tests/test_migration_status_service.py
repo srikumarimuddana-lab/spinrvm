@@ -58,6 +58,10 @@ class _Query:
         self._predicates.append(("in", col, list(vals)))
         return self
 
+    def is_(self, col, val):
+        self._predicates.append(("is_", col, val))
+        return self
+
     def filter(self, col, op, val):
         self._predicates.append(("filter", col, op, val))
         return self
@@ -72,6 +76,10 @@ class _Query:
             elif kind == "in":
                 _, col, vals = pred
                 if _get_path(row, col) not in vals:
+                    return False
+            elif kind == "is_":
+                _, col, val = pred
+                if val == "null" and _get_path(row, col) is not None:
                     return False
             elif kind == "filter":
                 _, col, op, val = pred
@@ -119,7 +127,15 @@ def _fresh_store(**tables):
 
 
 def _use(monkeypatch, store):
-    monkeypatch.setattr(svc, "supabase", _FakeSupabase(store))
+    fake = _FakeSupabase(store)
+    monkeypatch.setattr(svc, "supabase", fake)
+    # Tool 17 calls into migration_data_quality_service.py, which has its
+    # own module-level `supabase` binding -- patch it to the same fake store
+    # so the two modules see one consistent picture, same reasoning as
+    # every dual-binding conftest patch this repo already uses.
+    from backend.services import migration_data_quality_service as dq_svc
+
+    monkeypatch.setattr(dq_svc, "supabase", fake)
 
 
 def _driver(id_, *, source=None, mongo_history=False, extra=None):
@@ -276,7 +292,7 @@ def test_saved_address_backfill_reports_missing_column_without_crashing_other_to
     assert t10.warning == "Migration 373 not applied"
 
     # Every other tool still rendered -- the exception was contained to #10.
-    assert len(report.tools) == 16
+    assert len(report.tools) == 17
     t1 = next(t for t in report.tools if t.id == "bulk_driver_import")
     assert t1.state == "done"
 
@@ -342,8 +358,118 @@ def test_pre_launch_flag_counts_drivers_and_rides(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_report_contains_all_16_tools_in_order(monkeypatch):
+def test_report_contains_all_17_tools_in_order(monkeypatch):
     _use(monkeypatch, _fresh_store())
     report = svc.get_migration_status()
-    assert len(report.tools) == 16
-    assert [t.order for t in report.tools] == list(range(1, 17))
+    assert len(report.tools) == 17
+    assert [t.order for t in report.tools] == list(range(1, 18))
+
+
+# --------------------------------------------------------------------------
+# Tool 17: migration data quality scan
+# --------------------------------------------------------------------------
+
+
+def test_data_quality_scan_clean_is_done(monkeypatch):
+    """No issues found at all, nothing flagged -- genuinely clean, not
+    "not started"."""
+    _use(
+        monkeypatch,
+        _fresh_store(
+            rides=[
+                {
+                    "id": "r1",
+                    "status": "completed",
+                    "driver_id": "d1",
+                    "rider_id": "u1",
+                    "pickup_address": "123 St",
+                    "dropoff_address": "456 Ave",
+                    "grand_total": 12.5,
+                }
+            ]
+        ),
+    )
+    report = svc.get_migration_status()
+    t17 = next(t for t in report.tools if t.id == "data_quality_scan")
+    assert t17.state == "done"
+    assert "No missing-driver" in t17.detail
+
+
+def test_data_quality_scan_unflagged_issue_is_not_started(monkeypatch):
+    _use(
+        monkeypatch,
+        _fresh_store(
+            rides=[
+                {
+                    "id": "r1",
+                    "status": "completed",
+                    "driver_id": None,
+                    "rider_id": "u1",
+                    "pickup_address": "123 St",
+                    "dropoff_address": "456 Ave",
+                    "grand_total": 12.5,
+                }
+            ]
+        ),
+    )
+    report = svc.get_migration_status()
+    t17 = next(t for t in report.tools if t.id == "data_quality_scan")
+    assert t17.state == "not_started"
+    assert "1 row(s) found needing review" in t17.detail
+
+
+def test_data_quality_scan_all_flagged_is_done(monkeypatch):
+    _use(
+        monkeypatch,
+        _fresh_store(
+            rides=[
+                {
+                    "id": "r1",
+                    "status": "completed",
+                    "driver_id": None,
+                    "rider_id": "u1",
+                    "pickup_address": "123 St",
+                    "dropoff_address": "456 Ave",
+                    "grand_total": 12.5,
+                    "legacy_import_metadata": {"data_quality": {"issues": ["missing_driver"]}},
+                }
+            ]
+        ),
+    )
+    report = svc.get_migration_status()
+    t17 = next(t for t in report.tools if t.id == "data_quality_scan")
+    assert t17.state == "done"
+    assert "1 row(s) flagged, 0 pending" in t17.detail
+
+
+def test_data_quality_scan_mixed_is_partial(monkeypatch):
+    _use(
+        monkeypatch,
+        _fresh_store(
+            rides=[
+                {
+                    "id": "r1",
+                    "status": "completed",
+                    "driver_id": None,
+                    "rider_id": "u1",
+                    "pickup_address": "123 St",
+                    "dropoff_address": "456 Ave",
+                    "grand_total": 12.5,
+                    "legacy_import_metadata": {"data_quality": {"issues": ["missing_driver"]}},
+                },
+                {
+                    "id": "r2",
+                    "status": "completed",
+                    "driver_id": "d1",
+                    "rider_id": None,
+                    "pickup_address": "123 St",
+                    "dropoff_address": "456 Ave",
+                    "grand_total": 12.5,
+                },
+            ]
+        ),
+    )
+    report = svc.get_migration_status()
+    t17 = next(t for t in report.tools if t.id == "data_quality_scan")
+    assert t17.state == "partial"
+    assert "1 flagged, 1 more pending" in t17.detail

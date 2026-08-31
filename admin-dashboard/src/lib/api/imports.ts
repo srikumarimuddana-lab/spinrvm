@@ -459,6 +459,55 @@ export const adminCommitPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
         body: preLaunchFlagFormData(opts),
     });
 
+/* ── Migration Data Quality Scan (Step 17) ───── */
+// Super-admin-only endpoints (backend/routes/admin/migration_data_quality.py).
+// Scans completed rides for a missing driver, a missing rider, a
+// placeholder address, or $0.00 fare and additively tags each onto
+// legacy_import_metadata.data_quality.issues. Never touches rides.status.
+export interface DataQualityScanCounts {
+    missing_driver: number;
+    missing_rider: number;
+    placeholder_address: number;
+    zero_fare: number;
+    rides_affected: number;
+}
+export interface DataQualityScanReport {
+    batch: string;
+    counts: DataQualityScanCounts;
+    can_commit: boolean;
+}
+export interface DataQualityScanCommitResult extends DataQualityScanReport {
+    committed: boolean;
+    rides_flagged?: number;
+    conflicts?: number;
+}
+export interface DataQualityScanOptions {
+    batch?: string;
+}
+
+function dataQualityScanFormData(opts?: DataQualityScanOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the scan plan and return counts. No writes. */
+export const adminPreviewDataQualityScan = (opts?: DataQualityScanOptions) =>
+    request<DataQualityScanReport>("/api/admin/legacy/data-quality-scan/preview", {
+        method: "POST",
+        body: dataQualityScanFormData(opts),
+    });
+
+/**
+ * Re-scans fresh server-side and, if anything's found, tags it. Safe to
+ * re-send: an already-flagged issue on a row is skipped, never re-flagged.
+ */
+export const adminCommitDataQualityScan = (opts?: DataQualityScanOptions) =>
+    request<DataQualityScanCommitResult>("/api/admin/legacy/data-quality-scan/commit", {
+        method: "POST",
+        body: dataQualityScanFormData(opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout

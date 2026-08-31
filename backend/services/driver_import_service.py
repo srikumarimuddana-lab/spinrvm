@@ -1739,6 +1739,17 @@ MONGO_IMPORT_SOURCE = "legacy_mongo_driver_import"
 
 REQUIRED_MONGO_DRIVER_COLUMNS = {"_id", "name", "phone"}
 
+# Synthetic name stamped on a row whose source `name` was blank (abandoned
+# onboarding -- see the blank-name policy comment in build_mongo_driver_
+# import_plan below). Defined once because it is now READ as well as
+# written: fetch_incomplete_onboarding_driver_ids() classifies on it, and a
+# hand-copied literal at either site would silently stop matching the other.
+LEGACY_PLACEHOLDER_NAME_PREFIX = "Unnamed Legacy Driver"
+
+# JSONB key the importer stamps to record that the source app's own
+# onboarding funnel never completed for this row (`set_up_profile=false`).
+INCOMPLETE_PROFILE_KEY = "incomplete_profile_in_source"
+
 
 @dataclass
 class MongoDriverImportPlan:
@@ -1769,6 +1780,70 @@ def _mongo_driver_already_linked(existing_meta: dict[str, Any], old_id: str) -> 
     if existing_meta.get("source") == MONGO_IMPORT_SOURCE and str(existing_meta.get("old_driver_id")) == old_id:
         return True
     return any(str(h.get("old_driver_id")) == old_id for h in (existing_meta.get("mongo_driver_history") or []))
+
+
+def is_incomplete_onboarding_row(driver_row: dict[str, Any]) -> bool:
+    """True if this ``drivers`` row is an abandoned-onboarding shell carried
+    over from the legacy app rather than a real driver profile.
+
+    Root-caused in docs/migration/2026-08-27-legacy-driver-blank-name-root-
+    cause.md: in the source export a blank ``name`` is a perfect bijection
+    with ``set_up_profile=false`` -- the person OTP-verified a phone and
+    never completed the in-app profile step. None of them are referenced by
+    any booking; none ever drove a trip. They were imported deliberately for
+    completeness (forced needs_review/unverified/offline, so they can never
+    dispatch), which is why this is a classification helper and not a
+    deletion: the rows stay, the admin counts stop treating them as drivers.
+
+    Two markers, ORed, because neither alone covers the population: the
+    importer stamps ``incomplete_profile_in_source`` on rows it created, and
+    the synthetic placeholder name catches rows whose source flag disagreed
+    (16 rows in the 2026-08-22 batch had a placeholder name with the flag
+    false; 1 had the flag true with a real name).
+    """
+    meta = driver_row.get("legacy_import_metadata") or {}
+    if meta.get(INCOMPLETE_PROFILE_KEY) is True:
+        return True
+    return (driver_row.get("name") or "").startswith(LEGACY_PLACEHOLDER_NAME_PREFIX)
+
+
+def fetch_incomplete_onboarding_driver_ids() -> set[str]:
+    """Every ``drivers`` id ``is_incomplete_onboarding_row`` classifies as an
+    abandoned-onboarding shell. Read-only.
+
+    Shared (not duplicated) by the admin drivers list/stats and analytics
+    filters, for the same reason ``pre_launch_flag_service
+    .fetch_pre_launch_flagged_ids`` is shared: a hand-copied JSONB-path
+    filter in each route drifts from the definition the importer actually
+    writes. Classification runs in Python off the same predicate the
+    in-memory callers use, so a DB-side and an in-memory answer can never
+    disagree.
+
+    Paginated rather than relying on PostgREST's default 1000-row cap --
+    this population is 600 today and the cap would silently start dropping
+    ids as more legacy batches land.
+    """
+    out: set[str] = set()
+    offset = 0
+    page = 500
+    while True:
+        rows = (
+            supabase.table("drivers")
+            .select("id, name, legacy_import_metadata")
+            .range(offset, offset + page - 1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            break
+        for r in rows:
+            if r.get("id") and is_incomplete_onboarding_row(r):
+                out.add(r["id"])
+        if len(rows) < page:
+            break
+        offset += page
+    return out
 
 
 def validate_required_mongo_driver_columns(rows: list[dict[str, str]], plan: MongoDriverImportPlan) -> None:
@@ -1849,7 +1924,7 @@ def build_mongo_driver_import_plan(
         name = (row.get("name") or "").strip()
         incomplete_profile_in_source = parse_bool(row.get("set_up_profile", "")) is False
         if not name:
-            name = f"Unnamed Legacy Driver {old_id[-6:]}"
+            name = f"{LEGACY_PLACEHOLDER_NAME_PREFIX} {old_id[-6:]}"
             plan.warnings.append(
                 ImportErrorItem(
                     old_id,
@@ -2243,7 +2318,7 @@ def backfill_orphaned_legacy_driver_rows(*, service_area: dict[str, Any], apply:
         origin = history[0]  # the original, still-incomplete link attempt
         first_name = u.get("first_name") or ""
         last_name = u.get("last_name") or ""
-        name = f"{first_name} {last_name}".strip() or "Unnamed Legacy Driver"
+        name = f"{first_name} {last_name}".strip() or LEGACY_PLACEHOLDER_NAME_PREFIX
         driver_rows.append(
             {
                 "id": str(uuid.uuid4()),

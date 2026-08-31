@@ -180,8 +180,16 @@ Ordered by blast radius, smallest first:
    `opts.onboarding_complete = statusFilter !== "legacy_incomplete";` in `page.tsx`'s `loadDrivers`
    and point the header/tile back at `stats.total`. The list and counts return to today's exact
    behaviour while the backend keys stay in place (they are additive and inert if unread).
-2. **Full revert** — `git revert e9e7a36 69fa835 f5e537c c5db1a4`. Safe at any time: `stats.total`
-   never changed meaning, so no consumer is left reading a key that stops existing.
+2. **Full revert** — `git revert 7e14144 232a79d e9e7a36 69fa835 f5e537c c5db1a4`. Safe at any time:
+   `stats.total` never changed meaning, so no consumer is left reading a key that stops existing.
+
+   **Verified by execution, not assertion** (CI auto-labelled this PR `risk:high`, which makes the
+   template's "verify the rollback actually works" item apply): the sequence was applied with
+   `git revert --no-commit` inside a throwaway `git worktree`. It applied with **zero conflicts**,
+   `git diff` against the branch point `9953e60` came back **empty** — a byte-identical restore —
+   and a grep for `onboarding_complete` / `is_incomplete_onboarding_row` / `onboarded_total` across
+   `backend/routes`, `backend/services` and `admin-dashboard/src` returned nothing. The worktree was
+   then discarded; the branch is unmodified.
 
 No feature flag was added. Justification: this is an internal-admin read-only display change with
 no user-facing surface and no write path, and step 1 above is already a one-line rollback that
@@ -205,7 +213,8 @@ needs no backend deploy — a flag would add a config surface without shortening
       arithmetic touched; no PII added to logs (the classifier reads `name` but never logs it).
 - [x] **Tests written** for the classifier, the paginated fetch, the filter matrix, and the stats
       breakdown.
-- [ ] **Tests not executed** — see §9a.
+- [ ] **Tests not executed locally** — see §9a; CI has since run them, see §9c.
+- [x] **Rollback actually executed, not just written** — see §8.
 - [ ] Manual repro in staging — not performed.
 - [ ] Feature-flagged — deliberately not, justified in §8.
 
@@ -234,6 +243,35 @@ installed or executed here. Concretely:
   querying the data directly; the assertion that the endpoint will *return* those figures follows
   from the classifier logic and has not been observed end-to-end against a running backend.
 
+### 9c. What CI then found — the §9a gap, closed
+
+Added after PR #4810's first CI run, so this record does not stay stale at "outstanding".
+
+- **`admin-test` passed.** The `admin-dashboard` production-build/typecheck gate §9a listed as
+  outstanding is now satisfied.
+- **`backend-test` found a real defect**, exactly the risk §9a existed to flag: 38 failed / 13410
+  passed (coverage fine at 87.82% vs a 60% floor). 37 shared one cause — the new
+  `driver_import_service` imports landed in the `try:` branch of `routes/admin/drivers.py` and
+  `routes/admin/analytics.py` but **not** the `except ImportError:` fallback, so in top-level import
+  mode the names were unbound. This was a latent runtime `NameError`, not merely a test failure:
+  the dual-import pattern exists because both modes are live. The claim in §9's convention checkbox
+  that the "dual-import pattern [was] preserved in both new import blocks" was **wrong** — it was
+  reasoned, not checked, and is corrected here.
+  - Caught by the repo's own `tests/test_dual_import_parity.py`, whose docstring already records the
+    same regression class from PR #1757 and PR #1843.
+  - Cause was procedural: two `Edit` calls issued in parallel against the *same file*; both reported
+    success, only one survived, and the success reports were trusted instead of re-reading the file.
+    Ruff is **not** implicated — the exact multi-line import shape survives `ruff format` +
+    `ruff check --fix` unchanged when reproduced in isolation.
+  - Fixed in `7e14144`, verified by replicating that guard's own `_violations()` AST logic and
+    running it over the same file set: exactly the three reported names before, `PASS` across all
+    136 guarded files after.
+- **One failure was not this change's**: `test_run_migrations_skip_list.py`, which landed on `main`
+  at 19:51Z in `a95ed51` (PR #4805) after this branch's base, builds a cwd-relative
+  `Path("backend/migrations")` while `ci.yml` sets `working-directory: backend`. Diagnosed with a
+  proposed patch in a PR comment; deliberately not carried here.
+- **Still not run locally**: `pytest`. CI remains the source of truth for test outcomes.
+
 ### 9b. Adjacent finding, deliberately not fixed
 
 `booking_import_service.py:126` filters `CANADA_COUNTRY_CODE = "1"` on both customer and driver,
@@ -247,9 +285,13 @@ before the next import batch, not worth widening this change for.
 
 ## 10. Sign-off
 
-- [x] Rollback plan is concrete and testable — a one-line frontend revert with no backend deploy.
+- [x] Rollback plan is concrete and **executed, not just testable** — a one-line frontend revert
+      with no backend deploy, plus a full `git revert` of all six commits proven in an isolated
+      worktree (§8).
 - [x] Blast radius is stated, not assumed — every consumer enumerated by grep in §4.
 - [x] No silent behaviour change to an already-shipped flow — `stats.total` keeps its meaning; the
       two visible changes (drivers page figures, driver-acceptance analytics) are described in §5.
-- [ ] **Release gates outstanding: backend tests and an `admin-dashboard` production build must
-      both pass in CI before merge.** Neither could be run in this environment (§9a).
+- [x] **`admin-dashboard` production build gate: passed in CI** (`admin-test`, §9c).
+- [ ] **Backend test gate: not yet green.** CI's first run found a real dual-import defect, fixed in
+      `7e14144` (§9c); re-run pending. One unrelated failure is owned by `main` (§9c). Backend tests
+      must be green before merge.

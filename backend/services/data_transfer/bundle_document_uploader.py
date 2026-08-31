@@ -50,6 +50,32 @@ _EXT_TO_MIME_TYPE = {
 }
 
 
+_EXISTING_ROWS_PAGE_SIZE = 500
+
+
+async def _get_all_rows(table: str, filters: dict) -> list[dict[str, Any]]:
+    """Paginated get_rows — a plain unbounded get_rows() silently caps at
+    _DEFAULT_ROW_LIMIT (1,000) rows. The two callers below use this to
+    dedupe an update-mode reimport against a driver's FULL existing
+    driver_documents/driver_insurance_periods history, which for
+    driver_insurance_periods is a 7-year SGI/TNC regulatory audit trail —
+    silently truncating it here could both under-report existing periods
+    (masking a real gap on reimport) and, since callers treat "not in
+    existing" as "new", risk re-inserting periods already on file. Mirrors
+    the paged-fetch pattern in utils/document_expiry.py."""
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = await db_supabase.get_rows(table, filters, limit=_EXISTING_ROWS_PAGE_SIZE, offset=offset)
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _EXISTING_ROWS_PAGE_SIZE:
+            break
+        offset += _EXISTING_ROWS_PAGE_SIZE
+    return rows
+
+
 async def _upload_bytes(content: bytes, ext: str, content_type: str) -> str:
     """Upload raw bytes under a fresh storage key; returns the signed URL.
     Mirrors the raw-bytes upload shape in documents.py's bulk-upload path."""
@@ -177,7 +203,7 @@ async def replay_new_documents(
     driver_documents rows every run. Does not update/replace an existing
     document's content — a changed document must be re-uploaded through the
     normal driver document flow, not through this bulk-replay path."""
-    existing = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id})
+    existing = await _get_all_rows("driver_documents", {"driver_id": driver_id})
     existing_keys = {(row.get("document_type"), row.get("side")) for row in existing or []}
 
     new_documents = [doc for doc in documents if (doc.get("document_type"), doc.get("side")) not in existing_keys]
@@ -195,7 +221,7 @@ async def replay_new_insurance_periods(driver_id: str, periods: list[dict[str, A
     driver_id. Still append-only (never updates/deletes an existing row,
     per the regulatory audit convention) — this only prevents re-inserting
     the exact same period on a repeat "update" import."""
-    existing = await db_supabase.get_rows("driver_insurance_periods", {"driver_id": driver_id})
+    existing = await _get_all_rows("driver_insurance_periods", {"driver_id": driver_id})
     existing_keys = {(row.get("period"), row.get("started_at")) for row in existing or []}
 
     new_periods = [p for p in periods if (p.get("period"), p.get("started_at")) not in existing_keys]

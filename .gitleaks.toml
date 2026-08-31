@@ -108,3 +108,29 @@ keywords = [
     "sin_raw", "sin_number", "social_insurance_number", "social_insurance_no",
     "account_number", "institute_number", "institution_number", "transit_number",
 ]
+
+# Driver-export PII detector — added following #4596, a second file from the same
+# incident as spinr-sin-bank-pii above: driver_csv_migration.sql carried real
+# name/email/phone/license_number/lat/lng for 189 drivers and was NOT caught by that
+# rule, because it names none of the SIN/bank column identifiers — its column shape is
+# entirely different (a plain contact/identity export, not a financial one). Confirmed
+# via git history (commit 41356340d, the file's real first-appearance commit — #4596's
+# and the breach record's citation of commit `dea8ea5`/`3c336ff` as the origin is
+# incorrect, neither touches this file; see the correction landed alongside this rule).
+#
+# Same design as spinr-sin-bank-pii: a bare quoted email address is too common
+# to flag globally (test fixtures, admin seed data, comments), so this only fires in
+# files that also name one of the actual staging-table identifiers this incident's
+# file used (`license_number`, `driver_csv_import`, `matched_driver_id`,
+# `old_driver_id`) — column/table names that only show up in a one-off migration
+# script, not in application code (which reads these fields from the DB/request body,
+# never hardcodes them as SQL identifiers). A file naming one of these *and* carrying a
+# literal quoted email address is exactly the shape of the incident file.
+[[rules]]
+id = "spinr-driver-export-pii"
+description = "Possible driver export row (name/email/phone/license) alongside a driver-migration column identifier — verify this isn't real driver/rider data before merging."
+regex = '''['"][^'"@]+@[^'"@]+\.[^'"]{2,}['"]'''
+keywords = [
+    "license_number", "driver_license_number", "driver_csv_import",
+    "old_driver_id", "matched_driver_id",
+]

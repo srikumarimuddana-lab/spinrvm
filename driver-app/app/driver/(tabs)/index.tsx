@@ -179,6 +179,28 @@ function DriverDashboard() {
     refreshLocation,
   } = useDriverDashboard();
 
+  // Own-vehicle presence ring — colors mirror the insurance-period grouping
+  // in CLAUDE.md (Period 1 available / Period 2 en route-to-pickup, offer
+  // through arrival / Period 3 passenger aboard), for a visual that a driver
+  // already reads as "available / heading to a rider / on a trip" rather
+  // than inventing a fourth, unrelated color language. Pulsing is reserved
+  // for Period 2 only — idle can last minutes to hours online, so a
+  // continuous loop there would force Android to re-snapshot this marker
+  // for the whole shift (see CarMarker's `ring` prop doc comment); trip-in-
+  // progress doesn't need extra attention-drawing motion once already under
+  // way. This screen renders exactly one CarMarker (the driver's own
+  // vehicle), so pulsing here is the single-marker case the ring feature is
+  // scoped to — never wire `ring` onto a multi-marker screen.
+  const ownMarkerRing = !isOnline
+    ? null
+    : rideState === 'idle'
+    ? { color: colors.success, pulsing: false }
+    : rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup'
+    ? { color: colors.warning, pulsing: true }
+    : rideState === 'trip_in_progress'
+    ? { color: colors.primary, pulsing: false }
+    : null;
+
   // Unread notification count — fetched on mount, refreshed every 60s
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   useEffect(() => {
@@ -906,6 +928,7 @@ function DriverDashboard() {
             variant={markerVariant}
             imageUri={markerImageUri}
             routeCoordinates={routeCoords.length > 1 ? routeCoords : null}
+            ring={ownMarkerRing}
           />
         )}
         <RoutePins pickup={pickupPoint} dropoff={dropoffPoint} />

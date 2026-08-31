@@ -6535,9 +6535,10 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   every real test suite passed, not screenshotted/manually driven.
 
 ### B25. Maestro real-device mobile E2E (`.github/workflows/maestro-e2e.yml`) is wired but never fires — missing secrets, opt-in-only trigger, no iOS lane
-- [ ] **Status:** open. Found while explaining the Playwright vs. Maestro
-  split to a user (2026-08-11) — not a new regression, a pre-existing gap
-  that was never tracked here.
+- [ ] **Status:** open (action item #3 done 2026-08-31; #1/#2/#4 remain
+  blocked on repo/org-admin access — see below). Found while explaining
+  the Playwright vs. Maestro split to a user (2026-08-11) — not a new
+  regression, a pre-existing gap that was never tracked here.
 - **Why this matters:** `rider-app/e2e/` and `driver-app/e2e/` (Playwright)
   only exercise the Expo **web export** (react-native-web), with backend
   API, WebSocket, Google Maps, and Firebase all mocked via `page.route()`.
@@ -6582,8 +6583,34 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   2. Run the workflow once (`workflow_dispatch`, `apps: both`) to prove
      the Android lane actually completes end-to-end against Maestro
      Cloud, not just that CI YAML parses.
-  3. Decide whether `run-maestro` should be applied automatically (e.g.
-     via label-on-path-touch for `rider-app/`/`driver-app/` native code)
+  3. **Done (2026-08-31).** Built
+     `.github/workflows/label-run-maestro.yml`: on
+     `pull_request: [opened, synchronize, reopened]`, runs
+     `dorny/paths-filter` (same pinned SHA already used by
+     `detect-changes.yml`/`eas-build.yml`) against changed paths under
+     `rider-app/**` or `driver-app/**`, excluding
+     `rider-app/e2e/**`, `driver-app/e2e/**`, `**/*.md`, `**/__tests__/**`,
+     `**/*.test.ts`, `**/*.test.tsx` (Playwright/Jest-only changes don't
+     need native-device coverage — full rationale in the new workflow's
+     own header comment). On a match, an `actions/github-script` step
+     idempotently creates the `run-maestro` label if missing (catches the
+     422 from an already-existing label) and applies it to the PR
+     (`addLabels` is itself idempotent). Permissions are `pull-requests:
+     write` only — no `contents: write`, no secrets used. This only
+     applies the label; it does not touch `maestro-e2e.yml` and does not
+     itself run any EAS build or Maestro Cloud job, so it costs a few
+     seconds of `ubuntu-latest` CI time per PR, not billed mobile-build
+     minutes — see the new workflow's header comment for the explicit
+     "what this does not do" statement. Applying the label still just
+     fires `maestro-e2e.yml`'s existing `labeled` trigger, which still
+     fails at its `EXPO_TOKEN`/`MAESTRO_CLOUD_API_KEY` login step until
+     action items #1/#2/#4 below are unblocked. YAML syntax verified via
+     `python3 -c "import yaml; yaml.safe_load(...)"` only — this
+     environment has no `act`/real Actions runner, so the label-apply
+     logic has not been exercised against a real PR event.
+  3-orig (superseded by the above — kept for history): Decide whether
+     `run-maestro` should be applied automatically (e.g. via
+     label-on-path-touch for `rider-app/`/`driver-app/` native code)
      rather than purely manual, given it's currently opt-in-only and easy
      to forget on a PR that actually needs native-device coverage.
   4. Provision Apple Developer credentials in EAS and add an iOS

@@ -3778,10 +3778,28 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   does for insurance periods. If SK/CRA ever audits "when exactly did
   Spinr start collecting PST," the only source of truth is those
   `audit_logs` rows plus the change-log markdown.
-  - [ ] **Status:** open, low priority — `audit_logs` already covers the
-    "what changed and why" need; a dedicated history table would only add
-    value for high-volume tax-config churn, which this isn't yet. Revisit
-    if tax-rate changes become more frequent.
+  - [x] **Status:** DONE (2026-08-31). Previously deferred as low-priority
+    here; built now on explicit user request, overriding that deferral (not
+    because tax-config churn actually increased). New append-only
+    `service_area_tax_history` table (migration
+    `backend/migrations/375_service_area_tax_history.sql`, immutability
+    trigger blocks UPDATE/DELETE unconditionally — stricter than
+    `driver_insurance_periods`, which allows one specific close-transition
+    UPDATE). `admin_update_service_area` now writes one history row (old
+    vs. new gst/pst/hst enabled+rate, `changed_by`, justification,
+    cross-referenced `audit_log_id`) alongside its existing
+    `tax_config_updated` audit_logs write — additive, that write is
+    unchanged. New admin-only read endpoint
+    `GET /service-areas/{area_id}/tax-history`; no dashboard UI built for it
+    (kept minimal per scope). The two still-dead `/areas/{id}/tax`
+    endpoints (`features.py`, `admin_update_area_tax`) are intentionally
+    NOT wired to this table — confirmed still unreachable from any
+    frontend. 5 new tests in `test_admin_service_areas_coverage.py`; full
+    file re-run 69/69 pass. Migration verified against a scratch local
+    Postgres (not production Supabase — no `DATABASE_URL` available in this
+    environment); manual `spinr-migration-reviewer` checklist pass found no
+    blockers. Full Change Impact & Risk Log:
+    `docs/change-log/2026-08-31-service-area-tax-history-table.md`.
 
 ### A30. Migrated-data visibility audit (2026-08-13) — Finding 0 resolved live, 3 findings remain open
 - **Source:** `docs/audit/2026-08-13-migrated-data-visibility-audit.md`

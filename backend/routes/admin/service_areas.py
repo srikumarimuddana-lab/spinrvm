@@ -688,13 +688,17 @@ async def admin_update_service_area(
                 detail="Changing GST/PST/HST configuration requires a written justification "
                 "(regulatory + financial risk).",
             )
-        await log_admin_action(
+        _tax_audit_id = await log_admin_action(
             admin,
             "tax_config_updated",
             "service_areas",
             area_id,
             {"updated_fields": _tax_fields_touched, "justification": tax_justification},
         )
+        # A29 (ACTION_ITEMS.md): additive, dedicated append-only history row —
+        # complements (does not replace) the tax_config_updated audit_logs
+        # write above. See migration 375 / service_area_tax_history.
+        await _record_tax_history(area_id, area, _tax_fields_touched, tax_justification, admin, _tax_audit_id)
 
     update_payload: Dict[str, Any] = {}
     for field in [
@@ -890,6 +894,77 @@ async def _record_manual_surge_history(area_id: str, update_payload: dict, sourc
             e,
             exc_info=True,
         )
+
+
+_TAX_HISTORY_FIELDS = ("gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate")
+
+
+async def _record_tax_history(
+    area_id: str,
+    area: "ServiceAreaUpdateRequest",
+    touched_fields: List[str],
+    justification: str,
+    admin: Dict[str, Any],
+    audit_log_id: Optional[str],
+) -> None:
+    """Append a ``service_area_tax_history`` row for a GST/PST/HST change.
+
+    ACTION_ITEMS.md A29's final open sub-item: `audit_logs` already gets a
+    `tax_config_updated` row (written by the caller just before this), but
+    that's a shared, unstructured table — this adds a dedicated,
+    append-only, old-value/new-value record the way `driver_insurance_periods`
+    exists for insurance periods. Additive only; does not replace the
+    audit_logs write.
+
+    Must be called BEFORE the caller applies its update to `service_areas`
+    (old_* values are read fresh from the DB here) — reversing that order
+    would read the just-updated row as its own "old" value.
+
+    Failures are logged and swallowed, matching `_record_manual_surge_history`:
+    losing this history row must not fail the operator's tax-rate change
+    itself, but must not be silent either.
+    """
+    try:
+        existing = await db_supabase.find_one("service_areas", {"id": area_id}) or {}
+        row: Dict[str, Any] = {
+            "service_area_id": area_id,
+            "changed_by": admin.get("id"),
+            "changed_by_role": admin.get("role"),
+            "justification": justification,
+            "audit_log_id": audit_log_id,
+        }
+        for field in _TAX_HISTORY_FIELDS:
+            row[f"old_{field}"] = existing.get(field)
+            new_val = getattr(area, field)
+            row[f"new_{field}"] = new_val if new_val is not None else existing.get(field)
+        await db_supabase.insert_one("service_area_tax_history", row)
+    except Exception as e:  # noqa: BLE001 - never fail the tax-rate change itself
+        logger.error(
+            "tax history: failed to append service_area_tax_history row for area %s (fields=%s): %s",
+            area_id,
+            touched_fields,
+            e,
+            exc_info=True,
+        )
+
+
+@router.get("/service-areas/{area_id}/tax-history")
+async def admin_get_service_area_tax_history(area_id: str, limit: int = 100, admin: dict = Depends(get_admin_user)):
+    """List GST/PST/HST change history for a service area, newest first.
+
+    Reads the append-only `service_area_tax_history` table (migration 375,
+    ACTION_ITEMS.md A29) written by `admin_update_service_area`. Read-only —
+    no write path here, matching the table's append-only-from-one-place
+    contract.
+    """
+    rows = await db_supabase.get_rows(
+        "service_area_tax_history",
+        filters={"service_area_id": area_id},
+        order="changed_at",
+        desc=True,
+        limit=min(max(limit, 1), 500),
+    )
+    return {"area_id": area_id, "history": rows}
 
 
 @router.delete("/service-areas/{area_id}")

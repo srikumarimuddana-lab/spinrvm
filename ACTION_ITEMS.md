@@ -19052,6 +19052,73 @@ how much they de-risk a public launch._
   Change Impact Log, or explicitly risk-accepted/scheduled by the product
   owner with a dated note here.
 
+### C49. RLS DB-role-level test coverage (audit finding N18 / ranked blocker #29) — foundation built, partial coverage, not closed
+
+> Referenced from A40 above (`docs/audit/2026-08-18-full-fleet-whole-app-audit.md`,
+> ranked blocker register item #29, due date 2026-09-05): "No test in the
+> entire suite exercises an RLS policy from a real Postgres
+> `anon`/`authenticated` role — 207 policy statements across 139 migrations
+> have zero DB-level allow/deny coverage."
+
+- [ ] **Status (2026-08-31): partial progress, not closed.** Built the
+  foundation infrastructure this repo had zero of — a real-Postgres,
+  role-switching test fixture — plus DB-role-level coverage for **11
+  distinct policies across 5 tables** (`users`, `drivers`, `rides`,
+  `financial_events`, `driver_insurance_periods`). Against the audit's
+  cited 207-policy figure that's roughly 5%; against a fresh grep-based
+  recount in this session (127 `CREATE POLICY` occurrences across
+  `backend/migrations/*.sql` + `backend/supabase_rls.sql` — see the change
+  log for why this doesn't reconcile cleanly to 207), roughly 9%. Either
+  way: a real start, not the backlog item closing.
+- **What was built:** `backend/tests/rls/` — `conftest.py` provisions a
+  throwaway Postgres database per test session (via a real, reachable
+  `TEST_DATABASE_URL`/`DATABASE_URL`), recreates the `anon`/`authenticated`/
+  `service_role` Postgres roles and Supabase's own `auth.uid()`/`auth.role()`/
+  `auth.jwt()` helper functions, and applies the actual shipped
+  `backend/supabase_schema.sql` + `backend/supabase_rls.sql` (byte-for-byte,
+  unmodified) plus migrations 58/64/70/290. `as_role(cur, role, claims)`
+  flips the session role + JWT claims the way PostgREST does. 32 tests
+  (`test_core_tables_rls.py`, `test_money_and_safety_rls.py`) assert both
+  allow and deny paths per policy. Self-skips (does not fail) when no real
+  Postgres is reachable, per `pytest.mark.skipif` in `conftest.py`.
+- **Actually run, not just scaffolded:** this session had a real local
+  Postgres 16 instance available (see the change log's Verification
+  section for how) — all 32 tests were run against it: **32 passed, 0
+  failed.**
+- **A gap this work surfaced, not fixed:** `users`/`drivers`/`rides` — the
+  three tables this task prioritized — have their RLS policies only in
+  `backend/supabase_rls.sql`, a file applied manually via the Supabase SQL
+  editor per its own header comment, never run by
+  `backend/scripts/run_migrations.py`. There's currently no guarantee that
+  file matches what's actually live in production (it could have drifted
+  via a hand-edit in the dashboard). Recommended follow-up: either commit
+  those policies as a real numbered migration so `run_migrations.py`
+  becomes the source of truth, or add a periodic check that diffs live
+  `pg_policies` against this file.
+- **Remaining scope (not done here):** the other ~116–196 policies
+  (depending on denominator) across ~130+ migration files. Highest-value
+  next candidates by policy count, per this session's survey:
+  `lost_and_found`/`lost_and_found_messages` (4 policies each),
+  `referral_payouts` (4), `auto_payout_batches` (4), `complaints` (2),
+  and the `refresh_tokens`/`stripe_events`/`schema_migrations` deny-all
+  policies (migration 26). CI is not wired to run `tests/rls/` yet — no
+  Postgres service container configured for it, so these tests currently
+  only run when a developer points `TEST_DATABASE_URL` at a real Postgres
+  locally.
+- **Files:** `backend/tests/rls/conftest.py`, `test_core_tables_rls.py`,
+  `test_money_and_safety_rls.py` (new); `backend/pytest.ini` (`rls` marker
+  registered); `CLAUDE.md` (Testing Conventions — new RLS tier entry).
+- **Change log:** `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`
+  — full detail, including the exact coverage-fraction accounting and the
+  "what was NOT verified" list (production drift risk above; CI wiring;
+  full-suite co-collection with the mocked test stack not run end-to-end
+  in this sandbox).
+- **Acceptance:** ranked blocker #29 stays open until either (a) CI runs
+  `tests/rls/` against a real Postgres on every PR, or (b) a materially
+  larger fraction of the 207/127 policies has DB-role-level coverage —
+  whichever the team decides is the actual bar. Do not mark #29 closed
+  off this item alone.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -83,7 +83,12 @@ export default function RidesPage() {
             const apiOpts: RideListOpts = {};
             if (opts.tab === "scheduled") {
                 apiOpts.isScheduled = true;
-            } else if (opts.tab !== "all" && opts.tab !== "no_driver_found") {
+            } else if (opts.tab !== "all") {
+                // "no_driver_found" and "needs_review" are synthetic values
+                // the backend's _build_rides_filters translates itself (a
+                // cancellation_type filter and a data-quality id lookup,
+                // respectively) -- not real rides.status equality, but the
+                // client sends them the same way as any other tab.
                 apiOpts.status = opts.tab;
             }
             if (opts.search) apiOpts.search = opts.search;
@@ -210,7 +215,7 @@ export default function RidesPage() {
         const opts: RideListOpts = {};
         if (statusFilter === "scheduled") {
             opts.isScheduled = true;
-        } else if (statusFilter !== "all" && statusFilter !== "no_driver_found") {
+        } else if (statusFilter !== "all") {
             opts.status = statusFilter;
         }
         if (search) opts.search = search;

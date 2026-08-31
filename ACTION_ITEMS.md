@@ -14982,6 +14982,35 @@ record of what was assumed vs. what was actually true</summary>
     the 407 repo files, or (b) a manual file-by-file live-schema
     cross-check same as this session's targeted checks, at ~2.5x this
     session's scope. Neither started.
+  - **2026-08-31 follow-up — path (a) built and run once, live.** Built
+    `backend/scripts/audit_migration_drift.py`, a new **standalone**
+    read-only script (not an edit to `run_migrations.py` itself — a
+    separate task was concurrently adding a skip-list feature to that
+    file) that imports `run_migrations.py`'s own file-discovery/checksum
+    helpers and diffs them against `schema_migrations` into three
+    buckets: tracked-match, tracked-**mismatch**, untracked. Actually run
+    against production (Supabase MCP `execute_sql`,
+    `SELECT filename, checksum, applied_at, applied_by FROM
+    schema_migrations`, project `soavhtdhefowwvforzwb` — read-only, fed
+    into the script via its `--tracked-json` input path since no
+    `DATABASE_URL`/`TEST_DATABASE_URL` was configured in that session for
+    a direct connection). **Real current counts: 466 repo files, 456
+    tracked-and-matching, 0 checksum mismatches, 10 untracked** — up from
+    161/407 at the last check, most likely from a backfill pass between
+    sessions (live `applied_by` values show batches dated 2026-08-14 and
+    2026-08-21) that this 2026-08-31 session did not itself perform. Full
+    breakdown, the 10 untracked filenames (five touch money/auth/RLS by
+    name — `26_rls_coverage_gap.sql`,
+    `70_fix_financial_events_rls.sql`,
+    `78_fix_pii_function_search_path.sql`,
+    `137_fix_pii_encrypt_pgsodium_perms.sql`,
+    `376_corporate_wallet_adjust_idempotency.sql` — flagged for priority
+    follow-up, not individually verified), and what's still open:
+    `docs/audit/2026-08-31-migration-drift-reconciliation.md`. Unit tests
+    for the diff logic: `backend/tests/test_audit_migration_drift.py`.
+    **Still not closed**: per-file live-schema verification of the 10
+    untracked files (path (b)) remains the deferred, higher-stakes manual
+    audit — explicitly out of scope for this follow-up too.
 - [ ] **Original status (2026-08-13, superseded above but kept for
   history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see

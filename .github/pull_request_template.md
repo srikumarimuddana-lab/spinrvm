@@ -55,6 +55,7 @@ Tick any that apply and fill the elaboration line. At least one reviewer from th
 - **Metrics / logs introduced** [required]: `none` | <list; confirm naming follows `spinr_<domain>_<metric>_<unit>`>
 - **Screenshots / video** [required if UI files touched]: <attach or link>
 - **Perf numbers** [required if SLA-critical path touched — dispatch, fare calc, settlement, WS fan-out, driver location, token refresh, Stripe webhook]: <before/after P95>
+- **Native build verification** [required if `rider-app`/`driver-app` native deps, Expo SDK, or a native module changed]: this environment cannot authenticate `eas-cli` or reach `expo-doctor`'s 2 network-dependent checks (see CR-2026-008 / #3294) — trigger `.github/workflows/eas-native-build.yml` (or an equivalent manual EAS build) from an environment with EAS credentials before merge, and link the run here. `expo export --platform web` + the full JS test suite are not a substitute for a real native build.
 
 **Pre-merge checklist** [required]:
 

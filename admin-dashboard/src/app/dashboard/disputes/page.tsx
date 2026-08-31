@@ -145,8 +145,9 @@ export default function DisputesPage() {
       setAdminNote("");
       setResolveError(null);
       refresh();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to resolve dispute:", err);
+      setResolveError(err?.message || "Failed to resolve dispute. Please try again.");
     } finally {
       setResolving(false);
     }

@@ -18226,6 +18226,24 @@ how much they de-risk a public launch._
 - **Acceptance:** `get_advisors`' `rls_disabled` finding no longer lists
   these 4 tables, AND a full regression pass (backend integration tests +
   a manual admin-dashboard settings-page load) confirms nothing broke.
+- **Migration prepared, not applied (2026-08-31):** the reference SQL above
+  is now a real migration file,
+  `backend/migrations/378_enable_rls_settings_document_files_driver_imports.sql`
+  — the exact 4 `ENABLE ROW LEVEL SECURITY` statements, no new policies,
+  verified locally against a scratch Postgres instance (applied cleanly,
+  rollback's `DISABLE ROW LEVEL SECURITY` statements verified to work,
+  scratch DB dropped afterward — never touched staging or production), and
+  given a `spinr-migration-reviewer` pass (no blockers; see
+  `docs/runbooks/c43-rls-enable-readiness.md` for the full review output).
+  This follows the same "built but never `--apply`'d" pattern as the A41
+  legacy-backfill scripts (`docs/runbooks/legacy-backfill-scripts-rollout.md`).
+  Readiness note, re-confirmation step, and gating condition:
+  `docs/runbooks/c43-rls-enable-readiness.md`.
+  **This is not a status change — the deferral recorded above is still in
+  force, reconfirmed directly with the product owner this same session
+  (2026-08-31): the legacy-migration/A41-family work has NOT concluded.**
+  Do not run `--apply` against staging or production until that is
+  explicitly lifted.
 
 ### C44. Production Supabase migrations are stale — 363-369 (7 files, including 364 `legacy_ride_badge_enabled`) never ran
 

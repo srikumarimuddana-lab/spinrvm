@@ -134,3 +134,37 @@ keywords = [
     "license_number", "driver_license_number", "driver_csv_import",
     "old_driver_id", "matched_driver_id",
 ]
+
+# False-positive fix (#4778): the admin-dashboard's compiled/minified driver-management
+# UI chunks legitimately embed both a `license_number` column-label string (a form/table
+# schema) and a hardcoded placeholder sample row for CSV-import/export preview UI
+# (`/dashboard/drivers/legacy-import`, `/dashboard/drivers/legacy-sin-dob-backfill`, and
+# similar backfill screens) in the same minified file. Gitleaks' `keywords` field is only
+# a file-wide pre-filter -- it does not scope the regex to text near the keyword -- so any
+# quoted email-shaped string anywhere in that same bundle chunk matches, with zero real
+# relationship to the keyword. Reproduced directly against a real `npm run build` output:
+# 3 leaks, all three the placeholder sample rows `"Jane Doe"/"jane@example.com"` and
+# `"rider@example.com"` used by CSV-import/export preview components (confirmed via
+# `gitleaks detect --source admin-dashboard/.next/static --no-git --config .gitleaks.toml`,
+# no `--redact`, against gitleaks 8.18.4 -- matching G5b's exact invocation).
+#
+# A proximity-windowed single regex (tightening `regex` itself) was considered first per
+# the issue's stated preference order, but doesn't hold up: it can't distinguish this case
+# from a real leak, because the placeholder sample here sits *close* to its `license_number`
+# keyword (~250 chars on the same line) -- the same distance a real single-row leak would
+# have. Tightening the window would blind the rule to exactly the incident shape it exists
+# to catch, not just this false positive.
+#
+# Instead: RFC 2606 reserves example.com/.org/.net for documentation -- no real driver or
+# rider will ever have one of these as their actual email domain, and the real #4596
+# incident file's 189 leaked rows all use real domains (gmail.com, yahoo.com/.ca, live.ca,
+# icloud.com, yahoo.co.in). A per-rule allowlist scoped to the *matched secret* excludes
+# only the reserved-domain shape, leaving the rule fully sensitive to any real domain.
+# This also avoids the `paths`-exclusion route entirely (see #4216: a `paths` entry on
+# gitleaks 8.18.4 is a full-file skip, not content-scoped, and would reopen a blind spot
+# on `.next/` builds for any *other* real PII this rule could still catch there).
+[rules.allowlist]
+description = "RFC 2606 reserved example domains used by admin-dashboard's own CSV import/export placeholder/preview sample rows -- never a real driver/rider email"
+regexes = [
+    '''@example\.(com|org|net)['"]''',
+]

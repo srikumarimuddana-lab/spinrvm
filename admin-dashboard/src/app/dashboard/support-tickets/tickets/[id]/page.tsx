@@ -24,6 +24,7 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/ui/rich-text-editor";
@@ -70,6 +71,18 @@ function statusClass(status: string): string {
     return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
+// Quiet Console Stage 3: flag-gated Badge-variant equivalent of statusClass
+// above. "open" falls back to plain `outline` — there's no blue/info Badge
+// variant, and `outline-accent` reuses --primary (#d32f2f, same red family
+// as --destructive #dc2626), so it would misread "open" as escalated. See
+// the Stage 3c report; a dedicated blue/info variant is the real fix.
+function statusBadgeVariant(status: string): "outline-warning" | "outline-destructive" | "outline" {
+    const s = (status || "").toLowerCase();
+    if (s.includes("hold")) return "outline-warning";
+    if (s.includes("escal")) return "outline-destructive";
+    return "outline";
+}
+
 function fmtTime(s?: string): string {
     return s ? s.slice(0, 16).replace("T", " ") : "—";
 }
@@ -111,6 +124,7 @@ function textToHtml(text: string): string {
 
 export default function TicketDetailPage() {
     const { allowed } = useRequireModule("support_tickets");
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const params = useParams();
     const id = String(params?.id || "");
     const { toast } = useToast();
@@ -347,7 +361,11 @@ export default function TicketDetailPage() {
                             <CardHeader>
                                 <div className="flex items-start justify-between gap-2">
                                     <CardTitle className="text-lg">{ticket.subject || "(no subject)"}</CardTitle>
-                                    <Badge variant="secondary" className={statusClass(ticket.status)}>{ticket.status}</Badge>
+                                    {themeV2Enabled ? (
+                                        <Badge variant={statusBadgeVariant(ticket.status)}>{ticket.status}</Badge>
+                                    ) : (
+                                        <Badge variant="secondary" className={statusClass(ticket.status)}>{ticket.status}</Badge>
+                                    )}
                                 </div>
                                 <p className="text-xs text-muted-foreground">
                                     #{ticket.ticketNumber} · created {ticket.createdTime?.slice(0, 16).replace("T", " ")}

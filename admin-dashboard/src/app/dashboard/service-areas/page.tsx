@@ -19,6 +19,8 @@ import { getSurgeHistory } from "@/lib/api/analytics-payouts";
 import { TUNING_PLAYBOOK, tuningWarnings, warningsFor } from "@/lib/heatmap-tuning-guidance";
 import { parseAllowlistIds } from "@/lib/allowlist-ids";
 import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
+import { Badge } from "@/components/ui/badge";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { useTheme } from "next-themes";
 import { chartColors } from "@/components/analytics/chart-palette";
@@ -77,6 +79,7 @@ function getAreaCenter(area: any): { lat: number; lng: number } {
 
 export default function ServiceAreasPage() {
   const { allowed } = useRequireModule("service_areas");
+  const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
   const router = useRouter();
   const { toast } = useToast();
   const crudToast = useCrudToast();
@@ -344,11 +347,23 @@ export default function ServiceAreasPage() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <h4 className="font-bold text-foreground">{area.name}</h4>
-                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816) */}
-                      {area.is_airport && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-xs font-bold rounded-md">AIRPORT</span>}
+                      {area.is_airport && (
+                        themeV2Enabled ? (
+                          <Badge variant="outline" className="text-xs">AIRPORT</Badge>
+                        ) : (
+                          // eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816)
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 text-xs font-bold rounded-md">AIRPORT</span>
+                        )
+                      )}
                       {!area.is_active && <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-bold rounded-md">INACTIVE</span>}
-                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-zone-count badge, not a health-state signal (#2816) */}
-                      {subRegions.length > 0 && <span className="px-2 py-0.5 bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 text-xs font-bold rounded-md">{subRegions.length} airport zone{subRegions.length > 1 ? 's' : ''}</span>}
+                      {subRegions.length > 0 && (
+                        themeV2Enabled ? (
+                          <Badge variant="outline" className="text-xs">{subRegions.length} airport zone{subRegions.length > 1 ? 's' : ''}</Badge>
+                        ) : (
+                          // eslint-disable-next-line no-restricted-syntax -- decorative airport-zone-count badge, not a health-state signal (#2816)
+                          <span className="px-2 py-0.5 bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 text-xs font-bold rounded-md">{subRegions.length} airport zone{subRegions.length > 1 ? 's' : ''}</span>
+                        )
+                      )}
                     </div>
                     <p className="text-sm text-muted-foreground">{area.city || ''}{area.province ? `, ${area.province}` : ''} · GST {area.gst_rate || 5}% · PST {area.pst_rate || 0}%</p>
                   </div>
@@ -536,8 +551,12 @@ export default function ServiceAreasPage() {
                                       <Plane className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                                       {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-feature brand accent, not a health-state signal (#2816) */}
                                       <span className="font-bold text-blue-900 dark:text-blue-200">{sub.name}</span>
-                                      {/* eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816) */}
-                                      <span className="px-2 py-0.5 bg-blue-200 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 text-xs font-bold rounded-md">AIRPORT</span>
+                                      {themeV2Enabled ? (
+                                        <Badge variant="outline" className="text-xs">AIRPORT</Badge>
+                                      ) : (
+                                        // eslint-disable-next-line no-restricted-syntax -- decorative airport-category badge, not a health-state signal (#2816)
+                                        <span className="px-2 py-0.5 bg-blue-200 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300 text-xs font-bold rounded-md">AIRPORT</span>
+                                      )}
                                       {!sub.is_active && <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-bold rounded-md">INACTIVE</span>}
                                     </div>
                                     <button onClick={() => handleDelete(sub.id, sub.name)} className="text-sm text-destructive hover:underline">Delete</button>
@@ -1158,6 +1177,7 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
 // ─── Documents Editor ───
 
 function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => void }) {
+  const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
   const [rows, setRows] = useState(docs.length > 0 ? docs : [
     { key: 'drivers_license',       label: "Driver's License",    has_expiry: true,  required: true, requires_back_side: false },
     { key: 'vehicle_insurance',     label: 'Vehicle Insurance',   has_expiry: true,  required: true, requires_back_side: false },
@@ -1249,19 +1269,39 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
 
                 {/* Status badges */}
                 <div className="px-4 py-2.5 flex items-center gap-2 flex-wrap">
-                  {r.required !== false ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-success/15 text-success"><ShieldCheck className="h-3 w-3" /> Required</span>
+                  {themeV2Enabled ? (
+                    <>
+                      {r.required !== false ? (
+                        <Badge variant="outline-success" className="text-[10px]"><ShieldCheck className="h-3 w-3" /> Required</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px]"><ShieldAlert className="h-3 w-3" /> Optional</Badge>
+                      )}
+                      {r.has_expiry ? (
+                        <Badge variant="outline-warning" className="text-[10px]"><Clock className="h-3 w-3" /> Has Expiry</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px]">No Expiry</Badge>
+                      )}
+                      {r.requires_back_side && (
+                        <Badge variant="outline" className="text-[10px]"><Image className="h-3 w-3" /> Both Sides</Badge>
+                      )}
+                    </>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground"><ShieldAlert className="h-3 w-3" /> Optional</span>
-                  )}
-                  {r.has_expiry ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/15 text-warning"><Clock className="h-3 w-3" /> Has Expiry</span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground">No Expiry</span>
-                  )}
-                  {r.requires_back_side && (
-                    // eslint-disable-next-line no-restricted-syntax -- decorative informational badge (not a health-state signal) distinguishing a document-format attribute (#2816)
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><Image className="h-3 w-3" /> Both Sides</span>
+                    <>
+                      {r.required !== false ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-success/15 text-success"><ShieldCheck className="h-3 w-3" /> Required</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground"><ShieldAlert className="h-3 w-3" /> Optional</span>
+                      )}
+                      {r.has_expiry ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-warning/15 text-warning"><Clock className="h-3 w-3" /> Has Expiry</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-muted text-muted-foreground">No Expiry</span>
+                      )}
+                      {r.requires_back_side && (
+                        // eslint-disable-next-line no-restricted-syntax -- decorative informational badge (not a health-state signal) distinguishing a document-format attribute (#2816)
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><Image className="h-3 w-3" /> Both Sides</span>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -2056,6 +2096,7 @@ function CascadeEditor({
 }
 
 function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; areaName: string; vehicleTypes: { id: string; name: string }[] }) {
+  const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
   const [incentives, setIncentives] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -2217,8 +2258,12 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-foreground">{inc.name}</span>
-                    {/* eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent for the bonus-amount badge, not a health-state signal (#2816) */}
-                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-bold rounded-md">${parseFloat(inc.bonus_amount).toFixed(2)}</span>
+                    {themeV2Enabled ? (
+                      <Badge variant="outline" className="text-xs">${parseFloat(inc.bonus_amount).toFixed(2)}</Badge>
+                    ) : (
+                      // eslint-disable-next-line no-restricted-syntax -- decorative incentive-feature brand accent for the bonus-amount badge, not a health-state signal (#2816)
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-bold rounded-md">${parseFloat(inc.bonus_amount).toFixed(2)}</span>
+                    )}
                     <span className="px-2 py-0.5 bg-muted text-muted-foreground text-xs font-semibold rounded-md">{typeInfo?.label || inc.incentive_type}</span>
                   </div>
                   <p className="text-sm text-muted-foreground">{vtName}{inc.description ? ` · ${inc.description}` : ''}</p>

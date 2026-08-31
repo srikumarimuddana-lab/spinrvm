@@ -11706,6 +11706,57 @@ record of what was assumed vs. what was actually true</summary>
   driver-app candidates; 11 more admin-dashboard candidates); the
   admin-dashboard maplibre-gl build break above (`task_66016ac3`); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — maplibre-gl build break (flagged in step 17)
+  already fixed independently.** The task suggestion queued as
+  `task_66016ac3` was routed by the user into this same session; on
+  investigation, `main` already carried the fix by the time this session
+  picked it up (PR #4749, merging #4743 alongside two unrelated fixes) —
+  another session/PR fixed it independently in parallel. Verified: `npm
+  run build` now completes successfully on `main`, and the 57
+  pre-existing `tsc` error lines noted in step 17 are gone (`npx tsc
+  --noEmit` clean). No further action needed; `task_66016ac3` is
+  resolved (started, and now moot).
+- **2026-08-31 update — step 18 done: `admin-dashboard/src/app/dashboard/disputes/page.tsx`'s
+  `handleResolve` partial-refund validation (second admin-dashboard
+  candidate, money tier).** Extracted the `isNaN(amount) || amount <= 0`
+  and `amount > originalFareAmount` checks (only run when `resolution
+  === "partial_refund"`) into new
+  `admin-dashboard/src/lib/disputeResolutionSchema.ts`
+  (`isRefundAmountValid`, `isRefundWithinOriginalFare`,
+  `getPartialRefundError`). Pure extraction, byte-for-byte identical to
+  the original two sequential checks — no bug found, no behavior
+  change. New
+  `admin-dashboard/src/lib/__tests__/disputeResolutionSchema.test.ts`
+  (9 accept/reject cases). Verification: 9/9 new tests pass; full
+  admin-dashboard suite (`vitest run`) 46/46 suites, 452/452 tests
+  passing; `npx tsc --noEmit` clean (repo-wide, now that the
+  maplibre-gl break above is fixed); `npx eslint` on touched files: 0
+  errors, 3 pre-existing `react-hooks/set-state-in-effect` warnings on
+  unrelated lines, unchanged by this diff; **real production build**
+  (`npm run build`) completed successfully — the first B39
+  admin-dashboard step able to complete this (step 17 could not, due to
+  the now-fixed maplibre-gl break). Blast-radius grep confirmed no
+  other file duplicates this exact pattern (two coincidental
+  regex-match false positives — `walletAdjustmentSchema.ts`'s own
+  differently-shaped `isNaN` check, already migrated; and an unrelated
+  `Number.isNaN(amount) || amount < 0` check in
+  `company-portal/[id]/sections/page.tsx` — inspected and confirmed
+  distinct). Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-dispute-refund-zod-step18.md`.
+
+  **Separately flagged, not fixed (out of scope for this validation
+  step):** `handleResolve`'s `catch` block only `console.error`s a
+  failed `resolveDispute` API call — no `setResolveError`, so a failed
+  resolution attempt shows the admin nothing (dialog stays open, no
+  error message). This is an error-handling gap, not a validation gap,
+  and wasn't part of the original 21-candidate list — queued as a
+  separate task suggestion (`task_916f2e38`) rather than folded into
+  this step.
+
+  **Still open:** the remaining 17 candidates from the broader sweep (6
+  driver-app candidates; 10 more admin-dashboard candidates); the
+  `resolveDispute` silent-error-swallow gap above (`task_916f2e38`); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -3782,7 +3782,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     here; built now on explicit user request, overriding that deferral (not
     because tax-config churn actually increased). New append-only
     `service_area_tax_history` table (migration
-    `backend/migrations/375_service_area_tax_history.sql`, immutability
+    `backend/migrations/376_service_area_tax_history.sql`, immutability
     trigger blocks UPDATE/DELETE unconditionally — stricter than
     `driver_insurance_periods`, which allows one specific close-transition
     UPDATE). `admin_update_service_area` now writes one history row (old

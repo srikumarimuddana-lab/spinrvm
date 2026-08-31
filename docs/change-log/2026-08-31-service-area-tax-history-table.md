@@ -33,7 +33,7 @@ tax-change frequency, it reflects an explicit ask.
 
 ## 3. Fix / remediation
 
-1. New migration `backend/migrations/375_service_area_tax_history.sql` —
+1. New migration `backend/migrations/376_service_area_tax_history.sql` —
    append-only `service_area_tax_history` table (old/new gst/pst/hst
    enabled+rate, `changed_by`, `changed_by_role`, `justification`,
    `audit_log_id` cross-reference, `changed_at`). UPDATE/DELETE blocked by
@@ -100,7 +100,7 @@ any rider/driver.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/375_service_area_tax_history.sql` | New append-only audit table + indexes + RLS + immutability trigger | Dedicated, queryable tax-change history (A29) |
+| `backend/migrations/376_service_area_tax_history.sql` | New append-only audit table + indexes + RLS + immutability trigger | Dedicated, queryable tax-change history (A29) |
 | `backend/routes/admin/service_areas.py` | `admin_update_service_area` now calls new `_record_tax_history()` helper after its existing `tax_config_updated` audit_logs write; new `GET /service-areas/{area_id}/tax-history` read endpoint | Wire the write path; minimal read surface |
 | `backend/tests/test_admin_service_areas_coverage.py` | New tests: history row written with correct old/new values, write-failure swallowed without failing the tax change, non-tax updates don't write a row, and 2 tests for the new GET endpoint | Coverage for the new write + read paths |
 | `ACTION_ITEMS.md` | A29's tax-history sub-item marked done, linked to this log | Close the tracked backlog item |
@@ -129,7 +129,7 @@ any rider/driver.
         )
         # A29 (ACTION_ITEMS.md): additive, dedicated append-only history row —
         # complements (does not replace) the tax_config_updated audit_logs
-        # write above. See migration 375 / service_area_tax_history.
+        # write above. See migration 376 / service_area_tax_history.
         await _record_tax_history(area_id, area, _tax_fields_touched, tax_justification, admin, _tax_audit_id)
 ```
 
@@ -156,8 +156,8 @@ statement was appended after it.
 
 - [x] Automated tests run: `python3 -m pytest backend/tests/test_admin_service_areas_coverage.py -q --no-cov` — **69/69 passed** (5 new: 3 for `_record_tax_history`'s write path, 2 for the new GET endpoint; the other 64 are the file's pre-existing suite, re-run to confirm no regression).
 - [x] `ruff check` and `ruff format --check` on both touched Python files — clean.
-- [x] Migration applied against a scratch local Postgres 16 instance (`sudo -u postgres psql -d spinr_migration_scratch -f backend/migrations/375_service_area_tax_history.sql`, with stub `users`/`service_areas`/`auth.uid()` — table, indexes, RLS policy, and trigger all created without error. Manually verified: an INSERT with old/new tax values succeeds and is readable; a subsequent UPDATE is correctly rejected by the immutability trigger (`service_area_tax_history rows are append-only and cannot be updated`). Scratch database dropped after verification.
-- [x] Manual checklist review against `spinr-migration-reviewer`'s convention list (Agent/Task tool unavailable in this session, so the checklist in `.claude/agents/spinr-migration-reviewer.md` was applied manually): numbering OK (375, next free after 374), append-only OK (new file, no edits to merged migrations), RLS OK (admin-only SELECT, no client write grants), reversibility OK (rollback comment present), forward-compat OK (new table only, no ALTER/lock on hot tables), indexes OK (match the two query patterns the new GET endpoint and an admin-by-actor lookup would use), money safety N/A, retention OK (no CASCADE; stricter-than-`driver_insurance_periods` full-immutability trigger). No blockers or warnings found.
+- [x] Migration applied against a scratch local Postgres 16 instance (`sudo -u postgres psql -d spinr_migration_scratch -f backend/migrations/376_service_area_tax_history.sql`, with stub `users`/`service_areas`/`auth.uid()` — table, indexes, RLS policy, and trigger all created without error. Manually verified: an INSERT with old/new tax values succeeds and is readable; a subsequent UPDATE is correctly rejected by the immutability trigger (`service_area_tax_history rows are append-only and cannot be updated`). Scratch database dropped after verification.
+- [x] Manual checklist review against `spinr-migration-reviewer`'s convention list (Agent/Task tool unavailable in this session, so the checklist in `.claude/agents/spinr-migration-reviewer.md` was applied manually): numbering OK (376, next free after 375), append-only OK (new file, no edits to merged migrations), RLS OK (admin-only SELECT, no client write grants), reversibility OK (rollback comment present), forward-compat OK (new table only, no ALTER/lock on hot tables), indexes OK (match the two query patterns the new GET endpoint and an admin-by-actor lookup would use), money safety N/A, retention OK (no CASCADE; stricter-than-`driver_insurance_periods` full-immutability trigger). No blockers or warnings found.
 - [x] Blast-radius grep performed: `admin_update_service_area` has no other in-repo callers; `service_areas` table write paths outside this function (the two dead `/areas/{id}/tax` endpoints) confirmed still unreachable from any `.tsx` file, so intentionally left untouched.
 - [x] Reviewed against relevant CLAUDE.md conventions: append-only migration rule, RLS-first, "do not silently swallow errors" (write failures are `logger.error(..., exc_info=True)`, not swallowed silently — only the *outcome* of a failed history write doesn't propagate, matching the existing `_record_manual_surge_history` precedent CLAUDE.md's own codebase already established for this exact trade-off).
 - [ ] Feature-flagged: not applicable — backend-only additive audit table + admin-only endpoint, no user-visible or non-trivial behavior change to gate.

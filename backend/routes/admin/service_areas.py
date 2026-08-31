@@ -697,7 +697,7 @@ async def admin_update_service_area(
         )
         # A29 (ACTION_ITEMS.md): additive, dedicated append-only history row —
         # complements (does not replace) the tax_config_updated audit_logs
-        # write above. See migration 375 / service_area_tax_history.
+        # write above. See migration 376 / service_area_tax_history.
         await _record_tax_history(area_id, area, _tax_fields_touched, tax_justification, admin, _tax_audit_id)
 
     update_payload: Dict[str, Any] = {}
@@ -952,7 +952,7 @@ async def _record_tax_history(
 async def admin_get_service_area_tax_history(area_id: str, limit: int = 100, admin: dict = Depends(get_admin_user)):
     """List GST/PST/HST change history for a service area, newest first.
 
-    Reads the append-only `service_area_tax_history` table (migration 375,
+    Reads the append-only `service_area_tax_history` table (migration 376,
     ACTION_ITEMS.md A29) written by `admin_update_service_area`. Read-only —
     no write path here, matching the table's append-only-from-one-place
     contract.

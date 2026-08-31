@@ -1,4 +1,4 @@
--- 375_service_area_tax_history.sql
+-- 376_service_area_tax_history.sql
 -- ACTION_ITEMS.md A29 (final open sub-item): dedicated append-only audit
 -- table for service-area tax-rate changes, requested explicitly by the user
 -- to override the item's prior "low priority, audit_logs already covers
@@ -121,4 +121,4 @@ COMMENT ON TABLE service_area_tax_history IS
     'changes: old value, new value, changed_by admin, justification. '
     'Complements (does not replace) the tax_config_updated audit_logs row '
     'written by the same admin_update_service_area call. UPDATE/DELETE '
-    'blocked by trigger. Created in migration 375 (ACTION_ITEMS.md A29).';
+    'blocked by trigger. Created in migration 376 (ACTION_ITEMS.md A29).';

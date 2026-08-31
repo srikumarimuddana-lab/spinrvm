@@ -12043,6 +12043,26 @@ record of what was assumed vs. what was actually true</summary>
   `report-safety.tsx`, `(tabs)/profile.tsx`, `settings.tsx`,
   `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
   written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 30 done: `driver-app/app/driver/emergency-contacts.tsx`'s
+  `handleAdd` validation (second driver-app candidate, safety tier).**
+  Extracted the name-required and phone-digit-length checks into new
+  `driver-app/utils/emergencyContactSchema.ts` (`isContactNameValid`,
+  `isContactPhoneValid`, `getEmergencyContactFormError`). Pure
+  extraction, byte-for-byte identical to the original two `if` blocks +
+  `showToast(...)` calls — no bug found, no behavior change. New
+  `driver-app/utils/__tests__/emergencyContactSchema.test.ts` (13
+  accept/reject cases). Verification: 13/13 new tests pass; full
+  driver-app suite (`jest`) 122/122 suites, 1381/1381 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses these
+  toast strings. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-emergency-contact-zod-step30.md`.
+  **Still open:** 4 driver-app candidates (`report-safety.tsx`,
+  `(tabs)/profile.tsx`, `settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

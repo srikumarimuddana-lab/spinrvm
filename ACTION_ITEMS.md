@@ -11757,6 +11757,39 @@ record of what was assumed vs. what was actually true</summary>
   driver-app candidates; 10 more admin-dashboard candidates); the
   `resolveDispute` silent-error-swallow gap above (`task_916f2e38`); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — `resolveDispute` silent-error-swallow gap
+  (`task_916f2e38`) fixed.** Routed into this session and shipped as
+  PR #4754 (`fix(admin-dashboard): surface resolveDispute API failures
+  to the admin`), merged. `handleResolve`'s `catch` block now calls
+  `setResolveError(...)` with the API error message instead of only
+  `console.error`-ing, so a failed dispute resolution is now visible to
+  the admin instead of silently doing nothing.
+- **2026-08-31 update — step 19 done: `admin-dashboard/src/app/dashboard/promotions/page.tsx`'s
+  `handleSave` (third admin-dashboard candidate, money tier — the
+  largest single candidate block in the broader sweep).** Extracted the
+  full validation chain (code presence; discount presence/value/
+  percentage-cap/flat-cap, all skipped for a `free_ride` promo;
+  max-discount-cap validity/limit; max-uses; future-expiry-date) into
+  new `admin-dashboard/src/lib/promotionFormSchema.ts` (9 individual
+  predicates + `getPromotionFormError`). Pure extraction, byte-for-byte
+  identical to the original 9-check sequential block — no bug found, no
+  behavior change. New
+  `admin-dashboard/src/lib/__tests__/promotionFormSchema.test.ts` (31
+  accept/reject cases covering every predicate individually and every
+  branch of the aggregate error function, including the free-ride
+  skip-all-discount-checks path). Verification: 31/31 new tests pass;
+  full admin-dashboard suite (`vitest run`) 47/47 suites, 483/483 tests
+  passing; `npx tsc --noEmit` clean; `npx eslint` on touched files: 0
+  errors, 5 pre-existing `react-hooks/set-state-in-effect`/
+  `exhaustive-deps` warnings on unrelated lines, unchanged by this
+  diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed no other file duplicates
+  this pattern. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-promotions-zod-step19.md`.
+
+  **Still open:** the remaining 16 candidates from the broader sweep (6
+  driver-app candidates; 9 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

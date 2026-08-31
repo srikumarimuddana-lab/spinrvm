@@ -40,6 +40,7 @@ import {
   getAppCheckToken,
 } from '@shared/services/firebase';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
+import { setLogRocketInstance } from '@shared/services/logRocketInstance';
 
 import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
@@ -207,6 +208,10 @@ if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
     console.log('[LogRocket] unavailable:', e);
   }
 }
+// Publish the (possibly null) reference so useLogRocketPrivacyScreen — used
+// on payment/document/SOS screens (#1231 finding 17) — doesn't need to
+// duplicate the guard above.
+setLogRocketInstance(LogRocket);
 
 if (Notifications) {
   Notifications.setNotificationHandler({

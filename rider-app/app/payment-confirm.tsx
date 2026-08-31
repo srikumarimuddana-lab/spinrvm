@@ -32,6 +32,7 @@ import { Analytics } from '@shared/analytics';
 import { useResponsive } from '@shared/utils/responsive';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 
 interface CorporateAccount {
   id: string;
@@ -78,6 +79,8 @@ function PaymentConfirmScreenContent() {
 
   const { colors } = useTheme();
   const { sf } = useResponsive();
+  // #1231 finding 17: card entry/confirmation must never enter session replay.
+  useLogRocketPrivacyScreen();
   const styles = useMemo(() => createStyles(colors, sf), [colors, sf]);
   const { scheduleReminder } = useScheduledRideReminder();
   const [fareExpanded, setFareExpanded] = useState(false);

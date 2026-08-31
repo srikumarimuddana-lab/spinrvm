@@ -2788,3 +2788,164 @@ class TestDriverStatsOnboardingSegmentation:
 
         assert svc.is_incomplete_onboarding_row(stored) is True
         assert svc.is_incomplete_onboarding_row(rendered) is False
+
+
+# ---------------------------------------------------------------------------
+# GET /drivers -- legacy_review filter (2026-08-31 non-Canadian-number queue)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetDriversLegacyReviewFilter:
+    """The legacy export is a shared multi-tenant database, so it carried in
+    other tenants' driver rows. `legacy_review` surfaces the ones whose phone
+    is not a Canadian number, for a human to look at. Same $in/$nin id-set
+    compilation as the two filters beside it — and it must intersect with
+    them, not clobber `filters["id"]`."""
+
+    def test_omitted_applies_no_filter(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_suspect_legacy_driver_ids") as fetch_suspect,
+        ):
+            resp = test_client.get("/api/admin/drivers")
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]
+        fetch_suspect.assert_not_called()
+
+    def test_true_shows_only_flagged(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_suspect_legacy_driver_ids", return_value={"sus-1", "sus-2"}),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"legacy_review": "true"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["filters"]["id"]["$in"]) == {"sus-1", "sus-2"}
+
+    def test_false_hides_flagged(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_suspect_legacy_driver_ids", return_value={"sus-1"}),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"legacy_review": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$nin": ["sus-1"]}
+
+    def test_true_with_nothing_flagged_returns_empty_without_querying(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_rows", AsyncMock()) as get_rows,
+            patch("routes.admin.drivers.fetch_suspect_legacy_driver_ids", return_value=set()),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"legacy_review": "true"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+        get_rows.assert_not_called()
+
+    def test_intersects_with_onboarding_complete_rather_than_clobbering(self, test_client, super_admin_override):
+        """The review tab deliberately does NOT send onboarding_complete, but
+        nothing stops an API caller combining them. Both target filters["id"],
+        so the flagged-and-not-a-shell intersection must survive."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch(
+                "routes.admin.drivers.fetch_suspect_legacy_driver_ids",
+                return_value={"sus-real", "sus-shell"},
+            ),
+            patch(
+                "routes.admin.drivers.fetch_incomplete_onboarding_driver_ids",
+                return_value={"sus-shell"},
+            ),
+        ):
+            resp = test_client.get(
+                "/api/admin/drivers",
+                params={"legacy_review": "true", "onboarding_complete": "true"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": ["sus-real"]}
+
+
+class TestDriverStatsLegacyReviewCount:
+    def test_review_count_is_reported_and_does_not_reduce_the_fleet(self, test_client, super_admin_override):
+        """The review queue overlaps the other buckets on purpose: flagging is
+        a heuristic, so it must never silently remove a row from `total` or
+        `onboarded_total`."""
+
+        def rows(table, filters=None, **kwargs):
+            if table == "service_areas":
+                return [{"id": "area-1", "name": "Saskatoon"}]
+            if table == "drivers":
+                return [
+                    {
+                        "id": "ca",
+                        "user_id": "u1",
+                        "name": "Real Driver",
+                        "phone": "+13065551234",
+                        "status": "active",
+                        "service_area_id": "area-1",
+                        "created_at": "2026-07-01T00:00:00Z",
+                        "legacy_import_metadata": {"source": "legacy_mongo_driver_import"},
+                    },
+                    {
+                        "id": "foreign",
+                        "user_id": "u2",
+                        "name": "Other Tenant",
+                        "phone": "+13345551234",
+                        "status": "needs_review",
+                        "service_area_id": "area-1",
+                        "created_at": "2026-07-02T00:00:00Z",
+                        "legacy_import_metadata": {"source": "legacy_mongo_driver_import"},
+                    },
+                    {
+                        "id": "organic",
+                        "user_id": "u3",
+                        "name": "Organic Signup",
+                        "phone": "+13345559999",
+                        "status": "active",
+                        "service_area_id": "area-1",
+                        "created_at": "2026-07-03T00:00:00Z",
+                        "legacy_import_metadata": {},
+                    },
+                ]
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers/stats")
+        assert resp.status_code == 200, resp.text
+        stats = resp.json()["stats"]
+        # Only the legacy-imported foreign row is flagged — the organic signup
+        # with the same area code must NOT be.
+        assert stats["legacy_review"] == 1
+        # Unchanged by flagging.
+        assert stats["total"] == 3
+        assert stats["onboarded_total"] == 3

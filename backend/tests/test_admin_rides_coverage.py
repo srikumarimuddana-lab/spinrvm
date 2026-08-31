@@ -1561,3 +1561,115 @@ class TestAdminGetRidesPreLaunchFilter:
             resp = client.get("/api/admin/rides", params={"pre_launch": "false"})
         assert resp.status_code == 200, resp.text
         assert "id" not in captured["filters"]
+
+
+# ---------------------------------------------------------------------------
+# GET /rides -- status=no_driver_found / status=needs_review synthetic tabs
+# (2026-08-31 migration data-quality investigation,
+# docs/runbooks/migration-data-quality-strategy.md §3)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetRidesNoDriverFoundFilter:
+    """status=no_driver_found is NOT a real rides.status value -- it's the
+    admin Rides tab's live dispatch-quality signal (a ride the offer-timeout
+    loop auto-cancelled with no driver ever found, migration 38's
+    cancellation_type column). Must translate to status=cancelled +
+    cancellation_type=no_drivers_found, not a raw status equality (which
+    would 0-row-match forever, the pre-existing bug this replaces)."""
+
+    def test_translates_to_cancellation_type_filter(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+        ):
+            resp = client.get("/api/admin/rides", params={"status": "no_driver_found"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["status"] == "cancelled"
+        assert captured["filters"]["cancellation_type"] == "no_drivers_found"
+
+
+class TestAdminGetRidesNeedsReviewFilter:
+    """status=needs_review is the admin Rides tab's import-quality signal
+    (missing driver/rider, placeholder address, or $0 fare on a completed
+    legacy row -- services/migration_data_quality_service.py). No JSONB-path
+    operator in the generic filter DSL, so ids are resolved first and fed
+    into $in -- mirrors TestAdminGetRidesPreLaunchFilter above."""
+
+    def test_translates_to_id_in_filter(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_needs_review_ride_ids", return_value={"ride-1", "ride-2"}),
+        ):
+            resp = client.get("/api/admin/rides", params={"status": "needs_review"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["filters"]["id"]["$in"]) == {"ride-1", "ride-2"}
+        assert "status" not in captured["filters"]
+
+    def test_nothing_flagged_matches_zero_rows(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_needs_review_ride_ids", return_value=set()),
+        ):
+            resp = client.get("/api/admin/rides", params={"status": "needs_review"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": []}
+
+    def test_combines_with_pre_launch_true_via_intersection(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_needs_review_ride_ids", return_value={"ride-1", "ride-2"}),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value={"ride-2", "ride-3"}),
+        ):
+            resp = client.get("/api/admin/rides", params={"status": "needs_review", "pre_launch": "true"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": ["ride-2"]}
+
+    def test_combines_with_pre_launch_false_via_subtraction(self, client, as_super_admin):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                captured["filters"] = filters or {}
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("routes.admin.rides.fetch_needs_review_ride_ids", return_value={"ride-1", "ride-2"}),
+            patch("routes.admin.rides.fetch_pre_launch_flagged_ids", return_value={"ride-2"}),
+        ):
+            resp = client.get("/api/admin/rides", params={"status": "needs_review", "pre_launch": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": ["ride-1"]}

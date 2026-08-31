@@ -13,6 +13,7 @@ try:
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
     from ...geo_utils import calculate_distance
+    from ...services.migration_data_quality_service import fetch_needs_review_ride_ids
     from ...services.pre_launch_flag_service import fetch_pre_launch_flagged_ids
     from ...settings_loader import get_app_settings
     from ...socket_manager import manager
@@ -37,6 +38,7 @@ except ImportError:
     from dependencies import get_admin_user
     from features import send_push_notification
     from geo_utils import calculate_distance
+    from services.migration_data_quality_service import fetch_needs_review_ride_ids  # type: ignore
     from services.pre_launch_flag_service import fetch_pre_launch_flagged_ids  # type: ignore
     from settings_loader import get_app_settings
     from socket_manager import manager
@@ -145,7 +147,28 @@ async def _build_rides_filters(
     pre_launch: Optional[bool] = None,
 ) -> Dict[str, Any]:
     filters: Dict[str, Any] = {}
-    if status:
+    # Two synthetic `status` tab values the admin Rides UI sends that don't
+    # map to a real rides.status equality -- see
+    # docs/runbooks/migration-data-quality-strategy.md §3 for why these are
+    # deliberately different concepts, not aliases of each other:
+    #
+    # - "no_driver_found": a LIVE dispatch-quality signal -- a ride the
+    #   offer-timeout loop auto-cancelled after finding no driver (migration
+    #   38's cancellation_type column, set in routes/rides/matching.py's
+    #   ride-timeout handler). Translates to a real status + column filter.
+    # - "needs_review": an IMPORT-quality signal -- a completed legacy row
+    #   with a missing driver/rider, a placeholder address, or $0 fare (see
+    #   services/migration_data_quality_service.py). No JSONB-path operator
+    #   exists in the generic filter DSL, so flagged ids are resolved first
+    #   and fed into $in, same approach the pre_launch block below uses.
+    needs_review_ids: Optional[set] = None
+    if status == "no_driver_found":
+        filters["status"] = "cancelled"
+        filters["cancellation_type"] = "no_drivers_found"
+    elif status == "needs_review":
+        needs_review_ids = fetch_needs_review_ride_ids()
+        filters["id"] = {"$in": list(needs_review_ids)}
+    elif status:
         filters["status"] = status
     if is_scheduled is not None:
         filters["is_scheduled"] = is_scheduled
@@ -158,7 +181,12 @@ async def _build_rides_filters(
     # approach routes/admin/drivers.py's admin_get_drivers uses.
     if pre_launch is not None:
         flagged_ids = fetch_pre_launch_flagged_ids("rides")
-        if pre_launch:
+        if needs_review_ids is not None:
+            # Both filters resolve to an id set -- intersect rather than
+            # let one silently clobber the other's `filters["id"]` write.
+            combined = (needs_review_ids & flagged_ids) if pre_launch else (needs_review_ids - flagged_ids)
+            filters["id"] = {"$in": list(combined)}
+        elif pre_launch:
             # Empty $in list is intentional, not a bug: it compiles to
             # PostgREST's `id=in.()`, matching zero rows -- correct when
             # nothing is flagged yet, rather than raising or matching all.

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
-import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX, Tag } from "lucide-react";
+import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX, Tag, AlertTriangle } from "lucide-react";
 import { getStatusBadge, fmtTime, fmtKm, rideDistances } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 
@@ -15,10 +15,26 @@ const STATUS_TABS = [
     { value: "in_progress", label: "In Progress", icon: Clock },
     { value: "completed", label: "Completed", icon: CheckCircle },
     { value: "cancelled", label: "Cancelled", icon: XCircle },
+    // Live dispatch-quality signal: cancelled after the offer-timeout loop
+    // found no driver (migration 38's cancellation_type column) -- distinct
+    // from "Needs Review" below, which is an import-quality signal on
+    // completed legacy rows. See docs/runbooks/migration-data-quality-strategy.md §3.
     { value: "no_driver_found", label: "No Driver Found", icon: UserX },
+    { value: "needs_review", label: "Needs Review", icon: AlertTriangle },
 ];
 
 type SortKey = "status" | "pickup_address" | "total_fare" | "created_at";
+
+// Short row-level labels for services/migration_data_quality_service.py's
+// four issue keys -- see docs/runbooks/migration-data-quality-strategy.md §3
+// for why these render as sub-badges on one "Needs Review" row rather than
+// one tab each.
+const DATA_QUALITY_ISSUE_LABELS: Record<string, string> = {
+    missing_driver: "No driver",
+    missing_rider: "No rider",
+    placeholder_address: "No address",
+    zero_fare: "$0 fare",
+};
 
 interface RideListProps {
     rides: any[];
@@ -265,10 +281,16 @@ export default function RideList({
                                             </p>
                                         )}
                                         {ride.legacy_import_metadata && Object.keys(ride.legacy_import_metadata).length > 0 && (
-                                            <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5 mb-0.5">
+                                            <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5 mb-0.5 mr-1">
                                                 Imported
                                             </span>
                                         )}
+                                        {(ride.legacy_import_metadata?.data_quality?.issues ?? []).map((issue: string) => (
+                                            // eslint-disable-next-line no-restricted-syntax -- semantic warning color, not a status-badge duplicate (#2816)
+                                            <span key={issue} className="inline-block text-[10px] font-medium text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 rounded px-1.5 py-0.5 mb-0.5 mr-1">
+                                                {DATA_QUALITY_ISSUE_LABELS[issue] ?? issue}
+                                            </span>
+                                        ))}
                                         <p className="text-sm font-medium truncate">{ride.pickup_address || "—"}</p>
                                         <p className="text-xs text-muted-foreground truncate mt-0.5">
                                             <span className="text-muted-foreground/60">to</span> {ride.dropoff_address || "—"}

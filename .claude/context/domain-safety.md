@@ -61,35 +61,36 @@ Hard rules:
 
 ## Emergency contacts
 
-> **Corrected 2026-08-16.** This section previously described a design that was
-> never built — encryption at rest, an OTP opt-in ping, a STOP keyword, and a
-> max-5 constraint. All four were verified absent from the code. The aspirational
-> text is preserved under "Intended, not built" below so the intent isn't lost,
-> but do not treat any of it as current behaviour.
+> **Corrected 2026-08-31** (issue #4599 finding 3 — the 2026-08-16 correction
+> below itself went stale). Encryption, the hard cap, and STOP/consent handling
+> have since been built (migrations 357–359, `services/sos_contact_consent.py`).
+> Do not re-read the "Intended, not built" list further down as still
+> unimplemented — it is now the current state, kept here for the migration
+> references.
 
 **What actually exists today:**
-- Stored as **plaintext** `TEXT` in `emergency_contacts` (`name`, `phone`,
-  `relationship`) — see `migrations/120_ensure_emergency_contacts_and_gps_column.sql`
-  and `08_complete_schema.sql`. No `pgcrypto` anywhere near this table.
-- **No cap is enforced.** `routes/rides/safety.py` reads with `limit=5`, which
-  silently truncates: a user can store more than five contacts and the extras
-  are never notified, with nothing telling them so. There is no DB constraint
-  and no insert-time check in `routes/users.py`.
-- **No consent handshake.** We send SMS to these numbers during an SOS without
-  the recipient ever having opted in. There is no OTP ping, no STOP handling,
-  no opt-out path. Under PIPEDA this is a real exposure, not just a doc gap —
-  tracked as finding F13 in `docs/proposals/2026-08-16-safety-toolkit-gap-analysis.md`.
+- Stored **encrypted** (`pgcrypto`, via the Vault-backed helpers added in
+  migration 357, fixed up in migration 359) — no longer plaintext `TEXT`.
+- **Hard cap of 3** enforced at insert-time in `routes/users.py:874-879`
+  (`MAX_EMERGENCY_CONTACTS = 3`). `routes/rides/safety.py` reads with
+  `limit=5` (not backed by the same constant, but safe today since 3 < 5 —
+  see `ACTION_ITEMS.md`/#4599 finding 4 for the divergence-risk note).
+- **Consent/opt-out handling exists.** Migration 358
+  (`sos_contact_suppressions`) plus `services/sos_contact_consent.py` back a
+  STOP-keyword do-not-contact suppression list for these third-party numbers
+  (PIA finding R-002). Note: this is a suppression list, not an opt-in OTP
+  ping at add-time — a contact is notified by default and can STOP out
+  after the fact, not asked to opt in before.
 - `relationship` is stored but is **not** included in the SOS payload or the
   SMS body; nothing surfaces it to a dispatcher.
 - Per-contact delivery status **is** returned by `POST /rides/{id}/emergency`
   (`contacts[{id,name,notified}]` + `contacts_notified`) and is consumed by both
   apps as of 2026-08-16.
 
-**Intended, not built** (kept as the target design, unimplemented):
-- Max 5 per user, stored encrypted (`pgcrypto`)
-- Phone validated at add-time via OTP ping ("Jane added you as emergency contact — reply STOP to opt out")
-- Contact can opt out any time via STOP keyword or dashboard
-- Relationship surfaced in the SOS payload for dispatcher context
+**Still not built:**
+- No OTP ping at add-time — a contact isn't validated/notified before being
+  stored, only able to STOP out after an SOS message reaches them.
+- Relationship surfaced in the SOS payload for dispatcher context.
 
 ## Insurance period transitions (audit-critical)
 

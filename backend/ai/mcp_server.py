@@ -30,6 +30,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 try:
     from .context import current_ai_user, require_ai_user
+    from .guardrails import fallback_over_cap
     from .tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 except ImportError:
     from ai.context import current_ai_user, require_ai_user
@@ -69,9 +70,9 @@ async def _over_mcp_daily_cap(user_id: str, cap: int) -> bool:
     """Per-user daily cap on /mcp tool calls via Redis INCR. The chat path is
     capped in the orchestrator, but /mcp called execute_tool directly with no
     ceiling — an unattended agent client could hammer Maps-fee-free reads (or
-    any future exposed tool) all day. Fails OPEN with a loud log, mirroring
-    the chat-cap policy: ai_mcp_enabled stays the hard stop when Redis is
-    down."""
+    any future exposed tool) all day. On a Redis error, falls back to a
+    bounded, process-local cap (AI1b, GitHub #3742) rather than failing open
+    — see ai/guardrails.py; ai_mcp_enabled remains the separate hard stop."""
     key = f"ai:mcp:daily:{user_id}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
     try:
         count = await redis_incr(key)
@@ -79,8 +80,12 @@ async def _over_mcp_daily_cap(user_id: str, cap: int) -> bool:
             await redis_expire(key, 86400)
         return count > cap
     except Exception:
-        logger.error("mcp daily-cap check failed — failing open", exc_info=True, extra={"user_id": user_id})
-        return False
+        logger.error(
+            "mcp daily-cap check failed — falling back to bounded process-local cap",
+            exc_info=True,
+            extra={"user_id": user_id},
+        )
+        return fallback_over_cap(user_id, cap)
 
 
 class MCPAuthMiddleware:

@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
 
+import backend.ai.guardrails as guardrails
 import backend.ai.mcp_server as mcp_server
 from backend.ai.context import current_ai_user
 from backend.ai.mcp_server import MCPAuthMiddleware, build_mcp_asgi_app
@@ -175,9 +176,14 @@ class TestMcpDailyCap:
             assert await mcp_server._over_mcp_daily_cap("u2", 2) is False
 
     @pytest.mark.anyio
-    async def test_cap_fails_open_on_redis_error(self):
+    async def test_cap_falls_back_to_bounded_local_cap_on_redis_error(self):
+        """AI1b (#3742): a Redis error no longer fails open — it falls back
+        to the process-local bounded cap in ai/guardrails.py."""
+        guardrails._fallback_counts.clear()
         with patch.object(mcp_server, "redis_incr", AsyncMock(side_effect=RuntimeError("redis down"))):
-            assert await mcp_server._over_mcp_daily_cap("u1", 2) is False
+            for _ in range(guardrails._FALLBACK_DAILY_CAP):
+                assert await mcp_server._over_mcp_daily_cap("u1", 1000) is False
+            assert await mcp_server._over_mcp_daily_cap("u1", 1000) is True
 
     @pytest.mark.anyio
     async def test_lifecycle_noops_without_manager(self):

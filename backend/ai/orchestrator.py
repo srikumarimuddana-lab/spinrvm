@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 try:
     from . import conversations, response_cache
+    from .guardrails import fallback_over_cap
     from .pii import filter_tool_leakage, scrub_pii
     from .prompts import build_system_prompt
     from .providers import get_adapter
@@ -121,9 +122,10 @@ async def _pinned_quote_context(conversation_id: str) -> str:
 
 
 async def _over_daily_cap(user_id: str, cap: int) -> bool:
-    """Per-user daily message cap via Redis INCR. Fails OPEN with a loud log
-    (mirrors the non-OTP rate-limit policy) — the kill switch remains the
-    hard stop when Redis is down."""
+    """Per-user daily message cap via Redis INCR. On a Redis error, falls
+    back to a bounded, process-local cap (AI1b, GitHub #3742) rather than
+    failing open — see ai/guardrails.py for why AI usage can't fail open the
+    way the best-effort leader locks elsewhere do."""
     key = f"ai:daily:{user_id}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
     try:
         count = await redis_incr(key)
@@ -131,8 +133,12 @@ async def _over_daily_cap(user_id: str, cap: int) -> bool:
             await redis_expire(key, 86400)
         return count > cap
     except Exception:
-        logger.error("ai daily-cap check failed — failing open", exc_info=True, extra={"user_id": user_id})
-        return False
+        logger.error(
+            "ai daily-cap check failed — falling back to bounded process-local cap",
+            exc_info=True,
+            extra={"user_id": user_id},
+        )
+        return fallback_over_cap(user_id, cap)
 
 
 _CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-calling turn

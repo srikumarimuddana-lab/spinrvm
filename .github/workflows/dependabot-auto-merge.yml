@@ -18,6 +18,20 @@ name: Dependabot auto-merge
 #   1. Branch protection on `main` must have "Require status checks to pass"
 #      — the merge is queued and only executes after all required checks go green.
 #   2. "Allow auto-merge" must be enabled in repo Settings → General.
+#   3. Settings → Actions → General → Workflow permissions → "Allow GitHub
+#      Actions to create and approve pull requests" must be checked, or the
+#      "Approve patch/minor update" step below fails with GraphQL error
+#      "GitHub Actions is not permitted to approve pull requests" (confirmed
+#      live on PR #4766, 2026-08-31 — requests 2.33.1->2.34.2, a genuine
+#      minor bump the security-critical carve-out correctly let through).
+#      The approve step has `continue-on-error: true` specifically so this
+#      org-level restriction — which we cannot toggle without Settings
+#      access — doesn't also block the merge step from running; requirement
+#      #2 above is still what actually gates whether that merge step
+#      succeeds. An approval-less auto-merge is fine as long as branch
+#      protection doesn't itself require a review (requirement #1 covers
+#      required *status checks*, not required *reviews* — verify separately
+#      if that changes).
 #
 # To extend to major updates, or to narrow/widen the security-critical
 # exclusion list, edit the `security-critical` step below — it's the single
@@ -67,11 +81,17 @@ jobs:
 
       # Auto-approve patch/minor updates for all ecosystems, excluding
       # security-critical backend libraries at any tier (see header comment).
+      # continue-on-error: true — this step is best-effort. If org policy
+      # blocks GitHub Actions from approving PRs (see requirement #3 in the
+      # header comment), it fails but must not stop the next step: whether
+      # auto-merge itself can be enabled is governed by requirement #2, not
+      # by whether this approval landed.
       - name: Approve patch/minor update
         if: |
           (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
            steps.meta.outputs.update-type == 'version-update:semver-minor') &&
           steps.security_check.outputs.is_critical != 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}

@@ -192,15 +192,14 @@ async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[
     10 000-row ride export, for fields nothing renders. Add a column here if a
     caller starts reading one; do not widen back to ``*``.
     """
-    drivers_list = (
-        await db_supabase.get_rows(
-            "drivers",
-            {"id": {"$in": driver_ids}},
-            columns="id,user_id,name,lat,lng,service_area_id",
-            limit=max(len(driver_ids), 1),
-        )
-        if driver_ids
-        else []
+    # Batched: this helper is called with a whole page of ride rows' ids —
+    # including the 10 000-row export named above — and a bare `$in` puts every
+    # id in the URL, which the edge proxy rejects past ~840 of them.
+    drivers_list = await db_supabase.get_rows_batched_in(
+        "drivers",
+        "id",
+        driver_ids,
+        columns="id,user_id,name,lat,lng,service_area_id",
     )
     drivers_map = {d["id"]: d for d in drivers_list if d.get("id")}
 
@@ -210,15 +209,11 @@ async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[
             *(d.get("user_id") for d in drivers_list if d.get("user_id")),
         }
     )
-    users_list = (
-        await db_supabase.get_rows(
-            "users",
-            {"id": {"$in": all_user_ids}},
-            columns="id,first_name,last_name,email,phone",
-            limit=max(len(all_user_ids), 1),
-        )
-        if all_user_ids
-        else []
+    users_list = await db_supabase.get_rows_batched_in(
+        "users",
+        "id",
+        all_user_ids,
+        columns="id,first_name,last_name,email,phone",
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
 
@@ -338,6 +333,17 @@ _DRIVER_SORT_COLUMNS = {
     "total_earnings": "total_earnings",
     "region": "service_area_id",
 }
+
+
+def _sort_key(value: Any):
+    """Ordering key that reproduces Postgres NULL placement for a sorted page.
+
+    Postgres puts NULLs LAST on ASC and FIRST on DESC. Sorting on
+    ``(value is None, value)`` gives non-nulls first ascending, and reversing it
+    for DESC flips nulls to the front — matching both. The None never reaches a
+    ``<`` comparison against a real value, because the boolean decides first.
+    """
+    return (value is None, value)
 
 
 # ── Driver search ───────────────────────────────────────────────────────────
@@ -553,6 +559,7 @@ async def admin_get_drivers(
 
     # Filter by profile-photo moderation status (photo lives on users). Used by
     # the admin "Pending photos" queue. No matching users → no drivers.
+    photo_uids: Optional[List[str]] = None
     if photo_status:
         photo_users = await db_supabase.get_rows(
             "users", {"profile_image_status": photo_status}, columns="id", limit=1000
@@ -560,13 +567,27 @@ async def admin_get_drivers(
         photo_uids = [u["id"] for u in photo_users if u.get("id")]
         if not photo_uids:
             return []
-        filters["user_id"] = {"$in": photo_uids}
 
     order_col = _DRIVER_SORT_COLUMNS.get((sort_by or "").strip(), "created_at")
     # Default direction is descending (newest-first) — the historical behaviour
     # — unless the caller explicitly asks for ascending.
     desc = (sort_dir or "desc").strip().lower() != "asc"
-    drivers = await db_supabase.get_rows("drivers", filters, order=order_col, desc=desc, limit=limit, offset=offset)
+    if photo_uids is None:
+        drivers = await db_supabase.get_rows("drivers", filters, order=order_col, desc=desc, limit=limit, offset=offset)
+    else:
+        # photo_status resolves to a user_id set that the query above caps at
+        # 1000. As `filters["user_id"] = {"$in": photo_uids}` that is a ~39 KB
+        # `user_id=in.(...)` request line, which the edge proxy rejects outright
+        # (plain-text 400) once the set passes roughly 840 — so this tab would
+        # have started failing as photo approvals grew.
+        #
+        # The set is bounded at 1000 users, so fetch every matching driver in
+        # URL-safe batches and order/page in Python rather than asking the
+        # database to. Ordering cannot be delegated here: batches are ordered
+        # per request, so a DB-side `order` would only sort within each batch.
+        rows = await db_supabase.get_rows_batched_in("drivers", "user_id", photo_uids, filters)
+        rows.sort(key=lambda r: _sort_key(r.get(order_col)), reverse=desc)
+        drivers = rows[offset : offset + limit]
 
     # Defensive dedup — keep the earliest-created row per (user_id, phone) while
     # preserving the DB-returned ORDER BY. We decide which rows to KEEP by
@@ -732,9 +753,12 @@ async def admin_get_driver_stats(
 
     # Enrich with user info (batch)
     user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
-    users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
-    )
+    # Batched: `$in` compiles to a `id=in.(...)` URL parameter, and the whole
+    # fleet's user_ids is a ~35 KB request line that the edge proxy rejects with
+    # a plain-text 400 before PostgREST ever sees it (surfaces as the opaque
+    # "JSON could not be generated"). This endpoint returned 500 for every admin
+    # because of it.
+    users_list = await db_supabase.get_rows_batched_in("users", "id", user_ids)
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
     # Auto-detect needs_review: active drivers with expired docs or pending re-uploads.
@@ -1041,10 +1065,12 @@ async def admin_get_approval_queue(
     driver_map: Dict[str, Dict[str, Any]] = {d["id"]: d for d in pending_drivers if d.get("id")}
     extra_driver_ids = [did for did in pending_doc_count_by_driver if did not in driver_map]
     if extra_driver_ids:
-        extra_filters: Dict[str, Any] = {"id": {"$in": extra_driver_ids}}
+        # extra_driver_ids comes from the limit=1000 pending-document scans
+        # above, so it can exceed the URL-safe `$in` size on its own.
+        extra_filters: Dict[str, Any] = {}
         if service_area_id:
             extra_filters["service_area_id"] = service_area_id
-        extra_drivers = await db_supabase.get_rows("drivers", extra_filters, limit=len(extra_driver_ids))
+        extra_drivers = await db_supabase.get_rows_batched_in("drivers", "id", extra_driver_ids, extra_filters)
         for d in extra_drivers:
             if d.get("id"):
                 driver_map[d["id"]] = d
@@ -1058,13 +1084,11 @@ async def admin_get_approval_queue(
     known_user_ids = {d.get("user_id") for d in driver_map.values() if d.get("user_id")}
     photo_only_uids = [u["id"] for u in photo_users if u.get("id") and u["id"] not in known_user_ids]
     if photo_only_uids:
-        photo_filters: Dict[str, Any] = {
-            "user_id": {"$in": photo_only_uids},
-            "status": {"$nin": ["banned", "rejected"]},
-        }
+        # photo_only_uids derives from the limit=1000 users scan above.
+        photo_filters: Dict[str, Any] = {"status": {"$nin": ["banned", "rejected"]}}
         if service_area_id:
             photo_filters["service_area_id"] = service_area_id
-        photo_drivers = await db_supabase.get_rows("drivers", photo_filters, limit=len(photo_only_uids))
+        photo_drivers = await db_supabase.get_rows_batched_in("drivers", "user_id", photo_only_uids, photo_filters)
         for d in photo_drivers:
             if d.get("id") and d["id"] not in driver_map and d.get("user_id") not in known_user_ids:
                 driver_map[d["id"]] = d
@@ -1085,9 +1109,7 @@ async def admin_get_approval_queue(
         }
 
     user_ids = list({d.get("user_id") for d in driver_map.values() if d.get("user_id")})
-    users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
-    )
+    users_list = await db_supabase.get_rows_batched_in("users", "id", user_ids)
     users_map = {u["id"]: u for u in users_list if u.get("id")}
 
     area_ids = list({d.get("service_area_id") for d in driver_map.values() if d.get("service_area_id")})
@@ -1106,14 +1128,12 @@ async def admin_get_approval_queue(
     )
     vtypes_map = {v["id"]: v.get("name") for v in vtypes_list if v.get("id")}
 
-    all_docs = (
-        await db_supabase.get_rows(
-            "driver_documents",
-            {"driver_id": {"$in": list(driver_map.keys())}, "status": {"$in": ["approved", "pending"]}},
-            limit=max(len(driver_map) * 10, 100),
-        )
-        if driver_map
-        else []
+    all_docs = await db_supabase.get_rows_batched_in(
+        "driver_documents",
+        "driver_id",
+        list(driver_map.keys()),
+        {"status": {"$in": ["approved", "pending"]}},
+        limit=max(len(driver_map) * 10, 100),
     )
     docs_by_driver: Dict[str, List[Dict[str, Any]]] = {}
     for d in all_docs:
@@ -1295,9 +1315,7 @@ async def admin_get_expiring_documents(
         return {"items": []}
 
     user_ids = list({d["driver_row"].get("user_id") for d in expiring_rows if d["driver_row"].get("user_id")})
-    users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
-    )
+    users_list = await db_supabase.get_rows_batched_in("users", "id", user_ids)
     users_map = {u["id"]: u for u in users_list if u.get("id")}
 
     area_ids = list(
@@ -1311,18 +1329,12 @@ async def admin_get_expiring_documents(
     areas_map = {a["id"]: a.get("name") for a in areas_list if a.get("id")}
 
     rides_30d_ago = (now - timedelta(days=30)).isoformat()
-    rides = (
-        await db_supabase.get_rows(
-            "rides",
-            {
-                "driver_id": {"$in": list(affected_driver_ids)},
-                "status": "completed",
-                "ride_completed_at": {"$gte": rides_30d_ago},
-            },
-            limit=10000,
-        )
-        if affected_driver_ids
-        else []
+    rides = await db_supabase.get_rows_batched_in(
+        "rides",
+        "driver_id",
+        list(affected_driver_ids),
+        {"status": "completed", "ride_completed_at": {"$gte": rides_30d_ago}},
+        limit=10000,
     )
     rides_by_driver: Dict[str, int] = {}
     for r in rides:

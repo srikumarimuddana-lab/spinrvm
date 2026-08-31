@@ -958,3 +958,26 @@ export const adminCommitSavedAddressBackfill = (files: SavedAddressBackfillFiles
         body: savedAddressBackfillFormData(files, opts),
     });
 
+/* ── Migration Checklist status panel (read-only) ─── */
+// Super-admin-only (backend/routes/admin/migration_status.py /
+// services/migration_status_service.py). One GET, no files, no writes —
+// answers "what's already run, what's still pending" across all 16 tools
+// above, in the verified dependency order (docs/runbooks/
+// migration-tool-order.md).
+export type MigrationToolState = "not_started" | "partial" | "done" | "manual_check_required";
+export interface MigrationToolStatus {
+    order: number;
+    id: string;
+    name: string;
+    state: MigrationToolState;
+    detail: string;
+    admin_path: string;
+    warning: string | null;
+}
+export interface MigrationStatusReport {
+    tools: MigrationToolStatus[];
+}
+
+export const adminGetMigrationStatus = () =>
+    request<MigrationStatusReport>("/api/admin/migration-status");
+

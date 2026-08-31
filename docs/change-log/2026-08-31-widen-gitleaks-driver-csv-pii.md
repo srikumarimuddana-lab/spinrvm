@@ -50,12 +50,17 @@ of both #4547 and #4596's incident files.
     all 3 rules present).
 - **Could this regress the existing `spinr-sin-bank-pii` rule?** No — purely additive, that
   rule's `[[rules]]` block is untouched.
-- **What this does NOT do:** does not scan `gitleaks` locally in this sandbox (the real
-  `gitleaks` binary isn't installed here) — verification above used a Python `re`
-  approximation of the same regex against the same inputs, which is a reasonable proxy for
-  this rule's specific pattern (no backreferences, no lookaheads, nothing Go-regex-specific
-  used) but is not a substitute for CI actually running the real binary once merged. Flagged
-  under "what was NOT verified" below.
+- **Update (same day):** the original `{0,4000}` regex was verified only via a Python `re`
+  approximation, flagged below as an open gap — and that gap was real. CI's G5a run on this
+  PR's own commit hit `panic: regexp: Compile(...): error parsing regexp: bad repitition
+  argument: {0,4000}` — Go's RE2 engine (which gitleaks uses) caps repetition counts at 1000
+  by default, and `{0,4000}` doesn't just fail this rule, it crashes the whole gitleaks
+  binary at startup, taking `spinr-sin-bank-pii` down with it too. Fixed by reducing to
+  `{0,800}` (see §7). Downloaded the real pinned gitleaks 8.18.4 binary directly in this
+  session afterward and re-verified: config now compiles cleanly, fires 10/10 against the
+  real incident file, zero false positives against ~460 real files (including every current
+  `backend/migrations/*.sql`) and against a full working-tree scan (16 pre-existing findings,
+  none from this rule).
 
 ## 5. User-experience effect
 
@@ -78,7 +83,9 @@ None — this is a CI/security-tooling change with no rider/driver/admin-facing 
 [[rules]]
 id = "spinr-driver-csv-pii"
 description = "Possible driver PII data dump (literal email address inside an INSERT INTO ...driver... statement) — verify this isn't a real committed migration export before merging."
-regex = '''(?i)insert\s+into\s+\w*driver\w*[\s\S]{0,4000}?['"][^'",]*@[^'",]*\.[^'",]{2,}['"]'''
+regex = '''(?i)insert\s+into\s+\w*driver\w*[\s\S]{0,800}?['"][^'",]*@[^'",]*\.[^'",]{2,}['"]'''
+# (originally {0,4000} -- see §4 update: RE2 caps repetition at 1000 and
+# panics the whole binary above that, caught by CI's own G5a run)
 keywords = [
     "insert into", "license_number", "driver_csv_import", "driver_bank_sin_migration",
 ]
@@ -95,11 +102,12 @@ zero effect on any other rule, allowlist, or application code.
 - [x] Regex does not match a schema-only DDL snippet with no literal data.
 - [x] Regex produces zero matches against every file in `backend/migrations/*.sql`.
 - [x] `.gitleaks.toml` re-parses as valid TOML with all 3 rules present.
-- [ ] **Not run against the real `gitleaks` binary** — not installed in this sandbox. The
-  Python `re` approximation is a reasonable proxy for this specific pattern but CI's first
-  real run against the actual binary (gitleaks 8.18.4, per the pinned version comment
-  elsewhere in this file) is the true verification and hasn't happened yet as of this
-  commit.
+- [x] **Run against the real `gitleaks` binary** — downloaded gitleaks 8.18.4 (the exact
+  version pinned in `security-gates.yml`) directly in this session after CI's own G5a run
+  caught a real compile-time bug the Python approximation missed (see §4 update). Re-verified
+  with the real binary after the fix: config compiles cleanly, fires correctly against the
+  real incident file, zero false positives against ~460 real files and a full working-tree
+  scan.
 
 ## 10. Sign-off
 
@@ -107,9 +115,10 @@ zero effect on any other rule, allowlist, or application code.
 - [x] Blast radius stated, not assumed (§4)
 - [x] No silent behavior change to a live-tested rider/driver/admin flow (§5 — none exists)
 
-**What was NOT verified:** the real gitleaks binary was not run locally (not installed in
-this sandbox); CI's own run on this PR is the first real-binary verification. Whether this
-new rule produces any false positives against the *full* git history (not just the current
-working tree) was not checked — the existing G5a history scan in `security-gates.yml` is
-advisory-only (not blocking), so a history false positive here would surface as CI noise,
-not a hard failure, consistent with how `spinr-sin-bank-pii` was rolled out.
+**What was NOT verified:** whether this new rule produces any false positives against the
+*full* git history (not just the current working tree and a synthetic incident-file copy)
+was not checked directly — the real `git log -p`/history scan wasn't run against this rule
+in this session, only a working-tree scan. The existing G5a history scan in
+`security-gates.yml` is advisory-only (not blocking), so a history false positive here would
+surface as CI noise, not a hard failure, consistent with how `spinr-sin-bank-pii` was rolled
+out — but CI's own run on this PR is still the first true full-history check.

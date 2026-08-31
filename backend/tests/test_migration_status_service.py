@@ -137,6 +137,12 @@ def _use(monkeypatch, store):
 
     monkeypatch.setattr(dq_svc, "supabase", fake)
 
+    # Tool 18 calls into migration_driver_repair_service.py -- same
+    # dual-binding patch, same reasoning.
+    from backend.services import migration_driver_repair_service as dr_svc
+
+    monkeypatch.setattr(dr_svc, "supabase", fake)
+
 
 def _driver(id_, *, source=None, mongo_history=False, extra=None):
     meta = {}
@@ -292,7 +298,7 @@ def test_saved_address_backfill_reports_missing_column_without_crashing_other_to
     assert t10.warning == "Migration 373 not applied"
 
     # Every other tool still rendered -- the exception was contained to #10.
-    assert len(report.tools) == 17
+    assert len(report.tools) == 18
     t1 = next(t for t in report.tools if t.id == "bulk_driver_import")
     assert t1.state == "done"
 
@@ -358,11 +364,11 @@ def test_pre_launch_flag_counts_drivers_and_rides(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_report_contains_all_17_tools_in_order(monkeypatch):
+def test_report_contains_all_18_tools_in_order(monkeypatch):
     _use(monkeypatch, _fresh_store())
     report = svc.get_migration_status()
-    assert len(report.tools) == 17
-    assert [t.order for t in report.tools] == list(range(1, 18))
+    assert len(report.tools) == 18
+    assert [t.order for t in report.tools] == list(range(1, 19))
 
 
 # --------------------------------------------------------------------------
@@ -473,3 +479,55 @@ def test_data_quality_scan_mixed_is_partial(monkeypatch):
     t17 = next(t for t in report.tools if t.id == "data_quality_scan")
     assert t17.state == "partial"
     assert "1 flagged, 1 more pending" in t17.detail
+
+
+# --------------------------------------------------------------------------
+# Tool 18: driver-repair pass
+# --------------------------------------------------------------------------
+
+
+def test_driver_repair_clean_is_done(monkeypatch):
+    """No old_driver_id-bearing missing_driver rows at all -- genuinely
+    clean, not "not started"."""
+    _use(monkeypatch, _fresh_store())
+    report = svc.get_migration_status()
+    t18 = next(t for t in report.tools if t.id == "driver_repair")
+    assert t18.state == "done"
+    assert "No old_driver_id" in t18.detail
+
+
+def test_driver_repair_repairable_is_not_started(monkeypatch):
+    store = _fresh_store(
+        rides=[
+            {
+                "id": "r1",
+                "status": "completed",
+                "driver_id": None,
+                "legacy_import_metadata": {"old_driver_id": "old-d1"},
+            }
+        ],
+        drivers=[_driver("d1", extra={"legacy_import_metadata": {"old_driver_id": "old-d1"}})],
+    )
+    _use(monkeypatch, store)
+    report = svc.get_migration_status()
+    t18 = next(t for t in report.tools if t.id == "driver_repair")
+    assert t18.state == "not_started"
+    assert "1 ride(s) repairable now" in t18.detail
+
+
+def test_driver_repair_no_match_is_manual_check_required(monkeypatch):
+    store = _fresh_store(
+        rides=[
+            {
+                "id": "r1",
+                "status": "completed",
+                "driver_id": None,
+                "legacy_import_metadata": {"old_driver_id": "old-d1"},
+            }
+        ],
+    )
+    _use(monkeypatch, store)
+    report = svc.get_migration_status()
+    t18 = next(t for t in report.tools if t.id == "driver_repair")
+    assert t18.state == "manual_check_required"
+    assert "1 still unmatched" in t18.detail

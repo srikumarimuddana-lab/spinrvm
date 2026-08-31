@@ -452,6 +452,16 @@ pre_launch_flag_commit_limit = default_limiter.limit("10/hour")
 data_quality_scan_preview_limit = default_limiter.limit("30/hour")
 data_quality_scan_commit_limit = default_limiter.limit("10/hour")
 
+# Driver-repair pass (2026-08-31) — same small-fixed-dataset reasoning, but
+# commit here writes rides.driver_id + driver_insurance_periods + payouts
+# (see migration_driver_repair_service.py's module docstring), so it gets
+# the tighter of the two commit limits already in use on this page (matches
+# wallet_import_commit_limit/pre_launch_flag_commit_limit's own choice for
+# a real-money write path, not the looser bulk-CSV-import commit limits
+# below).
+driver_repair_preview_limit = default_limiter.limit("30/hour")
+driver_repair_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and

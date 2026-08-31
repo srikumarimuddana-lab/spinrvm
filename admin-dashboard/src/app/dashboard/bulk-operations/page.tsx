@@ -56,6 +56,7 @@ import { LegacyBookingImport } from "./_components/LegacyBookingImport";
 import { LegacyWalletImport } from "./_components/LegacyWalletImport";
 import { PreLaunchDataFlag } from "./_components/PreLaunchDataFlag";
 import { DataQualityScan } from "./_components/DataQualityScan";
+import { DriverRepairPass } from "./_components/DriverRepairPass";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
@@ -915,7 +916,7 @@ export default function BulkOperationsPage() {
             <PhaseSection
                 phase={6}
                 title="Final review"
-                overview="Flag pre-launch test data and catch anything that still looks wrong before calling the migration done. Both tools here read the full population every phase above produced, so they run last."
+                overview="Flag pre-launch test data, catch anything that still looks wrong, and re-check what's still unmatched before calling the migration done. All three tools here read the full population every phase above produced, so they run last."
             >
                 <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     <Upload className="h-4 w-4" />
@@ -925,6 +926,8 @@ export default function BulkOperationsPage() {
                 <PreLaunchDataFlag />
 
                 <DataQualityScan />
+
+                <DriverRepairPass />
             </PhaseSection>
         </div>
     );

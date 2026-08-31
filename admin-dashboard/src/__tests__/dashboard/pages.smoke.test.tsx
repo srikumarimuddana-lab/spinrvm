@@ -127,7 +127,7 @@ vi.mock("lucide-react", () => {
     Tag: Icon, Target: Icon, ToggleLeft: Icon, ToggleRight: Icon, Trash2: Icon,
     TrendingDown: Icon, TrendingUp: Icon,
     User: Icon, UserCheck: Icon, UserPlus: Icon, UserX: Icon, Users: Icon, Wallet: Icon,
-    Wifi: Icon, WifiOff: Icon, X: Icon, XCircle: Icon, XIcon: Icon,
+    Wifi: Icon, WifiOff: Icon, Wrench: Icon, X: Icon, XCircle: Icon, XIcon: Icon,
     BarChart3: Icon, Ticket: Icon, Zap: Icon, ZoomIn: Icon,
     // main-side additions (rides PlusCircle, earnings Filter) + AI console icons
     Filter: Icon, PlusCircle: Icon, Bot: Icon, MessageSquarePlus: Icon, Sparkles: Icon,

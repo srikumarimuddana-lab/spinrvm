@@ -14,12 +14,47 @@ renders with zeros rather than raising.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 # Payout rows rendered before the table is capped. Overflow is disclosed in the
 # document (see the "+N more" line) — never silently dropped, since the total
 # underneath always covers every payout.
 _MAX_PAYOUT_ROWS = 40
+
+
+def _log_combined_tax_fallback(statement: dict, tax_collected_str: str, tax_by_type: dict) -> None:
+    """#4639: loudly flag the combined "GST/PST collected on fares" fallback.
+
+    Mirrors utils/corporate_statement_pdf.py::_log_combined_tax_fallback for
+    the same reason — this line is captioned as a CRA remittance reminder,
+    so collapsing GST+PST into one number when a breakdown genuinely exists
+    for some rides but not others would mislead a driver about what they can
+    actually verify from this document. Harmless (and silent) when the
+    period's tax collected is genuinely zero. Never raises: telemetry must
+    not block a driver's statement.
+    """
+    try:
+        from decimal import Decimal, InvalidOperation
+
+        tax_total = Decimal(str(tax_collected_str))
+    except (InvalidOperation, TypeError, ValueError):
+        tax_total = Decimal("1")
+    if tax_total == 0:
+        return
+    driver_id = statement.get("driver_id") or "unknown"
+    period_label = statement.get("period_label") or "unknown"
+    logger.error(
+        "driver_statement_pdf: combined GST/PST fallback line used with nonzero "
+        "tax_collected (tax_by_type empty/missing) driver_id=%s period=%s "
+        "tax_collected=%s tax_by_type=%r",
+        driver_id,
+        period_label,
+        tax_collected_str,
+        tax_by_type,
+    )
 
 
 def generate_driver_statement_pdf(statement: dict) -> bytes:
@@ -40,8 +75,7 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
     if not previous_app_visible:
         payouts = [p for p in payouts if p.get("type") != "stripe_sync"]
     paid_out_display = str(
-        (statement.get("payouts_total") if previous_app_visible else statement.get("payouts_spinr_total"))
-        or "0.00"
+        (statement.get("payouts_total") if previous_app_visible else statement.get("payouts_spinr_total")) or "0.00"
     )
     period_type = str(statement.get("period_type") or "weekly")
     label = str(statement.get("period_label") or "")
@@ -135,7 +169,14 @@ def generate_driver_statement_pdf(statement: dict) -> bytes:
     line_item("Ride incentives", money("incentives"))
     line_item("Quest & referral bonuses", money("bonuses"))
     line_item("Cancellation / no-show fees", money("cancellation_fees"))
-    line_item("GST/PST collected on fares", money("tax_collected"))
+    tax_by_type = earnings.get("tax_by_type") or {}
+    if isinstance(tax_by_type, dict) and tax_by_type:
+        for label, amount in tax_by_type.items():
+            line_item(f"{label} collected on fares", str(amount))
+    else:
+        tax_collected_str = money("tax_collected")
+        _log_combined_tax_fallback(statement, tax_collected_str, tax_by_type)
+        line_item("GST/PST collected on fares", tax_collected_str)
     pdf.ln(1)
     pdf.set_draw_color(*rule)
     pdf.line(15, pdf.get_y(), 15 + W, pdf.get_y())

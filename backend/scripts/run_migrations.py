@@ -49,6 +49,52 @@ from typing import List, Tuple
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 TRACKING_TABLE_MIGRATION = "24_schema_migrations.sql"
 
+# Files that must NEVER be applied even though they are real, merged files in
+# backend/migrations/ — applying them as written would be a security
+# regression relative to the live schema. See ACTION_ITEMS.md G2 ("116
+# migration files merged to `main` had never been applied to the live
+# database", "Still open" item 1) for the full investigation each reason
+# below paraphrases.
+#
+# These are permanent, not "applied later with caveats": per the append-only
+# migration rule we never edit or delete the files, and this runner must
+# never execute them against any environment (fresh staging DB, disaster-
+# recovery replay, a naive full re-run) even though they sort into the
+# normal pending range by filename.
+#
+# To add a future entry: put the filename (exact, as it sits in
+# backend/migrations/) as the key and a one-line reason (why it must never
+# run, referencing the ACTION_ITEMS.md item that found it) as the value.
+# Don't remove an entry without the same level of investigation that added
+# it — and once a file is genuinely cleared, prefer superseding it with a
+# corrective migration and removing its entry here in the same change (see
+# backend/migrations/CLAUDE.md for the append-only convention this respects).
+NEVER_APPLY: dict[str, str] = {
+    "70_fix_financial_events_rls.sql": (
+        "Would replace the live financial_events_select RLS policy (which correctly "
+        "re-reads users.role from the table) with one that trusts the JWT's role claim "
+        "directly -- exactly what CLAUDE.md's JWT trust model section says never to do "
+        "for non-admin tokens. See ACTION_ITEMS.md G2, 'Still open' item 1."
+    ),
+    "78_fix_pii_function_search_path.sql": (
+        "Would strip 'vault' from encrypt_driver_pii/decrypt_driver_pii's search_path, "
+        "breaking the vault-based PII flow migration 138 already fixed them to use. "
+        "See ACTION_ITEMS.md G2, 'Still open' item 1."
+    ),
+    "137_fix_pii_encrypt_pgsodium_perms.sql": (
+        "Ambiguous change to encrypt_driver_pii/decrypt_driver_pii's search_path and "
+        "owner; live state doesn't cleanly match either the pre- or post-138 target. "
+        "Needs a human security review before ever running, not an automated apply. "
+        "See ACTION_ITEMS.md G2, 'Still open' item 1."
+    ),
+    "26_rls_coverage_gap.sql": (
+        "RLS is already enabled on every table it targets; only the two named "
+        "*_deny_all policies' presence on the live schema is unconfirmed. Low risk "
+        "either way -- left alone pending confirmation rather than blindly re-applied. "
+        "See ACTION_ITEMS.md G2, 'Still open' item 1."
+    ),
+}
+
 # Matches a dollar-quote tag opener: `$$` or `$tag$` (tag must start with a
 # letter/underscore, so positional parameters like `$1` never match).
 _DOLLAR_TAG_RE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
@@ -241,13 +287,38 @@ def _fetch_applied(conn) -> dict[str, str]:
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def _classify(files: List[Path], applied: dict[str, str]) -> Tuple[List[Path], List[Path], List[Tuple[Path, str, str]]]:
-    """Split migrations into (pending, already_applied, drifted)."""
+def _classify(
+    files: List[Path], applied: dict[str, str]
+) -> Tuple[List[Path], List[Path], List[Tuple[Path, str, str]], List[Tuple[Path, str]]]:
+    """Split migrations into (pending, already_applied, drifted, skipped).
+
+    A file in NEVER_APPLY is classified as `skipped` before it ever gets a
+    chance to land in `pending` or `already` -- it has its own status, never
+    conflated with either. If it is *also* already tracked as applied in
+    schema_migrations, that's a contradiction (someone/something ran it
+    outside this runner despite the skip-list) and must be surfaced loudly,
+    not silently absorbed into either bucket.
+    """
     pending: List[Path] = []
     already: List[Path] = []
     drifted: List[Tuple[Path, str, str]] = []
+    skipped: List[Tuple[Path, str]] = []
 
     for path in files:
+        reason = NEVER_APPLY.get(path.name)
+        if reason is not None:
+            skipped.append((path, reason))
+            if path.name in applied:
+                print(
+                    f"CONTRADICTION: {path.name} is in the NEVER_APPLY skip-list "
+                    f"(reason: {reason}) but is ALSO recorded as applied in "
+                    "schema_migrations. It was applied through some other path "
+                    "(direct SQL editor, another tool, manual psql) despite the "
+                    "skip-list -- this needs human investigation of the live schema, "
+                    "not silent acceptance either way.",
+                    file=sys.stderr,
+                )
+            continue
         if path.name not in applied:
             pending.append(path)
             continue
@@ -258,7 +329,7 @@ def _classify(files: List[Path], applied: dict[str, str]) -> Tuple[List[Path], L
         else:
             already.append(path)
 
-    return pending, already, drifted
+    return pending, already, drifted, skipped
 
 
 def _apply_one(conn, path: Path) -> None:
@@ -364,7 +435,7 @@ def main() -> int:
     try:
         _ensure_tracking_table(conn)
         applied = _fetch_applied(conn)
-        pending, already, drifted = _classify(files, applied)
+        pending, already, drifted, skipped = _classify(files, applied)
 
         if drifted:
             print("ERROR: the following migrations have been modified after being applied:", file=sys.stderr)
@@ -384,10 +455,13 @@ def main() -> int:
             print(f"Pending: {len(pending)}")
             for p in pending:
                 print(f"  … {p.name}")
+            print(f"PERMANENTLY SKIPPED (security regression risk): {len(skipped)}")
+            for p, reason in skipped:
+                print(f"  ⛔ {p.name}: {reason}")
             if args.status:
                 return 0
             if args.dry_run:
-                print("(dry-run — no changes made)")
+                print("(dry-run — no changes made; PERMANENTLY SKIPPED files above will never be applied)")
                 return 0
 
         if not pending:

@@ -6,6 +6,24 @@ Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number �
 
 Migration rules:
 - **Append-only**: never edit a merged migration. Schema changes go in a new file.
+- **NEVER_APPLY skip-list**: a merged migration file can be marked as must-never-run without
+  editing or deleting it. `backend/scripts/run_migrations.py` has a module-level
+  `NEVER_APPLY: dict[filename, reason]` constant that `_classify()` checks before a file can
+  ever land in "pending". A skip-listed file gets its own status —
+  `PERMANENTLY SKIPPED (security regression risk)` — in `--status` and `--dry-run` output; it
+  is never silently folded into "applied" or "pending", and `--apply` (the default, no-flag
+  run) can never reach it either, because it's removed from consideration before pending is
+  computed. If a skip-listed file is somehow *also* tracked as applied in `schema_migrations`
+  (it ran through some other path — direct SQL editor, another tool, manual `psql`), the
+  runner logs a loud `CONTRADICTION` line to stderr instead of silently accepting either
+  status. Use this when a migration is confirmed wrong/dangerous as merged relative to the
+  live schema (see ACTION_ITEMS.md G2 for the first 4 entries and the investigation that
+  found them) but rewriting it would violate the append-only rule above. To add a future
+  entry: add `"NN_filename.sql": "one-line reason + which ACTION_ITEMS.md item found it"` to
+  `NEVER_APPLY` in `backend/scripts/run_migrations.py`. To remove one: only after a human has
+  confirmed the underlying risk no longer applies, and prefer superseding the file with a
+  corrective migration in the same change (see 362 in ACTION_ITEMS.md G2 for the pattern of a
+  fix-forward migration correcting a broken merged one).
 - **Forward-compatible**: every migration must be safe to run against production traffic in flight. Wrap long-running `ALTER TABLE` in batched updates.
 - **Always reversible on paper**: put the rollback plan in a top comment, even if no down-migration file.
 - **RLS first**: every new table that stores user data must ship with RLS policies in the same migration.

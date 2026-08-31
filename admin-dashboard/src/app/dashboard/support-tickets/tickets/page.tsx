@@ -23,6 +23,7 @@ import {
     Table,
     TableBody,
     TableCell,
+    TableHead,
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
@@ -62,6 +63,41 @@ function tagNames(t: any): string {
     const tags = t?.tags;
     if (!Array.isArray(tags)) return "";
     return tags.map((x: any) => (typeof x === "string" ? x : x?.name)).filter(Boolean).join(", ");
+}
+
+// P1 support-ticket SLA (ACTION_ITEMS.md G8): CLAUDE.md's KPI table targets a
+// 2h response for P1 tickets. Nothing server-side surfaces a deadline field
+// yet (see backend/utils/support_sla.py's docstring for the same "P1 =
+// Urgent priority" mapping assumption used here — keep the two in sync if
+// that mapping ever changes), so this is computed client-side from the
+// ticket's own createdTime/priority/status, matching every other column on
+// this page (which already reads straight off the raw Zoho ticket shape).
+const SLA_HOURS = 2;
+const SLA_PRIORITIES = new Set(["Urgent"]);
+
+function isClosedStatus(t: any): boolean {
+    const statusType = (t?.statusType || "").toLowerCase();
+    const status = (t?.status || "").toLowerCase();
+    return statusType === "closed" || status.includes("closed");
+}
+
+type SlaInfo = { label: string; className: string } | null;
+
+function slaStatus(t: any): SlaInfo {
+    if (!SLA_PRIORITIES.has(t?.priority) || isClosedStatus(t) || !t?.createdTime) return null;
+    const created = new Date(t.createdTime).getTime();
+    if (Number.isNaN(created)) return null;
+    const deadline = created + SLA_HOURS * 60 * 60 * 1000;
+    const diffMs = deadline - Date.now();
+    const diffMin = Math.round(Math.abs(diffMs) / 60000);
+    const hh = Math.floor(diffMin / 60);
+    const mm = diffMin % 60;
+    const dur = hh > 0 ? `${hh}h ${mm}m` : `${mm}m`;
+    if (diffMs <= 0) {
+        // eslint-disable-next-line no-restricted-syntax -- SLA breach must stay visually distinct from the destructive-priority badge it sits next to (#2816-style)
+        return { label: `Breached ${dur} ago`, className: "bg-red-100 text-red-800 hover:bg-red-100" };
+    }
+    return { label: `Due in ${dur}`, className: "bg-warning/15 text-warning hover:bg-warning/15" };
 }
 
 export default function TicketListPage() {
@@ -330,6 +366,7 @@ export default function TicketListPage() {
                             <SortableHead column="contact.email" sort={sort} onSort={toggle}>Requester</SortableHead>
                             <SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead>
                             <SortableHead column="priority" sort={sort} onSort={toggle}>Priority</SortableHead>
+                            <TableHead>SLA</TableHead>
                             <SortableHead column="assignee.firstName" sort={sort} onSort={toggle}>Assignee</SortableHead>
                             <SortableHead column="createdTime" sort={sort} onSort={toggle}>Created</SortableHead>
                             <SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead>
@@ -337,10 +374,10 @@ export default function TicketListPage() {
                     </TableHeader>
                     <TableBody>
                         {loading && (
-                            <TableRow><TableCell colSpan={8} className="py-8 text-center text-muted-foreground">Loading…</TableCell></TableRow>
+                            <TableRow><TableCell colSpan={9} className="py-8 text-center text-muted-foreground">Loading…</TableCell></TableRow>
                         )}
                         {!loading && shown.length === 0 && (
-                            <TableRow><TableCell colSpan={8} className="py-8 text-center text-muted-foreground">No tickets found.</TableCell></TableRow>
+                            <TableRow><TableCell colSpan={9} className="py-8 text-center text-muted-foreground">No tickets found.</TableCell></TableRow>
                         )}
                         {!loading && sorted.map((t) => (
                             <TableRow key={t.id} className="cursor-pointer">
@@ -359,6 +396,12 @@ export default function TicketListPage() {
                                 <TableCell className="text-sm">{t.contact?.email || t.email || "—"}</TableCell>
                                 <TableCell className="text-sm">{t.category || "—"}</TableCell>
                                 <TableCell><Badge variant="secondary" className={priorityClass(t.priority)}>{t.priority || "None"}</Badge></TableCell>
+                                <TableCell>
+                                    {(() => {
+                                        const sla = slaStatus(t);
+                                        return sla ? <Badge variant="secondary" className={sla.className}>{sla.label}</Badge> : <span className="text-xs text-muted-foreground">—</span>;
+                                    })()}
+                                </TableCell>
                                 <TableCell className="text-sm">
                                     {t.assignee ? `${t.assignee.firstName || ""} ${t.assignee.lastName || ""}`.trim() || "—" : "Unassigned"}
                                 </TableCell>

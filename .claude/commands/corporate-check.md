@@ -37,8 +37,9 @@ it's a confirmed intersection between the two domains.
    also dispatches `spinr-ai-guardrail-reviewer` **in parallel** with the same
    scope — independent audits over the same diff, not a sequential pass. Ask
    it explicitly whether the diff touches AI-originated corporate booking and,
-   if so, whether it goes through the same payment-source-priority path
-   (rider wallet → corporate allowance → master wallet → rider card) as
+   if so, whether it goes through the same payment-method dispatch (booking-time
+   `payment_method` choice among `card`/`wallet`/`company_allowance`, with the
+   allowance→master-wallet fallback only inside `company_allowance` settlement) as
    `B-AI1` requires
 6. Presents both agents' reports to the user, each under its own heading —
    no edits without explicit approval

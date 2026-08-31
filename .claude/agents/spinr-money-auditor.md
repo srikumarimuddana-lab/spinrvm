@@ -72,9 +72,14 @@ Must appear as separate lines — never bundled into "service fee" or "other":
 - Tip (if given post-ride)
 - Discount/promo (negative line, if applied)
 
-## 6. Corporate billing priority
-Payment source order: **rider wallet → corporate allowance → master wallet → rider card**
-- Never bypass allowance cap — if ride exceeds cap, fall through to next source (don't over-spend)
+## 6. Corporate billing payment source
+Payment method is chosen once, at booking (`ride.payment_method ∈ {"card","wallet","company_allowance"}`) —
+settlement dispatches on that single field with **no cross-method fallback**; a `settle_wallet`/`settle_card`
+failure leaves the ride `payment_status="pending"` rather than trying another method.
+- The one real in-transaction fallback: for `company_allowance` rides, `settle_corporate` debits the member's
+  allowance first, then any shortfall from the company master wallet — never bypass the allowance cap here
+  (don't over-spend it), and if the master wallet is also exhausted the settlement hard-fails (it never reaches
+  the rider's personal card)
 - Wallet deltas go through `corporate_wallet_apply_delta` Postgres function (`SECURITY DEFINER`, row lock)
 - `allowance_reset.py` monthly loop: verify it uses `auto_approved_this_period` flag for replay safety
 

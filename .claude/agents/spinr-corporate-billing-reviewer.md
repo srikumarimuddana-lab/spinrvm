@@ -22,13 +22,21 @@ Audit only. You report; the user fixes. Load `@.claude/context/domain-corporate.
 - Any retryable operation (auto-topup, allowance reset, payment retry) touching a wallet must carry an idempotency key or a `reminder_sent`/`auto_approved_this_period`-style replay-safety flag
 - Flag any new background loop or retry path that writes a delta without checking "have I already applied this"
 
-## 3. Payment source priority (fare settlement)
-- Order is: **rider wallet → corporate allowance → master wallet fallback → rider card**
-- Flag any code that changes this order, skips a tier, or lets a ride exceed the allowance cap by falling through incorrectly
+## 3. Payment method dispatch (fare settlement)
+- Payment method is chosen once, at booking (`ride.payment_method`), and settlement dispatches on that single
+  field with **no cross-method fallback** — a `settle_wallet`/`settle_card` failure leaves the ride
+  `payment_status="pending"` rather than trying another method
+- The only real fallback lives inside `company_allowance` rides: `settle_corporate` debits the member's
+  allowance first, then any shortfall from the company master wallet
+- Flag any code that adds a fallback across `card`/`wallet`/`company_allowance`, or that changes the
+  allowance→master order within `settle_corporate`
 - Corporate-paid rides must **never** have surge applied — verify fare service branches on corporate payment source before multiplying by `surge_multiplier`
 
 ## 4. Allowance cap enforcement
-- If a ride's cost would exceed the remaining allowance, the excess must fall through to the next source in priority order — never silently over-spend the allowance, never silently fail the ride
+- If a `company_allowance` ride's cost would exceed the remaining allowance, the shortfall must be charged to
+  the company master wallet — never silently over-spend the allowance cap
+- If the master wallet is also exhausted/at its floor, settlement must hard-fail (503, ride left
+  `payment_status="pending"`) — it must never fall through to the rider's personal card
 - `allowance_reset.py` (monthly loop) must be idempotent across replicas — verify it uses a period-scoped flag, not just "run once a month" timing
 
 ## 5. Cascade-effect discipline (from domain-corporate.md conventions)

@@ -50,7 +50,7 @@ class _Recorder:
         await send({"type": "http.response.body", "body": b"{}"})
 
 
-async def _run_middleware(scope, *, enabled=True, auth_result=None, auth_raises=None):
+async def _run_middleware(scope, *, enabled=True, ai_assistant_enabled=True, auth_result=None, auth_raises=None):
     inner = _Recorder()
     middleware = MCPAuthMiddleware(inner)
     sent = []
@@ -63,7 +63,11 @@ async def _run_middleware(scope, *, enabled=True, auth_result=None, auth_raises=
         auth.side_effect = auth_raises
 
     with (
-        patch.object(mcp_server, "get_app_settings", AsyncMock(return_value={"ai_mcp_enabled": enabled})),
+        patch.object(
+            mcp_server,
+            "get_app_settings",
+            AsyncMock(return_value={"ai_mcp_enabled": enabled, "ai_assistant_enabled": ai_assistant_enabled}),
+        ),
         patch.object(mcp_server, "get_current_user", auth),
     ):
         await middleware(scope, AsyncMock(), send)
@@ -77,6 +81,16 @@ class TestMiddleware:
     @pytest.mark.anyio
     async def test_disabled_returns_503_before_auth(self):
         inner, status, body = await _run_middleware(_scope(), enabled=False)
+        assert status == 503
+        assert inner.called is False
+
+    @pytest.mark.anyio
+    async def test_global_ai_kill_switch_off_returns_503_even_if_mcp_enabled(self):
+        """#4641: ai_mcp_enabled=True alone must not be enough — the global
+        ai_assistant_enabled kill switch (the "stop sending user data to the
+        third-party LLM provider" incident lever) must also gate /mcp, same
+        as orchestrator.py/public_assistant.py/support_assistant.py."""
+        inner, status, body = await _run_middleware(_scope(), enabled=True, ai_assistant_enabled=False)
         assert status == 503
         assert inner.called is False
 

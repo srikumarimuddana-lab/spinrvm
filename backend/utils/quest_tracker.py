@@ -6,6 +6,7 @@ for any active quests the driver has joined.
 
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 try:
@@ -32,11 +33,7 @@ async def _ride_local_completion_hour(ride: dict):
     Returns None when no usable completion timestamp is present. Falls back to
     America/Regina when the ride has no service area or the area has no timezone.
     """
-    completed_at = (
-        ride.get("ride_completed_at")
-        or ride.get("completed_at")
-        or ride.get("updated_at")
-    )
+    completed_at = ride.get("ride_completed_at") or ride.get("completed_at") or ride.get("updated_at")
     if not completed_at:
         return None
     if isinstance(completed_at, str):
@@ -79,6 +76,15 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
     # Resolved lazily on the first peak_rides quest and reused for the rest.
     local_hour = _UNSET
 
+    # A ride fully covered by a free_ride/heavy-discount promo (grand_total
+    # == 0) must not count toward ride_count/peak_rides quest progress that
+    # pays a real driver_bonuses Stripe Connect transfer — the same
+    # zero-marginal-cost farming exploit already closed for rider referrals
+    # (migration 336, utils/referral_payout.py) but never propagated here
+    # (#4600). earnings_target is unaffected: it already sums real
+    # driver_earnings, which is $0 for a ride with no actual driver payout.
+    _ride_has_real_fare = Decimal(str(ride.get("grand_total") or 0)) > 0
+
     for progress in progress_rows:
         try:
             quest = await db.find_one("quests", {"id": progress["quest_id"]})
@@ -98,7 +104,8 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
             new_value = progress["current_value"]
 
             if quest["type"] == "ride_count":
-                new_value += 1
+                if _ride_has_real_fare:
+                    new_value += 1
 
             elif quest["type"] == "earnings_target":
                 earnings = ride.get("driver_earnings", 0) or 0
@@ -106,9 +113,9 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
 
             elif quest["type"] == "peak_rides":
                 # Count rides completed during local peak hours (7-9 AM, 5-8 PM).
-                if local_hour is _UNSET:
+                if _ride_has_real_fare and local_hour is _UNSET:
                     local_hour = await _ride_local_completion_hour(ride)
-                if local_hour is not None and (7 <= local_hour <= 9 or 17 <= local_hour <= 20):
+                if _ride_has_real_fare and local_hour is not None and (7 <= local_hour <= 9 or 17 <= local_hour <= 20):
                     new_value += 1
 
             # Check completion

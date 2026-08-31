@@ -26,6 +26,7 @@ import { useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { isVehicleInfoFormValid, getVehicleYearValue } from '../utils/vehicleInfoFormSchema';
 
 interface VehicleType {
     id: string;
@@ -140,12 +141,13 @@ export default function VehicleInfoScreen() {
         }, 50);
     };
 
-    const isFormValid =
-        form.vehicle_type_id &&
-        form.vehicle_make.trim() &&
-        form.vehicle_model.trim() &&
-        form.vehicle_year.trim() &&
-        form.license_plate.trim();
+    const isFormValid = isVehicleInfoFormValid({
+        vehicleTypeId: form.vehicle_type_id,
+        vehicleMake: form.vehicle_make,
+        vehicleModel: form.vehicle_model,
+        vehicleYear: form.vehicle_year,
+        licensePlate: form.license_plate,
+    });
 
     const handleSubmit = async () => {
         if (!isFormValid) {
@@ -172,7 +174,7 @@ export default function VehicleInfoScreen() {
                             }
                             await updateDriverMe.mutateAsync({
                                 ...form,
-                                vehicle_year: parseInt(form.vehicle_year) || 0,
+                                vehicle_year: getVehicleYearValue(form.vehicle_year),
                             });
                             // useUpdateDriverMe invalidates ['driver','me']
                             // and ['auth','me'] automatically. We still call

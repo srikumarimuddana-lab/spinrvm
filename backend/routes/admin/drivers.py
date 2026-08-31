@@ -335,6 +335,17 @@ _DRIVER_SORT_COLUMNS = {
 }
 
 
+def _sort_key(value: Any):
+    """Ordering key that reproduces Postgres NULL placement for a sorted page.
+
+    Postgres puts NULLs LAST on ASC and FIRST on DESC. Sorting on
+    ``(value is None, value)`` gives non-nulls first ascending, and reversing it
+    for DESC flips nulls to the front — matching both. The None never reaches a
+    ``<`` comparison against a real value, because the boolean decides first.
+    """
+    return (value is None, value)
+
+
 # ── Driver search ───────────────────────────────────────────────────────────
 #
 # Search runs as two queries because a driver's display name does not live on
@@ -548,6 +559,7 @@ async def admin_get_drivers(
 
     # Filter by profile-photo moderation status (photo lives on users). Used by
     # the admin "Pending photos" queue. No matching users → no drivers.
+    photo_uids: Optional[List[str]] = None
     if photo_status:
         photo_users = await db_supabase.get_rows(
             "users", {"profile_image_status": photo_status}, columns="id", limit=1000
@@ -555,13 +567,27 @@ async def admin_get_drivers(
         photo_uids = [u["id"] for u in photo_users if u.get("id")]
         if not photo_uids:
             return []
-        filters["user_id"] = {"$in": photo_uids}
 
     order_col = _DRIVER_SORT_COLUMNS.get((sort_by or "").strip(), "created_at")
     # Default direction is descending (newest-first) — the historical behaviour
     # — unless the caller explicitly asks for ascending.
     desc = (sort_dir or "desc").strip().lower() != "asc"
-    drivers = await db_supabase.get_rows("drivers", filters, order=order_col, desc=desc, limit=limit, offset=offset)
+    if photo_uids is None:
+        drivers = await db_supabase.get_rows("drivers", filters, order=order_col, desc=desc, limit=limit, offset=offset)
+    else:
+        # photo_status resolves to a user_id set that the query above caps at
+        # 1000. As `filters["user_id"] = {"$in": photo_uids}` that is a ~39 KB
+        # `user_id=in.(...)` request line, which the edge proxy rejects outright
+        # (plain-text 400) once the set passes roughly 840 — so this tab would
+        # have started failing as photo approvals grew.
+        #
+        # The set is bounded at 1000 users, so fetch every matching driver in
+        # URL-safe batches and order/page in Python rather than asking the
+        # database to. Ordering cannot be delegated here: batches are ordered
+        # per request, so a DB-side `order` would only sort within each batch.
+        rows = await db_supabase.get_rows_batched_in("drivers", "user_id", photo_uids, filters)
+        rows.sort(key=lambda r: _sort_key(r.get(order_col)), reverse=desc)
+        drivers = rows[offset : offset + limit]
 
     # Defensive dedup — keep the earliest-created row per (user_id, phone) while
     # preserving the DB-returned ORDER BY. We decide which rows to KEEP by

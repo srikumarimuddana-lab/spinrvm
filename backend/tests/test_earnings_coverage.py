@@ -935,6 +935,7 @@ class TestGetDriverEarningsComparison:
         assert result["change_pct"]["rides"] == 0.0
 
     async def test_month_period_zero_previous_gives_100pct_or_0pct(self):
+
         from backend.routes.drivers import get_driver_earnings_comparison
 
         # Regression (2026-08-31): this used a hardcoded absolute date

@@ -185,6 +185,29 @@ async def list_bookings(
         if isinstance(filters["created_at"], dict):
             filters["created_at"]["$lte"] = date_to
 
+    # #4639 Finding 3: section_id must be resolved to member IDs and applied
+    # to the DB filter *before* skip/limit — filtering in Python after a
+    # paginated fetch silently under-reports (a page can come back short, or
+    # empty, even when more matching rides exist beyond the fetched window).
+    if section_id:
+        section_member_rows = (
+            await db_supabase.get_rows(
+                "corporate_members",
+                {"company_id": ctx["company_id"], "section_id": section_id},
+                columns="id",
+                limit=10000,
+            )
+            or []
+        )
+        section_member_ids = [m["id"] for m in section_member_rows]
+        if "corporate_member_id" in filters:
+            # Already narrowed to one member (self-view or ?member_id=) —
+            # intersect rather than overwrite.
+            if filters["corporate_member_id"] not in section_member_ids:
+                return {"bookings": [], "skip": skip, "limit": limit}
+        else:
+            filters["corporate_member_id"] = {"$in": section_member_ids or [""]}
+
     rides = (
         await db_supabase.get_rows(
             "rides",

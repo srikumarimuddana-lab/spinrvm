@@ -701,7 +701,14 @@ async def trigger_emergency_rideless(
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
 
-        location_text = " Location shared with emergency services." if body.latitude and body.longitude else ""
+        # #4599 Finding 1: no 911/PSAP integration exists anywhere in the codebase.
+        # Claiming "shared with emergency services" here (the rideless SOS path)
+        # could lead a contact reading it to not call 911, believing it's already
+        # handled. Mirror the in-ride path's truthful copy (safety.py's
+        # trigger_emergency, ~line 351).
+        location_text = (
+            " Their live location has been shared with Spinr's safety team." if body.latitude and body.longitude else ""
+        )
         sms_body = (
             f"URGENT: {user_name} triggered an emergency alert via the Spinr app."
             f"{location_text} Call them or emergency services immediately."

@@ -47,6 +47,7 @@ import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal, backfillStripeCustomerEmails } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
 import { getWalletActionError } from "@/lib/userWalletActionSchema";
+import { isModerationReasonValid } from "@/lib/userModerationSchema";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -1154,10 +1155,10 @@ export default function UsersPage() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            disabled={!moderationReason.trim() || statusUpdating === pendingStatusChange?.id}
+                            disabled={!isModerationReasonValid(moderationReason) || statusUpdating === pendingStatusChange?.id}
                             onClick={async (e) => {
                                 if (!pendingStatusChange) return;
-                                if (!moderationReason.trim()) { e.preventDefault(); return; }
+                                if (!isModerationReasonValid(moderationReason)) { e.preventDefault(); return; }
                                 const change = pendingStatusChange;
                                 const reason = moderationReason.trim();
                                 const suspended_until =

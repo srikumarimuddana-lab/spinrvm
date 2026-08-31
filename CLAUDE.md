@@ -352,6 +352,13 @@ Test tiers:
 - **Integration**: real Supabase against a throwaway test schema. Target: < 2 s per test.
 - **E2E (ride lifecycle)**: full searching → completed flow with mock payments. Keep in `test_e2e_*.py`.
 - **Performance (perf_baseline.py)**: benchmark critical paths; compare against `perf_*_before.json` baselines to detect regressions.
+- **RLS (DB-role-level, `backend/tests/rls/`)**: exercises real Postgres Row-Level Security from an actual `anon`/`authenticated` role — a mocked `mock_supabase_client` can never do this, since RLS is enforced by Postgres itself. Needs a real Postgres reachable via `TEST_DATABASE_URL` (or `DATABASE_URL`) with CREATE DATABASE / CREATE ROLE rights; self-skips (not fails) otherwise. Run in isolation from the mocked-Supabase suite:
+  ```bash
+  export TEST_DATABASE_URL="<your libpq connection string>"
+  cd backend
+  pytest tests/rls -c /dev/null --confcutdir=tests/rls
+  ```
+  `-c /dev/null --confcutdir=tests/rls` stops pytest from also loading `backend/tests/conftest.py` (and `pytest.ini`'s coverage gate), which these tests don't use. Currently covers 5 of the ~127 tracked `CREATE POLICY` statements (`users`, `drivers`, `rides`, `financial_events`, `driver_insurance_periods`) — a start, not full coverage. See `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`.
 
 Coverage minimums (per domain):
 - `routes/payments.py`, `services/fare_service.py`, `utils/crypto.py`: ≥ 90%

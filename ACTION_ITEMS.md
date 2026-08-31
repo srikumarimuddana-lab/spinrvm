@@ -12016,6 +12016,121 @@ record of what was assumed vs. what was actually true</summary>
   `(tabs)/profile.tsx`, `settings.tsx`,
   `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
   written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 29 done: `driver-app/app/become-driver.tsx`'s
+  onboarding-wizard validation (first driver-app candidate, KYC
+  onboarding — the highest-risk driver-app item per this sweep's own
+  ordering).** Extracted `validateStep`'s case-1 (personal-info
+  requiredness) and case-2 (vehicle-year + vehicle-info-completeness,
+  the SK "vehicle < 10 years old" rule's client-side mirror) checks, and
+  `handleSubmit`'s CRC-consent guard, into new
+  `driver-app/utils/becomeDriverSchema.ts` (`isPersonalStepValid`,
+  `hasAnyVehicleInfo`, `isVehicleYearValid`, `isVehicleInfoComplete`,
+  `getVehicleStepError`, `isCrcConsentValid`). Pure extraction,
+  byte-for-byte identical to the original `Alert.alert`-driven checks —
+  no bug found, no behavior change. New
+  `driver-app/utils/__tests__/becomeDriverSchema.test.ts` (19
+  accept/reject cases). Verification: 19/19 new tests pass; full
+  driver-app suite (`jest`) 121/121 suites, 1368/1368 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses these
+  `Alert.alert` strings; submit button's `disabled` prop duplicates the
+  CRC-consent check but also includes `isLoading` (not exact) and was
+  left untouched. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-become-driver-zod-step29.md`.
+  **Still open:** 5 driver-app candidates (`emergency-contacts.tsx`,
+  `report-safety.tsx`, `(tabs)/profile.tsx`, `settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 30 done: `driver-app/app/driver/emergency-contacts.tsx`'s
+  `handleAdd` validation (second driver-app candidate, safety tier).**
+  Extracted the name-required and phone-digit-length checks into new
+  `driver-app/utils/emergencyContactSchema.ts` (`isContactNameValid`,
+  `isContactPhoneValid`, `getEmergencyContactFormError`). Pure
+  extraction, byte-for-byte identical to the original two `if` blocks +
+  `showToast(...)` calls — no bug found, no behavior change. New
+  `driver-app/utils/__tests__/emergencyContactSchema.test.ts` (13
+  accept/reject cases). Verification: 13/13 new tests pass; full
+  driver-app suite (`jest`) 122/122 suites, 1381/1381 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses these
+  toast strings. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-emergency-contact-zod-step30.md`.
+  **Still open:** 4 driver-app candidates (`report-safety.tsx`,
+  `(tabs)/profile.tsx`, `settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 31 done: `driver-app/app/report-safety.tsx`'s
+  `handleSubmit` validation (third driver-app candidate, safety tier).**
+  Extracted the category-required and description-required checks into
+  new `driver-app/utils/reportSafetySchema.ts` (`isSafetyCategoryValid`,
+  `isSafetyIssueValid`, `getReportSafetyFormError`). Pure extraction,
+  byte-for-byte identical to the original two `if` blocks +
+  `showToast(...)` calls — no bug found, no behavior change. New
+  `driver-app/utils/__tests__/reportSafetySchema.test.ts` (10
+  accept/reject cases). Verification: 10/10 new tests pass; full
+  driver-app suite (`jest`) 123/123 suites, 1391/1391 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses these
+  toast strings. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-report-safety-zod-step31.md`.
+  **Still open:** 3 driver-app candidates (`(tabs)/profile.tsx`,
+  `settings.tsx`, `addresses.tsx`/`destination-mode.tsx`); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 32 done: `driver-app/app/driver/(tabs)/profile.tsx`'s
+  profile-edit validation (fourth driver-app candidate, email regex).**
+  Extracted `handleSaveProfile`'s fields-required + email-format checks
+  into new `driver-app/utils/driverProfileSchema.ts`
+  (`isProfileFieldsComplete`, `isProfileEmailFormatValid`,
+  `getProfileFormError`) — the screen's own regex was kept as-is rather
+  than swapped for zod's `.email()`. Also consolidated the Save button's
+  `disabled` prop and style expression, both an *exact* duplicate of the
+  fields-required check (unlike partial-overlap `disabled` props left
+  alone elsewhere in this series), onto the same shared
+  `isProfileFieldsComplete(...)` call; removed the now-unused local
+  `EMAIL_REGEX` constant. Pure extraction, byte-for-byte identical to
+  the originals — no bug found, no behavior change. New
+  `driver-app/utils/__tests__/driverProfileSchema.test.ts` (11
+  accept/reject cases). Verification: 11/11 new tests pass; full
+  driver-app suite (`jest`) 124/124 suites, 1402/1402 tests passing on a
+  clean rerun (one transient unrelated flake on first run); `npx tsc
+  --noEmit` clean (repo-wide); `npx eslint` on touched files: 0 errors,
+  0 warnings; **real production build** (`npm run build:web` → `expo
+  export --platform web`) completed successfully. Blast-radius grep
+  found one coincidentally identical regex in an unrelated,
+  already-migrated screen's schema file (`profileSetupSchema.ts` for
+  `app/profile-setup.tsx`, B39 step 6) — confirmed unrelated by
+  inspection. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-profile-zod-step32.md`.
+  **Still open:** 2 driver-app candidates (`settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 33 done: `driver-app/app/driver/settings.tsx`'s
+  account-deletion confirmation validation (fifth driver-app candidate,
+  PIPEDA-adjacent).** Extracted `executeDelete`'s type-DELETE
+  confirmation check into new
+  `driver-app/utils/accountDeletionSchema.ts`
+  (`isDeleteConfirmationValid` — a plain predicate, not a zod schema).
+  Pure extraction, byte-for-byte identical to the original check — no
+  bug found, no behavior change. New
+  `driver-app/utils/__tests__/accountDeletionSchema.test.ts` (7
+  accept/reject cases). Verification: 7/7 new tests pass; full
+  driver-app suite (`jest`) 125/125 suites, 1409/1409 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses this
+  exact check expression. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-account-deletion-zod-step33.md`.
+  **Still open:** 1 driver-app candidate
+  (`addresses.tsx`/`destination-mode.tsx` — the last item in the entire
+  21-candidate broader sweep); no ADR/migration-order doc written yet.
+  Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

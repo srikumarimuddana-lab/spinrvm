@@ -29,6 +29,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile, resolveUploadMimeType } from '@shared/api/upload';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { isPersonalStepValid, getVehicleStepError, isCrcConsentValid } from '../utils/becomeDriverSchema';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
@@ -458,29 +459,19 @@ export default function BecomeDriverScreen() {
   const validateStep = (step: number) => {
     switch (step) {
       case 1: // Personal
-        return !!(firstName && lastName && email && gender && serviceAreaId);
-      case 2: // Vehicle
-        // Determine if user has entered ANY vehicle info
-        const hasVehicleInfo = vehicleMake || vehicleModel || vehicleColor || vehicleYear || licensePlate || vehicleVin || vehicleType;
-        if (!hasVehicleInfo) return true; // Allow proceeding if completely empty (skip)
-
-        // If partial info, enforce valid year and other fields? 
-        // For simplification, let's just warn but allow if they explicitly skip. 
-        // But here we are in "Next", so maybe enforce completeness if started.
-        const year = parseInt(vehicleYear);
-        const currentYear = new Date().getFullYear();
-        if (vehicleYear && (isNaN(year) || year < currentYear - 9)) {
-          Alert.alert('Invalid Year', 'Vehicle must be 9 years old or newer.');
-          return false;
-        }
-        // If they started entering info, require basic fields or use Skip
-        if (hasVehicleInfo && (!vehicleMake || !vehicleModel || !licensePlate || !vehicleType)) {
-          Alert.alert('Incomplete Vehicle Info', 'Please complete all vehicle fields or use "Skip for now".');
+        return isPersonalStepValid(firstName, lastName, email, gender, serviceAreaId);
+      case 2: { // Vehicle
+        const vehicleStepError = getVehicleStepError({
+          vehicleMake, vehicleModel, vehicleColor, vehicleYear, licensePlate, vehicleVin, vehicleType,
+        });
+        if (vehicleStepError) {
+          Alert.alert(vehicleStepError.title, vehicleStepError.message);
           return false;
         }
         return true;
+      }
       case 3: // Docs
-        // Similar logic: if they uploaded some but not all, warn? 
+        // Similar logic: if they uploaded some but not all, warn?
         // Or just let them proceed. Backend validates "Go Online".
         // Let's allow partial upload.
         return true;
@@ -502,7 +493,7 @@ export default function BecomeDriverScreen() {
   const prevStep = () => setCurrentStep(prev => prev - 1);
 
   const handleSubmit = async () => {
-    if (!crcConsentChecked) {
+    if (!isCrcConsentValid(crcConsentChecked)) {
       Alert.alert(
         'Consent required',
         'Please read and check the Criminal Record Check / Vulnerable Sector Check consent before submitting your application.'

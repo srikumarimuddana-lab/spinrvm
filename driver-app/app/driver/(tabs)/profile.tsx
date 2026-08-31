@@ -36,8 +36,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ScreenHeader } from '../../../components/ScreenHeader';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { isProfileFieldsComplete, getProfileFormError } from '../../../utils/driverProfileSchema';
 
 // Module-level (not component-scope) so react-hooks/purity doesn't treat
 // this Date.now() read as an impure call "during render" — the compiler's
@@ -216,10 +215,8 @@ function ProfileScreenInner() {
   };
 
   const handleSaveProfile = async () => {
-    if (!editFirstName.trim() || !editLastName.trim() || !editEmail.trim() || !editGender) {
-      return showToast('error', 'Missing Info', 'Please fill in all fields');
-    }
-    if (!EMAIL_REGEX.test(editEmail)) return showToast('error', 'Invalid Email', 'Please enter a valid email address');
+    const formError = getProfileFormError(editFirstName, editLastName, editEmail, editGender);
+    if (formError) return showToast('error', formError.title, formError.message);
 
     Keyboard.dismiss();
     setIsSaving(true);
@@ -837,19 +834,13 @@ function ProfileScreenInner() {
               <TouchableOpacity
                 style={[
                   modalStyles.saveButton,
-                  (!editFirstName.trim() ||
-                    !editLastName.trim() ||
-                    !editEmail.trim() ||
-                    !editGender ||
+                  (!isProfileFieldsComplete(editFirstName, editLastName, editEmail, editGender) ||
                     isSaving) &&
                     modalStyles.saveButtonDisabled,
                 ]}
                 onPress={handleSaveProfile}
                 disabled={
-                  !editFirstName.trim() ||
-                  !editLastName.trim() ||
-                  !editEmail.trim() ||
-                  !editGender ||
+                  !isProfileFieldsComplete(editFirstName, editLastName, editEmail, editGender) ||
                   isSaving
                 }
                 activeOpacity={0.85}

@@ -11755,8 +11755,234 @@ record of what was assumed vs. what was actually true</summary>
 
   **Still open:** the remaining 17 candidates from the broader sweep (6
   driver-app candidates; 10 more admin-dashboard candidates); the
-  `resolveDispute` silent-error-swallow gap above (`task_916f2e38`); no
+  `resolveDispute` silent-error-swallow gap above (fixed separately in
+  #4754, unrelated to this checkbox); no ADR/migration-order doc written
+  yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 19 done: `admin-dashboard/src/app/dashboard/promotions/page.tsx`'s
+  `handleSave` discount/expiry validation (third admin-dashboard
+  candidate, money tier — the largest single ad hoc block found in the
+  sweep).** Extracted the six sequential checks (discount value
+  required/positive/within its type's cap; optional max-discount cap
+  required/positive/within its own $500 cap; max uses required/positive;
+  expiry date must be in the future) into new
+  `admin-dashboard/src/lib/promotionFormSchema.ts`
+  (`getPromotionFormError` + one predicate per check + a documentation
+  zod schema). Pure extraction, byte-for-byte identical to the original
+  six `if` blocks + `toast(...)` calls — no bug found, no behavior
+  change. New `admin-dashboard/src/lib/__tests__/promotionFormSchema.test.ts`
+  (21 accept/reject cases). Verification: 21/21 new tests pass; full
+  admin-dashboard suite (`vitest run`) 47/47 suites, 473/473 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 5 pre-existing
+  `react-hooks/set-state-in-effect` warnings, unchanged by this diff;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file duplicates this form's
+  distinctive error copy. Save button's `disabled` prop duplicates only
+  two of the six checks (partial, not exact, overlap) and was left
+  untouched, same discipline as prior steps. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-promotions-zod-step19.md`.
+  **Still open:** the remaining 16 candidates from the broader sweep (6
+  driver-app candidates; 9 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 20 done: `admin-dashboard/src/app/dashboard/rides/_components/create-ride-modal.tsx`'s
+  `handleSubmit` rider/pickup/dropoff/fare validation (fourth
+  admin-dashboard candidate, money tier — admin fare override).**
+  Extracted the four sequential early-return checks (rider selected,
+  pickup selected, dropoff selected, total-fare override is a
+  non-negative number) into new
+  `admin-dashboard/src/lib/createRideFormSchema.ts`
+  (`getCreateRideFormError` + one predicate per check + a documentation
+  zod schema). Pure extraction, byte-for-byte identical to the original
+  four `if` blocks + `setError(...)` calls — no bug found, no behavior
+  change; three non-null assertions added at the payload fields that
+  lost TS control-flow narrowing from the removed inline checks (a
+  type-only change, not a runtime one — the schema call guarantees the
+  same non-null invariant). New
+  `admin-dashboard/src/lib/__tests__/createRideFormSchema.test.ts` (11
+  accept/reject cases). Verification: 11/11 new tests pass; full
+  admin-dashboard suite (`vitest run`) 48/48 suites, 484/484 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 4 pre-existing
+  `react-hooks/set-state-in-effect` warnings, unchanged by this diff;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file duplicates this form's
+  distinctive error copy. Submit button's `disabled` prop duplicates
+  three of the four checks but also includes `loading` (not an exact
+  duplicate) and was left untouched, same discipline as prior steps.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-create-ride-zod-step20.md`.
+  **Still open:** the remaining 15 candidates from the broader sweep (6
+  driver-app candidates; 8 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 21 done: `admin-dashboard/src/app/dashboard/safety/page.tsx`'s
+  incident-log + merge-duplicate validation (fifth admin-dashboard
+  candidate, safety tier).** Extracted both of the page's ad hoc
+  validation blocks: the manual "Log a safety incident" dialog's
+  `handleSubmit` (category + description required) and the
+  incident-detail drawer's `handleMerge` (canonical target ID required,
+  cannot merge into itself) — into new
+  `admin-dashboard/src/lib/safetyIncidentFormSchema.ts`
+  (`getLogIncidentFormError`, `getMergeIncidentError` + predicates + a
+  documentation zod schema). Pure extraction, byte-for-byte identical to
+  the original `if` blocks + `toast(...)` calls — no bug found, no
+  behavior change. New
+  `admin-dashboard/src/lib/__tests__/safetyIncidentFormSchema.test.ts`
+  (13 accept/reject cases). Verification: 13/13 new tests pass; full
+  admin-dashboard suite (`vitest run`) 49/49 suites, 497/497 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 3 pre-existing warnings, unchanged
+  by this diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed no other file duplicates
+  either form's distinctive error copy. Merge button's `disabled` prop
+  duplicates only the presence check (not the self-merge check) and was
+  left untouched, same discipline as prior steps. Full Change Impact
+  Log: `docs/change-log/2026-08-31-b39-admin-safety-incident-zod-step21.md`.
+  **Still open:** the remaining 14 candidates from the broader sweep (6
+  driver-app candidates; 7 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 22 done: `admin-dashboard/src/app/dashboard/cloud-messaging/page.tsx`'s
+  broadcast-compose + marketing-suppression validation (sixth
+  admin-dashboard candidate, PIPEDA-adjacent).** Extracted both of the
+  page's ad hoc validation blocks: the broadcast-compose form's
+  `handleSend` (title/description required, recipients required for a
+  particular audience, schedule time required when scheduling, at least
+  one delivery channel selected) and the marketing-suppression form's
+  `handleAddSuppression` (target email/phone required) — into new
+  `admin-dashboard/src/lib/cloudMessagingFormSchema.ts`
+  (`getBroadcastFormError`, `getSuppressionFormError` + predicates + a
+  documentation zod schema). Pure extraction, byte-for-byte identical to
+  the original `if` blocks + `toast(...)` calls — no bug found, no
+  behavior change; `isParticular` now sourced from a shared
+  `isParticularAudience(...)` helper instead of being redefined inline.
+  New `admin-dashboard/src/lib/__tests__/cloudMessagingFormSchema.test.ts`
+  (18 accept/reject cases). Verification: 18/18 new tests pass; full
+  admin-dashboard suite (`vitest run`) 50/50 suites, 515/515 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 5 pre-existing warnings, unchanged
+  by this diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed no other file duplicates
+  either form's distinctive error copy. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-cloud-messaging-zod-step22.md`.
+  **Still open:** the remaining 13 candidates from the broader sweep (6
+  driver-app candidates; 6 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 23 done: `admin-dashboard/src/app/dashboard/corporate-accounts/[id]/members/page.tsx`'s
+  invite-email validation (seventh admin-dashboard candidate,
+  invite-email regex).** Extracted `handleInvite`'s two sequential
+  checks (non-empty; matches the page's hand-rolled email-shape regex)
+  into new `admin-dashboard/src/lib/companyMemberInviteSchema.ts`
+  (`isInviteEmailProvided`, `isInviteEmailFormatValid` + a documentation
+  zod schema — the original regex was kept as-is rather than swapped for
+  zod's built-in `.email()`, since that validator accepts/rejects a
+  different string set). Pure extraction, byte-for-byte identical to the
+  original checks — no bug found, no behavior change; the first check
+  stays a silent no-op return, exactly as before. New
+  `admin-dashboard/src/lib/__tests__/companyMemberInviteSchema.test.ts`
+  (11 accept/reject cases). Verification: 11/11 new tests pass; full
+  admin-dashboard suite (`vitest run`) 51/51 suites, 526/526 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 1 pre-existing warning, unchanged
+  by this diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed no other file uses this
+  exact regex pattern. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-member-invite-zod-step23.md`.
+  **Still open:** the remaining 12 candidates from the broader sweep (6
+  driver-app candidates; 5 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 24 done: `admin-dashboard/src/app/dashboard/drivers/page.tsx`'s
+  photo-upload MIME check (eighth admin-dashboard candidate).**
+  Extracted `handlePhotoUpload`'s single inline
+  `file.type.startsWith("image/")` check into new
+  `admin-dashboard/src/lib/driverPhotoUploadSchema.ts`
+  (`isPhotoFileTypeValid` — a plain predicate, not a zod schema, since a
+  single MIME-prefix check has nothing for zod's parsing machinery to
+  add). Pure extraction, byte-for-byte identical to the original check —
+  no bug found, no behavior change. New
+  `admin-dashboard/src/lib/__tests__/driverPhotoUploadSchema.test.ts` (9
+  accept/reject cases). Verification: 9/9 new tests pass; full
+  admin-dashboard suite (`vitest run`) 52/52 suites, 535/535 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors — 45 pre-existing warnings
+  throughout this large file, none near the touched lines; **real
+  production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file uses this exact check. Full
+  Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-driver-photo-upload-zod-step24.md`.
+  **Still open:** the remaining 11 candidates from the broader sweep (6
+  driver-app candidates; 4 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 25 done: `admin-dashboard/src/app/dashboard/users/page.tsx`'s
+  ban/suspend reason validation (ninth admin-dashboard candidate).**
+  Extracted the ban/suspend dialog's `!moderationReason.trim()` check
+  (hand-duplicated across the confirm button's `disabled` prop and its
+  `onClick` guard) into new
+  `admin-dashboard/src/lib/userModerationSchema.ts`
+  (`isModerationReasonValid` — a plain predicate, not a zod schema).
+  Both call sites now call the same extracted predicate — an exact
+  duplicate consolidated (unlike partial-overlap `disabled` props
+  elsewhere in this PR's other steps, which were left alone since they
+  weren't identical expressions). Pure extraction, byte-for-byte
+  identical to the original checks — no bug found, no behavior change.
+  New `admin-dashboard/src/lib/__tests__/userModerationSchema.test.ts`
+  (4 accept/reject cases). Verification: 4/4 new tests pass; full
+  admin-dashboard suite (`vitest run`) 53/53 suites, 539/539 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 3 pre-existing warnings, none near
+  the touched lines; **real production build** (`npm run build`)
+  completed successfully. Blast-radius grep confirmed the only other
+  reference to the field is the untouched payload-construction trim.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-user-moderation-zod-step25.md`.
+  **Still open:** the remaining 10 candidates from the broader sweep (6
+  driver-app candidates; 3 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 26 done: `admin-dashboard/src/app/dashboard/venues/page.tsx`'s
+  venue-name requiredness check (tenth admin-dashboard candidate).**
+  Extracted the Save button's inline `!d.name.trim()` disabled-guard
+  check into new `admin-dashboard/src/lib/venueFormSchema.ts`
+  (`isVenueNameValid` — a plain predicate, not a zod schema). Pure
+  extraction, byte-for-byte identical to the original check — no bug
+  found, no behavior change. Left the page's raw `alert`/`confirm` usage
+  untouched (a UX-pattern finding from the same sweep, not this item's
+  validation-logic scope). New
+  `admin-dashboard/src/lib/__tests__/venueFormSchema.test.ts` (4
+  accept/reject cases). Verification: 4/4 new tests pass; full
+  admin-dashboard suite (`vitest run`) 54/54 suites, 543/543 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 1 pre-existing warning, unrelated;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file uses this exact expression.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-venue-name-zod-step26.md`.
+  **Still open:** the remaining 9 candidates from the broader sweep (6
+  driver-app candidates; 2 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 27 done: `admin-dashboard/src/app/dashboard/faqs/page.tsx`'s
+  question/answer requiredness check (eleventh and final standalone
+  admin-dashboard candidate).** Extracted `handleSave`'s inline
+  `!form.question.trim() || !form.answer.trim()` check into new
+  `admin-dashboard/src/lib/faqFormSchema.ts` (`isFaqFormValid` — a plain
+  predicate, not a zod schema). Pure extraction, byte-for-byte identical
+  to the original check — no bug found, no behavior change. New
+  `admin-dashboard/src/lib/__tests__/faqFormSchema.test.ts` (6
+  accept/reject cases). Verification: 6/6 new tests pass; full
+  admin-dashboard suite (`vitest run`) 55/55 suites, 549/549 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 1 pre-existing warning, unrelated;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed isolation. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-faqs-zod-step27.md`.
+
+  **Separately flagged, not fixed:** `handleDelete`'s `catch` block
+  silently swallows a failed delete (code comment only, no
+  `setDeleteError`) — same shape as the `resolveDispute` gap fixed in
+  #4754. Queued as a task suggestion, not folded into this step.
+
+  **Still open:** 8 candidates from the broader sweep — 6 driver-app,
+  plus admin-dashboard's `ride-complaint-form.tsx`/`ride-flag-form.tsx`
+  (silent no-op UX gaps needing a small behavior addition, not a pure
+  extraction — tracked as their own step). No ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

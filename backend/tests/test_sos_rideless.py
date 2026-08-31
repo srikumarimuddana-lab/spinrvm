@@ -170,6 +170,35 @@ class TestTriggerEmergencyRideless:
         UUID(result1["incident_id"])
         UUID(result2["incident_id"])
 
+    async def test_sos_raises_zoho_ticket_for_safety_team(self):
+        """#4599 Finding 2: same Zoho ticket as trigger_emergency -- see that
+        test's docstring for the full rationale. Fired via spawn(); await
+        the trigger through asyncio.sleep(0) so the scheduled task runs."""
+        import asyncio
+
+        from backend.routes import rides as rides_mod
+
+        ticket_mock = AsyncMock()
+        with (
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"rideless_sos_enabled": True})),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides.safety.create_ticket_for_safety", ticket_mock),
+        ):
+            await rides_mod.trigger_emergency_rideless(
+                body=_Req(),
+                current_user={"id": RIDER_ID, "is_driver": False},
+            )
+            await asyncio.sleep(0)
+
+        ticket_mock.assert_awaited_once()
+        incident = ticket_mock.await_args.args[0]
+        assert incident["category"] == "sos_button_rideless"
+        assert incident["ride_id"] is None
+        assert incident["reported_by_user_id"] == RIDER_ID
+
     async def test_lat_lon_forwarded_to_incident_record(self):
         _, persisted, _, _ = await self._trigger(RIDER_ID)
 

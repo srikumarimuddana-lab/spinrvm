@@ -666,8 +666,12 @@ function ProfileScreenInner() {
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/help' as any)}>
-                    <View style={[styles.iconBox, { backgroundColor: 'rgba(37, 99, 235, 0.1)' }]}>
-                        <Ionicons name="help-circle" size={18} color="#2563EB" />
+                    {/* #4640 Finding 3: was hardcoded #2563EB, an undocumented third
+                        blue distinct from the theme's colors.info -- this row sits in
+                        the normal themed surface, so it adapts with the theme like
+                        everything else here. */}
+                    <View style={[styles.iconBox, { backgroundColor: `${colors.info}1A` }]}>
+                        <Ionicons name="help-circle" size={18} color={colors.info} />
                     </View>
                     <Text style={styles.actionText}>Help Center</Text>
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />

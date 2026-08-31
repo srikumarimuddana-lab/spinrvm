@@ -317,6 +317,38 @@ class TestTriggerEmergency:
         assert call.kwargs.get("target_app") == "driver"
         assert call.kwargs.get("priority") == "safety"
 
+    async def test_sos_raises_zoho_ticket_for_safety_team(self):
+        """#4599 Finding 2: SOS previously reached only the admin WS
+        broadcast + email + CRITICAL log, none of which land in the safety
+        team's day-to-day Zoho triage queue the way the routine, self-filed
+        /safety/report path already does. Fired via spawn() -- yield once
+        so the scheduled task actually runs, matching the confirmation-push
+        tests above."""
+        from backend.routes import rides as rides_mod
+
+        ticket_mock = AsyncMock()
+        with (
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(return_value={"success": True})),
+            patch("backend.routes.rides.safety.create_ticket_for_safety", ticket_mock),
+        ):
+            await rides_mod.trigger_emergency(
+                ride_id=RIDE_ID,
+                body=_Req(),
+                current_user={"id": RIDER_ID},
+            )
+            await asyncio.sleep(0)
+
+        ticket_mock.assert_awaited_once()
+        incident = ticket_mock.await_args.args[0]
+        assert incident["category"] == "sos_button"
+        assert incident["ride_id"] == RIDE_ID
+        assert incident["reported_by_user_id"] == RIDER_ID
+
     async def test_emergency_contacts_receive_sms(self):
         contacts = [
             {"id": "ec-1", "phone": "+13061112222", "name": "Mom"},

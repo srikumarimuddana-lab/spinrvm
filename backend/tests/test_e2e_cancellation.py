@@ -351,7 +351,13 @@ class TestRiderCancelFeeWriteFailureReleasesDriver:
         settings = {"cancellation_fee_admin": 0.50, "cancellation_fee_driver": 2.50}
         wallet = {"id": "wallet_1", "balance": 100.0}
 
-        set_avail = AsyncMock()
+        # #4597 Finding 3: cancellation.py now only records the Period-1
+        # transition when set_driver_available's returned row confirms the
+        # driver actually came back available (isinstance(dict) + is_available
+        # truthy) — mirror that shape here instead of a bare AsyncMock, whose
+        # MagicMock return value fails the isinstance(dict) check and would
+        # silently skip the transition this test asserts on.
+        set_avail = AsyncMock(return_value={"id": DRIVER_ID, "is_available": True})
         period = AsyncMock()
         ws = AsyncMock()
 

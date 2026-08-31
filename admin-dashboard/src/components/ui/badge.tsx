@@ -16,6 +16,14 @@ const badgeVariants = cva(
           "bg-destructive text-white [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
           "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+        // "Quiet Console" addition: the accent-bordered sibling of `outline`
+        // above, for the one item in a same-weight group that's worth a
+        // second look (e.g. the super_admin role among 5 roles) without
+        // reaching for a filled, competing hue the way ROLE_COLORS-style
+        // ad-hoc badges do today. Pure addition — no existing call site
+        // uses this variant, so it has zero effect until adopted.
+        "outline-accent":
+          "border-primary text-primary [a&]:hover:bg-primary/10",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
       },

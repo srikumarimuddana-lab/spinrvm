@@ -60,6 +60,12 @@
    instead for --ring/--chart-1, which only need the 3:1 non-text threshold. */
 :root {
   --radius: 0.625rem;
+  /* Default = Tailwind's own built-in --shadow-sm (available automatically
+     via `@import "tailwindcss"` above) — i.e. pixel-identical to today's
+     static `shadow-sm` class on Card. Only .theme-v2 below overrides this
+     to `none`; referencing Tailwind's token rather than hardcoding a guessed
+     box-shadow value keeps this guaranteed to match, not approximate it. */
+  --shadow-card: var(--shadow-sm);
   --background: #f9fafb;
   --foreground: #111827;
   --card: #ffffff;
@@ -190,14 +196,13 @@
   --sidebar-ring: #ff453a;
 }
 
-/* ── Theme v2 (epic #2785 Phase 3) ── */
-/* Typography (Geist → Plus Jakarta Sans) and radius (10px → 16px) port from
-   shared/theme/index.ts, scoped to this class rather than :root/.dark so it
-   stays fully inert until a `.theme-v2` ancestor is present — gated behind
-   the `admin_theme_v2_enabled` flag (see useFeatureFlag, PR #2837) rather
-   than applied globally, given the blast radius (every shared primitive on
-   all 34 routes reads --radius, and every use of the `font-sans` utility
-   reads --font-geist-sans).
+/* ── Theme v2 / "Quiet Console" (epic #2785 Phase 3, redirected) ── */
+/* Typography (Geist → Plus Jakarta Sans) port from shared/theme/index.ts,
+   scoped to this class rather than :root/.dark so it stays fully inert
+   until a `.theme-v2` ancestor is present — gated behind the
+   `admin_theme_v2_enabled` flag (see useFeatureFlag, PR #2837) rather than
+   applied globally, given the blast radius (every shared primitive on all
+   90+ routes reads these tokens).
    Overrides --font-geist-sans itself, NOT the --font-sans alias: Tailwind
    v4's `@theme inline` inlines the alias's *source* variable directly into
    generated utilities at build time (`.font-sans { font-family:
@@ -207,10 +212,65 @@
    (no next/font call loaded it) until this same PR added the Plus Jakarta
    Sans next/font/google call to the root layout — so today's *actual*
    rendered font is already just the browser default sans-serif, not
-   literally Geist, regardless of this flag. */
+   literally Geist, regardless of this flag.
+
+   RADIUS: the original Theme v2 preview (reverted 2026-08-21) moved this
+   the *other* direction, 10px → 16px (softer/rounder). The "Quiet Console"
+   design direction (docs/change-log/2026-08-31-... redirect note) argues
+   the opposite — tighter, more precise corners read calmer than a bouncy
+   pill shape — so this now goes 10px → 6px instead of → 16px. Same flag,
+   same mechanism, reversed direction; nothing about the flag's plumbing
+   changed, only the value it carries. */
 .theme-v2 {
   --font-geist-sans: var(--font-plus-jakarta-sans);
-  --radius: 1rem;
+  --radius: 0.375rem;
+  /* Card's box-shadow, consumed via an arbitrary-value utility
+     (shadow-[var(--shadow-card)]) instead of the static `shadow-sm` class —
+     same "let a token flow through every consumer" pattern --radius above
+     already relies on. Applies in both light and dark; a flat, hairline-
+     bordered surface reads calmer than a drop shadow either way, and this
+     doesn't touch color, so it doesn't intersect the light/dark-only rule
+     below. */
+  --shadow-card: none;
+}
+
+/* Quiet Console neutrals — LIGHT MODE ONLY. Dark mode is deliberately left
+   untouched here: the brand's OLED-true-black dark background is a stated
+   product decision (mobile app battery profile, per
+   .claude/context/brand-spinr.md), and the direction this shipped under
+   was explicitly NOT to deviate from it — confirmed 2026-08-31. The
+   `html:not(.dark) .theme-v2` guard (rather than a bare `.theme-v2`
+   selector) is what makes that scoping real: `.theme-v2` is a `<div>`
+   nested inside `<html>`, so a bare `.theme-v2 { --background: ... }`
+   would silently win over `.dark`'s value regardless of which mode is
+   active — verified this distinction before writing it, it's the exact
+   kind of thing that's invisible in a light-mode screenshot and wrong in
+   dark mode.
+   --primary/--destructive/--warning/--success/--ring/--chart-1..5/
+   --sidebar-primary are deliberately NOT touched here: the brand accent
+   stays exactly as strong as it is today — only how often the UI reaches
+   for it changes (that's a component-level change, not a token one). */
+html:not(.dark) .theme-v2 {
+  --background: #fafaf8;
+  --foreground: #1c1c1a;
+  --card: #ffffff;
+  --card-foreground: #1c1c1a;
+  --popover: #ffffff;
+  --popover-foreground: #1c1c1a;
+  --secondary: #f2f1ec;
+  --secondary-foreground: #1c1c1a;
+  --muted: #f2f1ec;
+  --muted-foreground: #6b6b65;
+  --accent: #f2f1ec;
+  --accent-foreground: #1c1c1a;
+  --border: #e4e3dd;
+  --input: #e4e3dd;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #1c1c1a;
+  --sidebar-foreground-muted: #6b6b65;
+  --sidebar-accent: #f2f1ec;
+  --sidebar-accent-foreground: #1c1c1a;
+  --sidebar-border: #e4e3dd;
 }
 
 @layer base {

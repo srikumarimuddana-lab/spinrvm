@@ -732,9 +732,12 @@ async def admin_get_driver_stats(
 
     # Enrich with user info (batch)
     user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
-    users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
-    )
+    # Batched: `$in` compiles to a `id=in.(...)` URL parameter, and the whole
+    # fleet's user_ids is a ~35 KB request line that the edge proxy rejects with
+    # a plain-text 400 before PostgREST ever sees it (surfaces as the opaque
+    # "JSON could not be generated"). This endpoint returned 500 for every admin
+    # because of it.
+    users_list = await db_supabase.get_rows_batched_in("users", "id", user_ids)
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
     # Auto-detect needs_review: active drivers with expired docs or pending re-uploads.

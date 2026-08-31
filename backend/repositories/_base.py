@@ -904,6 +904,73 @@ async def get_rows(
     return await run_sync(_fn)
 
 
+# PostgREST renders `{"col": {"$in": [...]}}` as a `col=in.(v1,v2,…)` URL query
+# parameter, so the id list travels in the request LINE, not a body. ~910 UUIDs
+# is a ~35 KB URL, and the edge proxy in front of PostgREST rejects it with a
+# plain-text `Bad Request` — a 400 the client surfaces as the opaque
+# "JSON could not be generated", because the body is not JSON. The request never
+# reaches PostgREST, so nothing appears in its logs either.
+#
+# 150 keeps the encoded segment near 6 KB (150 x ~39 chars), well clear both of
+# the edge's ~32 KB ceiling and of the 8 KB request-line default that fronting
+# proxies commonly use.
+_IN_BATCH_SIZE = 150
+
+# Rows fetched per request within one batch (see the paging loop below).
+_BATCH_PAGE_SIZE = 1000
+
+
+async def get_rows_batched_in(
+    table: str,
+    column: str,
+    values,
+    extra_filters: Optional[Dict[str, Any]] = None,
+    *,
+    columns: str = "*",
+    limit: Optional[int] = None,
+    batch_size: int = _IN_BATCH_SIZE,
+):
+    """``get_rows`` for a large ``column IN (values)`` set, split across requests.
+
+    Use instead of a bare ``{"col": {"$in": ids}}`` whenever ``ids`` grows with
+    the fleet (every driver, every user) rather than being a fixed small set
+    like a status list — see the URL-length note above.
+
+    Rows are concatenated in batch order. Deliberately offers no ``order``/
+    ``offset``: ordering is per-request, so a global sort cannot be honoured by
+    concatenating batches, and silently returning a mis-ordered page would be
+    worse than not offering it. ``limit`` caps the TOTAL rows returned and stops
+    early once reached. An empty ``values`` returns ``[]`` without querying —
+    the same "matches nothing" an empty ``$in`` means, and never an unfiltered
+    scan of the whole table.
+    """
+    vals = list(values)
+    if not vals:
+        return []
+
+    out: list = []
+    for i in range(0, len(vals), batch_size):
+        if limit is not None and len(out) >= limit:
+            break
+        chunk = vals[i : i + batch_size]
+        filters: Dict[str, Any] = dict(extra_filters or {})
+        filters[column] = {"$in": chunk}
+        # Page WITHIN the batch. One key can match many rows (a driver has many
+        # rides), so capping a batch at len(chunk) would silently drop rows —
+        # exactly the kind of under-count that looks like correct data.
+        offset = 0
+        while True:
+            want = _BATCH_PAGE_SIZE if limit is None else min(_BATCH_PAGE_SIZE, limit - len(out))
+            if want <= 0:
+                break
+            page = await get_rows(table, filters, limit=want, offset=offset, columns=columns)
+            out.extend(page)
+            if len(page) < want:
+                break
+            offset += want
+    return out if limit is None else out[:limit]
+
+
 async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None, id_column: str = "id") -> int:
     """Count rows matching filters. ``id_column`` must name a real column on
     ``table`` — most tables use the default "id", but a few (e.g.

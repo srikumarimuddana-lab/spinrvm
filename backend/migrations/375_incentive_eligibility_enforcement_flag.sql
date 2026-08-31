@@ -8,7 +8,8 @@
 --   * a time_limited campaign whose end_date has passed keeps paying forever;
 --   * a campaign capped at max_budget pays out without limit, while the admin
 --     dashboard renders "Budget: $0 / $500" because budget_used was never
---     incremented by anything (grep: only the CREATE TABLE in migration 96);
+--     incremented by anything (grep: migration 96 declares the column and
+--     nothing has ever written it);
 --   * bonus_type='percentage' is paid as if the amount were dollars;
 --   * a conditions.min_distance_km of 20 pays on a 2 km ride.
 --

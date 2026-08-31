@@ -73,7 +73,7 @@ anyio>=4.13.0
 cloudinary>=1.44.1
 
 # Data processing
-pandas>=3.0.2
+pandas>=3.0.5
 numpy>=2.4.4
 
 # Payments

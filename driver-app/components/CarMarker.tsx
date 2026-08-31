@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, Image } from 'react-native';
+import { Animated, Easing, Platform, Image, View } from 'react-native';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
     distanceMeters,
@@ -96,6 +96,25 @@ interface CarMarkerProps {
     // usable GPS heading arrives (a stationary fix reports heading -1, which
     // previously left the car pointing due north across east-west streets).
     routeCoordinates?: readonly TrackingLatLng[] | null;
+    /**
+     * Optional state-colored presence ring drawn behind the car icon.
+     * `color` is caller-resolved (this component has no theme access and no
+     * ride-state knowledge by design — pass `colors.success`/`colors.warning`
+     * /`colors.primary` etc. from the caller's own `useTheme()`). `pulsing`
+     * toggles a looping "radar" pulse (an active, bounded-duration moment —
+     * e.g. en route to pickup) vs. a static ring (a steady state — parked
+     * online-idle, or a trip already in progress).
+     *
+     * ONLY pass this on a screen that renders a single CarMarker at a time
+     * (a driver's own vehicle, or a rider's one assigned driver). While
+     * `pulsing` is true this forces Android's `tracksViewChanges` to stay
+     * true for as long as the ring pulses — cheap for exactly one marker,
+     * but the same perf trap the mount-bounce animation above was built to
+     * avoid if it were ever applied per-marker on a multi-marker screen
+     * (e.g. rider-app's nearby-drivers map, `(tabs)/index.tsx`) — never wire
+     * this prop there.
+     */
+    ring?: { color: string; pulsing: boolean } | null;
 }
 
 // Playback tick: the marker re-targets its position animation this often,
@@ -183,6 +202,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     variant = 'standard',
     imageUri,
     routeCoordinates,
+    ring,
 }) => {
     const markerRef = useRef<any>(null);
     // Stable Animated holders created once; reading .current at init is safe.
@@ -472,6 +492,42 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Optional state-colored presence ring — see the `ring` prop doc comment
+    // above for the perf constraint (single-marker screens only). Two
+    // layers: a static low-opacity circle always shown while `ring` is set,
+    // plus (only while `ring.pulsing`) a second circle that scales up and
+    // fades out in a loop. Animated.loop's default `resetBeforeIteration`
+    // snaps the value back to 0 each cycle, so this is one Animated.timing,
+    // not a hand-rolled sequence.
+    // eslint-disable-next-line react-hooks/refs
+    const ringPulseAnim = useRef(new Animated.Value(0)).current;
+    const ringLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+    useEffect(() => {
+        if (ringLoopRef.current) {
+            ringLoopRef.current.stop();
+            ringLoopRef.current = null;
+        }
+        if (!ring?.pulsing) {
+            ringPulseAnim.setValue(0);
+            return;
+        }
+        ringPulseAnim.setValue(0);
+        const loop = Animated.loop(
+            Animated.timing(ringPulseAnim, {
+                toValue: 1,
+                duration: 1400,
+                easing: Easing.out(Easing.ease),
+                useNativeDriver: true,
+            }),
+        );
+        ringLoopRef.current = loop;
+        loop.start();
+        return () => {
+            loop.stop();
+            ringLoopRef.current = null;
+        };
+    }, [ring?.pulsing, ringPulseAnim]);
+
     // Custom marker failed to load (offline + cold cache, dead URL) — fall
     // back to the bundled variant. Reset when the URL changes so a fixed
     // upload is retried.
@@ -496,6 +552,42 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         transform: [{ scale: mountAnim }],
     };
 
+    // Ring geometry: the static ring sits at ~1.35x the car icon; the pulse
+    // (when present) scales up to ~1.7x THAT, so the outer wrapper needs
+    // ~2.3x the icon size to avoid clipping the pulse at its largest frame.
+    // Precomputed (not computed inline in JSX) for the same react-hooks/refs
+    // reason as mountAnimatedStyle above.
+    const ringDiameter = size * 1.35;
+    const ringMaxDiameter = size * 2.3;
+    const staticRingStyle = ring
+        ? {
+              position: 'absolute' as const,
+              width: ringDiameter,
+              height: ringDiameter,
+              borderRadius: ringDiameter / 2,
+              backgroundColor: ring.color,
+              opacity: 0.28,
+          }
+        : null;
+    /* eslint-disable react-hooks/refs -- ringPulseAnim is the stable Animated.Value from useRef(...).current above, not a fresh ref read */
+    const pulseRingAnimatedStyle = ring
+        ? {
+              position: 'absolute' as const,
+              width: ringDiameter,
+              height: ringDiameter,
+              borderRadius: ringDiameter / 2,
+              backgroundColor: ring.color,
+              opacity: ringPulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0] }),
+              transform: [{ scale: ringPulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.7] }) }],
+          }
+        : null;
+    /* eslint-enable react-hooks/refs */
+    const outerSize = ring ? ringMaxDiameter : size;
+    // Only forced while the ring actually loops — a static ring (in-trip,
+    // steady-state) is a one-time render, same settle-then-freeze lifecycle
+    // as everything else in this file.
+    const effectiveTracksViewChanges = ring?.pulsing ? true : tracksViewChanges;
+
     return (
         <MarkerComponent
             ref={markerRef}
@@ -503,25 +595,50 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={isAndroid ? androidRotation : (rotationAnim as any)}
-            tracksViewChanges={tracksViewChanges}
+            tracksViewChanges={effectiveTracksViewChanges}
             zIndex={zIndex}
             identifier={identifier}
             style={{ backgroundColor: 'transparent' }}
         >
-            {/* eslint-disable-next-line react-hooks/refs -- mountAnimatedStyle is a plain object computed above from the stable mountAnim ref value, not a fresh ref read */}
-            <Animated.View style={mountAnimatedStyle}>
-                <Image
-                    source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
-                    onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
-                    onLoad={handleImageLoaded}
-                    resizeMode="contain"
-                    style={{
-                        width: size,
-                        height: size,
-                        backgroundColor: 'transparent',
-                    }}
-                />
-            </Animated.View>
+            <View
+                style={{
+                    width: outerSize,
+                    height: outerSize,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: 'transparent',
+                }}
+            >
+                {ring && (
+                    <View
+                        pointerEvents="none"
+                        style={{
+                            position: 'absolute',
+                            width: ringMaxDiameter,
+                            height: ringMaxDiameter,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        <View style={staticRingStyle as any} />
+                        {ring.pulsing && <Animated.View style={pulseRingAnimatedStyle as any} />}
+                    </View>
+                )}
+                {/* eslint-disable-next-line react-hooks/refs -- mountAnimatedStyle is a plain object computed above from the stable mountAnim ref value, not a fresh ref read */}
+                <Animated.View style={mountAnimatedStyle}>
+                    <Image
+                        source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
+                        onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
+                        onLoad={handleImageLoaded}
+                        resizeMode="contain"
+                        style={{
+                            width: size,
+                            height: size,
+                            backgroundColor: 'transparent',
+                        }}
+                    />
+                </Animated.View>
+            </View>
         </MarkerComponent>
     );
 };
@@ -538,7 +655,12 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.identifier === next.identifier &&
         prev.variant === next.variant &&
         prev.imageUri === next.imageUri &&
-        prev.routeCoordinates === next.routeCoordinates
+        prev.routeCoordinates === next.routeCoordinates &&
+        // Compared by value, not reference: callers commonly pass a fresh
+        // `{ color, pulsing }` object literal each render, which would
+        // otherwise defeat memoization for every ring-using call site.
+        prev.ring?.color === next.ring?.color &&
+        prev.ring?.pulsing === next.ring?.pulsing
     );
 }
 

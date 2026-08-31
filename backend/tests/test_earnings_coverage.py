@@ -31,6 +31,7 @@ test_drivers_extended.py):
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -934,23 +935,23 @@ class TestGetDriverEarningsComparison:
         assert result["change_pct"]["rides"] == 0.0
 
     async def test_month_period_zero_previous_gives_100pct_or_0pct(self):
-        from datetime import datetime, timedelta, timezone
 
         from backend.routes.drivers import get_driver_earnings_comparison
 
-        # Relative timestamp: the assertion below relies on the handler's
-        # Python-side previous-window filter (ride_completed_at < now-30d)
-        # excluding this ride, so it must always sit inside the current
-        # 30-day window. A hardcoded date broke here on 2026-08-31, when
-        # 2026-08-01 aged past the 30-day boundary and previous became 1.
-        current_ride = _ride(
-            ride_completed_at=(datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
-        )
+        # Regression (2026-08-31): this used a hardcoded absolute date
+        # ("2026-08-01") that was safely inside the 30-day "current" window
+        # only while "now" stayed within August 2026 -- once wall-clock time
+        # crossed the 30-day-ago boundary past that fixed date, the ride
+        # started landing in the "previous" bucket instead, and
+        # previous["rides"] flipped from the intended 0 to 1. Anchor the
+        # fixture to "now" instead so the test doesn't decay with time: 5
+        # days ago is unambiguously inside the current 30-day window and
+        # nowhere near the 30/60-day previous-period boundary.
+        current_ride = _ride(ride_completed_at=(datetime.now(timezone.utc) - timedelta(days=5)).isoformat())
 
         def get_rows(table, filters=None, **kw):
             if table != "rides":
                 return []
-            gte = (filters or {}).get("ride_completed_at", {}).get("$gte", "")
             # Current-period query (>= ~30d ago) sees the ride; the all_rides
             # query (>= ~60d ago) also sees it but the previous window
             # (30-60d ago) then filters it out entirely -> previous == 0.

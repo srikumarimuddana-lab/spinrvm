@@ -743,6 +743,11 @@ function RideInProgressScreenContent() {
                 routeCoordinates={tripRouteCoords.length > 1 ? tripRouteCoords : null}
                 size={44}
                 zIndex={100}
+                // Single marker on this screen (the assigned driver) — safe
+                // to render a ring. Static, not pulsing: the trip is
+                // already under way, no need for extra attention-drawing
+                // motion (matches driver-app's own trip_in_progress ring).
+                ring={{ color: colors.primary, pulsing: false }}
               />
             )}
           </MapView>

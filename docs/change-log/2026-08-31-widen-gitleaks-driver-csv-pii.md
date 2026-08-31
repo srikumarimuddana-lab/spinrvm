@@ -1,5 +1,19 @@
 # Change Impact & Risk Log
 
+## 0. Superseded (2026-08-31)
+
+**The actual `.gitleaks.toml` rule addition in this branch was dropped.** A parallel session
+independently landed an equivalent rule (`spinr-driver-export-pii`, PR #4733) closing the
+same detection gap while this branch was in flight — merged to `main` first. On merging
+`main` into this branch, `.gitleaks.toml` was resolved to `main`'s version and this branch's
+now-duplicate `spinr-driver-csv-pii` rule was dropped rather than reintroduced (same pattern
+as #4597 Finding 1's resolution earlier this session, PR #4729/#4732).
+
+This log is kept, unmodified below, as a record of the independent verification work done
+against the real gitleaks binary (§4, §9) — useful supplementary evidence even though the
+rule itself didn't ship from this branch. The gap it describes (§1) is closed; see
+`main`'s current `.gitleaks.toml` for the rule that actually shipped.
+
 ## Summary
 
 | Field | Value |
@@ -8,7 +22,7 @@
 | Author | Claude Code (session) |
 | Surface(s) | CI / security config |
 | Domain (Sentry tag) | — (not runtime code; CI gate config) |
-| PR / commit link | security/widen-gitleaks-driver-csv-pii |
+| PR / commit link | security/widen-gitleaks-driver-csv-pii (superseded — see §0) |
 | Related issue or gap ID | #4596 (one of three "Still-open items" on the breach record) |
 
 ## 1. Issue / gap identified

@@ -16252,7 +16252,19 @@ Remaining, roughly in order of user impact:
   per-client renderer/screenshot pipeline this pass didn't build, same as
   N12's own original text already said. `utils/subscription_invoice.py`
   (PDF + kwargs, not raw HTML, DB-dependent) also wasn't brought into this
-  net — different shape of problem. See
+  net — different shape of problem. **Still open (2026-08-31):** this
+  gap remains unresolved pending a vendor/tooling decision — no paid
+  rendering-verification service (Litmus, Email on Acid, or similar) is
+  set up, and no per-client screenshot pipeline exists. A concrete plan —
+  a template-specific risk assessment plus three verification options
+  (paid service, free manual test-account matrix, static compatibility-
+  table cross-referencing) with a recommended no-cost interim checklist —
+  is written up at
+  `docs/testing/2026-08-31-email-client-rendering-verification-plan.md`.
+  That document informs the decision; it does not make it or close this
+  item — treat N12 as still open until a vendor is chosen (or the interim
+  manual checklist is formally adopted as the accepted long-term posture).
+  See
   `docs/change-log/2026-08-12-n12-email-snapshot-tooling.md`.
 - [x] ~~**N13. Rider-side lifecycle emails**~~ — done for welcome (R4),
   email-address-change security notice (R7), account-deletion confirmation

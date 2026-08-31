@@ -110,7 +110,9 @@ class TestSubscriptionCheckoutReturn:
     async def test_allowlisted_scheme_redirects_with_session_id(self):
         from backend.routes.drivers import subscription_checkout_return
 
-        response = await subscription_checkout_return(session_id="cs_test_abc123", to="spinr-driver://subscription/success")
+        response = await subscription_checkout_return(
+            session_id="cs_test_abc123", to="spinr-driver://subscription/success"
+        )
         assert response.status_code == 302
         assert response.headers["location"] == "spinr-driver://subscription/success?session_id=cs_test_abc123"
 
@@ -701,8 +703,9 @@ class TestSubscribeToPlanErrorBranches:
     async def test_dev_mode_cancels_existing_active_subscription(self):
         """Dev/no-Stripe activation must cancel the driver's prior active pass
         and bump the subscriber count inline (no webhook to do it later)."""
-        from backend.routes.drivers import subscribe_to_plan
         from fastapi import Request
+
+        from backend.routes.drivers import subscribe_to_plan
 
         request = AsyncMock(spec=Request)
         request.json = AsyncMock(return_value={"plan_id": "plan-free"})
@@ -1584,7 +1587,10 @@ class TestCheckExpiringSubscriptionsMainLoopBranches:
         offline_flip = [
             c
             for c in update_mock.await_args_list
-            if c.args and c.args[0] == "drivers" and c.args[1] == {"id": "d-online"} and c.args[2].get("is_online") is False
+            if c.args
+            and c.args[0] == "drivers"
+            and c.args[1] == {"id": "d-online"}
+            and c.args[2].get("is_online") is False
         ]
         assert offline_flip
         manager_mock.disconnect.assert_any_call("driver_u-online")
@@ -1650,9 +1656,7 @@ class TestCheckExpiringSubscriptionsMainLoopBranches:
                 "backend.routes.drivers._deps.manager": manager_mock,
                 "backend.routes.drivers._deps.clear_presence": AsyncMock(side_effect=Exception("presence down")),
                 "backend.routes.drivers._deps.record_period_transition": AsyncMock(),
-                "backend.routes.drivers._deps.send_push_notification": AsyncMock(
-                    side_effect=Exception("push down")
-                ),
+                "backend.routes.drivers._deps.send_push_notification": AsyncMock(side_effect=Exception("push down")),
             }
         )
         manager_mock.disconnect.assert_any_call("driver_u1")
@@ -1696,6 +1700,92 @@ class TestCheckExpiringSubscriptionsMainLoopBranches:
         )
         # Enforcement aborted before the insurance-period transition ran.
         period_mock.assert_not_awaited()
+
+    async def test_active_ride_defers_offline_flip_and_period_transition(self):
+        """#4597 Finding 1 (P0): a driver mid-trip when their subscription
+        expires must NOT be forced offline / dropped to Period 0 — that
+        would misclassify a live commercial trip as personal-auto-only.
+        The sub row still gets marked expired; only the offline-flip +
+        period-transition are deferred to ride completion."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        sub = {"id": "sub-1", "driver_id": "d1", "expires_at": (now - timedelta(hours=1)).isoformat()}
+        driver = {"id": "d1", "user_id": "u1", "is_online": True}
+        active_ride = {"id": "ride-1", "driver_id": "d1", "status": "in_progress"}
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "driver_subscriptions" and filters.get("status") == "active":
+                return [sub]
+            if table == "rides" and filters.get("driver_id") == "d1":
+                return [active_ride]
+            return []
+
+        def fake_find_one(table, filters, **kw):
+            if table == "drivers":
+                return driver
+            return None
+
+        update_mock = AsyncMock()
+        period_mock = AsyncMock()
+        manager_mock = MagicMock()
+        manager_mock.disconnect = MagicMock()
+        await _run_once(
+            **{
+                "backend.db_supabase.get_rows": AsyncMock(side_effect=fake_get_rows),
+                "backend.db_supabase.find_one": AsyncMock(side_effect=fake_find_one),
+                "backend.db_supabase.update_one": update_mock,
+                "backend.settings_loader.get_app_settings": AsyncMock(
+                    return_value={"require_driver_subscription": True}
+                ),
+                "backend.routes.drivers._deps.record_period_transition": period_mock,
+                "backend.routes.drivers._deps.manager": manager_mock,
+            }
+        )
+        # Sub row still marked expired (unconditional).
+        expired_calls = [c for c in update_mock.await_args_list if c.args and c.args[0] == "driver_subscriptions"]
+        assert expired_calls
+        # But the driver was never flipped offline, no period-0 write, no disconnect.
+        driver_flip_calls = [c for c in update_mock.await_args_list if c.args and c.args[0] == "drivers"]
+        assert not driver_flip_calls
+        period_mock.assert_not_awaited()
+        manager_mock.disconnect.assert_not_called()
+
+    async def test_no_active_ride_still_enforces_offline_flip(self):
+        """Regression guard for the fix above: a driver with NO active ride
+        at subscription expiry must still be flipped offline and dropped to
+        Period 0 as before — the guard must not over-defer."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        sub = {"id": "sub-1", "driver_id": "d1", "expires_at": (now - timedelta(hours=1)).isoformat()}
+        driver = {"id": "d1", "user_id": "u1", "is_online": True}
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "driver_subscriptions" and filters.get("status") == "active":
+                return [sub]
+            if table == "rides" and filters.get("driver_id") == "d1":
+                return []  # no active ride
+            return []
+
+        def fake_find_one(table, filters, **kw):
+            if table == "drivers":
+                return driver
+            return None
+
+        period_mock = AsyncMock()
+        await _run_once(
+            **{
+                "backend.db_supabase.get_rows": AsyncMock(side_effect=fake_get_rows),
+                "backend.db_supabase.find_one": AsyncMock(side_effect=fake_find_one),
+                "backend.db_supabase.update_one": AsyncMock(),
+                "backend.settings_loader.get_app_settings": AsyncMock(
+                    return_value={"require_driver_subscription": True}
+                ),
+                "backend.routes.drivers._deps.record_period_transition": period_mock,
+            }
+        )
+        period_mock.assert_awaited_once_with("d1", 0)
 
     async def test_24h_warning_push_failure_is_swallowed_flag_still_set(self):
         from datetime import datetime, timedelta, timezone
@@ -1822,9 +1912,7 @@ class TestCheckExpiringSubscriptions3DayWarning:
                 "backend.db_supabase.get_rows": AsyncMock(side_effect=fake_get_rows),
                 "backend.db_supabase.find_one": AsyncMock(side_effect=fake_find_one),
                 "backend.db_supabase.update_one": update_mock,
-                "backend.routes.drivers._deps.send_push_notification": AsyncMock(
-                    side_effect=Exception("push down")
-                ),
+                "backend.routes.drivers._deps.send_push_notification": AsyncMock(side_effect=Exception("push down")),
             }
         )
         claimed = [

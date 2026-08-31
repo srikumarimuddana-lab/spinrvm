@@ -274,6 +274,70 @@ async def test_fee_computation_failure_still_releases_driver():
     mock_supabase.set_driver_available.assert_awaited_once_with(_DRIVER_ID, True)
 
 
+async def test_rider_cancel_skips_period1_when_driver_already_offline():
+    """#4597 Finding 3 (P2): if the driver had already gone offline before
+    this rider-initiated cancel landed, set_driver_available clamps
+    is_available->False -- writing Period 1 in that case would falsely
+    reopen an online/commercial-insurance window for a driver who is
+    actually Period 0. Mirrors the equivalent guard already in
+    routes/rides/matching.py's offer-timeout handler."""
+    from backend.routes.rides.cancellation import cancel_ride_rider
+
+    searching = _ride(status="searching", driver_id=_DRIVER_ID)
+    cancelled = _ride(status="cancelled", driver_id=_DRIVER_ID)
+    driver = {"id": _DRIVER_ID, "user_id": "drv-user-1"}
+    req = _starlette_request()
+
+    with (
+        patch("backend.routes.rides.cancellation._deps.db") as mock_db,
+        patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
+        patch("backend.routes.rides.cancellation._deps.record_period_transition", AsyncMock()) as period_mock,
+        patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.find_one = AsyncMock(return_value=searching)
+        _base_patches(mock_db, mock_supabase, mock_manager, cancelled)
+        # Driver had already gone offline -- clamped to is_available: False.
+        mock_supabase.set_driver_available = AsyncMock(return_value={"id": _DRIVER_ID, "is_available": False})
+        mock_supabase.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_supabase.update_one = AsyncMock(return_value=cancelled)
+
+        result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
+
+    assert result["success"] is True
+    period_mock.assert_not_awaited()
+
+
+async def test_rider_cancel_records_period1_when_driver_still_online():
+    """Regression guard for the fix above: when the release actually makes
+    the driver available (the normal case), Period 1 must still be
+    recorded as before -- the guard must not over-suppress."""
+    from backend.routes.rides.cancellation import cancel_ride_rider
+
+    searching = _ride(status="searching", driver_id=_DRIVER_ID)
+    cancelled = _ride(status="cancelled", driver_id=_DRIVER_ID)
+    driver = {"id": _DRIVER_ID, "user_id": "drv-user-1"}
+    req = _starlette_request()
+
+    with (
+        patch("backend.routes.rides.cancellation._deps.db") as mock_db,
+        patch("backend.routes.rides.cancellation._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides.cancellation._deps.manager") as mock_manager,
+        patch("backend.routes.rides.cancellation._deps.record_period_transition", AsyncMock()) as period_mock,
+        patch("backend.routes.rides.cancellation._deps.spawn", side_effect=lambda coro: coro.close()),
+    ):
+        mock_db.find_one = AsyncMock(return_value=searching)
+        _base_patches(mock_db, mock_supabase, mock_manager, cancelled)
+        mock_supabase.set_driver_available = AsyncMock(return_value={"id": _DRIVER_ID, "is_available": True})
+        mock_supabase.get_driver_by_id = AsyncMock(return_value=driver)
+        mock_supabase.update_one = AsyncMock(return_value=cancelled)
+
+        result = await cancel_ride_rider(request=req, ride_id=_RIDE_ID, reason="", current_user=_USER)
+
+    assert result["success"] is True
+    period_mock.assert_awaited_once_with(_DRIVER_ID, 1)
+
+
 async def test_attribution_write_falls_back_to_minimal_on_missing_column():
     from backend.routes.rides.cancellation import cancel_ride_rider
 

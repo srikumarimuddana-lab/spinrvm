@@ -11,11 +11,15 @@
 > from the Privacy Policy draft and CLAUDE.md as of this review — it is not
 > a substitute for fixing the underlying issues those source documents
 > already flag: the 2-vs-3-year GPS retention contradiction in
-> `docs/data-classification.md`, and the fact that no scheduled hard-delete
-> job currently enforces the 30-day account-deletion promise (Privacy Policy
-> draft's own pre-publication note #4, DV-8). **Do not publish this page
-> until those two items are resolved** — a clean table of promises Spinr
-> isn't yet technically keeping is worse than the same promise buried in
+> `docs/data-classification.md` (code enforces **3 years** via migrations
+> 50/323 — `data-classification.md` is the stale side and needs correcting to
+> match). The 30-day account-deletion enforcement gap (DV-8) is **now
+> closed** — `retention_purge_loop` runs every ~24h and calls
+> `purge_pii_retention()`, whose Step N (`backend/migrations/296_pipeda_30day_profile_scrub.sql`)
+> enforces the 30-day scrub (`ACTION_ITEMS.md` B18, closed 2026-08-10). **Do
+> not publish this page until the GPS-figure contradiction is resolved** — a
+> clean table of promises Spinr isn't yet technically keeping is worse than
+> the same promise buried in
 > prose, because it's easier to point to and easier to be wrong about.
 
 ---
@@ -38,8 +42,8 @@ the Privacy Policy, the Privacy Policy controls.
 | Insurance coverage-period logs | 7 years, never altered after the fact | Insurance-audit requirement |
 | Full GPS trail of a completed trip | 90 days, then deleted | Not needed after trip reconciliation |
 | GPS point at pickup and drop-off only | 3 years | Regulatory and insurance-audit requirement |
-| In-ride chat messages | 90 days after trip, longer if part of an active safety investigation | Support and safety review |
-| Background check results (drivers) | 7 years after last check | CRA and regulatory record-keeping |
+| In-ride chat messages | 90 days after trip | Support and safety review |
+| Background check results (drivers) | [PENDING LEGAL/SAFETY DECISION — no retention period is set or enforced yet; see background-check-consent.md] | CRA and regulatory record-keeping |
 | Account information, after a deletion request | Removed within 30 days, except categories above | PIPEDA right to deletion, balanced against regulatory retention |
 
 WHY SOME DATA OUTLIVES A DELETION REQUEST
@@ -61,9 +65,11 @@ insurance-audit record intact, as described in our Privacy Policy.
    table (like the Privacy Policy draft) uses 3 years per CLAUDE.md and
    `docs/runbooks/data-breach.md`. Fix the internal document, not this one,
    since 3 years is the figure stated in the more authoritative source.
-2. **Confirm the 30-day deletion enforcement job exists (DV-8) before
-   publishing.** The Privacy Policy draft is explicit that no scheduled
-   hard-delete job enforces this promise yet — this table would repeat the
-   same unenforced promise in an even more citable form.
+2. **30-day deletion enforcement (DV-8) — closed 2026-08-10.** The scheduled
+   job exists and runs: `retention_purge_loop` (~24h, `backend/core/lifespan.py`)
+   → `purge_pii_retention()`, with the 30-day profile scrub in
+   `backend/migrations/296_pipeda_30day_profile_scrub.sql` (Step N). This
+   promise is now backed by code, not aspirational. (Corrected 2026-08-27;
+   the earlier "not enforced yet" note was stale.)
 3. This page is intentionally a mirror of Privacy Policy §4, not a
    replacement for it — keep both in sync if either changes.

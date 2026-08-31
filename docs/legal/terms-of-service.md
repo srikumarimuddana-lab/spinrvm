@@ -8,18 +8,23 @@
 > Copy only the text inside the markers into the admin dashboard's legal-text
 > editor.
 >
-> **Where this goes today.** As of this writing, neither app actually reads the
-> newer per-audience `legal_documents` table — both still fetch the single
-> shared blob at `GET /settings/legal`, set via Dashboard → Settings →
-> "Terms of Service" (a single textarea, no audience split). This document is
-> written as ONE combined Terms of Service that works correctly pasted into
-> that single shared field: Part A applies to everyone, Part B adds terms that
-> apply only when you are acting as a driver. See the companion report,
-> `reports/audits/2026-07-22-legal-content-validation-v1.md`, for the
-> engineering follow-up needed to route audience-specific content through the
-> newer table, and for a full list of factual claims below that depend on
-> something not yet true in the live system (data-residency attestation,
-> vendor DPAs, etc.) and must be re-checked before publication.
+> **Where this goes today (updated 2026-08-31).** Audience-split routing is now
+> live: both `rider-app/app/legal.tsx` and `driver-app/app/legal.tsx` read the
+> per-audience `GET /legal-documents?audience=<rider|driver>&type=<tos|privacy>`
+> endpoint, not the legacy single shared `/settings/legal` blob this note
+> originally described. Per `docs/legal/legal-text-publication-checklist.md`,
+> this document's content was published to the `legal_documents` table on
+> 2026-08-17. This document is still written as ONE combined Terms of Service
+> covering both audiences (Part A applies to everyone, Part B adds terms that
+> apply only when you are acting as a driver) — whoever manages the published
+> `legal_documents` rows should confirm whether that combined text is what's
+> actually stored for both the `rider` and `driver` audience rows, or whether
+> it has since been split per-audience; this file was not re-diffed against
+> the live DB rows as part of this correction. See the companion report,
+> `reports/audits/2026-07-22-legal-content-validation-v1.md`, for a full list
+> of factual claims below that depend on something not yet true in the live
+> system (data-residency attestation, vendor DPAs, etc.) and must be
+> re-checked before publication.
 >
 > **This is a draft, not legal advice.** It is grounded in this repository's
 > actual code, data flows, and documented policies as of 2026-07-22, but it

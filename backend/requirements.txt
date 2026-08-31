@@ -5,7 +5,7 @@ aiosignal==1.4.0          # via aiohttp
 annotated-doc==0.0.4      # via fastapi, typer
 annotated-types==0.7.0    # via pydantic
 anthropic==0.109.1        # via -r requirements.in
-anyio==4.13.0             # via -r requirements.in, anthropic, httpx, mcp, openai, sse-starlette, starlette, watchfiles
+anyio==4.14.2             # via -r requirements.in, anthropic, httpx, mcp, openai, sse-starlette, starlette, watchfiles
 attrs==26.1.0             # via aiohttp, jsonschema, referencing
 bcrypt==5.0.0             # via -r requirements.in
 boto3==1.43.80            # via -r requirements.in

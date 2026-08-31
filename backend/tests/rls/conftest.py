@@ -246,6 +246,13 @@ def pg_conn(pg_test_dbname):
     # --- driver_insurance_periods: migration 64, verbatim. ---
     cur.execute((migrations_dir / "64_driver_insurance_periods.sql").read_text())
 
+    # --- saved_addresses: real shipped table def (extracted verbatim, same
+    # technique as users/drivers/rides above) + migration 378's owner-scoped
+    # SELECT/INSERT/DELETE policies (ACTION_ITEMS.md B40), verbatim. ---
+    cur.execute(_extract_create_table(schema_sql, "saved_addresses"))
+    cur.execute("ALTER TABLE saved_addresses ENABLE ROW LEVEL SECURITY")
+    cur.execute((migrations_dir / "378_saved_addresses_rls_policies.sql").read_text())
+
     # New tables created by the migrations above also need the same
     # baseline grant as the earlier batch (grants don't retroactively apply
     # to tables that didn't exist yet).
@@ -276,7 +283,14 @@ def pg_cur(pg_conn):
     test for isolation, and always resets to the admin role afterward."""
     cur = pg_conn.cursor()
     cur.execute("RESET ROLE")
-    for table in ("rides", "drivers", "users", "financial_events", "driver_insurance_periods"):
+    for table in (
+        "rides",
+        "drivers",
+        "users",
+        "financial_events",
+        "driver_insurance_periods",
+        "saved_addresses",
+    ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     yield cur
     cur.execute("RESET ROLE")

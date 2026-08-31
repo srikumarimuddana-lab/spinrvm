@@ -135,6 +135,7 @@ export {
     decideAllowanceRequest,
     updateCompanyMember,
     getCompanyPolicy,
+    getCompanyPolicyAffectedRidesCount,
     putCompanyPolicy,
     patchCompanyPolicy,
     listAllowedDomains,

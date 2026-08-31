@@ -25,6 +25,7 @@ import { chartColors } from "@/components/analytics/chart-palette";
 import { needsSurgeJustification, isSurgeJustificationValid } from "@/lib/surgeJustificationSchema";
 import { isTaxJustificationValid } from "@/lib/taxJustificationSchema";
 import { isSpinrPassPlanNameValid, isSpinrPassPlanPriceValid } from "@/lib/spinrPassAreaPlanSchema";
+import { isServiceAreaNameValid, isAirportZoneValid } from "@/lib/serviceAreaFormSchema";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -154,7 +155,7 @@ export default function ServiceAreasPage() {
   };
 
   const handleCreate = async () => {
-    if (!createForm.name) return;
+    if (!isServiceAreaNameValid(createForm.name)) return;
     try {
       await createServiceArea({
         name: createForm.name, city: createForm.city, province: createForm.province,
@@ -180,7 +181,7 @@ export default function ServiceAreasPage() {
 
   const handleCreateAirportSubRegion = async (parentId: string) => {
     const parent = areas.find(a => a.id === parentId);
-    if (!airportForm.name || airportForm.polygon.length < 3) {
+    if (!isAirportZoneValid(airportForm.name, airportForm.polygon.length)) {
       crudToast.warn("Missing airport boundary", "Please enter a name and draw the airport boundary on the map.");
       return;
     }

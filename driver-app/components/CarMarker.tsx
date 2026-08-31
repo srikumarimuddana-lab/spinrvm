@@ -115,6 +115,20 @@ interface CarMarkerProps {
      * this prop there.
      */
     ring?: { color: string; pulsing: boolean } | null;
+    /**
+     * Fired every playback tick with the bearing this marker is actually
+     * rendering (the same value driving its own icon rotation, TICK_MS-
+     * delayed spline/route-aware smoothing included). A caller that also
+     * rotates something else in sync with this vehicle (e.g. a course-up
+     * map camera) MUST read the bearing from here rather than computing its
+     * own independently — two independently-computed bearings inevitably
+     * disagree (different lag, thresholds, smoothing), which shows up as
+     * the icon not pointing "up" on a course-up map even while the camera
+     * is nominally tracking the same vehicle. Not called on every render —
+     * only when the ticker actually selects a new bearing (see the
+     * selectBearing() call below), same cadence as the icon's own rotation.
+     */
+    onBearingChange?: (bearing: number) => void;
 }
 
 // Playback tick: the marker re-targets its position animation this often,
@@ -203,6 +217,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     imageUri,
     routeCoordinates,
     ring,
+    onBearingChange,
 }) => {
     const markerRef = useRef<any>(null);
     // Stable Animated holders created once; reading .current at init is safe.
@@ -228,6 +243,12 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     useEffect(() => {
         headingRef.current = heading;
     }, [heading]);
+    // Latest onBearingChange, read by the ticker (which must not re-fire per
+    // callback-identity change — same reasoning as headingRef above).
+    const onBearingChangeRef = useRef(onBearingChange);
+    useEffect(() => {
+        onBearingChangeRef.current = onBearingChange;
+    }, [onBearingChange]);
 
     // Route lookup happens inside the position effect via a ref so a route
     // refresh (live-route poll returns a new array every ~20 s) re-snaps the
@@ -417,6 +438,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 if (selected.source === 'route' || selected.source === 'travel') {
                     hasMovementBearingRef.current = true;
                 }
+                onBearingChangeRef.current?.(bearing);
                 if (isAndroid) {
                     setAndroidRotation(((bearing % 360) + 360) % 360);
                 } else {

@@ -22,7 +22,11 @@ Phase A of #2683 (already shipped, unmodified by this change) added an audit-onl
 ## 3. Fix / remediation
 
 - **Backend**: new read-only `GET /company/{company_id}/policy/affected-rides-count` endpoint, guarded by the same `require_company_admin` dependency as `replace_policy`/`patch_policy`. Counts the company's rides currently in a pre-pickup status (`SCHEDULED, SEARCHING, DRIVER_ASSIGNED, DRIVER_ACCEPTED, DRIVER_ARRIVED` — imported from `corporate_suspension_service._PRE_PICKUP_STATUSES`, not duplicated) via `db_supabase.get_rows`. Never touches, cancels, or mutates a ride.
-- **Frontend**: the company-portal policy page (`admin-dashboard/src/app/company-portal/[id]/policy/page.tsx`) calls this endpoint before submitting a save. If `count > 0`, an `AlertDialog` (the existing shadcn/Radix component already used elsewhere in the admin-dashboard, e.g. `dashboard/corporate-accounts/[id]/page.tsx`) shows: *"This change affects N ride(s) already booked. They will still be charged under the policy that was in effect when they were booked. Continue?"* with Cancel/Confirm. Only on Confirm does the existing `patchCompanyPolicy` PATCH fire. `count === 0` saves immediately, exactly as before — no behavior change for the common case.
+- **Frontend**: both admin-facing policy-edit surfaces get the same treatment, since both hit the identical `PATCH /company/{id}/policy` backend endpoint through two independent frontend client modules (see §4 below — this was caught during review and closed in the same change, not left as a follow-up):
+  - The company-portal policy page (`admin-dashboard/src/app/company-portal/[id]/policy/page.tsx`), via `@/lib/companyApi.ts`.
+  - The internal staff-admin policy page (`admin-dashboard/src/app/dashboard/corporate-accounts/[id]/policy/page.tsx`), via a new `getCompanyPolicyAffectedRidesCount` binding added to `@/lib/api/corporate.ts` (re-exported from the `@/lib/api` barrel) — mirrors the company-portal implementation exactly.
+
+  Both call the new count endpoint before submitting a save. If `count > 0`, an `AlertDialog` (the existing shadcn/Radix component already used elsewhere in the admin-dashboard, e.g. `dashboard/corporate-accounts/[id]/page.tsx`) shows: *"This change affects N ride(s) already booked. They will still be charged under the policy that was in effect when they were booked. Continue?"* with Cancel/Continue. Only on Continue does the existing `patchCompanyPolicy` PATCH fire. `count === 0` saves immediately on both pages, exactly as before — no behavior change for the common case.
 
 Ride state machine, settlement logic (`settle_corporate`), and `corporate_suspension_service.cancel_pre_pickup_rides_for_company` are all untouched. No ride is cancelled or otherwise affected by any part of this change — it is purely an admin-side pre-save confirmation step.
 
@@ -31,14 +35,15 @@ Ride state machine, settlement logic (`settle_corporate`), and `corporate_suspen
 - **New backend endpoint is additive** — a new `GET` route under the existing `/company/{company_id}/policy` resource. It reads `rides` via the shared `db_supabase.get_rows` helper (same call shape `cancel_pre_pickup_rides_for_company` already uses) and writes nothing. No other route or background loop calls this new endpoint; blast radius is isolated to this one new route.
 - **`_PRE_PICKUP_STATUSES` import** — grepped `backend/` for all consumers of this tuple: `corporate_suspension_service.py` (definer), `corporate_member_offboarding_service.py`, and now `routes/corporate_company.py`. The tuple itself is untouched (imported, not modified), so its existing consumers (company suspension cancellation, member offboarding cancellation) are unaffected.
 - **`replace_policy`/`patch_policy` themselves are unmodified** — the actual PATCH/PUT handlers, their audit logging (`corporate_policy_replaced`/`corporate_policy_patched`), and `upsert_corporate_policy` are untouched. The new confirmation step sits entirely in front of the existing PATCH call on the frontend; the backend PATCH/PUT endpoints have no new caller behavior imposed on them.
-- **Frontend blast radius**: grepped `admin-dashboard/src` for `getCompanyPolicy`/`patchCompanyPolicy` consumers. Two independent implementations exist:
-  - `@/lib/companyApi.ts` (company-portal / rider session) — used by `app/company-portal/[id]/policy/page.tsx`, the only page touched by this change.
-  - `@/lib/api.ts` (internal staff admin session) — used by `app/dashboard/corporate-accounts/[id]/policy/page.tsx`, a **separate, untouched** page. Internal staff-admin policy edits still have no pre-save confirmation after this change — that's an intentional scope decision per the task (only the company-portal flow was in scope for #2683 Option 4), not an oversight, but it's a known gap worth flagging if staff-admin policy edits should get the same treatment later.
+- **Frontend blast radius**: grepped `admin-dashboard/src` for `getCompanyPolicy`/`patchCompanyPolicy` consumers. Two independent implementations exist, both now updated:
+  - `@/lib/companyApi.ts` (company-portal / company-admin session) — used by `app/company-portal/[id]/policy/page.tsx`.
+  - `@/lib/api/corporate.ts`, re-exported via the `@/lib/api` barrel (internal staff-admin session) — used by `app/dashboard/corporate-accounts/[id]/policy/page.tsx`. Initially left unwired in the first pass of this change (would have let an internal admin bypass the confirmation entirely, since it hits the identical backend `PATCH` endpoint through a separate client), caught during review and fixed in the same change rather than shipped as a known gap.
+  No other consumer of `getCompanyPolicy`/`patchCompanyPolicy` exists in `admin-dashboard/src`.
 - No wallet/ride/Stripe state is touched anywhere in this change.
 
 ## 5. User-experience effect
 
-- **Company-admin facing** (company portal), visible only in the policy-edit flow, not mid-ride for a rider/driver — the confirmation is a synchronous step in an admin's own edit action, not something that appears unprompted during someone else's active session.
+- **Company-admin facing** (company portal) and **internal-admin facing** (staff dashboard), visible only in the policy-edit flow, not mid-ride for a rider/driver — the confirmation is a synchronous step in an admin's own edit action, not something that appears unprompted during someone else's active session.
 - Common case (no in-flight rides for the company) is unchanged: save still happens on the first click, no new dialog, no added latency beyond one lightweight count call.
 - New case (in-flight rides exist): one extra confirmation click before the save proceeds. This is the intended, and only, UX change.
 
@@ -48,9 +53,13 @@ Ride state machine, settlement logic (`settle_corporate`), and `corporate_suspen
 |---|---|---|
 | `backend/routes/corporate_company.py` | Added `GET /policy/affected-rides-count` endpoint; imported `get_rows` and `_PRE_PICKUP_STATUSES` | New read-only count endpoint per #2683 Option 4 |
 | `backend/tests/test_corporate_company_routes.py` | Added 3 tests for the new endpoint (filter correctness, zero count, admin-only guard) | Coverage for the new endpoint |
-| `admin-dashboard/src/lib/companyApi.ts` | Added `getCompanyPolicyAffectedRidesCount` helper | Frontend client for the new endpoint |
-| `admin-dashboard/src/app/company-portal/[id]/policy/page.tsx` | Save flow now checks the count first; shows an `AlertDialog` when count > 0, gating the existing `patchCompanyPolicy` call on confirmation | Admin confirmation UX |
+| `admin-dashboard/src/lib/companyApi.ts` | Added `getCompanyPolicyAffectedRidesCount` helper | Frontend client for the new endpoint (company-portal) |
+| `admin-dashboard/src/app/company-portal/[id]/policy/page.tsx` | Save flow now checks the count first; shows an `AlertDialog` when count > 0, gating the existing `patchCompanyPolicy` call on confirmation | Admin confirmation UX (company-admin) |
 | `admin-dashboard/src/app/company-portal/[id]/policy/page.test.tsx` | New test file: count=0 saves with no dialog; count>0 shows dialog and only saves on confirm; cancel does not save | Coverage for the new UI flow |
+| `admin-dashboard/src/lib/api/corporate.ts` | Added `getCompanyPolicyAffectedRidesCount` helper (separate binding, same backend endpoint) | Frontend client for the new endpoint (internal staff-admin) |
+| `admin-dashboard/src/lib/api.ts` | Re-exported `getCompanyPolicyAffectedRidesCount` from the barrel | Existing call sites import from `@/lib/api`, not `@/lib/api/corporate` directly |
+| `admin-dashboard/src/app/dashboard/corporate-accounts/[id]/policy/page.tsx` | Same confirmation flow as the company-portal page, adapted to this page's existing `handleSave`/state structure | Closes the bypass: this page hits the identical backend endpoint and would otherwise skip the confirmation entirely |
+| `admin-dashboard/src/app/dashboard/corporate-accounts/[id]/policy/page.test.tsx` | New test file, same 3 cases as the company-portal test | Coverage for the internal-admin UI flow |
 
 ## 7. Before / after
 
@@ -103,7 +112,7 @@ Purely additive on both surfaces — no schema, config, or `app_settings` change
 - No staging check — this is a worktree-only change per the task instructions (not pushed, no PR opened).
 - No `npm run build` (production Next.js build) was run for the admin-dashboard change — only `tsc --noEmit` and the targeted vitest run, per the task's explicit instruction not to run the full build for this scope. `tsc --noEmit` passing is not equivalent to a production build succeeding (per CLAUDE.md's own caveat), so treat the frontend change as typecheck+unit-test verified only.
 - No visual-regression tooling exists for admin-dashboard's actual behavior today (per CLAUDE.md: the Playwright visual-regression job has zero committed baselines and self-skips) — the new `AlertDialog` was not screenshotted or visually diffed against any baseline; its correctness is reasoned about from the DOM assertions in the vitest test only.
-- The internal staff-admin policy page (`dashboard/corporate-accounts/[id]/policy/page.tsx`) was confirmed untouched but was not exercised by any test in this change — it was out of scope for #2683 Option 4 as scoped to the company portal.
+- The internal staff-admin policy page's typecheck and its own 3-case vitest suite passed; it was not clicked through in a running dev server any more than the company-portal page was (see below).
 - No manual click-through in a running dev server was performed — verification is test-suite-only.
 
 ## 10. Sign-off

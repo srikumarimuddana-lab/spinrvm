@@ -969,3 +969,94 @@ class TestPlaceholderNameConstantIsUsedAtWriteSite:
         driver = plan.drivers_to_insert[0]
         assert driver["name"].startswith(svc.LEGACY_PLACEHOLDER_NAME_PREFIX)
         assert svc.is_incomplete_onboarding_row(driver) is True
+
+
+# ---------------------------------------------------------------------------
+# Suspect-legacy-number classification (2026-08-31 review queue)
+# ---------------------------------------------------------------------------
+
+
+class TestIsSuspectLegacyImportRow:
+    """Flags a legacy-imported row whose phone is not a Canadian number. A
+    review signal only — it gates nothing. The critical property is the last
+    two cases: an ORGANIC signup is never flagged, whatever its number."""
+
+    def test_saskatchewan_legacy_row_is_not_flagged(self):
+        for ac in ("306", "639"):
+            row = {"phone": f"+1{ac}5551234", "legacy_import_metadata": {"source": svc.MONGO_IMPORT_SOURCE}}
+            assert svc.is_suspect_legacy_import_row(row) is False
+
+    def test_other_canadian_area_codes_are_not_flagged(self):
+        # 250 (BC) and 368 (AB) are real Canadian NPAs — both were missing from
+        # an earlier draft of the list, which would have flagged real drivers.
+        for ac in ("250", "368", "604", "416", "902", "867"):
+            row = {"phone": f"+1{ac}5551234", "legacy_import_metadata": {"source": "x"}}
+            assert svc.is_suspect_legacy_import_row(row) is False, ac
+
+    def test_us_area_code_on_a_legacy_row_is_flagged(self):
+        row = {"phone": "+13345551234", "legacy_import_metadata": {"source": "x"}}
+        assert svc.is_suspect_legacy_import_row(row) is True
+
+    def test_unassigned_area_code_is_flagged(self):
+        """700/981/991 are not assignable NANP codes — the shape of a foreign
+        number squeezed into ten digits."""
+        for ac in ("700", "981", "991"):
+            row = {"phone": f"+1{ac}5551234", "legacy_import_metadata": {"source": "x"}}
+            assert svc.is_suspect_legacy_import_row(row) is True, ac
+
+    def test_organic_signup_is_never_flagged(self):
+        """The heuristic must not reach a real Spinr driver who happens to have
+        a foreign mobile. `legacy_import_metadata` is JSONB NOT NULL DEFAULT
+        '{}', so 'not imported' is the empty dict, not NULL."""
+        for phone in ("+13345551234", "+19915551234", "+13065551234"):
+            assert svc.is_suspect_legacy_import_row({"phone": phone, "legacy_import_metadata": {}}) is False
+
+    def test_row_with_no_metadata_key_at_all_is_not_flagged(self):
+        assert svc.is_suspect_legacy_import_row({"id": "d1", "phone": "+13345551234"}) is False
+
+    def test_missing_or_malformed_phone_on_a_legacy_row_is_flagged(self):
+        for phone in (None, "", "+1", "12345", "whatever"):
+            row = {"phone": phone, "legacy_import_metadata": {"source": "x"}}
+            assert svc.is_suspect_legacy_import_row(row) is True, repr(phone)
+
+    def test_missing_phone_on_an_organic_row_is_not_flagged(self):
+        assert svc.is_suspect_legacy_import_row({"phone": None, "legacy_import_metadata": {}}) is False
+
+
+class TestFetchSuspectLegacyDriverIds:
+    def test_returns_only_flagged_legacy_rows(self, monkeypatch):
+        _install(
+            monkeypatch,
+            store={
+                "drivers": [
+                    {"id": "sk", "phone": "+13065551234", "legacy_import_metadata": {"source": "x"}},
+                    {"id": "us", "phone": "+13345551234", "legacy_import_metadata": {"source": "x"}},
+                    {"id": "organic-us", "phone": "+13345559999", "legacy_import_metadata": {}},
+                ]
+            },
+        )
+        assert svc.fetch_suspect_legacy_driver_ids() == {"us"}
+
+    def test_paginates_past_a_single_page(self, monkeypatch):
+        rows = [
+            {"id": f"sus-{i}", "phone": "+19915551234", "legacy_import_metadata": {"source": "x"}} for i in range(1200)
+        ]
+        _install(monkeypatch, store={"drivers": rows})
+        found = svc.fetch_suspect_legacy_driver_ids()
+        assert len(found) == 1200
+        assert "sus-1199" in found
+
+    def test_empty_when_nothing_flagged(self, monkeypatch):
+        _install(
+            monkeypatch,
+            store={"drivers": [{"id": "sk", "phone": "+16395551234", "legacy_import_metadata": {"source": "x"}}]},
+        )
+        assert svc.fetch_suspect_legacy_driver_ids() == set()
+
+
+class TestCanadianAreaCodeList:
+    def test_contains_the_saskatchewan_codes_the_fleet_actually_uses(self):
+        assert {"306", "639"} <= svc.CANADIAN_AREA_CODES
+
+    def test_excludes_real_us_codes(self):
+        assert not ({"334", "360", "858", "952"} & svc.CANADIAN_AREA_CODES)

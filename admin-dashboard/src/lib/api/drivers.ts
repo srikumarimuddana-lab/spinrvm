@@ -30,6 +30,10 @@ export const getDrivers = (opts: {
      * shells, omitted = no filter. See services/driver_import_service.py's
      * is_incomplete_onboarding_row for why those rows exist. */
     onboarding_complete?: boolean;
+    /** true = only legacy-imported rows whose phone is not a Canadian number
+     * (a review signal, see services/driver_import_service.py's
+     * is_suspect_legacy_import_row), false = hide them, omitted = no filter. */
+    legacy_review?: boolean;
     sort_by?: string;
     sort_dir?: "asc" | "desc";
 } = {}) => {
@@ -48,6 +52,7 @@ export const getDrivers = (opts: {
     if (opts.legacy_import != null) sp.set("legacy_import", String(opts.legacy_import));
     if (opts.pre_launch != null) sp.set("pre_launch", String(opts.pre_launch));
     if (opts.onboarding_complete != null) sp.set("onboarding_complete", String(opts.onboarding_complete));
+    if (opts.legacy_review != null) sp.set("legacy_review", String(opts.legacy_review));
     if (opts.sort_by) sp.set("sort_by", opts.sort_by);
     if (opts.sort_dir) sp.set("sort_dir", opts.sort_dir);
     const qs = sp.toString();
@@ -633,6 +638,9 @@ export const getDriverStats = (params?: {
             onboarded_total: number;
             /** Abandoned-legacy-onboarding shells carried over by the import. */
             legacy_incomplete: number;
+            /** Legacy-imported rows with a non-Canadian phone, for human review.
+             * Overlaps the two above — a queue, not a disjoint bucket. */
+            legacy_review: number;
             online: number;
             verified: number;
             unverified: number;

@@ -1,10 +1,11 @@
+/// <reference types="geojson" />
 // src/lib/map/maplibre-base.ts
 // Shared MapLibre GL helpers used by every admin-dashboard map component.
 // The goal is to keep tile URLs, default centres, marker styling and
 // fitBounds behaviour in one place so individual map files stay small.
 
 import type { LngLatBoundsLike, Map as MapLibreMap } from "maplibre-gl";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import {
     ROUTE_MARKER_SIZE,
     routePinSvg,

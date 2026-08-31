@@ -43,9 +43,19 @@ Rules for this class of script:
   rule already exists precisely to keep that class of file out of git.
 - Sensitive columns (SIN, bank account/transit/institution number, government ID, DOB
   outside `users`/`drivers`' normal fields) reach `drivers`/`users` only via the existing
-  `encrypt_driver_pii()` Vault RPC. A local staging table holding the plaintext value in
-  between is fine — the SQL file that *populates* that staging table with real values is
-  the thing that must never reach git history.
-- CI has a corresponding backstop (`spinr-sin-bank-pii` rule in `.gitleaks.toml`) that flags
-  files naming a SIN/bank-account column identifier alongside bare 9-digit literals — but
-  that is a safety net for exactly this mistake, not a substitute for not making it.
+  `encrypt_driver_pii()` Vault RPC. **Correction (2026-08-31):** this section previously said
+  a plaintext staging table "in between" is fine — that is only true if the table is created
+  with RLS enabled from the start and is actually dropped once the import finishes. Neither
+  happened here: `driver_bank_import`/`driver_csv_import` sat in production with RLS
+  **disabled** for the whole gap between the migration and their discovery, meaning the same
+  data was separately readable live over the public API, independent of the git exposure.
+  See `docs/runbooks/safe-data-migration-playbook.md` for the full checklist this incident
+  produced — the SQL file that populates the staging table with real values must never reach
+  git history, *and* the staging table itself must be RLS-locked and dropped promptly, not
+  left as an unfinished afterthought.
+- CI has a corresponding backstop (`spinr-sin-bank-pii` and `spinr-driver-export-pii` rules
+  in `.gitleaks.toml`) that flags files naming a PII column identifier alongside a matching
+  literal pattern — but that is a safety net for exactly this mistake, not a substitute for
+  not making it, and it only covers the git side, not a database left unprotected. See the
+  playbook above for the full lifecycle, including the database-side steps this section
+  originally missed.

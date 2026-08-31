@@ -11616,6 +11616,147 @@ record of what was assumed vs. what was actually true</summary>
   (driver-app's `vehicle-info.tsx` negative-year bug + 6 more driver-app
   candidates; 12 more admin-dashboard candidates); no ADR/migration-order
   doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 16 done: `driver-app/app/vehicle-info.tsx`'s
+  `isFormValid` + submit-time vehicle-year computation, including the
+  silent-invalid-year bug fix.** Extracted the inline `isFormValid`
+  (`form.vehicle_type_id && form.vehicle_make.trim() &&
+  form.vehicle_model.trim() && form.vehicle_year.trim() &&
+  form.license_plate.trim()`) into
+  `driver-app/utils/vehicleInfoFormSchema.ts`'s
+  `isVehicleInfoFormValid(form)`, and the submit-time
+  `parseInt(form.vehicle_year) || 0` into `getVehicleYearValue(vehicleYear)`.
+  This is NOT a pure byte-for-byte extraction — per the user's explicit
+  direction, it also fixes the second bug flagged in the broader sweep:
+  the original `isFormValid` only checked `vehicle_year.trim()` was
+  non-empty, never that it actually parsed as a number, so a non-numeric
+  year (e.g. "abc") passed validation and then silently became
+  `vehicle_year: 0` via `parseInt(...) || 0` at submit time — a garbage
+  value written to the driver's vehicle record with no error shown.
+  `isVehicleYearValid` now requires the trimmed value to parse as a
+  finite integer before the form is considered valid, gating the "Save
+  Vehicle Info" button; `getVehicleYearValue`'s own `|| 0`-equivalent
+  fallback is kept only as a defensive no-op (unreachable once the
+  button is gated). New
+  `driver-app/utils/__tests__/vehicleInfoFormSchema.test.ts` (12
+  accept/reject cases across all 5 predicates + the aggregate + the
+  year-value getter, including the bug-fix case). Verification: 12/12
+  new tests pass; full driver-app suite 120/120 suites, 1349/1349 tests
+  passing on a clean re-run (an initial run showed 11 failures in an
+  unrelated file, `__tests__/services/backgroundMessaging.android.test.ts`
+  — confirmed a pre-existing full-suite flake, not caused by this
+  change: that file passes 18/18 in isolation both with and without this
+  diff, and a full-suite re-run with this exact diff applied passed
+  120/120 with zero failures); `npx tsc --noEmit` clean; `npx eslint`
+  clean on touched files; **real production build** (`npm run build:web`
+  → `expo export --platform web`) completed successfully. Blast-radius
+  grep (`parseInt\(form\.vehicle_year\)`) confirmed no other file
+  duplicates this pattern. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-vehicle-info-zod-step16.md`.
+
+  **Still open:** the remaining 19 candidates from the broader sweep (6
+  more driver-app candidates; 12 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 17 done: `admin-dashboard/src/app/dashboard/users/page.tsx`'s
+  `requestWalletAction` (per-user rider/driver wallet credit/debit —
+  first admin-dashboard candidate, money tier).** Extracted the amount
+  regex/`parseFloat` check and the reason-length check into new
+  `admin-dashboard/src/lib/userWalletActionSchema.ts`
+  (`isWalletAmountValid`, `isWalletReasonValid`,
+  `getWalletActionError`). Pure extraction, byte-for-byte identical to
+  the original two inline checks — no bug found in this form, no
+  behavior change. Explicitly kept as a **separate schema file** from
+  the existing `walletAdjustmentSchema.ts` (corporate-accounts wallet
+  adjustment): different call site (`creditUserWallet`/
+  `debitUserWallet` vs `corporate-accounts/{id}/wallet/adjust`),
+  different field shapes (always-positive regex-validated amount + a
+  separate `action` field, vs a signed `parseFloat`ed delta with a
+  $10,000 cap), same "kept separate, not merged" pattern as step 13's
+  `spinrPassAreaPlanSchema.ts` vs `subscriptionPlanSchema.ts`. New
+  `admin-dashboard/src/lib/__tests__/userWalletActionSchema.test.ts`
+  (11 accept/reject cases). Verification: 11/11 new tests pass; full
+  admin-dashboard suite (`vitest run`) 45/45 suites, 443/443 tests
+  passing; `npx tsc --noEmit` clean on touched files (57 pre-existing,
+  unrelated error lines confirmed via `git stash` — all in map
+  components, see the environment note below); `npx eslint` on touched
+  files: 0 errors, 3 pre-existing `react-hooks/set-state-in-effect`
+  warnings on unrelated lines of `users/page.tsx`, unchanged by this
+  diff.
+
+  **Environment note (found, not fixed, by this step — separate task
+  suggested):** `npm run build` currently fails on `main` for
+  admin-dashboard — confirmed via `git stash` to be entirely unrelated
+  to this diff. Root cause: `maplibre-gl@6.6.0` (the version
+  `package.json` pins) dropped its default export, breaking every file
+  doing `import maplibregl from "maplibre-gl"` (8 files: `lib/map/
+  maplibre-base.ts`, `monitoring-map.tsx`, `ride-route-map.tsx`,
+  `live-map.tsx`, `geofence-map.tsx`, `heat-map.tsx`, `venue-map.tsx`,
+  `driver-map.tsx`) — none of which this step touches. This blocks the
+  "real production build" verification CLAUDE.md requires for *every*
+  admin-dashboard change going forward, not just this one. A task
+  suggestion was queued (`task_66016ac3`) rather than fixed inline here
+  — out of scope for a B39 form-validation step, and non-trivial (needs
+  either a maplibre-gl downgrade or an import-shape migration across 8
+  files, plus map-screen spot-checks with no visual-regression coverage
+  to lean on). This step's own verification therefore relies on
+  `tsc`/`eslint`/`vitest` rather than a completed `npm run build` — see
+  "What was NOT verified" in the Change Impact Log. Full Change Impact
+  Log: `docs/change-log/2026-08-31-b39-admin-user-wallet-zod-step17.md`.
+
+  **Still open:** the remaining 18 candidates from the broader sweep (6
+  driver-app candidates; 11 more admin-dashboard candidates); the
+  admin-dashboard maplibre-gl build break above (`task_66016ac3`); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — maplibre-gl build break (flagged in step 17)
+  already fixed independently.** The task suggestion queued as
+  `task_66016ac3` was routed by the user into this same session; on
+  investigation, `main` already carried the fix by the time this session
+  picked it up (PR #4749, merging #4743 alongside two unrelated fixes) —
+  another session/PR fixed it independently in parallel. Verified: `npm
+  run build` now completes successfully on `main`, and the 57
+  pre-existing `tsc` error lines noted in step 17 are gone (`npx tsc
+  --noEmit` clean). No further action needed; `task_66016ac3` is
+  resolved (started, and now moot).
+- **2026-08-31 update — step 18 done: `admin-dashboard/src/app/dashboard/disputes/page.tsx`'s
+  `handleResolve` partial-refund validation (second admin-dashboard
+  candidate, money tier).** Extracted the `isNaN(amount) || amount <= 0`
+  and `amount > originalFareAmount` checks (only run when `resolution
+  === "partial_refund"`) into new
+  `admin-dashboard/src/lib/disputeResolutionSchema.ts`
+  (`isRefundAmountValid`, `isRefundWithinOriginalFare`,
+  `getPartialRefundError`). Pure extraction, byte-for-byte identical to
+  the original two sequential checks — no bug found, no behavior
+  change. New
+  `admin-dashboard/src/lib/__tests__/disputeResolutionSchema.test.ts`
+  (9 accept/reject cases). Verification: 9/9 new tests pass; full
+  admin-dashboard suite (`vitest run`) 46/46 suites, 452/452 tests
+  passing; `npx tsc --noEmit` clean (repo-wide, now that the
+  maplibre-gl break above is fixed); `npx eslint` on touched files: 0
+  errors, 3 pre-existing `react-hooks/set-state-in-effect` warnings on
+  unrelated lines, unchanged by this diff; **real production build**
+  (`npm run build`) completed successfully — the first B39
+  admin-dashboard step able to complete this (step 17 could not, due to
+  the now-fixed maplibre-gl break). Blast-radius grep confirmed no
+  other file duplicates this exact pattern (two coincidental
+  regex-match false positives — `walletAdjustmentSchema.ts`'s own
+  differently-shaped `isNaN` check, already migrated; and an unrelated
+  `Number.isNaN(amount) || amount < 0` check in
+  `company-portal/[id]/sections/page.tsx` — inspected and confirmed
+  distinct). Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-dispute-refund-zod-step18.md`.
+
+  **Separately flagged, not fixed (out of scope for this validation
+  step):** `handleResolve`'s `catch` block only `console.error`s a
+  failed `resolveDispute` API call — no `setResolveError`, so a failed
+  resolution attempt shows the admin nothing (dialog stays open, no
+  error message). This is an error-handling gap, not a validation gap,
+  and wasn't part of the original 21-candidate list — queued as a
+  separate task suggestion (`task_916f2e38`) rather than folded into
+  this step.
+
+  **Still open:** the remaining 17 candidates from the broader sweep (6
+  driver-app candidates; 10 more admin-dashboard candidates); the
+  `resolveDispute` silent-error-swallow gap above (`task_916f2e38`); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

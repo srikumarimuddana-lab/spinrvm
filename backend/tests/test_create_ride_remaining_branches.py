@@ -180,6 +180,8 @@ async def test_corporate_policy_passes_resolves_member_id():
     from backend.routes.rides import create_ride
 
     class _PassedPolicy:
+        allowance = {"type": "unlimited"}
+        policy = {}
         passed = True
         failed_rules = []
 
@@ -237,6 +239,8 @@ async def test_corporate_policy_passes_but_no_active_membership_fails_closed():
     from backend.routes.rides import create_ride
 
     class _PassedPolicy:
+        allowance = {"type": "unlimited"}
+        policy = {}
         passed = True
         failed_rules = []
 
@@ -280,6 +284,8 @@ async def test_corporate_policy_no_active_membership_allowed_when_flag_disabled(
     from backend.routes.rides import create_ride
 
     class _PassedPolicy:
+        allowance = {"type": "unlimited"}
+        policy = {}
         passed = True
         failed_rules = []
 
@@ -422,6 +428,60 @@ async def test_work_profile_policy_violation_raises_400():
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["reason"] == "policy_violation"
+
+
+async def test_company_allowance_low_headroom_raises_400():
+    """#4602 finding 1: the company_allowance self-book path only ran
+    evaluate_policy_for_ride, which fails solely on remaining <= 0 — a rider
+    with a couple dollars left on an allowance_only company could book a
+    ride many times that amount, silently absorbed by the master wallet at
+    settlement. Must 400 the same way the work_profile and guest booking
+    paths already do (see test_work_profile_low_allowance_raises_400)."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+        allowance = {"type": "monthly", "amount": "1.00", "used": "0.00"}
+        policy = {"allowed_payment_source": "allowance_only"}
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+
+        async def _get_rows(table, *a, **kw):
+            if table == "corporate_members":
+                return [{"id": "corp-member-9"}]
+            return []
+
+        mock_supabase.find_one = AsyncMock(return_value=None)
+        mock_supabase.get_rows = AsyncMock(side_effect=_get_rows)
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_ride(
+                request=_starlette_request(),
+                body=_body(payment_method="company_allowance", corporate_account_id="corp-1"),
+                current_user=_USER,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["reason"] == "allowance_low"
 
 
 async def test_work_profile_low_allowance_raises_400():
@@ -682,6 +742,8 @@ async def test_active_company_allows_company_allowance_booking():
     from backend.routes.rides import create_ride
 
     class _PassedPolicy:
+        allowance = {"type": "unlimited"}
+        policy = {}
         passed = True
         failed_rules = []
 
@@ -734,6 +796,8 @@ async def test_suspended_company_booking_allowed_when_flag_disabled():
     from backend.routes.rides import create_ride
 
     class _PassedPolicy:
+        allowance = {"type": "unlimited"}
+        policy = {}
         passed = True
         failed_rules = []
 

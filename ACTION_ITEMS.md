@@ -11983,6 +11983,39 @@ record of what was assumed vs. what was actually true</summary>
   (silent no-op UX gaps needing a small behavior addition, not a pure
   extraction — tracked as their own step). No ADR/migration-order doc
   written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 28 done: `ride-complaint-form.tsx` +
+  `ride-flag-form.tsx` silent no-op fix (last two admin-dashboard
+  candidates).** Unlike every other B39 step, **not a pure extraction**:
+  both forms guarded a required field with a bare `if (!x) return;` —
+  silent, no toast, no message — while every other error path on both
+  forms already used the shared `toast(...)` pattern. Extracted into new
+  `admin-dashboard/src/lib/rideComplaintFormSchema.ts`
+  (`getRideComplaintFormError`) and
+  `admin-dashboard/src/lib/rideFlagFormSchema.ts`
+  (`getRideFlagFormError`), and wired both `handleSubmit`s to show a
+  destructive toast instead of silently returning. In ordinary use this
+  path was already unreachable (the Submit/Flag button's `disabled` prop
+  blocks the click) — the fix only becomes visible on the abnormal paths
+  the `disabled` prop doesn't cover (a state-update race, Enter-key
+  submit, a future direct call). New
+  `admin-dashboard/src/lib/__tests__/rideComplaintFormSchema.test.ts` (4
+  cases) and `.../rideFlagFormSchema.test.ts` (2 cases). Verification:
+  6/6 new tests pass; full admin-dashboard suite (`vitest run`) 57/57
+  suites, 555/555 tests passing, 0 regressions; `npx tsc --noEmit` clean
+  (repo-wide); `npx eslint` on touched files: 0 errors, 5 pre-existing
+  `jsx-a11y/label-has-associated-control` warnings, unchanged by this
+  diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed both new error strings are
+  unique to their new files, and both forms have exactly one importer
+  (`ride-detail-modal.tsx`), unaffected. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-silent-noop-forms-step28.md`.
+
+  **This closes every admin-dashboard candidate from the 2026-08-31
+  broader sweep.** Still open: 6 driver-app candidates
+  (`become-driver.tsx`, `emergency-contacts.tsx`, `report-safety.tsx`,
+  `(tabs)/profile.tsx`, `settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

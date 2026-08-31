@@ -14,6 +14,7 @@ import {
   Easing,
   useWindowDimensions,
   Image,
+  AccessibilityInfo,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -106,6 +107,10 @@ function DriverArrivingScreenContent() {
 
   // Searching animation
   const pulseAnim = useAnimatedValue(0);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+  }, []);
   useEffect(() => {
     // Rewritten from `!currentRide || currentRide.status === ...` to read
     // only `currentRide?.status` so this narrows to a single field instead
@@ -113,6 +118,10 @@ function DriverArrivingScreenContent() {
     // every ride poll and would restart the pulse loop far more often than
     // intended). status == null covers the "no ride yet" case the same way
     // `!currentRide` did.
+    // #4607 finding 5: this loop ran unconditionally, ignoring the OS
+    // reduce-motion setting — gated behind it, matching the AiWelcomeOrb
+    // precedent (rider-app/components/AiWelcomeOrb.tsx).
+    if (reduceMotion) return;
     const status = currentRide?.status;
     if (status == null || status === RideStatus.SEARCHING || status === RideStatus.DRIVER_ASSIGNED) {
       Animated.loop(
@@ -121,7 +130,7 @@ function DriverArrivingScreenContent() {
     }
     // pulseAnim is a stable Animated.Value (useAnimatedValue, created once
     // via useRef and never reassigned) — adding it doesn't change firing.
-  }, [currentRide?.status, pulseAnim]);
+  }, [currentRide?.status, pulseAnim, reduceMotion]);
 
   const rideCoords = useMemo(() => getRideMapCoords(currentRide), [currentRide]);
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   ScrollView,
   Image,
+  AccessibilityInfo,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -44,6 +45,8 @@ export default function RideStatusScreen() {
 
   const [pulseAnim] = useState(new Animated.Value(1));
   const [dotAnim] = useState(new Animated.Value(0));
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const lastAnnouncedStatusRef = useRef<string | null>(null);
 
   const [searchElapsed, setSearchElapsed] = useState(0);
   useEffect(() => {
@@ -164,6 +167,17 @@ export default function RideStatusScreen() {
   }, [rideId, currentRide?.status, fetchRide]);
 
   useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+  }, []);
+
+  useEffect(() => {
+    // #4607 finding 5: this screen ignored the OS reduce-motion setting —
+    // gate both loops behind it, matching the AiWelcomeOrb precedent
+    // (rider-app/components/AiWelcomeOrb.tsx). A reduce-motion user still
+    // sees the static end-state values (pulseAnim at 1, dotAnim at 0),
+    // just no looping animation.
+    if (reduceMotion) return;
+
     // Pulse animation for searching
     if (currentRide?.status === 'searching') {
       Animated.loop(
@@ -183,7 +197,32 @@ export default function RideStatusScreen() {
     // ever keeps the FIRST call's result as the returned state — so
     // pulseAnim/dotAnim never change identity across renders even though no
     // setter is destructured here to guard against reassignment.
-  }, [currentRide?.status, pulseAnim, dotAnim]);
+  }, [currentRide?.status, pulseAnim, dotAnim, reduceMotion]);
+
+  useEffect(() => {
+    // #4607 finding 3: a screen-reader rider was never told the driver
+    // accepted or arrived unless they manually re-focused the status text —
+    // no accessibilityLiveRegion/announceForAccessibility existed anywhere
+    // on this screen. Announce once per actual status transition (not per
+    // 3s/15s poll tick that returns the same status) using the same copy
+    // already shown in the header title above.
+    const status = currentRide?.status;
+    if (!status || status === lastAnnouncedStatusRef.current) return;
+    lastAnnouncedStatusRef.current = status;
+
+    const announcement: Record<string, string> = {
+      searching: 'Finding driver',
+      driver_assigned: 'Driver confirming',
+      driver_accepted: 'Driver on the way',
+      driver_arrived: 'Driver arrived',
+      in_progress: 'Trip started',
+      completed: 'Trip completed',
+    };
+    const text = announcement[status];
+    if (text) {
+      AccessibilityInfo.announceForAccessibility(text);
+    }
+  }, [currentRide?.status]);
 
   // UX-001: Use server-provided cancellation fee (from app_settings) instead
   // of the old hardcoded Math.min(5, fare * 0.2) formula. Hoisted to

@@ -526,7 +526,7 @@ function createStyles(colors: ThemeColors) {
     avatarImg: { width: 50, height: 50, borderRadius: 25 },
     driverName: { fontSize: 17, fontWeight: '700', color: colors.text },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
-    driverMeta: { fontSize: 12, color: '#888', marginLeft: 2 },
+    driverMeta: { fontSize: 12, color: colors.textSecondary, marginLeft: 2 },
     msgBtn: {
       width: 44, height: 44, borderRadius: 22,
       backgroundColor: `${colors.primary}12`, justifyContent: 'center', alignItems: 'center',
@@ -540,10 +540,10 @@ function createStyles(colors: ThemeColors) {
       width: 32, height: 32, borderRadius: 8, backgroundColor: `${colors.primary}12`,
       justifyContent: 'center', alignItems: 'center',
     },
-    vehicleLabel: { fontSize: 9, fontWeight: '700', color: '#888', letterSpacing: 0.8, marginBottom: 2 },
+    vehicleLabel: { fontSize: 9, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.8, marginBottom: 2 },
     vehicleName: { fontSize: 13, fontWeight: '600', color: colors.text },
     plateWrap: { alignItems: 'center' },
-    plateLabel: { fontSize: 9, fontWeight: '700', color: '#888', letterSpacing: 0.8, marginBottom: 3 },
+    plateLabel: { fontSize: 9, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.8, marginBottom: 3 },
     plateBadge: {
       backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
     },

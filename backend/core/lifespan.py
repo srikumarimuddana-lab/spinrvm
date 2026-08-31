@@ -372,7 +372,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("safety_checkin (30s)", safety_checkin_loop)
     except Exception as e:
-        logger.warning(f"Failed to import safety checkin loop: {e}")
+        logger.opt(exception=True).error(f"Failed to import safety checkin loop: {e}")
 
     # PII retention purge — daily SECURITY DEFINER call to anonymize
     # ride GPS at 3y, hard-delete rides at 7y, delete location history
@@ -405,7 +405,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("reconciliation (daily 02:00 UTC)", reconciliation_loop)
     except Exception as e:
-        logger.warning(f"Failed to import reconciliation loop: {e}")
+        logger.opt(exception=True).error(f"Failed to import reconciliation loop: {e}")
 
     # Stripe ↔ DB daily reconciliation — runs at 02:00 UTC, one replica
     # via Redis leader lock. Flags paid rides with no matching Stripe
@@ -416,7 +416,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("stripe_reconcile (24h)", stripe_reconcile_loop)
     except Exception as e:
-        logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
+        logger.opt(exception=True).error(f"Failed to import Stripe reconciliation loop: {e}")
 
     # Chargeback evidence-deadline reminder — C23 Action 2. Checks every 6h
     # for open disputes whose evidence_due_by (populated by
@@ -429,7 +429,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("dispute_evidence_reminder (6h)", dispute_evidence_reminder_loop)
     except Exception as e:
-        logger.warning(f"Failed to import dispute evidence reminder loop: {e}")
+        logger.opt(exception=True).error(f"Failed to import dispute evidence reminder loop: {e}")
 
     # Double-entry leg projection — derives financial_event_entries rows from
     # financial_events headers (oldest first, via the missing-legs RPC,

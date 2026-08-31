@@ -585,7 +585,14 @@ async def compute_ride_estimates(
             pickup_lng=body.pickup_lng,
             dropoff_lat=body.dropoff_lat,
             dropoff_lng=body.dropoff_lng,
-            surge_multiplier=round(float(surge), 2),
+            # Decimal->float order matters: round the Decimal first, then
+            # convert (#4604 finding 2). round(float(surge), 2) converts
+            # to float BEFORE rounding -- clean auto-tier values round-trip
+            # safely, but a non-2dp admin manual override (1.0-10.0 allowed)
+            # is a genuine precision-loss vector on the token's `sm` field,
+            # which booking.py reads back verbatim to compute the actually
+            # -charged fare (the P0-4 surge-lock mechanism).
+            surge_multiplier=_f(_round(surge)),
             total_fare=_f(fb.total_fare),
             # Carry the quoted road distance + basis to /rides so booking charges
             # exactly what the rider was shown, not a re-derived haversine.
@@ -611,7 +618,7 @@ async def compute_ride_estimates(
                 "distance_fare": _money_str(fb.distance_fare),
                 "time_fare": _money_str(fb.time_fare),
                 "booking_fee": _money_str(fb.booking_fee),
-                "surge_multiplier": round(float(surge), 2),
+                "surge_multiplier": _f(_round(surge)),  # round Decimal first, then convert (#4604 finding 2)
                 "total_fare": _money_str(fb.total_fare),
                 "area_fees": fees_result.get("fees", []),
                 "area_fees_total": area_fees_total,

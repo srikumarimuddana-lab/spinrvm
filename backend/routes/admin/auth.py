@@ -1387,6 +1387,7 @@ class UnlockRequest(BaseModel):
 
 
 @admin_auth_router.post("/unlock")
+@limiter.limit("10/minute")
 async def admin_unlock(
     request: Request,
     body: UnlockRequest,

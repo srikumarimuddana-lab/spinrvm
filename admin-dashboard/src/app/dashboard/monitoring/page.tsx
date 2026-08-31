@@ -1,3 +1,4 @@
+/// <reference types="geojson" />
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

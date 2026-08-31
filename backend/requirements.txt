@@ -113,7 +113,7 @@ pyyaml==6.0.3             # via -r requirements.in, uvicorn
 realtime==2.29.0          # via -r requirements.in, supabase
 redis==7.4.0              # via -r requirements.in
 referencing==0.37.0       # via jsonschema, jsonschema-specifications
-requests==2.33.1          # via -r requirements.in, cachecontrol, google-api-core, google-cloud-storage, pyiceberg, staticmap, stripe, twilio
+requests==2.34.2          # via -r requirements.in, cachecontrol, google-api-core, google-cloud-storage, pyiceberg, staticmap, stripe, twilio
 rich==14.3.4              # via -r requirements.in, pyiceberg, typer
 rpds-py==2026.5.1         # via jsonschema, referencing
 s3transfer==0.16.1        # via boto3

@@ -225,7 +225,7 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **Redis transparency** — `utils/redis_client.py` falls back to an in-process dict when `REDIS_URL` is unset. Rate-limit and OTP lockout state are lost on restart in this mode.
 
-**WebSocket auth** — first message must be `{"type": "auth", "token": "<jwt>"}`. Connection keys: `"driver_{user_id}"` / `"rider_{user_id}"`. 30-second ping heartbeat; 30 msg/s rate limit; 64 KB max message.
+**WebSocket auth** — first message must be `{"type": "auth", "token": "<jwt>"}`. Connection keys: `"driver_{user_id}"` / `"rider_{user_id}"`. 10-second ping heartbeat (tightened from 30s — see `routes/websocket.py`'s `HEARTBEAT_INTERVAL`/`HEARTBEAT_TIMEOUT`, a 30s ping meant a dead connection could go undetected for 45s+); 30 msg/s rate limit; 64 KB max message.
 
 **Background task safety** — the 40 startup loops run on every replica concurrently (26 hold best-effort Redis leader locks that fail open on Redis errors — see `docs/audit/2026-08-26-db-query-optimization-recommendations.md` §4.3). Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
 

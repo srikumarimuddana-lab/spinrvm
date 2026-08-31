@@ -154,31 +154,24 @@ async def pay_driver_cancellation_fee(
             return False
 
         fee_dec = _d(str(fee))
-        new_balance = _round(_d(str(wallet.get("balance", 0))) + fee_dec)
-        await db_supabase.update_one(
-            "wallets",
-            {"id": wallet["id"]},
-            {
-                "balance": _f(new_balance),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-        await db_supabase.insert_one(
-            "wallet_transactions",
-            {
-                "id": str(uuid.uuid4()),
-                "wallet_id": wallet["id"],
-                "user_id": driver_user_id,
-                "type": "cancellation_fee",
-                "amount": _f(fee_dec),
-                "balance_after": _f(new_balance),
-                "reference_id": ride_id,
-                "description": f"Cancellation fee for ride {ride_id}",
-                "metadata": {
-                    "ride_id": ride_id,
-                    "status_at_cancel": ride_status_at_cancel,
-                },
-                "created_at": datetime.now(timezone.utc).isoformat(),
+        # WS-6 atomic locked credit (#4604 finding 1) -- this previously read
+        # the balance, computed balance + fee in Python, and wrote it back
+        # filtered on {id} only, same pre-WS-6 pattern the sibling RIDER-side
+        # debits at cancellation.py/ride_cancel.py were already migrated off
+        # of. Two near-simultaneous credits to the same driver (two rides, or
+        # racing an admin debit/payout) could silently lose one; with no
+        # reference_id dedup, a retry would double-credit with no backstop.
+        # reference_id=ride_id makes a replayed payout idempotent instead.
+        await db_supabase.wallet_apply_delta(
+            wallet_id=wallet["id"],
+            user_id=driver_user_id,
+            type_="cancellation_fee",
+            delta=fee_dec,
+            reference_id=ride_id,
+            description=f"Cancellation fee for ride {ride_id}",
+            metadata={
+                "ride_id": ride_id,
+                "status_at_cancel": ride_status_at_cancel,
             },
         )
         try:

@@ -161,13 +161,14 @@ class TestEdgeCases:
             verify_otp_hash(stored, 0)  # type: ignore[arg-type]
 
 
-class TestLegacyTransitionFallback:
-    """During the ~5-min TTL window straddling a deploy, codes hashed with the
-    old unsalted SHA-256 must still verify so in-flight OTPs don't all fail."""
+class TestLegacyTransitionFallbackRemoved:
+    """The pre-pepper unsalted-SHA-256 fallback (#4606 finding 3) was removed
+    2026-08-31: its ~5-min transition window closed long ago, so a
+    legacy-hashed code must no longer verify."""
 
-    def test_verify_accepts_legacy_sha256_hash(self):
+    def test_verify_rejects_legacy_sha256_hash(self):
         legacy = hashlib.sha256(b"246810").hexdigest()
-        assert verify_otp_hash(legacy, "246810") is True
+        assert verify_otp_hash(legacy, "246810") is False
 
     def test_verify_accepts_new_keyed_hash(self):
         assert verify_otp_hash(hash_otp("135790"), "135790") is True

@@ -8,8 +8,8 @@ anthropic==0.109.1        # via -r requirements.in
 anyio==4.13.0             # via -r requirements.in, anthropic, httpx, mcp, openai, sse-starlette, starlette, watchfiles
 attrs==26.1.0             # via aiohttp, jsonschema, referencing
 bcrypt==5.0.0             # via -r requirements.in
-boto3==1.42.96            # via -r requirements.in
-botocore==1.42.96         # via boto3, s3transfer
+boto3==1.43.80            # via -r requirements.in
+botocore==1.43.83         # via boto3, s3transfer
 cachecontrol==0.14.4      # via firebase-admin
 cachetools==6.2.6         # via pyiceberg
 certifi==2026.4.22        # via -r requirements.in, cloudinary, httpcore, httpx, requests, sentry-sdk
@@ -30,7 +30,7 @@ et-xmlfile==2.0.0         # via openpyxl
 fastapi==0.141.1          # via -r requirements.in
 firebase-admin==7.5.0     # via -r requirements.in
 fonttools==4.62.1         # via fpdf2
-fpdf2==2.8.7              # via -r requirements.in
+fpdf2==2.8.8              # via -r requirements.in
 frozenlist==1.8.0         # via aiohttp, aiosignal
 fsspec==2026.3.0          # via pyiceberg
 google-ai-generativelanguage==0.6.15  # via google-generativeai
@@ -40,7 +40,7 @@ google-auth==2.49.2       # via -r requirements.in, google-ai-generativelanguage
 google-auth-httplib2==0.3.1  # via google-api-python-client
 google-cloud-core==2.5.1  # via google-cloud-firestore, google-cloud-storage
 google-cloud-firestore==2.27.0  # via -r requirements.in, firebase-admin
-google-cloud-storage==3.10.1  # via -r requirements.in, firebase-admin
+google-cloud-storage==3.13.1  # via -r requirements.in, firebase-admin
 google-crc32c==1.8.0      # via google-cloud-storage, google-resumable-media
 google-generativeai==0.8.6  # via -r requirements.in
 google-resumable-media==2.8.2  # via google-cloud-storage
@@ -106,17 +106,17 @@ pytest-mock==3.15.1       # via -r requirements.in
 pytest-timeout==2.4.0     # via -r requirements.in
 python-dateutil==2.9.0.post0  # via -r requirements.in, botocore, pandas, strictyaml
 python-docx==1.1.2        # via -r requirements.in
-python-dotenv==1.2.2      # via -r requirements.in, pydantic-settings, pytest-env, uvicorn
+python-dotenv==1.2.3      # via -r requirements.in, pydantic-settings, pytest-env, uvicorn
 python-multipart==0.0.32  # via -r requirements.in, mcp
 pytz==2026.2              # via -r requirements.in
 pyyaml==6.0.3             # via -r requirements.in, uvicorn
 realtime==2.29.0          # via -r requirements.in, supabase
 redis==7.4.0              # via -r requirements.in
 referencing==0.37.0       # via jsonschema, jsonschema-specifications
-requests==2.33.1          # via -r requirements.in, cachecontrol, google-api-core, google-cloud-storage, pyiceberg, staticmap, stripe, twilio
+requests==2.34.2          # via -r requirements.in, cachecontrol, google-api-core, google-cloud-storage, pyiceberg, staticmap, stripe, twilio
 rich==14.3.4              # via -r requirements.in, pyiceberg, typer
 rpds-py==2026.5.1         # via jsonschema, referencing
-s3transfer==0.16.1        # via boto3
+s3transfer==0.19.2        # via boto3
 sentry-sdk==2.59.0        # via -r requirements.in
 shellingham==1.5.4        # via typer
 six==1.17.0               # via cloudinary, python-dateutil

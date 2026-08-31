@@ -223,6 +223,10 @@ function DriverArrivedScreenContent() {
               heading={(currentDriver as any).heading}
               size={44}
               zIndex={100}
+              // Single marker on this screen (the assigned driver) — safe
+              // to pulse. Driver has arrived but the trip hasn't started
+              // (still pre-trip/Period 2), same amber as driver-arriving.
+              ring={{ color: colors.warning, pulsing: true }}
             />
           )}
         </MapView>

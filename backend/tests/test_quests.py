@@ -588,7 +588,7 @@ class TestQuestTrackerOnRideComplete:
         mock_db.update_one = _update_one
 
         with patch("utils.quest_tracker.db", mock_db):
-            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1", "grand_total": 12.5})
 
         assert captured["table"] == "quest_progress"
         changes = captured["update"]["$set"]
@@ -636,7 +636,7 @@ class TestQuestTrackerOnRideComplete:
 
         mock_db.update_one = _update_one
         # No service_area_id on the ride → tracker falls back to America/Regina (UTC-6).
-        ride = {"id": "ride_1", "ride_completed_at": completed_at_utc, "service_area_id": None}
+        ride = {"id": "ride_1", "ride_completed_at": completed_at_utc, "service_area_id": None, "grand_total": 15.0}
         return mock_db, ride, captured
 
     @pytest.mark.anyio

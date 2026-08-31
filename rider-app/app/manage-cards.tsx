@@ -13,6 +13,7 @@ import { StripeKeyContext } from './_layout';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { showToast } from '../store/toastStore';
+import { getManageCardsFormError } from '../utils/manageCardsSchema';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -156,10 +157,9 @@ export default function ManageCardsScreen() {
   };
 
   const handleAddCard = async () => {
-    if (!cardDetailsComplete) { showToast('Missing Details', 'Please enter complete card details', 'warning'); return; }
-    if (!cardName.trim()) { showToast('Missing Name', 'Please enter the cardholder name', 'warning'); return; }
-    if (!createPaymentMethod) {
-      showToast('Payments unavailable', 'Payment processing is still starting up. Try again in a moment.', 'warning');
+    const validationError = getManageCardsFormError(cardDetailsComplete, cardName, createPaymentMethod);
+    if (validationError) {
+      showToast(validationError.title, validationError.message, 'warning');
       return;
     }
 

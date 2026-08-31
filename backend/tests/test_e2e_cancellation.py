@@ -351,7 +351,16 @@ class TestRiderCancelFeeWriteFailureReleasesDriver:
         settings = {"cancellation_fee_admin": 0.50, "cancellation_fee_driver": 2.50}
         wallet = {"id": "wallet_1", "balance": 100.0}
 
-        set_avail = AsyncMock()
+        # Regression (2026-08-31): #4729's Finding-3 guard in cancellation.py
+        # now only records Period 1 when set_driver_available's return
+        # confirms the driver is actually available (isinstance(released,
+        # dict) and released.get("is_available")). An unconfigured
+        # AsyncMock()'s default return value is a plain Mock, not a dict, so
+        # that guard silently suppressed this test's expected
+        # record_period_transition call -- this fixture predates that guard
+        # and was never updated to match. The driver is still online here
+        # (arrived, not force-offlined), so the release genuinely succeeds.
+        set_avail = AsyncMock(return_value={"id": DRIVER_ID, "is_available": True})
         period = AsyncMock()
         ws = AsyncMock()
 
@@ -390,11 +399,7 @@ class TestRiderCancelFeeWriteFailureReleasesDriver:
         period.assert_any_await(DRIVER_ID, 1)
         # Driver is notified of the cancellation.
         driver_channel = f"driver_{DRIVER_USER_ID}"
-        notified = [
-            call.args[0]
-            for call in ws.call_args_list
-            if len(call.args) > 1 and call.args[1] == driver_channel
-        ]
+        notified = [call.args[0] for call in ws.call_args_list if len(call.args) > 1 and call.args[1] == driver_channel]
         assert any(e.get("type") == "ride_cancelled" for e in notified), (
             "Driver must be notified of the cancel even when the fee write fails"
         )

@@ -213,7 +213,7 @@ async def test_one_bad_progress_row_does_not_abort_the_batch(monkeypatch, caplog
     monkeypatch.setattr("utils.quest_tracker.db", mock_db)
 
     with caplog.at_level(logging.ERROR):
-        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1", "grand_total": 8.0})
 
     assert "Failed to update quest quest_broken" in caplog.text
     # The second (good) row still got processed despite the first raising.
@@ -298,3 +298,106 @@ async def test_invalid_area_timezone_falls_back_to_default(monkeypatch):
         {"ride_completed_at": "2026-06-21T23:30:00+00:00", "service_area_id": "area_1"}
     )
     assert hour == 17
+
+
+# ── #4600: fare-floor gate on ride_count / peak_rides progress ────────────
+
+
+@pytest.mark.anyio
+async def test_zero_grand_total_ride_does_not_advance_ride_count():
+    """A ride fully covered by a free_ride/heavy-discount promo (grand_total
+    == 0) must not count toward ride_count quest progress that pays a real
+    driver_bonuses Stripe Connect transfer — the same exploit class already
+    closed for rider referrals (migration 336) but never propagated here."""
+    progress = _progress(current_value=5)
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[progress]),
+        find_one=AsyncMock(return_value=RIDE_COUNT_QUEST),
+        update_one=_update_one,
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("utils.quest_tracker.db", mock_db)
+        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1", "grand_total": 0})
+
+    # Still writes (updated_at refresh), but current_value must not advance.
+    assert captured["update"]["$set"]["current_value"] == 5
+
+
+@pytest.mark.anyio
+async def test_missing_grand_total_is_treated_as_zero_and_does_not_advance():
+    """A ride dict with no grand_total key at all (defensive default) must be
+    treated the same as an explicit 0 — not as "unknown, so allow it"."""
+    progress = _progress(current_value=5)
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[progress]),
+        find_one=AsyncMock(return_value=RIDE_COUNT_QUEST),
+        update_one=_update_one,
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("utils.quest_tracker.db", mock_db)
+        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+    assert captured["update"]["$set"]["current_value"] == 5
+
+
+@pytest.mark.anyio
+async def test_real_fare_ride_still_advances_ride_count():
+    """Control: a normal, real-fare completed ride must still advance
+    progress exactly as before this gate."""
+    progress = _progress(current_value=5)
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[progress]),
+        find_one=AsyncMock(return_value=RIDE_COUNT_QUEST),
+        update_one=_update_one,
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("utils.quest_tracker.db", mock_db)
+        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1", "grand_total": 14.75})
+
+    assert captured["update"]["$set"]["current_value"] == 6
+
+
+@pytest.mark.anyio
+async def test_earnings_target_is_unaffected_by_zero_grand_total():
+    """earnings_target already sums real driver_earnings — a $0-rider-fare
+    ride with nonzero driver_earnings (e.g. platform-subsidized promo) must
+    still count toward it; the fare-floor gate is scoped to ride_count and
+    peak_rides only, per #4600."""
+    earnings_quest = {
+        "id": "quest_e",
+        "type": "earnings_target",
+        "target_value": 100.0,
+        "is_active": True,
+        "end_date": _FUTURE,
+    }
+    progress = _progress(quest_id="quest_e", current_value=50)
+    captured = {}
+
+    async def _update_one(table, filters, update, **kwargs):
+        captured["update"] = update
+
+    mock_db = _mock_db(
+        get_rows=AsyncMock(return_value=[progress]),
+        find_one=AsyncMock(return_value=earnings_quest),
+        update_one=_update_one,
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("utils.quest_tracker.db", mock_db)
+        await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1", "grand_total": 0, "driver_earnings": 5})
+
+    assert captured["update"]["$set"]["current_value"] == 55

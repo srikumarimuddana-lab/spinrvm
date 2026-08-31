@@ -15,7 +15,12 @@ try:
     from ...routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt
     from ...routes.users import store_profile_image
     from ...services import lms_service
-    from ...services.driver_import_service import dob_source, sin_source
+    from ...services.driver_import_service import (
+        dob_source,
+        fetch_incomplete_onboarding_driver_ids,
+        is_incomplete_onboarding_row,
+        sin_source,
+    )
     from ...services.pre_launch_flag_service import fetch_pre_launch_flagged_ids
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
@@ -35,7 +40,12 @@ except ImportError:
     from routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
-    from services.driver_import_service import dob_source, sin_source  # type: ignore
+    from services.driver_import_service import (  # type: ignore
+        dob_source,
+        fetch_incomplete_onboarding_driver_ids,
+        is_incomplete_onboarding_row,
+        sin_source,
+    )
     from services.pre_launch_flag_service import fetch_pre_launch_flagged_ids  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
@@ -461,6 +471,7 @@ async def admin_get_drivers(
     missing_license: bool = False,
     legacy_import: Optional[bool] = None,
     pre_launch: Optional[bool] = None,
+    onboarding_complete: Optional[bool] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = None,
 ):
@@ -480,6 +491,13 @@ async def admin_get_drivers(
     `services/pre_launch_flag_service.py` -- see its module docstring for
     what actually gets flagged and why). True = flagged only, False = hide
     flagged, omitted = no filter (default, matches every prior behavior).
+
+    `onboarding_complete`: excludes abandoned-legacy-onboarding shells --
+    rows imported from the old app for people who OTP-verified a phone and
+    never completed a profile (see
+    `services/driver_import_service.is_incomplete_onboarding_row`). True =
+    real driver profiles only, False = only the shells, omitted = no filter
+    (default, matches every prior behavior).
     """
 
     filters = {}
@@ -504,20 +522,49 @@ async def admin_get_drivers(
     if legacy_import is not None:
         filters["legacy_import_metadata"] = {"$ne": {}} if legacy_import else {"$eq": {}}
 
-    # Pre-launch flag filter. The generic filter DSL (repositories/_base.py)
-    # has no JSONB-path operator, so flagged ids are resolved with a
-    # dedicated query first (same pattern `photo_status` below uses for a
-    # cross-table lookup), then fed into the existing `$in`/`$nin` filter --
-    # `filters["id"]` is otherwise unused by this route, so no collision
-    # with `search`'s own `$or` clause (a different top-level key, ANDed).
+    # Id-set filters. The generic filter DSL (repositories/_base.py) has no
+    # JSONB-path operator, so each of these resolves its ids with a dedicated
+    # query first (same pattern `photo_status` below uses for a cross-table
+    # lookup), then feeds them into the existing `$in`/`$nin` filter.
+    #
+    # `filters["id"]` is a single key, so TWO such filters cannot each assign
+    # it -- the second would silently clobber the first and quietly widen the
+    # result set. They are accumulated here and written once instead. (No
+    # collision with `search`'s own `$or` clause: a different top-level key,
+    # ANDed.)
+    include_ids: Optional[set] = None  # None = unconstrained, set() = match nothing
+    exclude_ids: set = set()
+
+    def _restrict_to(ids: set) -> Optional[set]:
+        return ids if include_ids is None else (include_ids & ids)
+
+    # Pre-launch flag filter -- see services/pre_launch_flag_service.py for
+    # what "flagged" means.
     if pre_launch is not None:
         flagged_ids = fetch_pre_launch_flagged_ids("drivers")
         if pre_launch:
-            if not flagged_ids:
-                return []
-            filters["id"] = {"$in": list(flagged_ids)}
-        elif flagged_ids:
-            filters["id"] = {"$nin": list(flagged_ids)}
+            include_ids = _restrict_to(flagged_ids)
+        else:
+            exclude_ids |= flagged_ids
+
+    # Abandoned-legacy-onboarding filter. True = real driver profiles only
+    # (the admin default), False = only the imported shells, omitted = no
+    # filter. See services/driver_import_service.is_incomplete_onboarding_row
+    # for why these rows exist and why they are classified, not deleted.
+    if onboarding_complete is not None:
+        incomplete_ids = fetch_incomplete_onboarding_driver_ids()
+        if onboarding_complete:
+            exclude_ids |= incomplete_ids
+        else:
+            include_ids = _restrict_to(incomplete_ids)
+
+    if include_ids is not None:
+        remaining = include_ids - exclude_ids
+        if not remaining:
+            return []
+        filters["id"] = {"$in": list(remaining)}
+    elif exclude_ids:
+        filters["id"] = {"$nin": list(exclude_ids)}
 
     # See the "Driver search" block above the route for the two-query design.
     if search:
@@ -729,6 +776,14 @@ async def admin_get_driver_stats(
 
     Returns overall + per-service-area stats, plus daily chart data for
     driver joins, rides, and earnings.
+
+    `total` counts every driver row and keeps that meaning. The legacy import
+    deliberately carried over abandoned-onboarding shells (see
+    `services/driver_import_service.is_incomplete_onboarding_row`), which made
+    `total` read far higher than the real fleet -- so two additional keys
+    break it down without changing it: `onboarded_total` (real driver
+    profiles) and `legacy_incomplete` (the shells). The two always sum to
+    `total`.
     """
     from collections import defaultdict
 
@@ -819,6 +874,16 @@ async def admin_get_driver_stats(
 
     # ── Compute overall driver stats ──
     total = len(enriched_drivers)
+    # Classified in Python off the rows already fetched above, using the same
+    # predicate the DB-side list filter resolves its id set from, so the two
+    # can never disagree — no extra query, and no N+1.
+    #
+    # Deliberately over `all_drivers`, not `enriched_drivers`: the enrichment
+    # loop replaces `name` with the linked account's display name, which is a
+    # different string from the `drivers.name` the importer stamped the
+    # placeholder into. Classify the stored row, not its rendering.
+    legacy_incomplete_count = sum(1 for d in all_drivers if is_incomplete_onboarding_row(d))
+    onboarded_total = total - legacy_incomplete_count
     # A deleted account is never "online", whatever its stale intent flag says.
     online = sum(1 for d in enriched_drivers if d.get("is_online") and d.get("status") != "deleted")
     active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
@@ -969,6 +1034,10 @@ async def admin_get_driver_stats(
     return {
         "stats": {
             "total": total,
+            # Breakdown of `total`. These two always sum to it — see the
+            # docstring for why the raw count alone was misleading.
+            "onboarded_total": onboarded_total,
+            "legacy_incomplete": legacy_incomplete_count,
             "online": online,
             "active": active_count,
             "pending": pending_count,

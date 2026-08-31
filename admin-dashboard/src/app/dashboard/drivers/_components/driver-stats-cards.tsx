@@ -8,6 +8,11 @@ import {
 
 interface DriverStatsData {
     total: number;
+    /** Real driver profiles — `total` minus the abandoned-legacy-onboarding
+     * shells. Optional so a stale cached response still renders. */
+    onboarded_total?: number;
+    /** Abandoned-onboarding rows carried over by the legacy import. */
+    legacy_incomplete?: number;
     online: number;
     active: number;
     pending: number;
@@ -65,10 +70,14 @@ export default function DriverStatsCards({ stats, loading }: { stats: DriverStat
                 inline Badge ternary) — kept together as one hand-picked
                 10-color set rather than partially converted. (#2816) */}
             {/* eslint-disable no-restricted-syntax -- mixed count-differentiation + driver-lifecycle-status tile set, see comment above (#2816) */}
+            {/* Counts real driver profiles, not raw `drivers` rows: the legacy
+                import left abandoned-onboarding shells in the table, which made
+                a raw total read ~3x the real fleet. Labelled "Drivers" rather
+                than "Total" so the narrower basis is legible on the tile. */}
             <StatCard icon={Users}
                 color="text-blue-600 dark:text-blue-400"
                 bg="bg-blue-100 dark:bg-blue-900/30"
-                label="Total" value={stats.total} />
+                label="Drivers" value={stats.onboarded_total ?? stats.total} />
             <StatCard icon={Wifi}
                 color="text-emerald-600 dark:text-emerald-400"
                 bg="bg-emerald-100 dark:bg-emerald-900/30"

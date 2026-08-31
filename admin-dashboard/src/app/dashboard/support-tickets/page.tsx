@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { ZohoConfigCard } from "./_components/zoho-config-card";
 import { Headphones, Inbox, BarChart3, Settings as SettingsIcon, AlertCircle, Info, RefreshCw, Ticket as TicketIcon } from "lucide-react";
 
@@ -33,8 +34,21 @@ function statusClass(status: string): string {
     return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
+// Quiet Console Stage 3: flag-gated Badge-variant equivalent of statusClass
+// above. "open" falls back to plain `outline` — there's no blue/info Badge
+// variant, and `outline-accent` reuses --primary (#d32f2f, same red family
+// as --destructive #dc2626), so it would misread "open" as escalated. See
+// the Stage 3c report; a dedicated blue/info variant is the real fix.
+function statusBadgeVariant(status: string): "outline-warning" | "outline-destructive" | "outline" {
+    const s = (status || "").toLowerCase();
+    if (s.includes("hold")) return "outline-warning";
+    if (s.includes("escal")) return "outline-destructive";
+    return "outline";
+}
+
 export default function HelpDeskPage() {
     const { allowed } = useRequireModule("support_tickets");
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const { toast } = useToast();
     const [connected, setConnected] = useState<boolean | null>(null);
     const [cfg, setCfg] = useState<ZohoConfigStatus | null>(null);
@@ -177,7 +191,11 @@ export default function HelpDeskPage() {
                         <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                             {Object.entries(data.by_status).map(([k, v]) => (
                                 <div key={k} className="flex items-center justify-between rounded-lg border p-4">
-                                    <Badge variant="secondary" className={statusClass(k)}>{k}</Badge>
+                                    {themeV2Enabled ? (
+                                        <Badge variant={statusBadgeVariant(k)}>{k}</Badge>
+                                    ) : (
+                                        <Badge variant="secondary" className={statusClass(k)}>{k}</Badge>
+                                    )}
                                     <span className="text-xl font-semibold">{v}</span>
                                 </div>
                             ))}
@@ -205,7 +223,11 @@ export default function HelpDeskPage() {
                                             </p>
                                         </div>
                                     </div>
-                                    <Badge variant="secondary" className={statusClass(t.status)}>{t.status}</Badge>
+                                    {themeV2Enabled ? (
+                                        <Badge variant={statusBadgeVariant(t.status)}>{t.status}</Badge>
+                                    ) : (
+                                        <Badge variant="secondary" className={statusClass(t.status)}>{t.status}</Badge>
+                                    )}
                                 </Link>
                             ))}
                         </CardContent>

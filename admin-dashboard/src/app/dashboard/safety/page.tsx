@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { IncidentEvidencePhotos } from "./_components/incident-evidence-photos";
 import { getLogIncidentFormError, getMergeIncidentError } from "@/lib/safetyIncidentFormSchema";
 import {
@@ -106,6 +107,36 @@ function severityTone(s: SafetySeverity | null): { bg: string; text: string; lab
     return { bg: "bg-muted/60", text: "text-muted-foreground", label: "Unset" };
 }
 
+// Quiet Console Stage 3: flag-gated Badge-variant equivalents of the tones
+// above. sev1/open map to outline-destructive, sev2/in_progress to
+// outline-warning, resolved to outline-success. sev3 ("info", lowest
+// severity) and "unset" fall back to plain `outline` — there is no
+// blue/info Badge variant, and `outline-accent` reuses --primary
+// (#d32f2f), the same red hue family as --destructive (#dc2626), so it
+// would misread SEV 3 as elevated rather than as the lowest tier. Not
+// fixed here — see Stage 3c report; a dedicated blue/info variant is the
+// real fix, and adding it is out of scope for this batch (badge.tsx is
+// shared with two other in-flight batches).
+function statusBadgeVariant(s: SafetyStatus): "outline-destructive" | "outline-warning" | "outline-success" | "outline" {
+    switch (s) {
+        case "open":
+            return "outline-destructive";
+        case "in_progress":
+            return "outline-warning";
+        case "resolved":
+            return "outline-success";
+        case "closed":
+        case "duplicate":
+            return "outline";
+    }
+}
+
+function severityBadgeVariant(s: SafetySeverity | null): "outline-destructive" | "outline-warning" | "outline" {
+    if (s === "sev1") return "outline-destructive";
+    if (s === "sev2") return "outline-warning";
+    return "outline";
+}
+
 function relativeTime(iso?: string | null) {
     if (!iso) return "—";
     const t = new Date(iso).getTime();
@@ -132,6 +163,7 @@ const PAGE_SIZE = 50;
 
 export default function SafetyPage() {
     const { allowed } = useRequireModule("support");
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const { toast } = useToast();
     const router = useRouter();
 
@@ -366,9 +398,15 @@ export default function SafetyPage() {
                                             <div className="text-[10px] text-muted-foreground">{fmtDateTime(it.reported_at)}</div>
                                         </TableCell>
                                         <TableCell>
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${sv.bg} ${sv.text}`}>
-                                                {sv.label}
-                                            </span>
+                                            {themeV2Enabled ? (
+                                                <Badge variant={severityBadgeVariant(it.severity)} className="text-[10px]">
+                                                    {sv.label}
+                                                </Badge>
+                                            ) : (
+                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${sv.bg} ${sv.text}`}>
+                                                    {sv.label}
+                                                </span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-xs">
                                             <div className="font-mono font-medium truncate max-w-[180px]" title={it.category}>{it.category}</div>
@@ -398,9 +436,15 @@ export default function SafetyPage() {
                                             )}
                                         </TableCell>
                                         <TableCell>
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${st.bg} ${st.text}`}>
-                                                {st.label}
-                                            </span>
+                                            {themeV2Enabled ? (
+                                                <Badge variant={statusBadgeVariant(it.status)} className="text-[10px]">
+                                                    {st.label}
+                                                </Badge>
+                                            ) : (
+                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${st.bg} ${st.text}`}>
+                                                    {st.label}
+                                                </span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-xs text-muted-foreground">
                                             {it.assigned_to_admin_id ? (
@@ -597,6 +641,7 @@ function IncidentDetailDrawer({
     // Optional: a backend deployed before migration 340 omits the key entirely.
     const photos = detail.photos ?? [];
     const { toast } = useToast();
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
 
     const [status, setStatus] = useState<SafetyStatus>(incident.status);
     const [severity, setSeverity] = useState<SafetySeverity | "unset">(incident.severity ?? "unset");
@@ -670,8 +715,16 @@ function IncidentDetailDrawer({
                 <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${sv.bg} ${sv.text}`}>{sv.label}</span>
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${st.bg} ${st.text}`}>{st.label}</span>
+                            {themeV2Enabled ? (
+                                <Badge variant={severityBadgeVariant(incident.severity)} className="text-[10px]">{sv.label}</Badge>
+                            ) : (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${sv.bg} ${sv.text}`}>{sv.label}</span>
+                            )}
+                            {themeV2Enabled ? (
+                                <Badge variant={statusBadgeVariant(incident.status)} className="text-[10px]">{st.label}</Badge>
+                            ) : (
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${st.bg} ${st.text}`}>{st.label}</span>
+                            )}
                             <Badge variant="outline" className="text-[10px] capitalize">{incident.role}</Badge>
                         </div>
                         <h2 className="text-lg font-bold mt-2 font-mono truncate">{incident.category}</h2>

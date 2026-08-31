@@ -79,6 +79,7 @@ export default function HeatMapPage() {
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
     const [groupBy, setGroupBy] = useState<"pickup" | "dropoff" | "both">("both");
     const [dateError, setDateError] = useState<string | null>(null);
+    const [heatMapError, setHeatMapError] = useState<string | null>(null);
 
     // Display toggles
     const [showPickups, setShowPickups] = useState(true);
@@ -111,7 +112,14 @@ export default function HeatMapPage() {
                 setShowPickups(settingsData.heat_map_show_pickups ?? true);
                 setShowDropoffs(settingsData.heat_map_show_dropoffs ?? true);
             })
-            .catch(console.error)
+            .catch((err) => {
+                console.error(err);
+                // #4640 Finding 2: this used to fail silently — setLoading(false)
+                // below still fires, so the page rendered as if settings/areas
+                // genuinely had nothing to show instead of signalling the fetch
+                // itself failed.
+                setHeatMapError("Failed to load heat map settings. Try refreshing the page.");
+            })
             .finally(() => setLoading(false));
     }, []);
 
@@ -154,6 +162,7 @@ export default function HeatMapPage() {
             return;
         }
         setDateError(null); // clear previous error when dates are valid
+        setHeatMapError(null);
         setLoading(true);
         const { start_date, end_date } = getDateRange();
 
@@ -165,7 +174,15 @@ export default function HeatMapPage() {
             group_by: groupBy,
         })
             .then(setHeatMapData)
-            .catch(console.error)
+            .catch((err) => {
+                console.error(err);
+                // #4640 Finding 2: a failed fetch used to render as a quiet,
+                // stale/empty map — setLoading(false) still fires below, so it
+                // was indistinguishable from "genuinely no rides in range." An
+                // admin reading demand data to make dispatch/pricing decisions
+                // needs a signal the fetch itself failed, not just an empty map.
+                setHeatMapError("Failed to load heat map data. Try again.");
+            })
             .finally(() => setLoading(false));
     }, [filter, dateRange, startDate, endDate, serviceAreaId, groupBy, getDateRange]);
 
@@ -464,6 +481,17 @@ export default function HeatMapPage() {
                     {loading ? (
                         <div className="w-full h-[600px] bg-muted animate-pulse flex items-center justify-center">
                             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : heatMapError ? (
+                        <div
+                            role="alert"
+                            className="w-full h-[600px] flex flex-col items-center justify-center gap-3 text-center px-6"
+                        >
+                            <p className="text-sm text-destructive">{heatMapError}</p>
+                            <Button variant="outline" size="sm" onClick={fetchHeatMapData}>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                Retry
+                            </Button>
                         </div>
                     ) : (
                         <HeatMap

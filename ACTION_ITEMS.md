@@ -18228,7 +18228,7 @@ how much they de-risk a public launch._
   a manual admin-dashboard settings-page load) confirms nothing broke.
 - **Migration prepared, not applied (2026-08-31):** the reference SQL above
   is now a real migration file,
-  `backend/migrations/378_enable_rls_settings_document_files_driver_imports.sql`
+  `backend/migrations/379_enable_rls_settings_document_files_driver_imports.sql`
   — the exact 4 `ENABLE ROW LEVEL SECURITY` statements, no new policies,
   verified locally against a scratch Postgres instance (applied cleanly,
   rollback's `DISABLE ROW LEVEL SECURITY` statements verified to work,

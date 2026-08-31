@@ -1,7 +1,7 @@
 # C43 — RLS-Enable Migration Readiness
 
 **Status:** prepared, not applied. Migration
-`backend/migrations/378_enable_rls_settings_document_files_driver_imports.sql`
+`backend/migrations/379_enable_rls_settings_document_files_driver_imports.sql`
 exists and has been verified locally, but has **not** been run against
 staging or production, and must not be until the condition below is met.
 
@@ -75,9 +75,9 @@ first:
 Reviewed against `spinr-migration-reviewer`'s checklist:
 
 ```
-SPINR MIGRATION REVIEW — backend/migrations/378_enable_rls_settings_document_files_driver_imports.sql
+SPINR MIGRATION REVIEW — backend/migrations/379_enable_rls_settings_document_files_driver_imports.sql
 ==================================
-NUMBERING:     OK (378 is next free after 377; verified via `ls backend/migrations | sort -V | tail`)
+NUMBERING:     OK (379 is next free after 378; verified via `ls backend/migrations | sort -V | tail`)
 APPEND-ONLY:   OK (new file only, no edits to a merged migration)
 RLS:           OK, WITH NOTE — this enables RLS on 4 EXISTING tables with
                zero policies (deny-all to anon/authenticated), not the

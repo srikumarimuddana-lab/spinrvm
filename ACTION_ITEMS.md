@@ -11957,6 +11957,32 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 9 candidates from the broader sweep (6
   driver-app candidates; 2 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 27 done: `admin-dashboard/src/app/dashboard/faqs/page.tsx`'s
+  question/answer requiredness check (eleventh and final standalone
+  admin-dashboard candidate).** Extracted `handleSave`'s inline
+  `!form.question.trim() || !form.answer.trim()` check into new
+  `admin-dashboard/src/lib/faqFormSchema.ts` (`isFaqFormValid` — a plain
+  predicate, not a zod schema). Pure extraction, byte-for-byte identical
+  to the original check — no bug found, no behavior change. New
+  `admin-dashboard/src/lib/__tests__/faqFormSchema.test.ts` (6
+  accept/reject cases). Verification: 6/6 new tests pass; full
+  admin-dashboard suite (`vitest run`) 55/55 suites, 549/549 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 1 pre-existing warning, unrelated;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed isolation. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-faqs-zod-step27.md`.
+
+  **Separately flagged, not fixed:** `handleDelete`'s `catch` block
+  silently swallows a failed delete (code comment only, no
+  `setDeleteError`) — same shape as the `resolveDispute` gap fixed in
+  #4754. Queued as a task suggestion, not folded into this step.
+
+  **Still open:** 8 candidates from the broader sweep — 6 driver-app,
+  plus admin-dashboard's `ride-complaint-form.tsx`/`ride-flag-form.tsx`
+  (silent no-op UX gaps needing a small behavior addition, not a pure
+  extraction — tracked as their own step). No ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

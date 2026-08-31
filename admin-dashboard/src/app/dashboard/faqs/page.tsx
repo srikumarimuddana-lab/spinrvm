@@ -20,6 +20,7 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { HelpCircle, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { getFaqs, createFaq, updateFaq, deleteFaq } from "@/lib/api";
 import { FAQ_CATEGORIES } from "@/lib/faq-categories";
+import { isFaqFormValid } from "@/lib/faqFormSchema";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -135,7 +136,7 @@ export default function FaqsPage() {
     }
 
     async function handleSave() {
-        if (!form.question.trim() || !form.answer.trim()) {
+        if (!isFaqFormValid(form.question, form.answer)) {
             setSaveError("Question and answer are required.");
             return;
         }

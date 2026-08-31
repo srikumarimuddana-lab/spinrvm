@@ -11656,6 +11656,56 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 19 candidates from the broader sweep (6
   more driver-app candidates; 12 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 17 done: `admin-dashboard/src/app/dashboard/users/page.tsx`'s
+  `requestWalletAction` (per-user rider/driver wallet credit/debit —
+  first admin-dashboard candidate, money tier).** Extracted the amount
+  regex/`parseFloat` check and the reason-length check into new
+  `admin-dashboard/src/lib/userWalletActionSchema.ts`
+  (`isWalletAmountValid`, `isWalletReasonValid`,
+  `getWalletActionError`). Pure extraction, byte-for-byte identical to
+  the original two inline checks — no bug found in this form, no
+  behavior change. Explicitly kept as a **separate schema file** from
+  the existing `walletAdjustmentSchema.ts` (corporate-accounts wallet
+  adjustment): different call site (`creditUserWallet`/
+  `debitUserWallet` vs `corporate-accounts/{id}/wallet/adjust`),
+  different field shapes (always-positive regex-validated amount + a
+  separate `action` field, vs a signed `parseFloat`ed delta with a
+  $10,000 cap), same "kept separate, not merged" pattern as step 13's
+  `spinrPassAreaPlanSchema.ts` vs `subscriptionPlanSchema.ts`. New
+  `admin-dashboard/src/lib/__tests__/userWalletActionSchema.test.ts`
+  (11 accept/reject cases). Verification: 11/11 new tests pass; full
+  admin-dashboard suite (`vitest run`) 45/45 suites, 443/443 tests
+  passing; `npx tsc --noEmit` clean on touched files (57 pre-existing,
+  unrelated error lines confirmed via `git stash` — all in map
+  components, see the environment note below); `npx eslint` on touched
+  files: 0 errors, 3 pre-existing `react-hooks/set-state-in-effect`
+  warnings on unrelated lines of `users/page.tsx`, unchanged by this
+  diff.
+
+  **Environment note (found, not fixed, by this step — separate task
+  suggested):** `npm run build` currently fails on `main` for
+  admin-dashboard — confirmed via `git stash` to be entirely unrelated
+  to this diff. Root cause: `maplibre-gl@6.6.0` (the version
+  `package.json` pins) dropped its default export, breaking every file
+  doing `import maplibregl from "maplibre-gl"` (8 files: `lib/map/
+  maplibre-base.ts`, `monitoring-map.tsx`, `ride-route-map.tsx`,
+  `live-map.tsx`, `geofence-map.tsx`, `heat-map.tsx`, `venue-map.tsx`,
+  `driver-map.tsx`) — none of which this step touches. This blocks the
+  "real production build" verification CLAUDE.md requires for *every*
+  admin-dashboard change going forward, not just this one. A task
+  suggestion was queued (`task_66016ac3`) rather than fixed inline here
+  — out of scope for a B39 form-validation step, and non-trivial (needs
+  either a maplibre-gl downgrade or an import-shape migration across 8
+  files, plus map-screen spot-checks with no visual-regression coverage
+  to lean on). This step's own verification therefore relies on
+  `tsc`/`eslint`/`vitest` rather than a completed `npm run build` — see
+  "What was NOT verified" in the Change Impact Log. Full Change Impact
+  Log: `docs/change-log/2026-08-31-b39-admin-user-wallet-zod-step17.md`.
+
+  **Still open:** the remaining 18 candidates from the broader sweep (6
+  driver-app candidates; 11 more admin-dashboard candidates); the
+  admin-dashboard maplibre-gl build break above (`task_66016ac3`); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

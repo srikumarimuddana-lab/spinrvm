@@ -92,7 +92,7 @@ export function MigrationChecklist() {
                 <div>
                     <CardTitle>Migration Checklist</CardTitle>
                     <CardDescription>
-                        All 16 legacy-migration tools, in dependency order — run top to bottom against a
+                        All 17 legacy-migration tools, in dependency order — run top to bottom against a
                         fresh Mongo export. Each tool below is still its own dry-run-first process; this
                         panel only shows what&apos;s already run.
                     </CardDescription>

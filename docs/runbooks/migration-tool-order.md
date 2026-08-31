@@ -35,6 +35,7 @@ you actually are right now*.
 | 14 | Route Map Snapshots | `/dashboard/bulk-operations` | Hard-requires `rides.legacy_import_metadata IS NOT NULL` — only #11 writes that |
 | 15 | Route Backfill | `/dashboard/bulk-operations` | Same hard requirement as #14 |
 | 16 | Pre-Launch Legacy Data Flagging | `/dashboard/bulk-operations` | Needs #1/#2's source markers on drivers **and** #11's written rides — run last so the full population exists before deciding what's dormant/pre-launch |
+| 17 | Migration Data Quality Scan | `/dashboard/bulk-operations` | Needs #11's written rides (checks completed rows for a missing driver/rider, a placeholder address, or \$0 fare) — run last, as a final audit pass over everything the chain above produced, not a dependency any other step reads |
 
 Not part of the ordered chain above (unwired or already one-shot):
 
@@ -52,4 +53,6 @@ Not part of the ordered chain above (unwired or already one-shot):
 
 ## Verification performed for this doc
 
-Built from a full codebase inventory (grepped every `backend/routes/admin/*.py` and its matching service, plus the admin-dashboard pages that reach them) cross-checked against the module-level dependency guards actually written in each service's code — not inferred from either older doc's own claims. The 16-item order above matches exactly what `migration_status_service.py` computes live.
+Built from a full codebase inventory (grepped every `backend/routes/admin/*.py` and its matching service, plus the admin-dashboard pages that reach them) cross-checked against the module-level dependency guards actually written in each service's code — not inferred from either older doc's own claims. The 17-item order above matches exactly what `migration_status_service.py` computes live.
+
+**Added 2026-08-31**: #17 (Migration Data Quality Scan) — see `docs/runbooks/migration-data-quality-strategy.md` for what it checks and why it's a read-and-tag audit pass, not a data-repair tool. It doesn't gate any step above; it exists to catch what the chain above didn't fully resolve.

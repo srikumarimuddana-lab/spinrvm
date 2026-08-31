@@ -13,7 +13,7 @@
  * the validate-first / dry-run-report contract.
  */
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
     Upload,
@@ -55,6 +55,7 @@ import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
 import { LegacyWalletImport } from "./_components/LegacyWalletImport";
 import { PreLaunchDataFlag } from "./_components/PreLaunchDataFlag";
+import { DataQualityScan } from "./_components/DataQualityScan";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
@@ -311,6 +312,56 @@ function NeedsUpdateSection({
     );
 }
 
+/**
+ * One numbered phase of the migration flow (docs/runbooks/migration-tool-
+ * order.md), grouping the 17 tools by what they depend on rather than
+ * showing all 17 as one flat list. A phase's own tools render as `children`
+ * (the existing dry-run-first cards, unchanged); a phase whose tools live on
+ * a different page render as `offPage` links instead.
+ */
+function PhaseSection({
+    phase,
+    title,
+    overview,
+    offPage,
+    children,
+}: {
+    phase: number;
+    title: string;
+    overview: string;
+    offPage?: { label: string; href: string; note: string }[];
+    children?: ReactNode;
+}) {
+    return (
+        <section className="space-y-3">
+            <div className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                    {phase}
+                </span>
+                <div>
+                    <h2 className="text-base font-semibold">{title}</h2>
+                    <p className="text-sm text-muted-foreground">{overview}</p>
+                </div>
+            </div>
+            {offPage && offPage.length > 0 && (
+                <div className="ml-9 grid gap-2 sm:grid-cols-2">
+                    {offPage.map((item) => (
+                        <Link
+                            key={item.href}
+                            href={item.href}
+                            className="rounded-md border p-3 text-sm hover:bg-muted/40"
+                        >
+                            <span className="font-medium underline-offset-2 hover:underline">{item.label}</span>
+                            <p className="mt-0.5 text-xs text-muted-foreground">{item.note}</p>
+                        </Link>
+                    ))}
+                </div>
+            )}
+            {children && <div className="ml-9 space-y-6">{children}</div>}
+        </section>
+    );
+}
+
 export default function BulkOperationsPage() {
     const user = useAuthStore((s) => s.user);
     const { toast } = useToast();
@@ -499,45 +550,92 @@ export default function BulkOperationsPage() {
     const cfg = KIND_CONFIG[kind];
 
     return (
-        <div className="mx-auto max-w-4xl space-y-6 p-4">
+        <div className="mx-auto max-w-4xl space-y-8 p-4">
             <div>
                 <h1 className="text-2xl font-semibold">Bulk Operations</h1>
                 <p className="text-sm text-muted-foreground">
-                    Super-admin CSV tools. Every tool is dry-run first: validate, review the report,
-                    then commit. Driver account/profile imports live on the{" "}
-                    <Link href="/dashboard/drivers/import" className="underline">
-                        Bulk Driver Import
-                    </Link>{" "}
-                    page (Saskatoon recruitment CSV) or{" "}
-                    <Link href="/dashboard/drivers/legacy-import" className="underline">
-                        Legacy Driver Import
-                    </Link>{" "}
-                    (raw Mongo export) — with{" "}
-                    <Link href="/dashboard/drivers/legacy-sin-dob-backfill" className="underline">
-                        SIN/DOB
-                    </Link>{" "}
-                    and{" "}
-                    <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
-                        vehicle-history
-                    </Link>{" "}
-                    backfills for drivers created there. Riders get a{" "}
-                    <Link href="/dashboard/riders/legacy-saved-address-backfill" className="underline">
-                        saved-address
-                    </Link>{" "}
-                    backfill for riders created via Bulk Rider Import below.
+                    Super-admin migration tools, grouped below into the order a fresh export should
+                    go through them — see the phase headings for what each group does and why it
+                    comes where it does. Every tool is dry-run first: preview or validate, review
+                    the report, then commit. Nothing writes until you click commit.
                 </p>
             </div>
 
             <MigrationChecklist />
 
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                <CreditCard className="h-4 w-4" />
-                Stripe Mapping Import — carry legacy Stripe IDs over so drivers keep payout
-                accounts and riders keep saved cards
-            </div>
+            <PhaseSection
+                phase={1}
+                title="Bring in people"
+                overview="Create driver and rider accounts from your export's CSVs. Nothing else below can run until the people it matches by phone/email actually exist."
+                offPage={[
+                    {
+                        label: "Bulk Driver Import",
+                        href: "/dashboard/drivers/import",
+                        note: "Saskatoon recruitment CSV — creates new driver accounts.",
+                    },
+                    {
+                        label: "Legacy Driver Import",
+                        href: "/dashboard/drivers/legacy-import",
+                        note: "Raw Mongo drivers.csv export — creates or links driver accounts.",
+                    },
+                ]}
+            >
+                <RiderImportSection />
+            </PhaseSection>
 
-            <Card>
-                <CardHeader>
+            <PhaseSection
+                phase={2}
+                title="Enrich driver profiles"
+                overview="Fill in the regulatory/compliance fields and repair known import bugs on the drivers Phase 1 just created."
+                offPage={[
+                    {
+                        label: "Legacy SIN/DOB Backfill",
+                        href: "/dashboard/drivers/legacy-sin-dob-backfill",
+                        note: "Fills SIN and date of birth for drivers from Phase 1.",
+                    },
+                    {
+                        label: "Legacy Vehicle-History Backfill",
+                        href: "/dashboard/drivers/legacy-vehicle-history-backfill",
+                        note: "Fills vehicle make/model/plate history for the same drivers.",
+                    },
+                    {
+                        label: "Fix Orphaned Legacy-Linked Accounts",
+                        href: "/dashboard/drivers/legacy-import",
+                        note: "One-time repair for a since-fixed linking bug — only has candidates once Legacy Driver Import has run.",
+                    },
+                    {
+                        label: "Fix Backfilled Driver Join Dates",
+                        href: "/dashboard/drivers/legacy-import",
+                        note: "Repairs the Joined-date stamp the orphaned-account fix leaves behind.",
+                    },
+                ]}
+            />
+
+            <PhaseSection
+                phase={3}
+                title="Link payment identities"
+                overview="Carry legacy Stripe IDs, tax IDs, and saved addresses over so drivers keep their payout accounts, riders keep their saved cards, and both remain reachable."
+                offPage={[
+                    {
+                        label: "Legacy Saved-Address Backfill",
+                        href: "/dashboard/riders/legacy-saved-address-backfill",
+                        note: "Fills saved home/work addresses for riders from Phase 1.",
+                    },
+                ]}
+            >
+                <p className="text-xs text-muted-foreground">
+                    Bulk Driver Tax-ID Import (GST/BN) also belongs in this phase but has no
+                    dedicated page yet — API-only for now.
+                </p>
+
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <CreditCard className="h-4 w-4" />
+                    Stripe Mapping Import — carry legacy Stripe IDs over so drivers keep payout
+                    accounts and riders keep saved cards
+                </div>
+
+                <Card>
+                    <CardHeader>
                     <CardTitle>1. Prepare your CSV</CardTitle>
                     <CardDescription>{cfg.columns} Max 200 rows per file.</CardDescription>
                 </CardHeader>
@@ -762,60 +860,72 @@ export default function BulkOperationsPage() {
                     </CardContent>
                 </Card>
             )}
+            </PhaseSection>
 
-            {/* Corrected 2026-08-30: the "moved to Data Transfer" redirect below
-                was wrong -- checked, and Data Transfer's Import tab
-                (adminValidateDataTransferImport/adminCommitDataTransferImport,
-                routes/admin/data_transfer_import.py) is a different tool
-                entirely: it re-imports a previously-exported Spinr-native
-                data-portability bundle for one account (a zip built by the
-                Export tab), not a bulk CSV of brand-new accounts from an
-                external system. It cannot read the legacy Mongo customers.csv
-                shape this section expects. RiderImportSection was fully
-                built, tested (21 passing tests), and simply unreached by any
-                page for however long this redirect card pointed somewhere
-                that never had it — restored here rather than left orphaned. */}
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                <MapPin className="h-4 w-4" />
-                Imported Ride Snapshots — regenerate route map images with Google Maps tiles
-            </div>
-            <SnapshotRegenerateSection />
+            {/* Corrected 2026-08-30: the "moved to Data Transfer" redirect this
+                section used to have was wrong -- checked, and Data Transfer's
+                Import tab (adminValidateDataTransferImport/
+                adminCommitDataTransferImport, routes/admin/
+                data_transfer_import.py) is a different tool entirely: it
+                re-imports a previously-exported Spinr-native data-portability
+                bundle for one account (a zip built by the Export tab), not a
+                bulk CSV of brand-new accounts from an external system. It
+                cannot read the legacy Mongo customers.csv shape
+                RiderImportSection (now in Phase 1 above) expects. */}
+            <PhaseSection
+                phase={4}
+                title="Import trip history"
+                overview="Bring completed rides and historical wallet balances into the accounts Phase 1 created, and fix rider join-date issues along the way. Ordering matters here: booking_import_service.py matches a ride's rider/driver by phone against an account that already exists — a rider not yet imported gets their ride history silently skipped, not created alongside them."
+            >
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <Upload className="h-4 w-4" />
+                    Legacy Booking Import — bring completed rides from the previous app into rider
+                    and driver trip history
+                </div>
+                <LegacyBookingImport />
 
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                <MapPin className="h-4 w-4" />
-                Imported Ride Routes — backfill road-following routes (OSRM/Google Directions)
-            </div>
-            <RouteRegenerateSection />
+                <RiderCreatedAtBackfillSection />
 
-            {/* Ordering matters: booking_import_service.py matches a ride's
-                rider/driver by phone against an EXISTING account -- a rider
-                with no account yet gets their completed rides silently
-                skipped, not created alongside them. Run this before Legacy
-                Booking Import for any batch that includes riders not
-                already in production. */}
-            <RiderImportSection />
-            <RiderCreatedAtBackfillSection />
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <Upload className="h-4 w-4" />
+                    Legacy Wallet-Balance Import — apply historical rider/driver wallet
+                    adjustments from the previous app
+                </div>
+                <LegacyWalletImport />
+            </PhaseSection>
 
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                <Upload className="h-4 w-4" />
-                Legacy Booking Import — bring completed rides from the previous app into rider
-                and driver trip history
-            </div>
-            <LegacyBookingImport />
+            <PhaseSection
+                phase={5}
+                title="Finish the ride records"
+                overview="Generate map images and road-following routes for the rides Phase 4 just imported — both require rides to already carry legacy import metadata, so they run after Phase 4, not before."
+            >
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <MapPin className="h-4 w-4" />
+                    Imported Ride Snapshots — regenerate route map images with Google Maps tiles
+                </div>
+                <SnapshotRegenerateSection />
 
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                <Upload className="h-4 w-4" />
-                Legacy Wallet-Balance Import — apply historical rider/driver wallet
-                adjustments from the previous app
-            </div>
-            <LegacyWalletImport />
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <MapPin className="h-4 w-4" />
+                    Imported Ride Routes — backfill road-following routes (OSRM/Google Directions)
+                </div>
+                <RouteRegenerateSection />
+            </PhaseSection>
 
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                <Upload className="h-4 w-4" />
-                Pre-Launch Legacy Data Flagging — flag already-migrated pre-launch driver/ride
-                rows so admin views and KPIs can filter them out
-            </div>
-            <PreLaunchDataFlag />
+            <PhaseSection
+                phase={6}
+                title="Final review"
+                overview="Flag pre-launch test data and catch anything that still looks wrong before calling the migration done. Both tools here read the full population every phase above produced, so they run last."
+            >
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <Upload className="h-4 w-4" />
+                    Pre-Launch Legacy Data Flagging — flag already-migrated pre-launch driver/ride
+                    rows so admin views and KPIs can filter them out
+                </div>
+                <PreLaunchDataFlag />
+
+                <DataQualityScan />
+            </PhaseSection>
         </div>
     );
 }

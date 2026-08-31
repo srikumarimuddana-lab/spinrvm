@@ -12063,6 +12063,25 @@ record of what was assumed vs. what was actually true</summary>
   `(tabs)/profile.tsx`, `settings.tsx`,
   `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
   written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 31 done: `driver-app/app/report-safety.tsx`'s
+  `handleSubmit` validation (third driver-app candidate, safety tier).**
+  Extracted the category-required and description-required checks into
+  new `driver-app/utils/reportSafetySchema.ts` (`isSafetyCategoryValid`,
+  `isSafetyIssueValid`, `getReportSafetyFormError`). Pure extraction,
+  byte-for-byte identical to the original two `if` blocks +
+  `showToast(...)` calls — no bug found, no behavior change. New
+  `driver-app/utils/__tests__/reportSafetySchema.test.ts` (10
+  accept/reject cases). Verification: 10/10 new tests pass; full
+  driver-app suite (`jest`) 123/123 suites, 1391/1391 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses these
+  toast strings. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-report-safety-zod-step31.md`.
+  **Still open:** 3 driver-app candidates (`(tabs)/profile.tsx`,
+  `settings.tsx`, `addresses.tsx`/`destination-mode.tsx`); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

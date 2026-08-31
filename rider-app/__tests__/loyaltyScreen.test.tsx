@@ -9,7 +9,7 @@
  *    negative points in red, with the type-to-icon mapping falling back
  *    to a generic icon for an unrecognised type
  *  - the empty state renders when history is empty
- *  - a load failure is swallowed silently (loyalty stays null, no crash)
+ *  - a load failure shows a distinct error+retry state, not the empty-history copy
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
@@ -29,6 +29,7 @@ jest.mock('expo-router', () => ({
 
 const COLORS = {
   primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB',
+  danger: '#DC2626',
 };
 jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
 
@@ -138,10 +139,32 @@ describe('LoyaltyScreen', () => {
     expect(text).toContain('["","-100"," pts"]');
   });
 
-  it('does not crash and leaves loyalty null on a load failure', async () => {
+  it('shows a distinct error+retry state on a load failure, not the empty-history copy', async () => {
     mockApiGet.mockRejectedValue(new Error('network down'));
     const r = await renderScreen();
-    expect(allText(r)).toContain('No points history yet');
+    const text = allText(r);
+    expect(text).toContain("Couldn't load your rewards");
+    expect(text).not.toContain('No points history yet');
+  });
+
+  it('retrying after a load failure re-fetches and can recover', async () => {
+    mockApiGet.mockRejectedValue(new Error('network down'));
+    const r = await renderScreen();
+    expect(allText(r)).toContain("Couldn't load your rewards");
+
+    mockApiGet.mockImplementation((url: string) => {
+      if (url === '/loyalty') return Promise.resolve({ data: LOYALTY });
+      return Promise.resolve({ data: [] });
+    });
+    // Only two TouchableOpacitys render in this error state: the header
+    // back button (index 0) and the retry button (index 1).
+    const retryBtn = r.root.findAllByType(TouchableOpacity)[1];
+    await act(async () => {
+      retryBtn.props.onPress();
+      await flush();
+    });
+    expect(allText(r)).toContain('Silver');
+    expect(allText(r)).not.toContain("Couldn't load your rewards");
   });
 
   it('pull-to-refresh reloads loyalty and history silently', async () => {

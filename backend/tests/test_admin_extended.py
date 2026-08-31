@@ -1342,3 +1342,75 @@ class TestBatchFetchDriversAndUsers:
             drivers_map, users_map = asyncio.run(_batch_fetch_drivers_and_users([RIDER_ID], [DRIVER_ID]))
 
         assert DRIVER_ID in drivers_map
+
+
+class TestAdminNotifyMissingLicense:
+    """ACTION_ITEMS.md B14 — driver-facing self-serve push campaign,
+    admin-triggered POST /admin/drivers/notify-missing-license."""
+
+    def test_uses_same_missing_license_filter_and_pushes_each_driver(self):
+        from backend.routes.admin import drivers as admin_drivers
+
+        cohort = [
+            _driver(id="d1", user_id="u1", license_number=None, license_class="5"),
+            _driver(id="d2", user_id="u2", license_number="ABC123", license_class=None),
+        ]
+        captured_filters = {}
+
+        def get_rows_side(table, filters=None, **kw):
+            if table == "drivers":
+                captured_filters.update(filters or {})
+                return cohort
+            return []
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)),
+            patch("backend.routes.admin.drivers.send_push_notification", AsyncMock(return_value=True)) as mock_push,
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+            patch("backend.routes.admin.drivers.log_admin_action", AsyncMock()) as mock_audit,
+        ):
+            result = asyncio.run(admin_drivers.admin_notify_missing_license(admin=ADMIN_USER))
+
+        # Same cohort-identifying filter as the GET /drivers?missing_license=true queue.
+        assert captured_filters.get("$or") == [{"license_number": None}, {"license_class": None}]
+        assert mock_push.await_count == 2
+        pushed_user_ids = {call.args[0] for call in mock_push.await_args_list}
+        assert pushed_user_ids == {"u1", "u2"}
+        assert result == {"total": 2, "sent": 2, "skipped": 0, "failed": 0}
+        mock_audit.assert_awaited_once()
+
+    def test_skips_driver_with_no_linked_user(self):
+        from backend.routes.admin import drivers as admin_drivers
+
+        cohort = [_driver(id="d1", user_id=None, license_number=None, license_class=None)]
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=cohort)),
+            patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()) as mock_push,
+            patch("backend.routes.admin.drivers.log_admin_action", AsyncMock()),
+        ):
+            result = asyncio.run(admin_drivers.admin_notify_missing_license(admin=ADMIN_USER))
+
+        mock_push.assert_not_awaited()
+        assert result == {"total": 1, "sent": 0, "skipped": 1, "failed": 0}
+
+    def test_push_failure_is_counted_not_raised(self):
+        """CLAUDE.md 'do not silently swallow errors' — a failed send is logged
+        and counted, not dropped, but one driver's push failure must not abort
+        the whole campaign for the rest of the cohort."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        cohort = [_driver(id="d1", user_id="u1", license_number=None, license_class=None)]
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=cohort)),
+            patch(
+                "backend.routes.admin.drivers.send_push_notification",
+                AsyncMock(side_effect=RuntimeError("fcm down")),
+            ),
+            patch("backend.routes.admin.drivers.log_admin_action", AsyncMock()) as mock_audit,
+        ):
+            result = asyncio.run(admin_drivers.admin_notify_missing_license(admin=ADMIN_USER))
+
+        assert result == {"total": 1, "sent": 0, "skipped": 0, "failed": 1}
+        mock_audit.assert_awaited_once()

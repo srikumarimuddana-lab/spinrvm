@@ -895,10 +895,13 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 - <<'PYEOF'
-          import subprocess, re, sys
+          import os, subprocess, re, sys
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
 
           result = subprocess.run(
-              ['git', 'diff', '--name-only', '$BASE_SHA', '$HEAD_SHA'],
+              ['git', 'diff', '--name-only', BASE_SHA, HEAD_SHA],
               capture_output=True, text=True
           )
           migration_files = [f for f in result.stdout.strip().split('\n')
@@ -1143,11 +1146,14 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 - <<'PYEOF'
-          import subprocess, re, sys
+          import os, subprocess, re, sys
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
 
           # Detect changes to backend route signatures and DB schema
           result = subprocess.run(
-              ['git', 'diff', '$BASE_SHA', '$HEAD_SHA', '--', 'backend/routes/', 'backend/db_supabase.py'],
+              ['git', 'diff', BASE_SHA, HEAD_SHA, '--', 'backend/routes/', 'backend/db_supabase.py'],
               capture_output=True, text=True
           )
           diff = result.stdout

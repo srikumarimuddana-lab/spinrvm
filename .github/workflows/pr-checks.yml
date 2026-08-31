@@ -621,9 +621,13 @@ jobs:
             const audience = pickEnum(findLine('User-visible change'), /:\s*`?(none|riders|drivers|admins|corporate)`?/i);
             const blast = pickEnum(findLine('Blast radius'), /:\s*`?(isolated|single-surface|multi-surface|cross-cutting)`?/i);
 
-            // Compliance tick detection (same pattern used in required-fields)
+            // Compliance tick detection (same pattern used in required-fields).
+            // The template wraps the checkbox in backticks (`` `[x]` ``, see
+            // pull_request_template.md's Tier 3) -- tolerate that (and the
+            // bare `[x]` form) so a genuinely-ticked box isn't reported as
+            // "declared" (fixes #2691).
             const ticked = (label) => {
-              const line = body.match(new RegExp('\\[\\s*x\\s*\\]\\s*\\*\\*' + label, 'i'));
+              const line = body.match(new RegExp('`?\\[\\s*x\\s*\\]`?\\s*\\*\\*' + label, 'i'));
               return !!line;
             };
             const declared = {

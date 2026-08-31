@@ -1,0 +1,284 @@
+{
+  "100": [
+    "100_batch_dispatch.sql",
+    "100_rides_planned_route_polyline.sql",
+    "100_users_add_fcm_token.sql"
+  ],
+  "102": [
+    "102_approve_rider_profile_images.sql",
+    "102_push_tokens_client_type.sql"
+  ],
+  "106": [
+    "106_backfill_surge_enabled.sql",
+    "106_settings_dispatch_globals.sql"
+  ],
+  "110": [
+    "110_drivers_device_attestation.sql",
+    "110_settings_resend_email.sql",
+    "110_wallet_pay_for_ride_tip_atomic.sql"
+  ],
+  "114": [
+    "114_lost_and_found_add_item_category.sql",
+    "114_ride_history_stable_cursor_index.sql",
+    "114_rides_scheduled_dispatch_flags.sql"
+  ],
+  "117": [
+    "117_push_retry_target_app.sql",
+    "117_ride_routes.sql"
+  ],
+  "136": [
+    "136_rewrite_supabase_storage_urls.sql",
+    "136_rides_payment_retry_count.sql"
+  ],
+  "137": [
+    "137_fix_pii_encrypt_pgsodium_perms.sql",
+    "137_rides_started_at_generated_column.sql"
+  ],
+  "138": [
+    "138_driver_pii_use_vault_create_secret.sql",
+    "138_drivers_estimate_recency_index.sql",
+    "138_payouts_missing_columns.sql"
+  ],
+  "140": [
+    "140_ai_assistant_conversations.sql",
+    "140_vehicle_types_add_marker_variant.sql"
+  ],
+  "141": [
+    "141_retention_purge_ai_messages.sql",
+    "141_vehicle_types_add_marker_image_url.sql"
+  ],
+  "142": [
+    "142_fix_rls_financial_tables.sql",
+    "142_rides_route_validation_column.sql",
+    "142_surge_pricing_schema.sql"
+  ],
+  "143": [
+    "143_retention_purge_surge_pricing.sql",
+    "143_ride_offers_cancelled_status.sql",
+    "143_ride_offers_one_accepted_index.sql"
+  ],
+  "156": [
+    "156_drivers_driver_code.sql",
+    "156_ride_preauth_columns.sql"
+  ],
+  "157": [
+    "157_driver_availability_claimed_at.sql",
+    "157_driver_vehicle_history.sql"
+  ],
+  "185": [
+    "185_service_area_vehicle_cascade.sql",
+    "185_service_areas_subscription_tax_config.sql"
+  ],
+  "200": [
+    "200_data_export_objects.sql",
+    "200_zoho_desk_ticket_service_area.sql"
+  ],
+  "224": [
+    "224_corporate_self_serve_signup.sql",
+    "224_notification_preferences_earnings_summary.sql",
+    "224_ride_offers_expires_at.sql"
+  ],
+  "225": [
+    "225_corporate_kyb_v1_columns.sql",
+    "225_rides_event_version.sql"
+  ],
+  "229": [
+    "229_faqs_service_area.sql",
+    "229_settings_lms_integration.sql"
+  ],
+  "248": [
+    "248_corporate_allowance_ride_debit.sql",
+    "248_fare_road_basis_and_quote_lock.sql"
+  ],
+  "249": [
+    "249_driver_period_distances.sql",
+    "249_wallet_apply_delta.sql"
+  ],
+  "250": [
+    "250_payout_reservation_guard.sql",
+    "250_period1_distance_accumulator.sql"
+  ],
+  "251": [
+    "251_cancel_fee_payment_intent.sql",
+    "251_drivers_period1_accum_pending_index.sql"
+  ],
+  "256": [
+    "256_users_legacy_import_metadata.sql",
+    "256_users_role_reject_admin_values.sql"
+  ],
+  "257": [
+    "257_promo_per_user_atomic_claim.sql",
+    "257_stripe_id_unique_indexes.sql"
+  ],
+  "262": [
+    "262_data_transfer_export_jobs.sql",
+    "262_disputes_rls_lockdown.sql"
+  ],
+  "263": [
+    "263_compliance_export_events.sql",
+    "263_service_areas_city_backfill.sql"
+  ],
+  "268": [
+    "268_admin_export_approvals.sql",
+    "268_rides_legacy_import_metadata.sql"
+  ],
+  "272": [
+    "272_driver_statements.sql",
+    "272_push_retry_queue_account_priority.sql"
+  ],
+  "273": [
+    "273_driver_onboarding_reminder_counts_fn.sql",
+    "273_driver_statements_fk_cascade.sql"
+  ],
+  "28": [
+    "28_corporate_wallet_rpc.sql",
+    "28_requirement_key.sql"
+  ],
+  "286": [
+    "286_financial_event_entries.sql",
+    "286_settings_lifecycle_emails_enabled.sql",
+    "286_stripe_id_mode_tracking.sql"
+  ],
+  "287": [
+    "287_financial_events_missing_legs_rpc.sql",
+    "287_settings_company_logo_url.sql",
+    "287_settings_stripe_reprovision_flag.sql"
+  ],
+  "288": [
+    "288_driver_stripe_connect_ledger.sql",
+    "288_settings_branded_receipt_enabled.sql",
+    "288_settle_ride_card_payment.sql"
+  ],
+  "289": [
+    "289_driver_sin_encrypted.sql",
+    "289_financial_events_purge_delete_gate.sql"
+  ],
+  "29": [
+    "29_corporate_allowance_rpc.sql",
+    "29_wallet_fks_and_admin_types.sql"
+  ],
+  "307": [
+    "307_drop_dead_gst_hst_number_column.sql",
+    "307_email_send_log_error_detail.sql",
+    "307_seed_saskatoon_pickup_venues.sql",
+    "307_zoho_desk_helpdesk_signature_header.sql"
+  ],
+  "310": [
+    "310_deactivate_unverified_saskatoon_venues.sql",
+    "310_rides_area_created_idx.sql"
+  ],
+  "313": [
+    "313_fix_imported_ride_polyline_shape.sql",
+    "313_rides_shared_trip_token_created_at.sql",
+    "313_settings_missing_columns.sql"
+  ],
+  "319": [
+    "319_driver_crc_consents.sql",
+    "319_late_tip_debit_types.sql"
+  ],
+  "321": [
+    "321_purge_pii_retention_step_h_driver_rides_guard.sql",
+    "321_tip_collection.sql"
+  ],
+  "327": [
+    "327_merge_duplicate_onboarding_faqs.sql",
+    "327_stripe_disputes_evidence_reminder_claim_flag.sql"
+  ],
+  "328": [
+    "328_legacy_id_crosswalk.sql",
+    "328_lost_and_found_ride_driver_unique.sql"
+  ],
+  "349": [
+    "349_exclude_legacy_cancelled_from_cancellation_analytics.sql",
+    "349_route_booked_dropoff_anchor_flag.sql"
+  ],
+  "354": [
+    "354_kyb_documents_bucket_private.sql",
+    "354_revoke_public_execute_on_security_definer_fns.sql"
+  ],
+  "370": [
+    "370_add_unresolved_at_completion_status_to_gap_events.sql",
+    "370_driver_earnings_rollup_fn.sql",
+    "370_location_marker_write_gate_flag.sql"
+  ],
+  "48": [
+    "48_faqs_audience.sql",
+    "48_notifications_tables.sql"
+  ],
+  "50": [
+    "50_audit_logs_append_only.sql",
+    "50_pii_retention_purge.sql",
+    "50_wallet_atomic_rpcs.sql"
+  ],
+  "51": [
+    "51_audit_logs_lockdown.sql",
+    "51_audit_logs_remove_user_email.sql",
+    "51_loyalty_unique_and_promo_atomic_increment.sql",
+    "51_promo_atomic_increment.sql"
+  ],
+  "52": [
+    "52_admin_staff_mfa.sql",
+    "52_fare_split_pay_rpc.sql",
+    "52_loyalty_dedup_constraint.sql"
+  ],
+  "54": [
+    "54_add_rides_assigned_at.sql",
+    "54_dispatch_round_robin_index.sql",
+    "54_gps_daily_rollup_fn.sql"
+  ],
+  "55": [
+    "55_drivers_dispatch_composite_index.sql",
+    "55_drivers_dispatch_partial_index.sql",
+    "55_find_nearby_drivers_suspended_filter.sql"
+  ],
+  "56": [
+    "56_admin_staff_security_columns.sql",
+    "56_audit_logs_delete_lockdown.sql",
+    "56_purge_dsar_pending_deletions.sql"
+  ],
+  "57": [
+    "57_audit_logs_schema_standardization.sql",
+    "57_fix_retention_purge_audit_insert.sql",
+    "57_purge_pii_retention_regression_fix.sql"
+  ],
+  "58": [
+    "58_drivers_gst_bn.sql",
+    "58_financial_events.sql"
+  ],
+  "8": [
+    "08_complete_schema.sql",
+    "08_service_area_subregions.sql"
+  ],
+  "80": [
+    "80_fix_match_and_claim_driver_type.sql",
+    "80_service_areas_vehicle_pricing.sql"
+  ],
+  "81": [
+    "81_rides_cancellation_fee_columns.sql",
+    "81_service_areas_missing_columns.sql"
+  ],
+  "82": [
+    "82_promotions_schema_and_service_area.sql",
+    "82_rides_discount_columns.sql"
+  ],
+  "83": [
+    "83_admin_media_assets.sql",
+    "83_promotions_unique_code_per_area.sql"
+  ],
+  "84": [
+    "84_audit_logs_missing_columns.sql",
+    "84_drop_service_areas_fee_columns.sql"
+  ],
+  "91": [
+    "91_driver_documents_expiry_date.sql",
+    "91_driver_location_history_accuracy_fk.sql"
+  ],
+  "92": [
+    "92_drivers_stripe_kyc_mirror.sql",
+    "92_payouts_instant.sql"
+  ],
+  "96": [
+    "96_driver_ride_incentives.sql",
+    "96_payouts_instant_reversal.sql"
+  ]
+}

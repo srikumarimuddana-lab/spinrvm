@@ -1,0 +1,92 @@
+name: Nightly Migration Duplicate-Prefix Sweep
+
+# CR #4642 (option 3): migration-check.yml's CHECK B validates a PR's new
+# migration number only against its own merge-base — it structurally cannot
+# see a true cross-PR race where two PRs both branch before either merges,
+# and each PR's own CI looks clean in isolation. This nightly job instead
+# scans main's actual post-merge state, so a collision that slipped past
+# CHECK B on both PRs (like the real 370_* triple-duplicate reported on
+# #4642) is caught the morning after, not left silently.
+#
+# This repo already carries ~65 historical duplicate prefixes that pre-date
+# CHECK B entirely (see backend/migrations/CLAUDE.md) — this job must not
+# fail on those. `.known_duplicate_prefixes.json` is the accepted baseline;
+# only a duplicate NOT already in that baseline fails the run. Renumbering
+# any of the baseline entries is out of scope here (CLAUDE.md: never rename
+# an applied migration — the filename is the idempotency key) and would
+# need its own decision, separate from this detection guard.
+
+on:
+  schedule:
+    - cron: '17 9 * * *' # ~03:17 America/Regina (fixed UTC-6, no DST) — low-traffic window
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  duplicate-prefix-sweep:
+    name: Duplicate migration-prefix sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+
+      - name: Scan for new duplicate migration prefixes
+        run: |
+          python3 - << 'PYEOF'
+          import json
+          import os
+          import re
+          import sys
+
+          MIGRATIONS_DIR = "backend/migrations"
+          BASELINE_PATH = os.path.join(MIGRATIONS_DIR, ".known_duplicate_prefixes.json")
+
+          def seq_num(filename):
+              m = re.match(r'^(\d+)_', filename)
+              return int(m.group(1)) if m else None
+
+          files = sorted(f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql"))
+          by_num = {}
+          for f in files:
+              n = seq_num(f)
+              if n is not None:
+                  by_num.setdefault(n, []).append(f)
+
+          current_dups = {n: sorted(fs) for n, fs in by_num.items() if len(fs) > 1}
+
+          with open(BASELINE_PATH) as fh:
+              baseline = {int(k): sorted(v) for k, v in json.load(fh).items()}
+
+          # A prefix is genuinely NEW trouble only if it duplicates today that
+          # didn't duplicate in the baseline — a baseline prefix gaining yet
+          # another file is still worth flagging (a third PR landed on an
+          # already-known-bad number), so compare file SETS, not just keys.
+          new_or_worsened = {
+              n: fs for n, fs in current_dups.items()
+              if n not in baseline or set(fs) != set(baseline[n])
+          }
+
+          if not new_or_worsened:
+              print(f"PASS: no new duplicate migration prefixes ({len(current_dups)} known historical duplicates, unchanged).")
+              sys.exit(0)
+
+          print("FAIL: new duplicate migration-prefix(es) detected since the last sweep:")
+          for n in sorted(new_or_worsened):
+              print(f"  prefix {n}: {', '.join(new_or_worsened[n])}")
+          print()
+          print("This means two PRs each added a migration with the same numeric prefix and both merged")
+          print("(migration-check.yml's CHECK B only sees its own PR's diff, so a true cross-PR race can pass")
+          print("both PRs' CI independently — see CR #4642 / ACTION_ITEMS.md C36).")
+          print()
+          print("This does NOT necessarily mean data loss — check backend/scripts/run_migrations.py's")
+          print("schema_migrations table in production before renumbering anything (the filename is the")
+          print("idempotency key; renaming an already-applied migration is never safe).")
+          print()
+          print("Once confirmed and resolved (rename the not-yet-applied file to the next free number,")
+          print("or accept it as a new historical duplicate), update backend/migrations/.known_duplicate_prefixes.json")
+          print("to match the new state so this check stops flagging it.")
+          sys.exit(1)
+          PYEOF

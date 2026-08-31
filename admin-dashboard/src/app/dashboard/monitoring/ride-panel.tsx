@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Car, CheckCircle, ChevronRight, Copy, Loader2, MapPin, Phone, XCircle } from "lucide-react";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 interface RidePanelProps {
     ride: MonitoringRide;
@@ -32,7 +33,20 @@ const STATUS_COLORS: Record<string, string> = {
 };
 /* eslint-enable no-restricted-syntax */
 
+// Quiet Console Stage 3: quiet-variant counterpart to STATUS_COLORS above,
+// used only when the flag is on. searching is the one pending/attention
+// stage (outline-warning); driver_assigned/driver_arrived are same-weight
+// categorical waypoints (plain outline); in_progress is the "good" state
+// (outline-success).
+const STATUS_QUIET_VARIANTS: Record<string, "outline-warning" | "outline" | "outline-success"> = {
+    searching: "outline-warning",
+    driver_assigned: "outline",
+    driver_arrived: "outline",
+    in_progress: "outline-success",
+};
+
 export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }: RidePanelProps) {
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const currentStepIdx = STATUS_STEPS.indexOf(ride.status);
     const elapsed = Math.floor(
         (Date.now() - new Date(ride.created_at).getTime()) / 60_000
@@ -55,12 +69,21 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                             <Copy className="h-3 w-3 text-muted-foreground hover:text-foreground" />
                         </button>
                     </div>
-                    <Badge
-                        // eslint-disable-next-line no-restricted-syntax -- fallback for the solid-fill white-text badge above; same contrast-risk exclusion (#2816)
-                        className={`mt-1 text-white ${STATUS_COLORS[ride.status] ?? "bg-gray-500"}`}
-                    >
-                        {STATUS_LABELS[ride.status] ?? ride.status}
-                    </Badge>
+                    {themeV2Enabled ? (
+                        <Badge
+                            className="mt-1"
+                            variant={STATUS_QUIET_VARIANTS[ride.status] ?? "outline"}
+                        >
+                            {STATUS_LABELS[ride.status] ?? ride.status}
+                        </Badge>
+                    ) : (
+                        <Badge
+                            // eslint-disable-next-line no-restricted-syntax -- fallback for the solid-fill white-text badge above; same contrast-risk exclusion (#2816)
+                            className={`mt-1 text-white ${STATUS_COLORS[ride.status] ?? "bg-gray-500"}`}
+                        >
+                            {STATUS_LABELS[ride.status] ?? ride.status}
+                        </Badge>
+                    )}
                 </div>
                 {ride.is_corporate && (
                     <Badge variant="outline" className="text-xs">Corporate</Badge>

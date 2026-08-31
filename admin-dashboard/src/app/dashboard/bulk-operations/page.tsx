@@ -94,6 +94,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { exportToCsv } from "@/lib/export-csv";
+import { Badge } from "@/components/ui/badge";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 // Per-kind CSV contract. Keep in sync with
 // backend/services/stripe_mapping_import_service.py (parse_mapping_rows) and
@@ -1150,6 +1152,11 @@ function RiderIssueTable({ items }: { items: RiderImportReportItem[] }) {
 }
 
 function DuplicateTable({ items }: { items: RiderImportDuplicate[] }) {
+    // Quiet Console Stage 3: flag-gated quiet Badge rendering for the
+    // match-type pill below — original filled-pastel rendering is
+    // untouched when the flag is off. Same hook/name/shape as
+    // sidebar.tsx / page-header.tsx.
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     return (
         <div className="overflow-x-auto rounded-md border">
             <Table>
@@ -1167,23 +1174,39 @@ function DuplicateTable({ items }: { items: RiderImportDuplicate[] }) {
                             <TableCell className="font-mono text-xs">{it.row}</TableCell>
                             <TableCell className="font-mono text-xs">{it.phone}</TableCell>
                             <TableCell>
-                                <span
-                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                        it.match_type === "protected_skip"
-                                            ? "bg-warning/15 text-warning"
+                                {themeV2Enabled ? (
+                                    <Badge
+                                        variant={
+                                            it.match_type === "protected_skip"
+                                                ? "outline-warning"
+                                                : "outline"
+                                        }
+                                    >
+                                        {it.match_type === "protected_skip"
+                                            ? "Skipped — needs review"
                                             : it.match_type === "driver"
-                                              // eslint-disable-next-line no-restricted-syntax -- categorical match-type distinction (driver vs rider), not a status signal, no token equivalent (#2816)
-                                              ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
-                                              // eslint-disable-next-line no-restricted-syntax -- categorical match-type distinction (rider), not a status signal, no token equivalent (#2816)
-                                              : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                                    }`}
-                                >
-                                    {it.match_type === "protected_skip"
-                                        ? "Skipped — needs review"
-                                        : it.match_type === "driver"
-                                          ? "Driver"
-                                          : "Existing rider"}
-                                </span>
+                                              ? "Driver"
+                                              : "Existing rider"}
+                                    </Badge>
+                                ) : (
+                                    <span
+                                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                                            it.match_type === "protected_skip"
+                                                ? "bg-warning/15 text-warning"
+                                                : it.match_type === "driver"
+                                                  // eslint-disable-next-line no-restricted-syntax -- categorical match-type distinction (driver vs rider), not a status signal, no token equivalent (#2816)
+                                                  ? "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
+                                                  // eslint-disable-next-line no-restricted-syntax -- categorical match-type distinction (rider), not a status signal, no token equivalent (#2816)
+                                                  : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                        }`}
+                                    >
+                                        {it.match_type === "protected_skip"
+                                            ? "Skipped — needs review"
+                                            : it.match_type === "driver"
+                                              ? "Driver"
+                                              : "Existing rider"}
+                                    </span>
+                                )}
                             </TableCell>
                             <TableCell className="font-mono text-xs">{it.existing_user_id}</TableCell>
                         </TableRow>

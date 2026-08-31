@@ -533,6 +533,13 @@ export const decideAllowanceRequest = (
 export const getCompanyPolicy = (companyId: string) =>
     companyRequest<CorporatePolicy | Record<string, never>>(`/api/company/${companyId}/policy`);
 
+// Count of the company's current pre-pickup rides — used to warn an admin,
+// before they save a policy edit, how many already-booked rides it would
+// affect (GitHub #2683, admin confirmation UX). Read-only; never cancels
+// anything.
+export const getCompanyPolicyAffectedRidesCount = (companyId: string) =>
+    companyRequest<{ count: number }>(`/api/company/${companyId}/policy/affected-rides-count`);
+
 export const patchCompanyPolicy = (
     companyId: string,
     body: Partial<Omit<CorporatePolicy, "id" | "company_id">>

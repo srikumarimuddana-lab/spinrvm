@@ -579,6 +579,14 @@ describe('map rendering (pickup_lat/dropoff_lat present)', () => {
       expect(text).not.toContain('GPS coverage');
     }
   });
+
+  it('still explains an imported ride\'s empty map', async () => {
+    // Not provenance copy: the "Imported" badge alone does not tell a rider why
+    // the map is blank, so this notice is deliberately kept.
+    mockApiGet.mockResolvedValue({ data: { ...RIDE_WITH_COORDS, show_legacy_badge: true } });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Imported from the previous app — no GPS was recorded for this ride');
+  });
 });
 
 describe('payment badge variants', () => {

@@ -18,7 +18,7 @@ import { RoutePins } from '@shared/components/RoutePins';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
@@ -148,21 +148,6 @@ export default function RideDetailScreen() {
         ],
         [actualSections, hasActualRoute, isV2Route, plannedSegments, showPlannedUnderlay],
     );
-    const routeLabel = hasActualRoute
-        ? 'Actual route'
-        : isV2Route
-            ? (showPlannedUnderlay ? 'Booked route' : 'Actual route')
-            : 'Planned route';
-    const routeQuality = routeQualityLabel(ride?.route_quality);
-    const routeIsProcessing =
-        ride?.route_geometry_status === 'pending' || ride?.route_geometry_status === 'processing';
-    const routeStatus = hasActualRoute
-        ? routeQuality
-        : isV2Route
-            ? routeIsProcessing
-                ? 'Actual route processing'
-                : 'Actual route unavailable'
-            : 'Planned route preview';
 
     useEffect(() => {
         if (!routeMapReady || mapCoordinates.length < 2) return;
@@ -281,14 +266,20 @@ export default function RideDetailScreen() {
                         >
                             <Ionicons name="arrow-back" size={22} color="#fff" />
                         </TouchableOpacity>
-                        <View style={styles.routeStatusPill}>
-                            <Ionicons name={isImported ? 'archive-outline' : hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
-                            <Text style={styles.routeStatusText} numberOfLines={1}>
-                                {isImported
-                                    ? 'Imported from the previous app — no GPS was recorded for this ride'
-                                    : `${routeLabel} · ${routeStatus}`}
-                            </Text>
-                        </View>
+                        {/* Only the imported-ride notice survives on the map: it
+                            explains an EMPTY map, which the "Imported" badge below
+                            does not. The route-provenance label it used to share
+                            this pill with (coverage %, reconstruction status) is an
+                            operator diagnostic and lives on the admin ride-detail
+                            modal instead. */}
+                        {isImported && (
+                            <View style={styles.routeStatusPill}>
+                                <Ionicons name="archive-outline" size={14} color="#2563EB" />
+                                <Text style={styles.routeStatusText} numberOfLines={2}>
+                                    Imported from the previous app — no GPS was recorded for this ride
+                                </Text>
+                            </View>
+                        )}
                     </View>
                 )}
 

@@ -11911,6 +11911,31 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 11 candidates from the broader sweep (6
   driver-app candidates; 4 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 25 done: `admin-dashboard/src/app/dashboard/users/page.tsx`'s
+  ban/suspend reason validation (ninth admin-dashboard candidate).**
+  Extracted the ban/suspend dialog's `!moderationReason.trim()` check
+  (hand-duplicated across the confirm button's `disabled` prop and its
+  `onClick` guard) into new
+  `admin-dashboard/src/lib/userModerationSchema.ts`
+  (`isModerationReasonValid` — a plain predicate, not a zod schema).
+  Both call sites now call the same extracted predicate — an exact
+  duplicate consolidated (unlike partial-overlap `disabled` props
+  elsewhere in this PR's other steps, which were left alone since they
+  weren't identical expressions). Pure extraction, byte-for-byte
+  identical to the original checks — no bug found, no behavior change.
+  New `admin-dashboard/src/lib/__tests__/userModerationSchema.test.ts`
+  (4 accept/reject cases). Verification: 4/4 new tests pass; full
+  admin-dashboard suite (`vitest run`) 53/53 suites, 539/539 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 3 pre-existing warnings, none near
+  the touched lines; **real production build** (`npm run build`)
+  completed successfully. Blast-radius grep confirmed the only other
+  reference to the field is the untouched payload-construction trim.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-user-moderation-zod-step25.md`.
+  **Still open:** the remaining 10 candidates from the broader sweep (6
+  driver-app candidates; 3 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

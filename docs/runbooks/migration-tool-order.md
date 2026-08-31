@@ -36,6 +36,7 @@ you actually are right now*.
 | 15 | Route Backfill | `/dashboard/bulk-operations` | Same hard requirement as #14 |
 | 16 | Pre-Launch Legacy Data Flagging | `/dashboard/bulk-operations` | Needs #1/#2's source markers on drivers **and** #11's written rides — run last so the full population exists before deciding what's dormant/pre-launch |
 | 17 | Migration Data Quality Scan | `/dashboard/bulk-operations` | Needs #11's written rides (checks completed rows for a missing driver/rider, a placeholder address, or \$0 fare) — run last, as a final audit pass over everything the chain above produced, not a dependency any other step reads |
+| 18 | Driver-Repair Pass | `/dashboard/bulk-operations` | Needs #17's `missing_driver` finding and the CURRENT `drivers` table (#1/#2, including any later batch) — re-checks rides #17 flagged against whoever exists in `drivers` *now*, so it must run after #2 (or any later driver import) adds the driver a delta booking import ran ahead of. Driver-side only — see `docs/runbooks/migration-driver-rider-repair-scope.md` for why there is no rider-side equivalent yet |
 
 Not part of the ordered chain above (unwired or already one-shot):
 

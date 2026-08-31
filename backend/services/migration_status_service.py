@@ -32,11 +32,13 @@ from typing import Any
 try:
     from ..supabase_client import supabase
     from .migration_data_quality_service import build_data_quality_scan_plan, fetch_needs_review_ride_ids
+    from .migration_driver_repair_service import build_driver_repair_plan
 except ImportError:
     from services.migration_data_quality_service import (  # type: ignore
         build_data_quality_scan_plan,
         fetch_needs_review_ride_ids,
     )
+    from services.migration_driver_repair_service import build_driver_repair_plan  # type: ignore
     from supabase_client import supabase  # type: ignore
 
 # Mirrors the constants in each importer's own service module -- duplicated
@@ -472,8 +474,34 @@ def _tool_17_data_quality_scan() -> ToolStatus:
     )
 
 
+def _tool_18_driver_repair() -> ToolStatus:
+    """Same reasoning as #17: no fixed eligible population, so this re-runs
+    the live, read-only build_driver_repair_plan (migration_driver_repair_
+    service.py) to report how many missing_driver rides are re-matchable
+    against the CURRENT drivers table right now, rather than a stale count.
+    Driver-side only -- see that module's docstring for why there is no
+    rider-side equivalent."""
+    plan = build_driver_repair_plan()
+    stats = plan.stats
+    repairable = stats.get("repairable", 0)
+    still_unmatched = stats.get("still_unmatched", 0)
+    ambiguous = stats.get("ambiguous_old_driver_id_skipped", 0)
+    if repairable == 0 and still_unmatched == 0 and ambiguous == 0:
+        state, detail = "done", "No old_driver_id-bearing missing_driver rows found"
+    elif repairable > 0:
+        detail = f"{repairable} ride(s) repairable now"
+        if still_unmatched:
+            detail += f", {still_unmatched} still unmatched"
+        if ambiguous:
+            detail += f", {ambiguous} ambiguous (skipped)"
+        state = "not_started"
+    else:
+        state, detail = "manual_check_required", f"{still_unmatched} still unmatched, {ambiguous} ambiguous"
+    return ToolStatus(18, "driver_repair", "Driver-Repair Pass", state, detail, "/dashboard/bulk-operations")
+
+
 def get_migration_status() -> MigrationStatusReport:
-    """Read-only. Runs every count query above and returns all 17 tool
+    """Read-only. Runs every count query above and returns all 18 tool
     statuses in the verified dependency order. No writes, no side effects."""
     eligible_ids = _eligible_driver_ids()
     imported_rides = _imported_ride_ids()
@@ -498,5 +526,6 @@ def get_migration_status() -> MigrationStatusReport:
             route_backfill,
             _tool_16_pre_launch_flag(),
             _tool_17_data_quality_scan(),
+            _tool_18_driver_repair(),
         ]
     )

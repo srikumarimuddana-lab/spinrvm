@@ -76,6 +76,7 @@ export default function LoyaltyScreen() {
   const [history, setHistory] = useState<LoyaltyHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -86,7 +87,16 @@ export default function LoyaltyScreen() {
       ]);
       setLoyalty(loyaltyRes.data);
       setHistory((historyRes.data as LoyaltyHistoryItem[]) || []);
-    } catch {}
+      setLoadFailed(false);
+    } catch (err) {
+      // A failed fetch left `loyalty` null and `history` empty, which the
+      // list rendered as the cheerful "No points history yet" empty state —
+      // indistinguishable from a rider who genuinely has zero points history.
+      // Track the failure so the empty state can say what actually happened
+      // and offer a retry, matching notifications.tsx's loadFailed pattern.
+      console.error('[loyalty]', err);
+      setLoadFailed(true);
+    }
     finally {
       setLoading(false);
       setRefreshing(false);
@@ -239,13 +249,22 @@ export default function LoyaltyScreen() {
           }
           contentContainerStyle={styles.list}
           ListEmptyComponent={
-            !loading ? (
+            loading ? null : loadFailed ? (
+              <View style={styles.empty}>
+                <Ionicons name="cloud-offline-outline" size={48} color={colors.danger} />
+                <Text style={styles.emptyTitle}>Couldn&apos;t load your rewards</Text>
+                <Text style={styles.emptySub}>Check your connection and try again.</Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={() => loadData()}>
+                  <Text style={styles.retryText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
               <View style={styles.empty}>
                 <Ionicons name="receipt-outline" size={48} color="#DDD" />
                 <Text style={styles.emptyTitle}>No points history yet</Text>
                 <Text style={styles.emptySub}>Complete rides to start earning points</Text>
               </View>
-            ) : null
+            )
           }
         />
       )}
@@ -325,5 +344,13 @@ function createStyles(colors: ThemeColors) {
     empty: { alignItems: 'center', paddingVertical: 40 },
     emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 12 },
     emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center' },
+    retryBtn: {
+      marginTop: 16,
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      borderRadius: 20,
+      backgroundColor: colors.primary,
+    },
+    retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   });
 }

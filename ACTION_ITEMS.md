@@ -12253,6 +12253,46 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** 1 candidate — the last item in the entire 21-candidate
   broader sweep: rider-app's `emergency-contacts.tsx`. No
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 36 done, closing the entire 21-candidate
+  broader sweep for real this time: `rider-app/app/emergency-contacts.tsx`'s
+  `handleAdd` validation (last item in the sweep).** Extracted the two
+  sequential checks (name required; phone must have at least 10 digits
+  after non-digit stripping) into new
+  `rider-app/utils/emergencyContactSchema.ts` (`isContactNameValid`,
+  `isContactPhoneValid`, `getEmergencyContactFormError`) — same
+  function names/signatures as driver-app's own
+  `emergencyContactSchema.ts` (step 30), kept as a separate file since
+  the two apps don't share a `utils/` module. Pure extraction,
+  byte-for-byte identical to the original two `if` blocks +
+  `showToast(...)` calls — no bug found, no behavior change. Call
+  site's local variable named `validationError` (not `error`) from the
+  start, learning from step 35's eslint false-positive fix. New
+  `rider-app/utils/__tests__/emergencyContactSchema.test.ts` (8
+  accept/reject cases, including the phone-digit-stripping behavior).
+  Verification: 8/8 new tests pass; existing
+  `__tests__/emergencyContactsScreen.test.tsx` (20 tests) re-run
+  unchanged; full rider-app suite (`jest`) 138/138 suites, 1933/1933
+  tests passing, 0 regressions; `npx tsc --noEmit` clean; `npx eslint`
+  clean on touched files; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed the only other matches for
+  this form's copy are the existing UI test (re-run, unaffected) and a
+  `.metro-cache` build artifact (not source). Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-rider-emergency-contact-zod-step36.md`.
+
+  **The 2026-08-31 broader-sweep 21-candidate list (steps 15-36) is now
+  genuinely fully closed** — every rider-app, driver-app, and
+  admin-dashboard candidate the sweep identified has been migrated and
+  verified via `git ls-tree`/grep at each step, including catching and
+  correcting two earlier undercounted "fully closed" claims along the
+  way (the "8, not 11" and "driver-app/admin closed, rider-app has 2
+  left" corrections above). Checkbox stays `[ ]` regardless: this
+  item's own scope was always "adopt zod, migrate one form at a time,"
+  not "migrate every form in the codebase," and no ADR/migration-order
+  doc for the overall effort has been written (a standing gap carried
+  since step 1) — forms outside this specific sweep were never
+  exhaustively enumerated, so this checkbox does not claim the item
+  itself is complete, only that this sweep's scope is done.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

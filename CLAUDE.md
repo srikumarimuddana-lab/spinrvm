@@ -133,8 +133,16 @@ python -m backend.scripts.run_migrations           # ordered SQL runner over bac
                                                      # connection — REST client is intentionally not
                                                      # used, multi-statement DDL needs a raw psycopg
                                                      # session). Add --dry-run to preview, --status to
-                                                     # show applied vs pending.
+                                                     # show applied vs pending vs permanently-skipped.
 ```
+
+A file can be registered in the runner's `NEVER_APPLY` skip-list (module-level constant in
+`run_migrations.py`) to permanently block it from ever being applied — without editing or
+deleting the merged file itself, respecting the append-only rule below. A skip-listed file
+gets its own `PERMANENTLY SKIPPED` status in `--status`/`--dry-run` output and can never reach
+`pending` or get applied, even on a naive full re-run against a fresh/different environment.
+See `backend/migrations/CLAUDE.md`'s "NEVER_APPLY skip-list" rule for how to add or remove an
+entry, and `ACTION_ITEMS.md` G2 for the 4 files currently registered.
 
 **Use `run_migrations.py` — `migrate.py` no longer exists.** Two scripts
 used to exist in `backend/scripts/`; only `run_migrations.py` ever matched

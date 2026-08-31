@@ -7407,6 +7407,37 @@ record of what was assumed vs. what was actually true</summary>
      deleting/superseding them with corrective migrations, or adding an explicit
      skip-list mechanism to `run_migrations.py` (doesn't currently have one) — filed
      here rather than done unilaterally since it's a runner-tooling decision.
+     - [x] **Skip-list mechanism built (2026-08-31, separate session)**:
+       `backend/scripts/run_migrations.py` now has a module-level
+       `NEVER_APPLY: dict[filename, reason]` constant, checked by `_classify()` before a
+       file can ever land in "pending" — so a skip-listed file can never be applied,
+       including via a naive full re-run against a fresh/different environment (new
+       staging DB, disaster-recovery replay), and never even shows up in `--dry-run`'s
+       "would apply" list. It gets its own explicit `PERMANENTLY SKIPPED (security
+       regression risk)` status in both `--status` and `--dry-run` output — never
+       conflated with "applied" or "pending". If a skip-listed file is somehow *also*
+       tracked as applied in `schema_migrations` (ran through some other path — direct
+       SQL editor, another tool, manual `psql`), the runner prints a loud
+       `CONTRADICTION` line to stderr rather than silently accepting either status. All
+       4 files above (`70_fix_financial_events_rls.sql`,
+       `78_fix_pii_function_search_path.sql`, `137_fix_pii_encrypt_pgsodium_perms.sql`,
+       `26_rls_coverage_gap.sql`) are registered with the reasons above, paraphrased,
+       citing this item. This is not their fix (still open per items 1–3 above, which
+       need a human) — only the guard against accidentally applying them. Documented in
+       `backend/migrations/CLAUDE.md` ("NEVER_APPLY skip-list" rule) and root
+       `CLAUDE.md`'s Database Migrations section, including how to add/remove a future
+       entry. Tests: `backend/tests/test_run_migrations_skip_list.py` (skip-listed files
+       never appear as pending/applied, contradiction logging, `--status`/`--dry-run`
+       categorization). Verified: `pytest
+       backend/tests/test_run_migrations_skip_list.py
+       backend/tests/test_run_migrations_batch_failure.py
+       backend/tests/test_run_migrations_autocommit_chunks.py -v` (12 passed);
+       `ruff check` clean on the changed files; manually exercised `_classify()` against
+       a throwaway local file layout (temp dir + skip-listed filenames) confirming the
+       three-way applied/pending/PERMANENTLY-SKIPPED split renders correctly. Not
+       verified: an actual `--dry-run`/`--status` invocation against a live
+       `DATABASE_URL` (no DB access from this session; the classification logic itself
+       is what's under test, and it's DB-connection-agnostic).
 - **Files:** `backend/migrations/362_fix_rider_email_verification_otp_user_id_type.sql`
   (new); no other repo files changed — the schema application and
   `schema_migrations` backfill happened directly against the live Supabase project

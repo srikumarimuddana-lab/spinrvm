@@ -14,7 +14,7 @@ Eligibility, in order:
    area-less ride matches only globally-scoped ones
 3. vehicle type — the ride's type, or an untyped incentive
 4. a resolved bonus greater than zero (see ``_resolve_bonus``)
-5. **gated on the ``incentive_eligibility_enforced`` setting** — the
+5. **gated on the ``incentive_eligibility_enforced`` rollout switch** — the
    ``start_date``/``end_date`` window, the ``conditions`` JSONB, and the
    ``max_budget`` cap
 
@@ -80,12 +80,27 @@ class MatchedIncentive:
     bonus: Decimal
 
 
-async def _enforcement_enabled() -> bool:
-    """Read the rollout flag. Fails CLOSED to today's behaviour (no enforcement).
+async def _enforcement_enabled(area: Optional[Dict[str, Any]]) -> bool:
+    """Resolve the rollout switch for one ride's service area.
 
-    A settings-load failure must not silently start denying bonuses drivers
-    were quoted — that is the more damaging direction of the two.
+    ``enforce = settings.incentive_eligibility_enforced OR
+                service_areas.incentive_eligibility_enforced`` (migration 376).
+
+    The per-area column is the staged, city-by-city rollout — incentives are
+    configured per area, so the switch governing them lives at the same
+    granularity. The global one stays as the fleet-wide master switch. OR, not
+    AND: requiring both would make a freshly-enabled area silently do nothing
+    until the global was also on, which reads as a broken toggle.
+
+    A ride with no service area has no per-area row, so only the global switch
+    can govern it — such a ride matches only globally-scoped incentives anyway.
+
+    Fails CLOSED to today's behaviour (no enforcement) on a read error: a
+    settings or area lookup failure must not silently start denying bonuses
+    drivers were already quoted, which is the more damaging direction.
     """
+    if area and bool(area.get("incentive_eligibility_enforced")):
+        return True
     try:
         return bool((await get_app_settings() or {}).get("incentive_eligibility_enforced", False))
     except Exception:
@@ -245,21 +260,43 @@ async def match_ride_incentives(
     now: Optional[datetime] = None,
     tz_name: str = _DEFAULT_TZ,
     enforce: Optional[bool] = None,
+    service_area: Optional[Dict[str, Any]] = None,
 ) -> List[MatchedIncentive]:
     """Return the incentives this ride qualifies for, with bonuses resolved.
 
-    ``enforce`` overrides the ``incentive_eligibility_enforced`` setting; leave
-    it None outside tests so every call site shares one rollout switch.
+    ``enforce`` overrides the rollout switches; leave it None outside tests so
+    every call site shares one resolution (see ``_enforcement_enabled``).
+
+    ``service_area`` is the ride's already-fetched ``service_areas`` row. Pass
+    it whenever the caller has one — dispatch does — so resolving the per-area
+    rollout flag costs nothing on the offer→accept path. Omitted, it is fetched
+    here, and only when the global switch has not already decided the answer.
 
     Raises on a DB failure rather than returning an empty list — an empty
     result and a failed lookup mean very different things to a driver being
     quoted a bonus, and each caller already decides how to degrade.
     """
     now = now or datetime.now(timezone.utc)
-    if enforce is None:
-        enforce = await _enforcement_enabled()
-
     sa_id = ride.get("service_area_id")
+
+    if enforce is None:
+        area = service_area
+        if area is None and sa_id:
+            # Best-effort: an area we cannot read must not flip enforcement ON
+            # for a ride that was quoted without it, so a failure here leaves
+            # the decision to the global switch.
+            try:
+                area = await db.find_one("service_areas", {"id": sa_id})
+            except Exception:
+                logger.error(
+                    "incentive eligibility: service_area %s lookup failed; "
+                    "falling back to the global switch",
+                    sa_id,
+                    exc_info=True,
+                )
+                area = None
+        enforce = await _enforcement_enabled(area)
+
     vt_id = ride.get("vehicle_type_id")
 
     query = db.supabase.table("ride_incentives").select(INCENTIVE_SELECT).eq("is_active", True)

@@ -213,6 +213,10 @@ class ServiceAreaUpdateRequest(BaseModel):
     spinr_pass_enabled: Optional[bool] = None
     subscription_plan_ids: Optional[List[str]] = None
     subscription_required: Optional[bool] = None
+    # Migration 376 — per-area rollout of ride-incentive eligibility
+    # enforcement (dates / conditions / percentage / budget cap). ORed with
+    # settings.incentive_eligibility_enforced, the fleet-wide master switch.
+    incentive_eligibility_enforced: Optional[bool] = None
     driver_matching_algorithm: Optional[str] = None
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
@@ -721,6 +725,9 @@ async def admin_update_service_area(
         "spinr_pass_enabled",
         "subscription_plan_ids",
         "subscription_required",
+        # Migration 376 — without this line the field is accepted by the
+        # request model and then silently dropped by this allowlist.
+        "incentive_eligibility_enforced",
         "driver_matching_algorithm",
         "search_radius_km",
         "min_driver_rating",

@@ -902,7 +902,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # unchanged.
         try:
             return incentive_display_payload(
-                await match_ride_incentives(_deps.db_supabase, ride)
+                # `_ride_area` is already fetched above, so resolving the
+                # per-area eligibility rollout flag adds no query here.
+                await match_ride_incentives(
+                    _deps.db_supabase, ride, service_area=_ride_area or None
+                )
             )
         except Exception as e:
             logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)

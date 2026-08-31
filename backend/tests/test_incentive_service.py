@@ -75,6 +75,8 @@ class _DB:
     def __init__(self, tables=None):
         self.tables = tables or {}
         self.log, self.inserted, self.updated = [], [], []
+        self.area_row = None
+        self.find_one_raises = False
         self.supabase = MagicMock()
         self.supabase.table = lambda name: _Chain(self.tables.get(name, []), self.log)
 
@@ -87,6 +89,12 @@ class _DB:
 
     async def update_one(self, table, filt, updates):
         self.updated.append((table, filt, updates))
+
+    async def find_one(self, table, filters):
+        self.log.append(("find_one", (table, tuple(sorted(filters.items())))))
+        if self.find_one_raises:
+            raise RuntimeError("service_areas down")
+        return self.area_row
 
 
 def _inc(**kw):
@@ -278,6 +286,142 @@ async def test_percentage_bonus_rounding_to_zero_is_dropped():
         ride={**RIDE, "driver_earnings": 0.2},
     )
     assert matched == []
+
+
+# ── Rollout-switch resolution (migration 376) ───────────────────────────────
+#
+# enforce = settings.incentive_eligibility_enforced
+#           OR service_areas.incentive_eligibility_enforced
+#
+# Incentives are configured per service area, so the switch governing them is
+# too. OR, not AND: requiring both would make a freshly-enabled area silently
+# do nothing until the global was also on.
+
+
+async def _resolve(monkeypatch, *, global_flag, area, ride=None, db=None):
+    """Run the real resolution path with the global setting stubbed."""
+    import backend.services.incentive_service as svc
+
+    async def _settings():
+        return {"incentive_eligibility_enforced": global_flag}
+
+    monkeypatch.setattr(svc, "get_app_settings", _settings)
+    db = db or _DB({"ride_incentives": [_inc()], "ride_incentive_claims": []})
+    db.area_row = area
+    matched = await svc.match_ride_incentives(
+        db, ride if ride is not None else RIDE, now=NOW, service_area=area
+    )
+    return db, matched
+
+
+async def test_area_flag_alone_enables_enforcement(monkeypatch):
+    """The staged rollout: one city on, the fleet switch still off."""
+    _, matched = await _resolve(
+        monkeypatch,
+        global_flag=False,
+        area={"id": "area-1", "incentive_eligibility_enforced": True},
+    )
+    # Enforcement is ON, so the expired incentive below would be dropped —
+    # prove it by using one that only enforcement would reject.
+    db = _DB({"ride_incentives": [_inc(end_date="2026-01-01T00:00:00Z")], "ride_incentive_claims": []})
+    _, expired = await _resolve(
+        monkeypatch,
+        global_flag=False,
+        area={"id": "area-1", "incentive_eligibility_enforced": True},
+        db=db,
+    )
+    assert len(matched) == 1
+    assert expired == []
+
+
+async def test_global_flag_alone_enables_enforcement(monkeypatch):
+    """The fleet-wide master switch still works with the area flag off."""
+    db = _DB({"ride_incentives": [_inc(end_date="2026-01-01T00:00:00Z")], "ride_incentive_claims": []})
+    _, matched = await _resolve(
+        monkeypatch,
+        global_flag=True,
+        area={"id": "area-1", "incentive_eligibility_enforced": False},
+        db=db,
+    )
+    assert matched == []
+
+
+async def test_both_off_leaves_enforcement_off(monkeypatch):
+    """Default state: an expired incentive still pays, exactly as pre-375."""
+    db = _DB({"ride_incentives": [_inc(end_date="2026-01-01T00:00:00Z")], "ride_incentive_claims": []})
+    _, matched = await _resolve(
+        monkeypatch,
+        global_flag=False,
+        area={"id": "area-1", "incentive_eligibility_enforced": False},
+        db=db,
+    )
+    assert len(matched) == 1
+
+
+async def test_ride_without_an_area_falls_back_to_the_global_switch(monkeypatch):
+    """No area row exists to carry a per-area flag, so only the global one can
+    govern such a ride."""
+    db = _DB({"ride_incentives": [_inc(end_date="2026-01-01T00:00:00Z")], "ride_incentive_claims": []})
+    _, matched = await _resolve(
+        monkeypatch,
+        global_flag=True,
+        area=None,
+        ride={**RIDE, "service_area_id": None},
+        db=db,
+    )
+    assert matched == []
+
+
+async def test_area_is_fetched_when_the_caller_does_not_supply_it(monkeypatch):
+    """Callers without the row still get per-area resolution."""
+    import backend.services.incentive_service as svc
+
+    async def _settings():
+        return {"incentive_eligibility_enforced": False}
+
+    monkeypatch.setattr(svc, "get_app_settings", _settings)
+    db = _DB({"ride_incentives": [_inc(end_date="2026-01-01T00:00:00Z")], "ride_incentive_claims": []})
+    db.area_row = {"id": "area-1", "incentive_eligibility_enforced": True}
+
+    matched = await svc.match_ride_incentives(db, RIDE, now=NOW)
+
+    assert matched == []
+    assert any(c[0] == "find_one" for c in db.log), "area should have been fetched"
+
+
+async def test_supplying_the_area_avoids_the_lookup(monkeypatch):
+    """Dispatch already holds the row; resolving the flag must not add a query
+    to the offer→accept path."""
+    import backend.services.incentive_service as svc
+
+    async def _settings():
+        return {"incentive_eligibility_enforced": False}
+
+    monkeypatch.setattr(svc, "get_app_settings", _settings)
+    db = _DB({"ride_incentives": [_inc()], "ride_incentive_claims": []})
+
+    await svc.match_ride_incentives(
+        db, RIDE, now=NOW, service_area={"id": "area-1", "incentive_eligibility_enforced": False}
+    )
+
+    assert not [c for c in db.log if c[0] == "find_one"]
+
+
+async def test_area_lookup_failure_falls_back_to_the_global_switch(monkeypatch):
+    """An unreadable area must not flip enforcement ON for a ride quoted
+    without it — the damaging direction is denying a promised bonus."""
+    import backend.services.incentive_service as svc
+
+    async def _settings():
+        return {"incentive_eligibility_enforced": False}
+
+    monkeypatch.setattr(svc, "get_app_settings", _settings)
+    db = _DB({"ride_incentives": [_inc(end_date="2026-01-01T00:00:00Z")], "ride_incentive_claims": []})
+    db.find_one_raises = True
+
+    matched = await svc.match_ride_incentives(db, RIDE, now=NOW)
+
+    assert len(matched) == 1, "failed area read must leave enforcement off"
 
 
 # ── Display payload ─────────────────────────────────────────────────────────

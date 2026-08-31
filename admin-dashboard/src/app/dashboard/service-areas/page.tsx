@@ -579,7 +579,19 @@ export default function ServiceAreasPage() {
 
                       {/* Incentives Tab */}
                       {editTab === 'incentives' && (
-                        <IncentivesTab areaId={area.id} areaName={area.name} vehicleTypes={vehicleTypes} />
+                        <IncentivesTab
+                          areaId={area.id}
+                          areaName={area.name}
+                          vehicleTypes={vehicleTypes}
+                          enforcementEnabled={!!area.incentive_eligibility_enforced}
+                          onToggleEnforcement={async (next) => {
+                            try {
+                              await updateServiceArea(area.id, { incentive_eligibility_enforced: next });
+                              setAreas(prev => prev.map(a => a.id === area.id ? { ...a, incentive_eligibility_enforced: next } : a));
+                              crudToast.updated("Incentive eligibility enforcement");
+                            } catch (e) { crudToast.error("update incentive eligibility enforcement", e); }
+                          }}
+                        />
                       )}
 
                       {/* Dispatch Cascade Tab */}
@@ -2055,7 +2067,13 @@ function CascadeEditor({
   );
 }
 
-function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; areaName: string; vehicleTypes: { id: string; name: string }[] }) {
+function IncentivesTab({ areaId, areaName, vehicleTypes, enforcementEnabled, onToggleEnforcement }: {
+  areaId: string;
+  areaName: string;
+  vehicleTypes: { id: string; name: string }[];
+  enforcementEnabled: boolean;
+  onToggleEnforcement: (next: boolean) => Promise<void>;
+}) {
   const [incentives, setIncentives] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -2065,6 +2083,7 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
     max_budget: '',
   });
   const [saving, setSaving] = useState(false);
+  const [togglingEnforcement, setTogglingEnforcement] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -2117,6 +2136,42 @@ function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; are
             <Gift className="h-4 w-4" /> Add Incentive
           </button>
         )}
+      </div>
+
+      {/* Eligibility enforcement (migration 376). Off by default and per area,
+          because turning it on changes what drivers are PAID: it makes
+          start/end dates, the conditions JSONB, bonus_type=percentage and the
+          budget cap actually bind. Rolling out city by city is the point. */}
+      <div className="border border-border rounded-xl p-4 mb-5 bg-muted/40">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="font-semibold text-foreground text-sm">Enforce incentive eligibility rules</p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-2xl">
+              When on, incentives in {areaName} only pay if they are inside their start/end dates,
+              within their budget cap, and meet their configured conditions — and a
+              percentage bonus is charged as a percentage rather than as dollars.
+              When off, <strong>only the Active switch matters</strong>: an expired or
+              over-budget incentive keeps paying.
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Changes what drivers are paid. Check for expired or over-budget incentives below before enabling.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              setTogglingEnforcement(true);
+              try { await onToggleEnforcement(!enforcementEnabled); } finally { setTogglingEnforcement(false); }
+            }}
+            disabled={togglingEnforcement}
+            aria-pressed={enforcementEnabled}
+            aria-label={`${enforcementEnabled ? 'Disable' : 'Enable'} incentive eligibility enforcement for ${areaName}`}
+            className={`shrink-0 p-2 rounded-lg disabled:opacity-50 ${enforcementEnabled ? 'text-success hover:bg-success/10' : 'text-muted-foreground hover:bg-muted'}`}
+            title={enforcementEnabled ? 'Enforcing — click to disable' : 'Not enforcing — click to enable'}
+          >
+            {enforcementEnabled ? <ToggleRight className="h-6 w-6" /> : <ToggleLeft className="h-6 w-6" />}
+          </button>
+        </div>
       </div>
 
       {showForm && (

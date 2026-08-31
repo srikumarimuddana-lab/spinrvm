@@ -1784,6 +1784,29 @@ class TestGetActiveRideEnrichment:
         # Quest hint stays offer-only — it is a dispatch nudge, not earnings.
         assert result["quest_hint"] is None
 
+    async def test_no_matching_incentive_returns_empty_not_null(self):
+        """[] / 0 means "no bonus on this ride"; null is reserved for "the
+        lookup failed". The driver client keeps its last known bonus on null,
+        so conflating the two makes a transient DB blip look like a real $0."""
+        from backend.routes.drivers.ride_reads import get_active_ride
+
+        ride = _ride(status="in_progress", service_area_id="area-1", vehicle_type_id="vt-1")
+        fake_supabase = MagicMock()
+        fake_supabase.table.side_effect = lambda name: _chain([])
+
+        with _Patches(
+            *self._base_patches(ride),
+            patch("backend.routes.drivers.ride_reads.db_supabase.supabase", fake_supabase),
+            patch(
+                "backend.routes.drivers.ride_reads.db_supabase.run_sync",
+                AsyncMock(side_effect=lambda fn: fn()),
+            ),
+        ):
+            result = await get_active_ride(current_user={"id": _USER_ID})
+
+        assert result["incentives"] == []
+        assert result["total_bonus"] == 0.0
+
     async def test_incentive_lookup_exception_is_non_fatal(self):
         from backend.routes.drivers.ride_reads import get_active_ride
 
@@ -1802,7 +1825,10 @@ class TestGetActiveRideEnrichment:
             ),
         ):
             result = await get_active_ride(current_user={"id": _USER_ID})
+        # null, not [] — the client must be able to tell a failed lookup from a
+        # ride that genuinely carries no bonus.
         assert result["incentives"] is None
+        assert result["total_bonus"] is None
 
     async def test_quest_hint_lookup_exception_is_non_fatal(self):
         from backend.routes.drivers.ride_reads import get_active_ride

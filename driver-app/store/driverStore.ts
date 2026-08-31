@@ -948,13 +948,24 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 else if (ride.status === RideStatus.DRIVER_ARRIVED) rideState = 'arrived_at_pickup';
                 else if (ride.status === RideStatus.IN_PROGRESS) rideState = 'trip_in_progress';
 
+                // The backend sends [] / 0 for "no bonus on this ride" and null
+                // only when its incentive lookup failed, so a null here means
+                // "unknown" — keep the last known figure rather than letting the
+                // in-trip earnings headline drop by the bonus and pop back on
+                // the next poll. Mirrors the pre-accept branch above.
+                const _prevActive = get().activeRide;
+                const _nextActive: ActiveRide = {
+                    ...(res.data as ActiveRide),
+                    incentives: res.data.incentives ?? _prevActive?.incentives,
+                    total_bonus: res.data.total_bonus ?? _prevActive?.total_bonus,
+                };
                 set({
-                    activeRide: res.data,
+                    activeRide: _nextActive,
                     rideState,
                     incomingRide: null,
                     countdownSeconds: 0,
                 });
-                _persistDriverState(rideState, res.data);
+                _persistDriverState(rideState, _nextActive);
             } else {
                 // No active ride on the server. With batch dispatch the ride
                 // stays in 'searching' (no driver_id set), so the API returns

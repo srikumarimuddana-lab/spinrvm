@@ -535,6 +535,70 @@ async def test_work_profile_low_allowance_raises_400():
     assert exc_info.value.detail["reason"] == "allowance_low"
 
 
+async def test_work_profile_allowance_guard_uses_grand_total_not_total_fare():
+    """Follow-up to #4602: this guard used to gate on total_fare alone,
+    which understates what's actually charged once area fees/tax are
+    added — the same 'gap #39' reasoning the company_allowance path's
+    guard already used. An allowance that covers 1.5x total_fare but NOT
+    1.5x grand_total must now correctly be refused, where it previously
+    would have passed."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+
+    # distance_km=5.0 -> duration_minutes = int(5/30*60)+5 = 15
+    # total_fare = base(3.0) + per_km(1.5*5=7.5) + per_min(0.25*15=3.75) + booking(2.0) = 16.25
+    # fees_total=10 -> grand_total = 26.25
+    # 1.5 * total_fare = 24.375 ; 1.5 * grand_total = 39.375
+    # allowance=30.00 sits BETWEEN the two thresholds: passes the old
+    # (total_fare) basis, fails the new (grand_total) basis.
+    class _PassedPolicy:
+        passed = True
+        failed_rules = []
+        allowance = {"type": "monthly", "amount": "30.00", "used": "0.00"}
+        policy = {"allowed_payment_source": "allowance_only"}
+
+    with (
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_FARE_INFO])),
+        patch("backend.routes.rides._deps.calculate_distance", return_value=5.0),
+        patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+        patch(
+            "backend.routes.rides._deps.calculate_all_fees",
+            AsyncMock(return_value={"fees_total": 10, "tax_amount": 0, "fees": [], "tax_breakdown": {}}),
+        ),
+        patch("backend.routes.rides._deps.evaluate_policy_for_ride", AsyncMock(return_value=_PassedPolicy())),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.db_supabase.get_corporate_account_by_id", AsyncMock(return_value={"status": "active"})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+
+        async def _wallet_ok(table, *a, **kw):
+            if table == "wallets":
+                return {"id": "wallet-1", "balance": 1000.0}
+            return None
+
+        mock_supabase.find_one = AsyncMock(side_effect=_wallet_ok)
+        mock_supabase.get_rows = AsyncMock(return_value=[])
+        mock_supabase.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_supabase.get_corporate_account_by_id = AsyncMock(return_value={"status": "active"})
+        mock_supabase.list_active_memberships_for_user = AsyncMock(
+            return_value=[{"company_id": "corp-1", "policy_override": False}]
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_ride(
+                request=_starlette_request(),
+                body=_body(payment_method="wallet", work_profile=True, corporate_account_id="corp-1"),
+                current_user=_USER,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["reason"] == "allowance_low"
+
+
 async def test_sca_preauth_requires_action_returns_early_without_creating_ride():
     from backend.routes.rides import create_ride
 

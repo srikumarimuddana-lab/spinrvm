@@ -1171,6 +1171,19 @@ async def create_ride(
         # 5. Pre-auth buffer check (skip for unlimited allowances).
         # Uses allowance + policy surfaced by evaluate_policy_for_ride so we
         # don't need a second round-trip to fetch them separately.
+        #
+        # Uses grand_total (base + area fees + tax), not total_fare — same
+        # "gap #39" reasoning as the company_allowance path's policy-fare
+        # check and its own identical headroom guard above: total_fare
+        # understates what's actually charged, so gating on it alone could
+        # let a ride through that the allowance can't actually cover once
+        # fees/tax are added. This guard used total_fare until #4602's
+        # follow-up reconciled it with the company_allowance path — the two
+        # corporate booking paths must use the same basis for what reads as
+        # "the same check", or a future diff between them looks like a bug.
+        # Strictly more conservative than before (grand_total >= total_fare
+        # always): a ride with nonzero area fees/tax that previously passed
+        # this guard may now correctly require more allowance headroom.
         _allowance = _policy_result.allowance
         _policy = _policy_result.policy
         if _allowance.get("type") != "unlimited":
@@ -1179,7 +1192,7 @@ async def create_ride(
                 "master_only",
                 "both",
             )
-            if _remaining < _round(_d(str(_f(total_fare))) * _d("1.5")) and not _master_permitted:
+            if _remaining < _round(_d(str(_f(grand_total))) * _d("1.5")) and not _master_permitted:
                 raise HTTPException(
                     status_code=400,
                     detail={"reason": "allowance_low"},

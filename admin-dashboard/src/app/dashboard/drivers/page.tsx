@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2, Tag } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2, Tag, UserX } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
@@ -42,6 +42,12 @@ const STATUS_TABS = [
     { value: "banned", label: "Banned", icon: Ban },
     { value: "online", label: "Online", icon: Wifi },
     { value: "photos_pending", label: "Pending photos", icon: Image },
+    // Abandoned-onboarding rows carried over by the legacy import: someone
+    // OTP-verified a phone in the old app and never completed a profile. They
+    // are real `drivers` rows (forced needs_review/unverified/offline, so they
+    // can never dispatch) and they outnumber the real fleet ~2:1, which is why
+    // every other tab excludes them and this one exists to reach them.
+    { value: "legacy_incomplete", label: "Legacy incomplete", icon: UserX },
 ];
 
 const PAGE_SIZE = 50;
@@ -285,6 +291,9 @@ export default function DriversPage() {
         if (statusFilter === "online") opts.is_online = true;
         else if (statusFilter === "photos_pending") opts.photo_status = "pending_review";
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
+        // Legacy shells are hidden from every tab but their own. They are not
+        // deleted or hidden from the database — the dedicated tab reaches them.
+        opts.onboarding_complete = statusFilter !== "legacy_incomplete";
         if (legacyFilter === "imported") opts.legacy_import = true;
         else if (legacyFilter === "not_imported") opts.legacy_import = false;
         if (preLaunchFilter === "only") opts.pre_launch = true;
@@ -650,7 +659,10 @@ export default function DriversPage() {
     const statusCounts = (s: string) => {
         const stats = data?.stats;
         if (!stats) return 0;
-        if (s === "all") return stats.total ?? 0;
+        // `all` is every REAL driver — `stats.total` still counts the legacy
+        // shells too, and showing that made the fleet read ~3x its true size.
+        if (s === "all") return stats.onboarded_total ?? stats.total ?? 0;
+        if (s === "legacy_incomplete") return stats.legacy_incomplete ?? 0;
         if (s === "online") return stats.online ?? 0;
         if (s === "photos_pending") return stats.pending_photos ?? 0;
         return stats[s] ?? 0;
@@ -877,7 +889,13 @@ export default function DriversPage() {
             <PageHeader
                 className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
                 title="Drivers"
-                description={`${data?.stats?.total ?? 0} drivers ${serviceAreaId ? `in ${selectedAreaName}` : "overall"}`}
+                description={
+                    // Real drivers, not the raw row count: the legacy import left
+                    // abandoned-onboarding shells in the table. They stay visible
+                    // as a separate figure so the two reconcile to `stats.total`.
+                    `${data?.stats?.onboarded_total ?? data?.stats?.total ?? 0} drivers ${serviceAreaId ? `in ${selectedAreaName}` : "overall"}`
+                    + (data?.stats?.legacy_incomplete ? ` \u00b7 ${data.stats.legacy_incomplete} legacy incomplete` : "")
+                }
                 actions={
                 <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center gap-1.5">

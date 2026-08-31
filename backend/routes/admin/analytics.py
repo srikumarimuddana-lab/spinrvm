@@ -13,11 +13,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 try:
     from ...db import db
     from ...dependencies import get_admin_user
+    from ...services.driver_import_service import is_incomplete_onboarding_row
     from ...services.fare_service import _d, _f, _round
     from ...utils.redis_client import redis_get, redis_set
 except ImportError:
     from db import db
     from dependencies import get_admin_user
+    from services.driver_import_service import is_incomplete_onboarding_row  # type: ignore
     from services.fare_service import _d, _f, _round  # noqa: F401
     from utils.redis_client import redis_get, redis_set  # noqa: F401
 
@@ -249,6 +251,17 @@ async def get_driver_acceptance_rates(
             extra={"domain": "admin", "cap": _DRIVER_SCAN_CAP, "service_area_id": service_area_id},
         )
 
+    # Drop abandoned-legacy-onboarding shells (see services/driver_import_
+    # service.is_incomplete_onboarding_row). They are imported rows for people
+    # who never completed onboarding in the old app and have never taken an
+    # offer, so counting them here both inflated `total_drivers` and dragged
+    # `avg_acceptance_rate` / `low_performer_count` toward zero with drivers
+    # who were never dispatchable in the first place.
+    #
+    # Applied AFTER the scan-cap check above on purpose: filtering first would
+    # let a truncated scan look complete.
+    drivers = [d for d in drivers if not is_incomplete_onboarding_row(d)]
+
     driver_ids = [d["id"] for d in drivers]
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
 
@@ -372,6 +385,8 @@ async def get_driver_acceptance_rates(
         "service_area_id": service_area_id,
         # Every driver matching the filters — NOT "active drivers". The UI
         # previously labelled this "Total Active Drivers", which it never was.
+        # Excludes abandoned-legacy-onboarding shells (see the filter above),
+        # so this agrees with the drivers page's `onboarded_total`.
         "total_drivers": total,
         "drivers_with_rides": len(active),
         "avg_completion_rate_active": avg_active,

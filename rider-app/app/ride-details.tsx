@@ -13,7 +13,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
 import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -77,13 +77,17 @@ export function buildReceiptHtml(ride: any): string {
     routeRevision > 0 &&
     _num(ride?.snapshot_revision) === routeRevision;
   const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
-  const routeQuality = routeQualityLabel(ride?.route_quality);
+  // Bare map image, no caption: revision numbers and GPS-coverage percentages
+  // are operator diagnostics and live on the admin ride-detail modal now. A v2
+  // ride whose snapshot revision is stale still renders nothing at all — never
+  // a stale image — it just no longer explains itself in provenance copy. The
+  // alt text keeps the actual/planned distinction for screen readers.
   const routeMap = routeSnapshotUrl
-    ? `<tr><td style="padding:0 24px 12px"><p style="color:#666;font-size:12px;margin:0 0 6px">Actual route (revision ${routeRevision}) · ${routeQuality}</p><img src="${routeSnapshotUrl}" alt="Actual route" width="472" style="width:100%;max-width:472px;border-radius:12px;display:block" /></td></tr>`
+    ? `<tr><td style="padding:0 24px 12px"><img src="${routeSnapshotUrl}" alt="Actual route" width="472" style="width:100%;max-width:472px;border-radius:12px;display:block" /></td></tr>`
     : _num(ride?.route_schema_version) >= 2
-      ? `<tr><td style="padding:0 24px 12px"><p style="color:#8a3412;font-size:12px;margin:0">Route snapshot unavailable · ${routeQuality}</p></td></tr>`
+      ? ''
       : ride?.route_snapshot_url
-        ? `<tr><td style="padding:0 24px 12px"><p style="color:#666;font-size:12px;margin:0 0 6px">Planned route</p><img src="${ride.route_snapshot_url}" alt="Planned route" width="472" style="width:100%;max-width:472px;border-radius:12px;display:block" /></td></tr>`
+        ? `<tr><td style="padding:0 24px 12px"><img src="${ride.route_snapshot_url}" alt="Planned route" width="472" style="width:100%;max-width:472px;border-radius:12px;display:block" /></td></tr>`
         : '';
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>

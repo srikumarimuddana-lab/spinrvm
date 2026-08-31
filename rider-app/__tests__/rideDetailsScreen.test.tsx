@@ -435,23 +435,45 @@ describe('buildReceiptHtml', () => {
       id: 'r10', route_schema_version: 2, route_revision: 3, snapshot_revision: 3,
       route_snapshot_url: 'https://cdn.example.com/route.png', route_quality: 'good',
     });
-    expect(html).toContain('Actual route (revision 3)');
     expect(html).toContain('https://cdn.example.com/route.png');
+    expect(html).toContain('alt="Actual route"');
+    // Revision number and GPS-coverage copy are operator diagnostics — admin only.
+    expect(html).not.toContain('revision 3');
   });
 
-  it('shows "Route snapshot unavailable" when v2 but the snapshot revision does not match', () => {
+  it('renders no map at all when v2 but the snapshot revision does not match', () => {
     const html = buildReceiptHtml({
       id: 'r11', route_schema_version: 2, route_revision: 3, snapshot_revision: 1,
       route_snapshot_url: 'https://cdn.example.com/stale.png',
     });
-    expect(html).toContain('Route snapshot unavailable');
+    // The never-a-stale-snapshot rule is what matters and is unchanged; the
+    // "Route snapshot unavailable · <quality>" line that used to explain it is
+    // provenance copy and no longer appears on a rider-facing receipt.
     expect(html).not.toContain('stale.png');
+    expect(html).not.toContain('Route snapshot unavailable');
   });
 
   it('falls back to a "Planned route" image for legacy (pre-v2) rides with a snapshot url', () => {
     const html = buildReceiptHtml({ id: 'r12', route_snapshot_url: 'https://cdn.example.com/planned.png' });
-    expect(html).toContain('Planned route');
     expect(html).toContain('planned.png');
+    // Kept as alt text for screen readers, not as visible caption copy.
+    expect(html).toContain('alt="Planned route"');
+    expect(html).not.toContain('>Planned route</p>');
+  });
+
+  it('prints no route-quality copy on the receipt for any route state', () => {
+    for (const ride of [
+      { id: 'q1', route_schema_version: 2, route_revision: 3, snapshot_revision: 3, route_snapshot_url: 'https://cdn.example.com/a.png', route_quality: { observed_distance_ratio: 0.59, inferred_distance_ratio: 0.41 } },
+      { id: 'q2', route_schema_version: 2, route_revision: 3, snapshot_revision: 1, route_quality: { coverage_ratio: 0.4, missing_tail: true } },
+      { id: 'q3', route_snapshot_url: 'https://cdn.example.com/b.png' },
+    ]) {
+      const html = buildReceiptHtml(ride);
+      expect(html).not.toContain('GPS observed');
+      expect(html).not.toContain('GPS coverage');
+      expect(html).not.toContain('Route reconstructed');
+      expect(html).not.toContain('Route verified');
+      expect(html).not.toContain('Route incomplete');
+    }
   });
 
   it('uses "—" as the ride code fallback when neither ride_code nor id is present', () => {
@@ -532,31 +554,30 @@ describe('map rendering (pickup_lat/dropoff_lat present)', () => {
     expect(polylines.length).toBe(2);
     await act(async () => { MapViewNode.props.onMapReady(); await flush(); });
     expect(mockFitToCoordinates).toHaveBeenCalled();
-    // hasActualRoute is true here (a real trip_in_progress segment exists),
-    // so the quality text takes the "Actual route · <quality>" branch, not
-    // the isV2Route/routeIsProcessing one — that's covered separately below.
-    expect(allText(r)).toContain('Actual route ·');
+    // The map draws; no route-provenance caption accompanies it (see below).
+    expect(allText(r)).not.toContain('Actual route');
   });
 
-  it('shows "Actual route unavailable" for a v2 ride whose geometry finished processing with no usable actual route', async () => {
-    mockApiGet.mockResolvedValue({
-      data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'complete' },
-    });
-    const r = await renderScreen();
-    expect(allText(r)).toContain('Actual route unavailable');
-  });
-
-  it('shows the legacy "Planned route preview" label for a pre-v2 ride with no actual route', async () => {
-    const r = await renderScreen(); // RIDE_COMPLETED default: no route_schema_version, no actual_route_segments
-    expect(allText(r)).toContain('Planned route · Planned route preview');
-  });
-
-  it('shows "Actual route processing" for a v2 ride with no actual route yet while geometry is still processing', async () => {
-    mockApiGet.mockResolvedValue({
-      data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'processing' },
-    });
-    const r = await renderScreen();
-    expect(allText(r)).toContain('Actual route processing');
+  it('renders no route-provenance caption in any route state', async () => {
+    // Coverage percentages, "Actual route processing" / "unavailable" and the
+    // legacy "Planned route preview" label were operator diagnostics on a rider
+    // screen. They live on the admin ride-detail modal now. The rider still
+    // gets the disclosure that matters from the fare line itself, which the
+    // backend relabels to "Ride fare (X km booked)" whenever the charged
+    // distance is the booking estimate rather than a GPS measurement.
+    for (const data of [
+      { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'complete' },
+      { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'processing' },
+      RIDE_COMPLETED,
+    ]) {
+      mockApiGet.mockResolvedValue({ data });
+      const r = await renderScreen();
+      const text = allText(r);
+      expect(text).not.toContain('Actual route');
+      expect(text).not.toContain('Planned route');
+      expect(text).not.toContain('GPS observed');
+      expect(text).not.toContain('GPS coverage');
+    }
   });
 });
 

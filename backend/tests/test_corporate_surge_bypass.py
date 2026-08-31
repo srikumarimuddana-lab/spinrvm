@@ -439,3 +439,21 @@ class TestCreateRideSurgeBypass:
         assert corp_fare > 0
         assert personal_fare > corp_fare
         assert personal_fare / corp_fare == pytest.approx(1.5, rel=0.01)
+
+    def test_unclamped_upstream_surge_is_clamped_at_charge_site(self, test_client, rider_override):
+        """#4638 finding 1: booking.py is the one place that persists the
+        CHARGED fare, so it must not trust an upstream fare-list builder's
+        surge_multiplier at face value. A hypothetical unclamped value from
+        _fares_for_location_impl (every real builder already clamps, but
+        this is the one-site safety net for if any of them ever didn't)
+        must never reach the persisted ride row above SURGE_CAP."""
+        from backend.utils.surge_engine import SURGE_CAP
+
+        captured: dict = {}
+        # Deliberately above SURGE_CAP -- simulates a missed clamp upstream.
+        patches = _start_patches(_patch_create_ride_deps(captured=captured, surge=10.0))
+        try:
+            test_client.post("/api/v1/rides", json=_BASE_RIDE_BODY, headers=_APP_CHECK_HEADERS)
+        finally:
+            _stop_patches(patches)
+        assert captured.get("surge_multiplier") == pytest.approx(SURGE_CAP)

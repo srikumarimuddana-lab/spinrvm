@@ -687,14 +687,58 @@ async def decline_ride(
     except Exception as _e:
         logger.error(f"Could not set offer cooldown key for ride {ride_id}: {_e}", exc_info=True)
 
-    # Early resolution: if no pending offers remain and ride is still
-    # searching, re-dispatch immediately instead of waiting for batch timeout.
     try:
         try:
             from ..rides import match_driver_to_ride
         except ImportError:
             from rides import match_driver_to_ride  # type: ignore
 
+        # An admin-direct-assignment (routes/admin/rides.py) sets
+        # status=driver_assigned + driver_id with no ride_offers row — so
+        # offer_claimed is always False for it. Without this branch the
+        # rides row was never reverted on decline: no ride_offers row means
+        # the "still searching" re-dispatch check below never fires (the
+        # ride is stuck at driver_assigned, not searching), and the only
+        # recovery was the in-process offer-expiry timer, which a pod
+        # restart between assignment and decline loses entirely, stranding
+        # the ride forever with the rider never notified (#4598 finding 1).
+        # Filtered on the exact pre-decline state so a concurrent operation
+        # (e.g. the ride already progressed) can't be clobbered.
+        if is_assigned and not offer_claimed:
+            reverted = await db_supabase.update_one(
+                "rides",
+                {"id": ride_id, "status": RideStatus.DRIVER_ASSIGNED, "driver_id": driver["id"]},
+                {
+                    "$set": {
+                        "status": RideStatus.SEARCHING,
+                        "driver_id": None,
+                        "driver_notified_at": None,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
+            )
+            if reverted:
+                rider_id = reverted.get("rider_id") or ride.get("rider_id")
+                if rider_id:
+                    await _deps.manager.send_personal_message(
+                        {
+                            "type": "driver_timeout",
+                            "ride_id": ride_id,
+                            "message": "Driver didn't respond. Finding another driver...",
+                        },
+                        f"rider_{rider_id}",
+                    )
+                spawn(match_driver_to_ride(ride_id))
+                logger.info(f"[DECLINE] admin-assigned ride {ride_id} reverted to searching — re-dispatching")
+            else:
+                logger.info(
+                    f"[DECLINE] admin-assigned ride {ride_id} was no longer in driver_assigned/{driver['id']} "
+                    "at decline time — no revert needed"
+                )
+            return {"success": True}
+
+        # Early resolution: if no pending offers remain and ride is still
+        # searching, re-dispatch immediately instead of waiting for batch timeout.
         fresh_ride = await db_supabase.get_ride(ride_id)
         if fresh_ride and fresh_ride.get("status") == "searching":
             remaining = await db_supabase.run_sync(

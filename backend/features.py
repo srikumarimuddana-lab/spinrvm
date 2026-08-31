@@ -437,10 +437,16 @@ async def admin_reset_surge_to_auto(area_id: str):
     # gate on. Without this, an area that was previously disabled would stay
     # gated off: the surge engine would keep skipping it and fare calc would
     # keep ignoring surge, even though this endpoint returned success.
+    #
+    # Also reset surge_multiplier to 1.0 (#4638 finding 3): leaving a parked
+    # manual multiplier in place meant it stayed live — still clamped to
+    # SURGE_CAP, so never a cap breach, but a transient wrong-tier price that
+    # doesn't reflect current demand — until the surge engine's next ~2-minute
+    # tick recalculates it from scratch.
     await db.update_one(
         "service_areas",
         {"id": area_id},
-        {"$set": {"surge_source": "auto", "surge_active": True, "surge_enabled": True}},
+        {"$set": {"surge_source": "auto", "surge_active": True, "surge_enabled": True, "surge_multiplier": 1.0}},
     )
     updated = await db.find_one("service_areas", {"id": area_id})
     return updated
@@ -853,7 +859,12 @@ async def compute_fare_estimate(
             break
     matched_area_id = matched_area.get("id") if matched_area else None
     if surge_override is not None:
-        surge = surge_override
+        # Clamp here too (#4638 finding 2) — both current callers hardcode
+        # Decimal("1") today, but this unconditionally overwrote the
+        # already-clamped area surge above with no cap of its own, so a
+        # future computed/admin-supplied override would silently exceed
+        # SURGE_CAP with nothing catching it.
+        surge = min(_fare_d(surge_override), _fare_d(SURGE_CAP))
 
     fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge)
     subtotal = _fare_f(fb.total_fare)

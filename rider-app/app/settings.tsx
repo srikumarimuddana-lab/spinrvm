@@ -33,10 +33,6 @@ export default function SettingsScreen() {
 
   const [pushEnabled, setPushEnabled] = useState(true);
   const [emailEnabled, setEmailEnabled] = useState(true);
-  // SMS defaults OFF to match the server default (get_preferences returns
-  // sms_enabled: False when no row exists) — a true default here caused an
-  // ON→OFF flash on first load.
-  const [smsEnabled, setSmsEnabled] = useState(false);
   const [showLangModal, setShowLangModal] = useState(false);
   const handleDarkModeToggle = (value: boolean) => {
     setTheme(value ? 'dark' : 'light');
@@ -51,12 +47,11 @@ export default function SettingsScreen() {
     const prefs: any = notificationPrefs;
     if (prefs == null) return;
     // Syncs local toggle state from the fetched preference; none of
-    // pushEnabled/emailEnabled/smsEnabled is a dep of this effect (only
+    // pushEnabled/emailEnabled is a dep of this effect (only
     // notificationPrefs is), so no loop.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (prefs.push_enabled != null) setPushEnabled(Boolean(prefs.push_enabled));
     if (prefs.email_enabled != null) setEmailEnabled(Boolean(prefs.email_enabled));
-    if (prefs.sms_enabled != null) setSmsEnabled(Boolean(prefs.sms_enabled));
   }, [notificationPrefs]);
 
   const handleNotificationToggle = (key: string, setter: (v: boolean) => void) => async (value: boolean) => {
@@ -100,9 +95,6 @@ export default function SettingsScreen() {
           <SettingToggle icon="mail" iconColor="#8B5CF6" iconBg="#EDE9FE"
             title={t('settings.email_notifications')} subtitle={t('settings.email_notifications_subtitle')}
             value={emailEnabled} onToggle={handleNotificationToggle('email_enabled', setEmailEnabled)} />
-          <SettingToggle icon="chatbubble" iconColor="#10B981" iconBg="#ECFDF5"
-            title={t('settings.sms_notifications')} subtitle={t('settings.sms_notifications_subtitle')}
-            value={smsEnabled} onToggle={handleNotificationToggle('sms_enabled', setSmsEnabled)} />
         </View>
 
         {/* Appearance */}

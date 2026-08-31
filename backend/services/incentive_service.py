@@ -28,30 +28,21 @@ over its own injected ``_deps.db_supabase`` (the reason ``offer_card.py``
 gave for duplicating the lookup in the first place).
 """
 
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import Any, Dict, List, Tuple
 
 try:
     from ..repositories._base import _postgrest_or_value
+    from ..utils.money import to_decimal as _d
 except ImportError:
     from repositories._base import _postgrest_or_value  # type: ignore
+    from utils.money import to_decimal as _d  # type: ignore
 
-_TWO_PLACES = Decimal("0.01")
-
-# Superset of the columns the call sites need: ``id`` for a claim row, the
-# rest for the driver-facing chip. One select keeps every caller on the same
-# row shape.
-INCENTIVE_SELECT = "id, name, bonus_amount, incentive_type, service_area_id, vehicle_type_id"
-
-
-def _d(v: Any) -> Decimal:
-    """Convert any numeric value to Decimal without float precision loss."""
-    return Decimal(str(v))
-
-
-def _round(v: Decimal) -> Decimal:
-    """Round a Decimal to 2 decimal places (ROUND_HALF_UP)."""
-    return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+# What the callers actually read: the name and amount for the driver-facing
+# chip, plus the two scoping columns the filter needs back. The settlement
+# paths still run their own query (see the module docstring), so no caller
+# needs the row's ``id``.
+INCENTIVE_SELECT = "name, bonus_amount, incentive_type, service_area_id, vehicle_type_id"
 
 
 async def match_ride_incentives(db, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -106,10 +97,10 @@ def incentive_display_payload(
     items = [
         {
             "name": r.get("name") or "Incentive",
-            "bonus_amount": float(_round(_d(r.get("bonus_amount") or 0))),
+            "bonus_amount": float(_d(r.get("bonus_amount") or 0)),
             "incentive_type": r.get("incentive_type") or "per_ride",
         }
         for r in rows
     ]
-    total = _round(sum((_d(r.get("bonus_amount") or 0) for r in rows), Decimal("0")))
+    total = sum((_d(r.get("bonus_amount") or 0) for r in rows), Decimal("0"))
     return items, float(total)

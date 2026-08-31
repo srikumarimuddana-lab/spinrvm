@@ -811,6 +811,7 @@ async def complete_ride(
     # Freeze the full breakdown so totals never drift from recomputation.
     # _total_bonus comes from the incentive block above; default to 0 if
     # the variable wasn't set (incentive block errored before assignment).
+    _earnings_snapshot = None
     try:
         # The driver's ride-fare share = total_fare − booking − airport (the
         # driver keeps the minimum-fare uplift, 0% commission). Derive from the
@@ -835,6 +836,7 @@ async def complete_ride(
             tax=ride.get("tax_amount") or 0,
             cancel_fee=ride.get("cancellation_fee_driver") or 0,
         )
+        _earnings_snapshot = _snapshot
         await db_supabase.update_one("rides", {"id": ride_id}, {"driver_earnings_snapshot": _snapshot})
     except Exception:
         logger.error("complete_ride: driver_earnings_snapshot failed for ride %s", ride_id, exc_info=True)
@@ -996,6 +998,17 @@ async def complete_ride(
         )
 
     response = serialize_ride_for_driver(completed_ride)
+    # rides.driver_earnings is fare-only by design — the bonus lives in
+    # ride_incentive_claims. Without these two fields the post-trip panel has
+    # only the fare to render, so a driver who was quoted fare+bonus at offer
+    # time and through the whole trip watches the figure drop the moment they
+    # tap Complete. Same names get_ride() uses, so both driver screens read one
+    # vocabulary. total_earned comes from the frozen snapshot's exact Decimal
+    # sum; if that write failed above (already logged at error) the field is
+    # omitted and the client falls back to driver_earnings.
+    response["incentive_amount"] = float(_total_bonus.quantize(Decimal("0.01")))
+    if _earnings_snapshot is not None:
+        response["total_earned"] = _earnings_snapshot["total"]
     response["location_ack"] = completion_location.location_ack
     response["legacy_client_missing_tail"] = completion_location.legacy_client_missing_tail
     response["completion_distance_band"] = completion_location.distance_band

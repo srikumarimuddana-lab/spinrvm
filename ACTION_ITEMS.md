@@ -11784,6 +11784,36 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 16 candidates from the broader sweep (6
   driver-app candidates; 9 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 20 done: `admin-dashboard/src/app/dashboard/rides/_components/create-ride-modal.tsx`'s
+  `handleSubmit` rider/pickup/dropoff/fare validation (fourth
+  admin-dashboard candidate, money tier — admin fare override).**
+  Extracted the four sequential early-return checks (rider selected,
+  pickup selected, dropoff selected, total-fare override is a
+  non-negative number) into new
+  `admin-dashboard/src/lib/createRideFormSchema.ts`
+  (`getCreateRideFormError` + one predicate per check + a documentation
+  zod schema). Pure extraction, byte-for-byte identical to the original
+  four `if` blocks + `setError(...)` calls — no bug found, no behavior
+  change; three non-null assertions added at the payload fields that
+  lost TS control-flow narrowing from the removed inline checks (a
+  type-only change, not a runtime one — the schema call guarantees the
+  same non-null invariant). New
+  `admin-dashboard/src/lib/__tests__/createRideFormSchema.test.ts` (11
+  accept/reject cases). Verification: 11/11 new tests pass; full
+  admin-dashboard suite (`vitest run`) 48/48 suites, 484/484 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 4 pre-existing
+  `react-hooks/set-state-in-effect` warnings, unchanged by this diff;
+  **real production build** (`npm run build`) completed successfully.
+  Blast-radius grep confirmed no other file duplicates this form's
+  distinctive error copy. Submit button's `disabled` prop duplicates
+  three of the four checks but also includes `loading` (not an exact
+  duplicate) and was left untouched, same discipline as prior steps.
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-admin-create-ride-zod-step20.md`.
+  **Still open:** the remaining 15 candidates from the broader sweep (6
+  driver-app candidates; 8 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

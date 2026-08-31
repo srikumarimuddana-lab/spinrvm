@@ -100,7 +100,13 @@ class MCPAuthMiddleware:
             return
 
         settings = await get_app_settings()
-        if not settings.get("ai_mcp_enabled"):
+        # Two switches, both must be on — same invariant as every other AI
+        # entry point (orchestrator.py, public_assistant.py, support_assistant.py).
+        # Without this, an operator flipping the global ai_assistant_enabled
+        # kill switch off (the "stop sending user data to the third-party LLM
+        # provider" incident lever) would not actually stop /mcp if
+        # ai_mcp_enabled was separately left on (#4641).
+        if not settings.get("ai_assistant_enabled") or not settings.get("ai_mcp_enabled"):
             await _send_json(send, 503, {"detail": "MCP is disabled"})
             return
 

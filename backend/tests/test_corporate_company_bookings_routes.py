@@ -259,6 +259,54 @@ async def test_list_bookings_section_filter_excludes_other_sections():
     assert [b["ride_id"] for b in result["bookings"]] == ["r1"]
 
 
+@pytest.mark.anyio
+async def test_list_bookings_section_filter_does_not_under_report_across_pages():
+    """#4639 Finding 3 regression: section_id must narrow the DB query
+    (via a resolved corporate_member_id $in list) *before* skip/limit are
+    applied — filtering in Python after a paginated fetch can silently
+    return fewer than `limit` rows (or none) even when more matching rides
+    exist beyond the fetched page. This mock enforces `limit`/offset the
+    way PostgREST actually would, so it fails if section_id is only
+    applied post-fetch."""
+    from backend.routes.corporate_company_bookings import list_bookings
+
+    # 3 rides for sec_a's member, but ride r0 belongs to a different
+    # section and sorts first (newest). A naive "fetch limit=1, then
+    # Python-filter by section" would return r0, find it doesn't match
+    # sec_a, and hand back an empty page — even though sec_a rides exist.
+    all_rides = [
+        {"id": "r0", "corporate_member_id": "member_other", "rider_id": None},
+        {"id": "r1", "corporate_member_id": "member_1", "rider_id": None},
+        {"id": "r2", "corporate_member_id": "member_1", "rider_id": None},
+    ]
+    member_rows = [
+        {"id": "member_1", "section_id": "sec_a"},
+        {"id": "member_other", "section_id": "sec_b"},
+    ]
+
+    async def _get_rows(table, filters, **kwargs):
+        if table == "corporate_members":
+            if filters.get("section_id") == "sec_a":
+                return [m for m in member_rows if m["section_id"] == "sec_a"]
+            return member_rows
+        if table == "rides":
+            member_filter = filters.get("corporate_member_id")
+            rows = all_rides
+            if isinstance(member_filter, dict) and "$in" in member_filter:
+                rows = [r for r in rows if r["corporate_member_id"] in member_filter["$in"]]
+            limit = kwargs.get("limit", 50)
+            offset = kwargs.get("offset", 0)
+            return rows[offset : offset + limit]
+        return []
+
+    with patch(_CCB + "db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+        result = await list_bookings(_ADMIN_CTX, status=None, member_id=None, section_id="sec_a", date_from=None, date_to=None, skip=0, limit=1)
+
+    # limit=1 should still surface a real sec_a ride, not an empty page
+    # from r0 (a different section) consuming the only DB-fetched slot.
+    assert [b["ride_id"] for b in result["bookings"]] == ["r1"]
+
+
 # ── cancel_booking ─────────────────────────────────────────────────────────
 
 

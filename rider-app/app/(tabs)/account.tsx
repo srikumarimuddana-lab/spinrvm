@@ -308,7 +308,11 @@ export default function AccountScreen() {
             <View style={styles.card}>
               <MenuRow styles={styles} colors={colors} icon="bag-handle" iconColor="#F97316" iconBg="rgba(249, 115, 22, 0.1)" label="Lost & Found" onPress={() => router.push('/lost-and-found' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)" label="Help Center" onPress={() => router.push('/support' as any)} />
+              {/* #4640 Finding 3: was hardcoded #2563EB, an undocumented third
+                  blue distinct from the theme's colors.info -- this row sits in
+                  the normal themed surface, so it adapts with the theme like
+                  everything else here. */}
+              <MenuRow styles={styles} colors={colors} icon="help-circle" iconColor={colors.info} iconBg={`${colors.info}1A`} label="Help Center" onPress={() => router.push('/support' as any)} />
             </View>
           </View>
 

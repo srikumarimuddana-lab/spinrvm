@@ -22,6 +22,18 @@ import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
+// #4640 Finding 3: the "Imported from the previous app" pill below sits on a
+// hardcoded rgba(255,255,255,0.95) background so it stays legible over the
+// map behind it -- that background is deliberately theme-independent (never
+// goes dark). Its icon/text color is therefore ALSO deliberately fixed
+// rather than pulled from colors.info: the theme's dark-mode info color
+// (#0A84FF) is tuned for a dark surface, and using it here against a
+// near-white pill would swap a documented, intentional exception for an
+// undocumented contrast regression. Not the same fix as the Help Center
+// icons elsewhere in this finding, which DO live on the normal themed
+// surface and were switched to colors.info.
+const ROUTE_STATUS_PILL_ICON_COLOR = '#2563EB';
+
 export default function RideDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
@@ -274,7 +286,7 @@ export default function RideDetailScreen() {
                             modal instead. */}
                         {isImported && (
                             <View style={styles.routeStatusPill}>
-                                <Ionicons name="archive-outline" size={14} color="#2563EB" />
+                                <Ionicons name="archive-outline" size={14} color={ROUTE_STATUS_PILL_ICON_COLOR} />
                                 <Text style={styles.routeStatusText} numberOfLines={2}>
                                     Imported from the previous app — no GPS was recorded for this ride
                                 </Text>
@@ -615,7 +627,7 @@ function createStyles(colors: ThemeColors) {
                 flexDirection: 'row', alignItems: 'center', gap: 5,
                 backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7,
             },
-            routeStatusText: { flex: 1, color: '#2563EB', fontSize: 11, fontWeight: '600' },
+            routeStatusText: { flex: 1, color: ROUTE_STATUS_PILL_ICON_COLOR, fontSize: 11, fontWeight: '600' },
         content: { padding: 16 },
         statusRow: {
             flexDirection: 'row',

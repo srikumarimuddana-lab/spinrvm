@@ -145,6 +145,10 @@ export interface Driver {
   vehicle_year?: number;
   vehicle_vin?: string;
   license_plate: string;
+  // Driver's licence (not the vehicle plate above) — ACTION_ITEMS.md B14.
+  // Optional: ~22 already-onboarded drivers have neither on file.
+  license_number?: string;
+  license_class?: string;
   rating: number;
   total_rides: number;
   is_online: boolean;

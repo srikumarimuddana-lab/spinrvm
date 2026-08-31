@@ -280,6 +280,43 @@ class TestUpdateMyDriver:
         mock_resolve.assert_awaited_once_with("sa-regina")
         assert captured["payload"]["service_area_id"] == "sa-regina"
 
+    def test_license_class_is_a_self_serve_vehicle_field(self):
+        """ACTION_ITEMS.md B14: license_class must be self-serve settable via
+        PUT /drivers/me, same as license_number already was, and go through
+        the same encrypting write path (_encrypt_driver_pii) rather than a
+        new one. Not a Vault PII field itself (only license_number is), but
+        must reach the DB write and — like every other vehicle/document
+        field — flip an ACTIVE driver to needs_review pending re-approval."""
+        from backend.routes import drivers as drv
+
+        driver = _driver(is_verified=True, status="active", is_online=True, license_class=None)
+        captured_updates = {}
+
+        async def _fake_update(table, write_filter, updates):
+            captured_updates.update(updates)
+            return driver
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", _fake_update),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch(
+                "backend.utils.driver_status_notifications.notify_driver_status_change",
+                AsyncMock(),
+            ),
+        ):
+            req = drv.UpdateDriverProfileRequest(license_class="5A")
+            asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID}))
+
+        assert captured_updates["license_class"] == "5A"
+        # Same re-review consequence license_number already has for an
+        # active driver — not new behaviour introduced by this field.
+        assert captured_updates["status"] == "needs_review"
+        assert captured_updates["is_online"] is False
+
 
 # ---------------------------------------------------------------------------
 # create_driver (admin/internal POST /drivers)

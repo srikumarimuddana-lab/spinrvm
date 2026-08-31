@@ -236,6 +236,11 @@ function usePushNotificationRouter() {
           router.push(`/driver/chat?rideId=${data.ride_id}` as any);
         } else if ((data?.type === 'lost_and_found' || data?.type === 'lost_and_found_message') && data?.case_id) {
           router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId: data.case_id } } as any);
+        } else if (data?.type === 'license_backfill_prompt') {
+          // ACTION_ITEMS.md B14 self-serve nudge — send the driver straight
+          // to the Profile tab, where the missing-licence banner (see
+          // app/driver/(tabs)/profile.tsx) opens the entry modal.
+          router.push('/driver/profile' as any);
         } else {
           router.push('/driver/notifications');
         }
@@ -298,6 +303,8 @@ function usePushNotificationRouter() {
               router.push(`/driver/chat?rideId=${data.ride_id}` as any);
             } else if ((data?.type === 'lost_and_found' || data?.type === 'lost_and_found_message') && data?.case_id) {
               router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId: data.case_id } } as any);
+            } else if (data?.type === 'license_backfill_prompt') {
+              router.push('/driver/profile' as any);
             } else {
               router.push('/driver/notifications' as any);
             }

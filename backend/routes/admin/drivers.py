@@ -382,6 +382,11 @@ _DRIVER_SEARCH_DRIVER_COLUMNS = ("name", "phone", "license_plate", "driver_code"
 _DRIVER_SEARCH_ID_COLUMNS = ("id", "user_id")
 _DRIVER_SEARCH_ID_MIN_LEN = 8
 
+# Shared with `missing_license` (GET /drivers below) and the self-serve nudge
+# campaign (POST /drivers/notify-missing-license) so both identify the exact
+# same cohort — ACTION_ITEMS.md B14.
+_MISSING_LICENSE_FILTER: Dict[str, Any] = {"$or": [{"license_number": None}, {"license_class": None}]}
+
 
 def _looks_like_id(term: str) -> bool:
     """True when a term is long enough and shaped like a pasted identifier."""
@@ -555,7 +560,7 @@ async def admin_get_drivers(
     if missing_license:
         if search:
             raise HTTPException(status_code=400, detail="missing_license cannot be combined with search")
-        filters["$or"] = [{"license_number": None}, {"license_class": None}]
+        filters["$or"] = _MISSING_LICENSE_FILTER["$or"]
 
     # Filter by profile-photo moderation status (photo lives on users). Used by
     # the admin "Pending photos" queue. No matching users → no drivers.
@@ -1467,6 +1472,69 @@ async def admin_nudge_driver_expiry(
     )
 
     return {"ok": True}
+
+
+@router.post("/drivers/notify-missing-license")
+async def admin_notify_missing_license(admin: dict = Depends(get_admin_user)):
+    """One-time push campaign prompting the missing-license cohort to
+    self-serve their own licence number/class in the driver app.
+
+    ACTION_ITEMS.md B14: the manual admin-backfill approach
+    (`/dashboard/driver-license-backfill`, unaffected by this endpoint) was
+    parked by the product owner on 2026-08-31 in favour of letting each
+    affected driver enter their own data via `PUT /drivers/me`. This is a
+    deliberate one-time admin-triggered POST, not a background loop — it
+    remediates a known, bounded (~22-driver) cohort rather than being an
+    ongoing system behaviour (CLAUDE.md "simplicity first"). Re-running it
+    is safe: the `missing_license` filter naturally drops any driver who has
+    since filled in their own data, so only drivers still missing it get
+    re-nudged.
+    """
+    drivers = await db_supabase.get_rows("drivers", _MISSING_LICENSE_FILTER, limit=500)
+
+    sent: List[str] = []
+    skipped: List[str] = []
+    failed: List[str] = []
+    for drv in drivers:
+        driver_id = drv.get("id")
+        user_id = drv.get("user_id")
+        if not user_id or drv.get("deleted_at"):
+            skipped.append(driver_id)
+            continue
+        try:
+            ok = await send_push_notification(
+                user_id,
+                "Add your driver's licence info",
+                "Please add your driver's licence number and class in the app to keep your account in good standing.",
+                data={"type": "license_backfill_prompt"},
+                target_app="driver",
+            )
+        except Exception:
+            logger.error(
+                "license backfill nudge push failed for driver %s",
+                driver_id,
+                exc_info=True,
+            )
+            failed.append(driver_id)
+            continue
+        (sent if ok else skipped).append(driver_id)
+        await _log_driver_activity(
+            driver_id,
+            "license_backfill_nudge_sent",
+            "Licence self-serve reminder sent",
+            "",
+            {"delivered": ok},
+        )
+
+    await log_admin_action(
+        admin,
+        "driver_license_backfill_nudge_campaign",
+        "drivers",
+        "bulk",
+        {"total": len(drivers), "sent": len(sent), "skipped": len(skipped), "failed": len(failed)},
+    )
+
+    return {"total": len(drivers), "sent": len(sent), "skipped": len(skipped), "failed": len(failed)}
 
 
 @router.put("/drivers/{driver_id}")

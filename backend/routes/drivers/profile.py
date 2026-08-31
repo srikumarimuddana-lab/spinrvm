@@ -113,6 +113,11 @@ class UpdateDriverProfileRequest(BaseModel):
     license_plate: Optional[str] = None
     vehicle_vin: Optional[str] = None
     license_number: Optional[str] = None
+    # Self-serve counterpart to license_number — ACTION_ITEMS.md B14. Not
+    # Vault PII (_shared._VAULT_PII_FIELDS covers license_number only); a
+    # licence class like "5" or "5A" carries no personal-identity value on
+    # its own.
+    license_class: Optional[str] = None
     license_expiry_date: Optional[str] = None
     insurance_expiry_date: Optional[str] = None
     vehicle_inspection_expiry_date: Optional[str] = None
@@ -154,6 +159,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         "license_plate",
         "vehicle_vin",
         "license_number",
+        "license_class",
         "license_expiry_date",
         "insurance_expiry_date",
         "vehicle_inspection_expiry_date",

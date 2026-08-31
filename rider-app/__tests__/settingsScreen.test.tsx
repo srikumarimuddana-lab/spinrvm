@@ -103,7 +103,7 @@ function findButtonByText(r: TestRenderer.ReactTestRenderer, text: string) {
 
 // SettingToggle instances carry a `title` prop (the i18n key) -- selecting by
 // that, rather than by boolean `value`, avoids ambiguity when multiple
-// toggles share the same on/off state (push/email/sms all default true).
+// toggles share the same on/off state (push/email both default true).
 function findToggleByTitle(r: TestRenderer.ReactTestRenderer, title: string) {
   return r.root.findByProps({ title });
 }
@@ -126,11 +126,10 @@ afterEach(() => {
 
 describe('SettingsScreen', () => {
   it('syncs local toggle state from fetched notification preferences', async () => {
-    mockNotificationPrefsData = { push_enabled: false, email_enabled: false, sms_enabled: true };
+    mockNotificationPrefsData = { push_enabled: false, email_enabled: false };
     const r = await renderScreen();
     expect(findToggleByTitle(r, 'settings.push_notifications').props.value).toBe(false);
     expect(findToggleByTitle(r, 'settings.email_notifications').props.value).toBe(false);
-    expect(findToggleByTitle(r, 'settings.sms_notifications').props.value).toBe(true);
   });
 
   it('toggles push on directly when permission is already granted', async () => {
@@ -203,11 +202,10 @@ describe('SettingsScreen', () => {
   });
 
   it('only syncs the preference fields that are present, leaving the others at their defaults', async () => {
-    mockNotificationPrefsData = { push_enabled: false }; // email_enabled/sms_enabled absent
+    mockNotificationPrefsData = { push_enabled: false }; // email_enabled absent
     const r = await renderScreen();
     expect(findToggleByTitle(r, 'settings.push_notifications').props.value).toBe(false);
     expect(findToggleByTitle(r, 'settings.email_notifications').props.value).toBe(true); // untouched default
-    expect(findToggleByTitle(r, 'settings.sms_notifications').props.value).toBe(false); // untouched default
   });
 
   it('leaves the push toggle at its default when push_enabled itself is absent from the fetched preferences', async () => {
@@ -216,7 +214,7 @@ describe('SettingsScreen', () => {
     expect(findToggleByTitle(r, 'settings.push_notifications').props.value).toBe(true); // untouched default
   });
 
-  it('toggles email/sms notifications directly (no permission check, since only push needs it)', async () => {
+  it('toggles email notifications directly (no permission check, since only push needs it)', async () => {
     const r = await renderScreen();
     const emailToggle = findToggleByTitle(r, 'settings.email_notifications');
     await act(async () => {

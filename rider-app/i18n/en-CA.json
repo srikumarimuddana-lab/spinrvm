@@ -120,8 +120,6 @@
     "push_notifications_subtitle": "Ride updates and alerts",
     "email_notifications": "Email Notifications",
     "email_notifications_subtitle": "Receipts and promotions",
-    "sms_notifications": "SMS Notifications",
-    "sms_notifications_subtitle": "OTP and ride confirmations",
     "appearance": "Appearance",
     "dark_mode": "Dark Mode",
     "dark_mode_subtitle": "Reduce eye strain at night",

@@ -4,7 +4,7 @@
  * accessibilityRole/State).
  *
  * Pins:
- *  - the four notification toggles (push/ride/earnings/promotions) each
+ *  - the three notification toggles (push/ride/earnings) each
  *    call updatePreferences.mutate with their own key, and revert on error
  *  - the two marketing (CASL) toggles PUT /marketing/preferences and revert
  *    optimistically on failure
@@ -125,7 +125,6 @@ describe('notification toggles', () => {
     ['settings.pushNotifications', 'push_enabled'],
     ['settings.rideAlerts', 'ride_updates'],
     ['settings.earningsSummary', 'earnings_summary'],
-    ['settings.promotions', 'promotions'],
   ];
   it.each(cases)('%s toggles and mutates key %s', async (label, key) => {
     const screen = render(<SettingsScreen />);
@@ -150,11 +149,10 @@ describe('notification toggles', () => {
   });
 
   it('hydrates from the prefs query response', async () => {
-    mockPrefsData = { push_enabled: false, ride_updates: false, earnings_summary: false, promotions: true };
+    mockPrefsData = { push_enabled: false, ride_updates: false, earnings_summary: false };
     const screen = render(<SettingsScreen />);
     await flush();
     expect(screen.getByLabelText('settings.pushNotifications').props.accessibilityState.checked).toBe(false);
-    expect(screen.getByLabelText('settings.promotions').props.accessibilityState.checked).toBe(true);
   });
 });
 

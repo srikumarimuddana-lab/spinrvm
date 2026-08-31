@@ -16010,9 +16010,13 @@ Remaining, roughly in order of user impact:
     ungated because it may carry "safety, outage" content, and the endpoint
     has no sub-classification to separate that from routine info, so gating
     it risks silently suppressing an operational/outage broadcast). No
-    remaining call site is both real and safe to gate. Frontend follow-up:
-    remove the "SMS Notifications" toggle from rider-app/driver-app
-    settings (not verified/edited this session — backend-only scope).
+    remaining call site is both real and safe to gate. **Frontend follow-up
+    done 2026-08-31**: removed the "SMS Notifications" toggle (`rider-app`
+    only — driver-app never had one) from `rider-app/app/settings.tsx`
+    (state, sync effect, and render row), plus the now-orphaned
+    `settings.sms_notifications`/`settings.sms_notifications_subtitle` i18n
+    keys from `rider-app/i18n/en-CA.json` and `fr-CA.json` (the only locale
+    files that had them). See `docs/change-log/2026-08-31-n9-dead-toggle-removal.md`.
   - **`safety_alerts` — determined DEAD, no safe wiring found; actively
     unsafe to wire.** The only `priority="safety"` push in the codebase is
     the SOS self-confirmation in `routes/rides/safety.py`
@@ -16021,8 +16025,10 @@ Remaining, roughly in order of user impact:
     *bypasses* the opt-out by design. Letting a `safety_alerts` toggle
     suppress that would directly contradict CLAUDE.md's safety guardrails.
     No other "safety advisory"-style informational push exists to gate
-    instead. Frontend follow-up: remove the toggle (not verified/edited
-    this session).
+    instead. **Frontend follow-up checked 2026-08-31**: no `safety_alerts`
+    toggle exists in either app's UI (rider-app or driver-app) — grepped
+    both apps' `app/`, `i18n/`, and `store/` trees for `safety_alerts` and
+    "Safety Alerts" string variants, no matches. Nothing to remove.
   - **`promotions` — determined DEAD/redundant, not wired.** Spinr already
     has a legally-scoped CASL consent system for marketing content
     (`services/marketing_consent.py`'s `marketing_preferences` table, migration
@@ -16031,10 +16037,14 @@ Remaining, roughly in order of user impact:
     as a second, differently-scoped opt-in for the same channel/category
     would create two sources of truth for "may we send this user
     promotional content" — a correctness and compliance risk, not a safe
-    win. Frontend follow-up: remove the toggle, or (better, not decided
-    here) point it at the existing `marketing_preferences.push_opt_in` /
-    `sms_opt_in` read path if product wants a single settings-screen
-    control — a product decision, not a backend one.
+    win. **Frontend follow-up done 2026-08-31**: removed (not repointed —
+    the repoint-to-`marketing_preferences` option stays an undecided
+    product call, per this entry's own text) the "Promotions & Offers"
+    toggle (`driver-app` only — rider-app never had one) from
+    `driver-app/app/driver/settings.tsx` (state, sync effect, and render
+    row), plus the now-orphaned `settings.promotions`/`settings.promotionsDesc`
+    i18n keys from `driver-app/i18n/en.json`, `fr.json`, `es.json`. See
+    `docs/change-log/2026-08-31-n9-dead-toggle-removal.md`.
   - Tests: `backend/tests/test_notification_preferences.py` (4 new cases —
     ride_updates suppresses/doesn't-suppress by type, dispatch-priority
     bypass, opted-in still sends) and

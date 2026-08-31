@@ -66,7 +66,6 @@ export default function SettingsScreen() {
     const [pushNotifications, setPushNotifications] = useState(true);
     const [rideAlerts, setRideAlerts] = useState(true);
     const [earningsSummary, setEarningsSummary] = useState(true);
-    const [promotions, setPromotions] = useState(false);
 
     // Marketing consent (CASL): express opt-in → DEFAULTS OFF. Backed by
     // /marketing/preferences (separate from notification_preferences above:
@@ -134,7 +133,6 @@ export default function SettingsScreen() {
         if (prefs.push_enabled != null) setPushNotifications(Boolean(prefs.push_enabled));
         if (prefs.ride_updates != null) setRideAlerts(Boolean(prefs.ride_updates));
         if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));
-        if (prefs.promotions != null) setPromotions(Boolean(prefs.promotions));
     }, [prefsResponse]);
 
     const savePreference = (key: string, value: boolean, revert: () => void) => {
@@ -268,8 +266,6 @@ export default function SettingsScreen() {
                         {renderToggle(t('settings.rideAlerts'), t('settings.rideAlertsDesc'), rideAlerts, handleToggle('ride_updates', setRideAlerts), 'car', colors.orange)}
                         <View style={styles.cardDivider} />
                         {renderToggle(t('settings.earningsSummary'), t('settings.earningsSummaryDesc'), earningsSummary, handleToggle('earnings_summary', setEarningsSummary), 'wallet', colors.gold)}
-                        <View style={styles.cardDivider} />
-                        {renderToggle(t('settings.promotions'), t('settings.promotionsDesc'), promotions, handleToggle('promotions', setPromotions), 'gift', colors.primaryDark)}
                     </View>
                 </View>
 

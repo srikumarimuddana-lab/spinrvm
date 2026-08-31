@@ -120,6 +120,29 @@ See CLAUDE.md for the auto-mode tier table. Additional payment rules:
   (503, ride left `payment_status="pending"`) if the master wallet is also exhausted or at its
   floor — it never reaches the rider's personal card.
 - All wallet deltas go through `corporate_wallet_apply_delta` Postgres function (`SECURITY DEFINER`, row lock)
+- **#4074 (open) — unresolved conflict between two decisions, do not "fix" from this file alone.**
+  #4074 reports that `settle_corporate`'s in-flow settlement debits the tip-inclusive
+  `total_charge` from the employer's allowance/master wallet with no separate tip tracking. A
+  2026-08-31 pass on this file recommended "tips are always personal, never billed to the company"
+  (Uber/Lyft-for-Business convention) as the fix direction — but that reading was made without
+  checking `charge_late_corporate_tip` (`backend/services/payment_service.py`, added 2026-08-17,
+  see `docs/change-log/2026-08-17-wallet-corporate-late-tip-debit.md`), which is a **different,
+  already-shipped, deliberately-reviewed decision that late tips on corporate rides ARE
+  collected from the company's allowance/master wallet** ("trust-first": the driver always gets
+  the full tip credit, Spinr collects from the company when it can rather than absorbing the cost
+  itself). These two decisions contradict each other on the same question — which one is
+  authoritative for #4074's in-flow fix is a real open product call, not something to resolve
+  silently in a doc pass. Two ways to close the gap, and they lead to different code:
+  1. **The late-tip decision is right; #4074's fix should match it** — keep billing the tip to the
+     company, but fix the *reporting* gap: give `ride_payment_sources` (and the billing
+     summary/PDF/policy `final_fare`/allowance notification) an explicit tip column so a
+     tip-inclusive company debit is visible and attributable instead of silently folded into
+     "fare".
+  2. **Tips should never be company-billed; the 2026-08-17 late-tip decision should be revisited
+     too** — a bigger call, since it would mean walking back a reviewed, shipped, tested change
+     for a different (if related) code path.
+  No code has been changed for #4074 as part of this pass — flagged back to the user rather than
+  picked silently, per CLAUDE.md's "escalate, don't silently ship" rule for money-path ambiguity.
 - Allowance reset loop (`allowance_reset.py`) runs monthly; uses `auto_approved_this_period` flag for replay safety
 - Never bypass allowance caps — the allowance→master fallback above enforces the per-member cap
   and the master wallet's floor rather than over-spending either; it does not extend to card

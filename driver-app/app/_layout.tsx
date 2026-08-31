@@ -34,6 +34,7 @@ import {
 } from '@shared/services/firebase';
 import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
+import { setLogRocketInstance } from '@shared/services/logRocketInstance';
 
 // Arm the sign-out location teardown at module scope, before any screen mounts:
 // the API client's 401 interceptor can trigger a logout before the dashboard
@@ -177,6 +178,10 @@ if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
     console.log('[LogRocket] unavailable:', e);
   }
 }
+// Publish the (possibly null) reference so useLogRocketPrivacyScreen — used
+// on payment/document/SOS screens (#1231 finding 17) — doesn't need to
+// duplicate the guard above.
+setLogRocketInstance(LogRocket);
 
 // ── Module-level side effects (must run before React mounts) ──────────
 

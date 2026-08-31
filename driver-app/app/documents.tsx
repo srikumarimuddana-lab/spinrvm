@@ -17,6 +17,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { ScreenHeader } from '../components/ScreenHeader';
 
 
@@ -50,6 +51,8 @@ export default function DocumentsScreen() {
     const insets = useSafeAreaInsets();
     const { fetchDriverProfile, driver } = useAuthStore();
     const { colors } = useTheme();
+    // #1231 finding 17: ID/vehicle document photos must never enter session replay.
+    useLogRocketPrivacyScreen();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [loading, setLoading] = useState(true);
     const [requirements, setRequirements] = useState<Requirement[]>([]);

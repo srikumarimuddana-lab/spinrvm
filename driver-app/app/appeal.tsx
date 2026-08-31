@@ -119,7 +119,7 @@ export default function AppealScreen() {
                             <Text style={styles.sectionTitle}>Submit an appeal</Text>
                             <Text style={styles.helperText}>
                                 Tell us why you believe your account&apos;s current status should be reviewed. A different
-                                reviewer than the one who made the original decision will look at your appeal.
+                                reviewer than the one who made the original decision is expected to look at your appeal.
                             </Text>
                             <TextInput
                                 style={styles.textInput}

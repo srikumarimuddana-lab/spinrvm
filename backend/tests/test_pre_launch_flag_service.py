@@ -159,13 +159,62 @@ def test_pre_launch_driver_with_insurance_period_is_excluded(monkeypatch):
     assert plan.driver_candidates == []
 
 
-def test_post_launch_dormant_driver_is_not_a_candidate(monkeypatch):
-    """A dormant driver whose OWN created_at is post-launch is out of scope
-    for this tool entirely (not pre-launch data), even if never active."""
+def test_post_launch_dormant_legacy_driver_is_now_a_candidate(monkeypatch):
+    """Broadened 2026-08-31: the created_at < LAUNCH_DATE gate was dropped
+    (many legacy rows carry their real old-app signup date, which can
+    postdate Spinr's own launch since the old app kept accepting signups
+    until its Oct 31 decommission). A dormant legacy driver is a candidate
+    regardless of created_at now -- this replaces the old, opposite-asserting
+    test of the same name."""
     store = _fresh_store(drivers=[_driver("drv-1", created_at="2026-05-01")])
     _use(monkeypatch, store)
     plan = svc.build_pre_launch_flag_plan()
+    assert [c.id for c in plan.driver_candidates] == ["drv-1"]
+
+
+def test_linked_driver_with_only_mongo_driver_history_is_a_candidate(monkeypatch):
+    """Broadened 2026-08-31: a driver the mongo importer linked to an
+    existing rider account or enriched onto an existing driver carries
+    mongo_driver_history but no top-level 'source' key -- it must still be
+    eligible, not silently excluded by requiring 'source'."""
+    row = {
+        "id": "drv-1",
+        "created_at": "2026-02-01",
+        "legacy_import_metadata": {"mongo_driver_history": [{"old_driver_id": "abc"}]},
+    }
+    store = _fresh_store(drivers=[row])
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    assert [c.id for c in plan.driver_candidates] == ["drv-1"]
+
+
+def test_linked_driver_with_a_ride_is_still_excluded(monkeypatch):
+    """The activity guard applies identically to the broadened
+    mongo_driver_history-only shape -- broadening candidacy must never widen
+    who the zero-activity exclusion protects."""
+    row = {
+        "id": "drv-1",
+        "created_at": "2026-02-01",
+        "legacy_import_metadata": {"mongo_driver_history": [{"old_driver_id": "abc"}]},
+    }
+    store = _fresh_store(
+        drivers=[row],
+        rides=[{"id": "ride-1", "driver_id": "drv-1", "created_at": "2026-06-01"}],
+    )
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
     assert plan.driver_candidates == []
+
+
+def test_driver_with_both_marker_keys_is_not_double_counted(monkeypatch):
+    """A driver matching both the 'source' and 'mongo_driver_history' fetch
+    queries (shouldn't normally happen, but the union-by-id must be safe if
+    it ever does) appears exactly once in the plan."""
+    row = _driver("drv-1", extra_meta={"mongo_driver_history": [{"old_driver_id": "abc"}]})
+    store = _fresh_store(drivers=[row])
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    assert [c.id for c in plan.driver_candidates] == ["drv-1"]
 
 
 def test_non_legacy_driver_is_never_a_candidate(monkeypatch):

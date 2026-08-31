@@ -13,21 +13,42 @@ Nothing is deleted or deactivated. This is a decision made explicitly, not a
 default: see docs/change-log/2026-08-30-pre-launch-flag-tool.md for the full
 reasoning and the AskUserQuestion exchange it came from.
 
-**Scope, and why it's narrower than "everything before 2026-03-30":**
+**Scope, and why it's activity-gated rather than date-gated:**
 
 - **Drivers**: a driver's own ``created_at`` predating launch does NOT by
-  itself mean the profile is test data — 33 of the 343 legacy-imported
-  drivers with a pre-launch ``created_at`` have driven a real ride or have a
-  real ``driver_insurance_periods`` row, meaning they onboarded during a
-  pre-launch beta/soft-launch window and are real, active drivers. Flagging
-  all 343 would have mislabeled those 33. The actual criterion here is
-  narrower and activity-based: legacy-imported (``legacy_import_metadata->>
-  'source'`` set), ``created_at`` before launch, AND **zero** rides ever
-  driven AND **zero** ``driver_insurance_periods`` rows ever — i.e. a
-  dormant profile with no real footprint at all. That's **310** drivers in
-  the reference dataset, not 343 (or the earlier, looser 252-via-``users
-  .created_at`` estimate given during initial investigation, before this
-  refinement).
+  itself mean the profile is test data — 33 of the original 343
+  source-tagged, pre-launch-``created_at`` drivers had driven a real ride or
+  had a real ``driver_insurance_periods`` row, meaning they onboarded during
+  a pre-launch beta/soft-launch window and are real, active drivers. The
+  criterion is therefore activity-based, not date-based: legacy-imported AND
+  **zero** rides ever driven AND **zero** ``driver_insurance_periods`` rows
+  ever — i.e. a dormant profile with no real footprint at all, regardless of
+  when its ``created_at`` falls.
+- **Broadened 2026-08-31 (owner decision)**, dropping two restrictions the
+  original version had:
+  - *"Legacy-imported" no longer requires a top-level ``source`` key.* It
+    also matches a ``mongo_driver_history`` key — the shape
+    ``driver_import_service.py``'s link/enrich split writes on a driver row
+    it linked to an existing rider account or enriched onto an existing
+    driver, rather than net-new-inserting (see that module's "existing-match
+    link/enrich policy"). Confirmed against production this is the complete
+    partition: of 910 total driver rows, 697+187 carry a top-level
+    ``source``, 25 carry only ``mongo_driver_history``, and exactly 1 (the
+    lone organic signup) carries neither — no third shape exists.
+  - *The ``created_at < LAUNCH_DATE`` gate is dropped entirely.* Many
+    legacy rows carry their *original* old-app signup date (the importer
+    preserves it rather than stamping import time), and the old app kept
+    accepting real signups well past Spinr's 2026-03-30 launch — it wasn't
+    decommissioned until Oct 31. Gating on that date left 272 of the 487
+    "Unnamed Legacy Driver" placeholder rows (themselves already confirmed
+    to have zero ride linkage — see the blank-name root-cause doc) sitting
+    unflagged and fully visible in the default admin Drivers list, for no
+    reason connected to whether they're real activity.
+  - The zero-activity guard itself is **unchanged and still unconditional**
+    — broadening what counts as "legacy-imported" or dropping the date gate
+    must never widen who the activity guard excludes. A driver with a real
+    ride or a real insurance-period row is never a candidate, full stop,
+    regardless of source shape or created_at.
 - **Rides**: no comparable ambiguity — a ride either happened or it didn't,
   and there is no real customer base to serve before launch by definition.
   Every ride with ``created_at`` before 2026-03-30 is flagged (25 in the
@@ -114,21 +135,40 @@ def _select_in(table: str, columns: str, column: str, values: list[str], chunk: 
     return out
 
 
-def _fetch_pre_launch_driver_candidates() -> list[FlagCandidate]:
-    """Legacy-imported drivers created before launch, not already flagged,
-    with zero rides ever driven and zero driver_insurance_periods rows.
-    Read-only.
-    """
-    legacy_pre_launch = (
+# Both top-level shapes a legacy-imported driver row can carry -- see the
+# module docstring's "Broadened 2026-08-31" note. Checked as two separate
+# queries and unioned by id rather than one PostgREST `.or_()` call: this
+# matches the codebase's existing "resolve ids from N queries, then combine"
+# convention (e.g. admin_get_drivers's photo_status filter) and keeps each
+# query a plain single-key JSONB-path filter, which is what the shared test
+# fake and every other caller of this pattern already expects.
+_LEGACY_IMPORT_MARKER_KEYS = ("source", "mongo_driver_history")
+
+
+def _fetch_drivers_with_metadata_key(key: str) -> list[dict[str, Any]]:
+    """Drivers carrying a non-null legacy_import_metadata->>key, not already
+    pre-launch-flagged. Read-only."""
+    return (
         supabase.table("drivers")
         .select("id,legacy_import_metadata")
-        .filter("legacy_import_metadata->>source", "not.is", "null")
+        .filter(f"legacy_import_metadata->>{key}", "not.is", "null")
         .filter("legacy_import_metadata->>pre_launch_test", "is", "null")
-        .lt("created_at", LAUNCH_DATE)
         .execute()
         .data
         or []
     )
+
+
+def _fetch_pre_launch_driver_candidates() -> list[FlagCandidate]:
+    """Legacy-imported drivers, not already flagged, with zero rides ever
+    driven and zero driver_insurance_periods rows. Read-only.
+    """
+    by_id: dict[str, dict[str, Any]] = {}
+    for key in _LEGACY_IMPORT_MARKER_KEYS:
+        for row in _fetch_drivers_with_metadata_key(key):
+            if row.get("id"):
+                by_id[row["id"]] = row
+    legacy_pre_launch = list(by_id.values())
     if not legacy_pre_launch:
         return []
 

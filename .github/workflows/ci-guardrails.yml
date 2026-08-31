@@ -1024,6 +1024,33 @@ jobs:
           )
           OVERRIDE = re.compile(r'--\s*migration-override-ok\s*:', re.IGNORECASE)
 
+          def strip_sql_comments(text):
+              # Same false-positive class as the dangerous-pattern scan above
+              # (see #4791): a migration's own header prose can say something
+              # like "... CREATE OR REPLACE FUNCTION is idempotent ..." --
+              # without stripping comments first, COR.findall() below reads
+              # that as a real target named "is". Strip comments so only
+              # executable SQL is scanned for real CREATE OR REPLACE targets.
+              text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+              out_lines = []
+              for line in text.split('\n'):
+                  result = []
+                  in_string = False
+                  i = 0
+                  while i < len(line):
+                      ch = line[i]
+                      if ch == "'":
+                          in_string = not in_string
+                          result.append(ch)
+                          i += 1
+                          continue
+                      if not in_string and ch == '-' and i + 1 < len(line) and line[i + 1] == '-':
+                          break
+                      result.append(ch)
+                      i += 1
+                  out_lines.append(''.join(result))
+              return '\n'.join(out_lines)
+
           def target_name(raw: str) -> str:
               """Bare object name, schema-insensitive.
 
@@ -1039,10 +1066,12 @@ jobs:
                   content = open(fpath).read()
               except OSError:
                   continue
+              # OVERRIDE is checked against the raw content (not comment-
+              # stripped) -- the annotation itself lives in a comment.
               if OVERRIDE.search(content):
                   print(f"  Skipping {fpath}: migration-override-ok annotation found.")
                   continue
-              for name in COR.findall(content):
+              for name in COR.findall(strip_sql_comments(content)):
                   pr_targets.setdefault(target_name(name), []).append(fpath)
 
           if not pr_targets:
@@ -1065,7 +1094,7 @@ jobs:
                       content = open(fpath).read()
                   except OSError:
                       continue
-                  for name in COR.findall(content):
+                  for name in COR.findall(strip_sql_comments(content)):
                       if target_name(name) in pr_targets:
                           conflicts.append({
                               'target': name,

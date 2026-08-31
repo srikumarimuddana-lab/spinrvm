@@ -9,6 +9,7 @@ import type {
 } from "@/lib/api";
 import {
     getCompanyPolicy,
+    getCompanyPolicyAffectedRidesCount,
     patchCompanyPolicy,
 } from "@/lib/companyApi";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,16 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Plus, Save, Trash2 } from "lucide-react";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
@@ -66,6 +77,8 @@ export default function PolicyPage() {
     const [saving, setSaving] = useState(false);
     const [feedback, setFeedback] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [affectedCount, setAffectedCount] = useState<number | null>(null);
+    const [confirming, setConfirming] = useState(false);
 
     const load = useCallback(async () => {
         if (!id) return;
@@ -105,12 +118,8 @@ export default function PolicyPage() {
 
     const invalidWindow = draft.allowed_time_windows.find((w) => w.end <= w.start);
 
-    const save = async () => {
+    const applyPolicySave = async () => {
         if (!id) return;
-        if (invalidWindow) {
-            setError("Every time window end must be after its start.");
-            return;
-        }
         setSaving(true);
         setError(null);
         setFeedback(null);
@@ -132,6 +141,42 @@ export default function PolicyPage() {
             setError(e instanceof Error ? e.message : "Save failed");
         } finally {
             setSaving(false);
+        }
+    };
+
+    // Option 4 of #2683 (admin confirmation UX): before saving, check how
+    // many currently in-flight rides this edit would affect. Those rides
+    // are never touched or cancelled by this change — they still settle
+    // under the policy in effect when they were booked — so a zero count
+    // saves immediately with no extra step, and a non-zero count just asks
+    // the admin to confirm they understand that before proceeding.
+    const save = async () => {
+        if (!id) return;
+        if (invalidWindow) {
+            setError("Every time window end must be after its start.");
+            return;
+        }
+        setError(null);
+        try {
+            const { count } = await getCompanyPolicyAffectedRidesCount(id);
+            if (count > 0) {
+                setAffectedCount(count);
+                return;
+            }
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Failed to check affected rides");
+            return;
+        }
+        await applyPolicySave();
+    };
+
+    const confirmSave = async () => {
+        setConfirming(true);
+        try {
+            await applyPolicySave();
+        } finally {
+            setConfirming(false);
+            setAffectedCount(null);
         }
     };
 
@@ -281,6 +326,31 @@ export default function PolicyPage() {
                     </div>
                 </>
             )}
+
+            <AlertDialog
+                open={affectedCount !== null}
+                onOpenChange={(open) => {
+                    if (!open) setAffectedCount(null);
+                }}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Confirm policy change</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This change affects {affectedCount} ride
+                            {affectedCount === 1 ? "" : "s"} already booked. They
+                            will still be charged under the policy that was in
+                            effect when they were booked. Continue?
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={confirming}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmSave} disabled={confirming}>
+                            {confirming ? "Saving…" : "Continue"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

@@ -389,6 +389,16 @@ export interface CorporatePolicy {
 export const getCompanyPolicy = (companyId: string) =>
     request<CorporatePolicy | Record<string, never>>(`/api/company/${companyId}/policy`);
 
+// Count of the company's current pre-pickup rides — used to warn an admin,
+// before they save a policy edit, how many already-booked rides it would
+// affect (GitHub #2683, admin confirmation UX). Read-only; never cancels
+// anything. Mirrors companyApi.ts's copy of the same call for the
+// company-portal surface — this internal admin page hits the identical
+// backend endpoint via a separate (admin-authenticated) client, so it needs
+// its own binding.
+export const getCompanyPolicyAffectedRidesCount = (companyId: string) =>
+    request<{ count: number }>(`/api/company/${companyId}/policy/affected-rides-count`);
+
 export const putCompanyPolicy = (
     companyId: string,
     body: Omit<CorporatePolicy, "id" | "company_id">

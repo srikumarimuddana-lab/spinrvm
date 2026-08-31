@@ -473,6 +473,61 @@ def test_get_policy_blocked_for_non_member(test_client, rider_override):
     assert resp.status_code == 403
 
 
+def test_affected_rides_count_filters_to_pre_pickup_statuses_and_company(test_client, rider_override):
+    """Count only reflects this company's pre-pickup rides — not in_progress,
+    completed, or cancelled rides, and not another company's rides."""
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=_ADMIN_MEMBERSHIPS),
+        ),
+        patch(
+            "routes.corporate_company.get_rows",
+            AsyncMock(return_value=[{"id": "r1"}, {"id": "r2"}, {"id": "r3"}]),
+        ) as m_get_rows,
+    ):
+        resp = test_client.get("/company/c1/policy/affected-rides-count")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"count": 3}
+    m_get_rows.assert_awaited_once()
+    assert m_get_rows.await_args.args[0] == "rides"
+    call_filters = m_get_rows.await_args.args[1]
+    assert call_filters["corporate_account_id"] == "c1"
+    assert set(call_filters["status"]["$in"]) == {
+        "scheduled",
+        "searching",
+        "driver_assigned",
+        "driver_accepted",
+        "driver_arrived",
+    }
+    assert "in_progress" not in call_filters["status"]["$in"]
+    assert "completed" not in call_filters["status"]["$in"]
+    assert "cancelled" not in call_filters["status"]["$in"]
+
+
+def test_affected_rides_count_zero_when_no_pre_pickup_rides(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=_ADMIN_MEMBERSHIPS),
+        ),
+        patch("routes.corporate_company.get_rows", AsyncMock(return_value=[])),
+    ):
+        resp = test_client.get("/company/c1/policy/affected-rides-count")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"count": 0}
+
+
+def test_affected_rides_count_requires_admin(test_client, rider_override):
+    """Plain member cannot call this endpoint — same guard as replace_policy/patch_policy."""
+    with patch(
+        "dependencies.company_guard.list_active_memberships_for_user",
+        AsyncMock(return_value=_MEMBER_MEMBERSHIPS),
+    ):
+        resp = test_client.get("/company/c1/policy/affected-rides-count")
+    assert resp.status_code == 403
+
+
 def test_put_policy_creates_when_none_exists(test_client, rider_override):
     """PUT replaces/creates policy; upsert_corporate_policy is called with full payload."""
     with (

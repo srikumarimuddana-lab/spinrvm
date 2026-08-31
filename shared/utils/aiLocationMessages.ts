@@ -12,6 +12,14 @@
  * the quote-card tap and the map-pin picker use it, the backend PII scrubber
  * preserves it (keep_trip_pins), and prompt rule 6b tells the model to use
  * it verbatim without re-geocoding.
+ *
+ * When a candidate's `precise` field is explicitly `false` (Google flagged
+ * the geocode as an APPROXIMATE/GEOMETRIC_CENTER guess, not a real address
+ * match — see `LocationSuggestionCandidate.precise`), the choice message
+ * appends a short marker so prompt rule 6b can still use the coordinates
+ * verbatim (never re-geocode) while telling the rider the location is
+ * approximate (decision AI14(b), issue #3742). `precise: true` or absent
+ * behaves exactly as before — no marker.
  */
 import type { AiAction, FareQuoteOption, LocationSuggestionCandidate } from '../types/ai';
 
@@ -21,16 +29,20 @@ export type LocationRole = 'pickup' | 'dropoff' | null | undefined;
  * assistant, e.g. `Use 655 Albert St, Regina [50.44079,-104.61802] as my
  * dropoff.` — or null when the candidate has no usable label. toFixed(5)
  * matches the quote-card/map-pin precedent and the backend's bracketed
- * coordinate pattern. */
+ * coordinate pattern. When `candidate.precise === false`, an approximate-
+ * location marker is appended (see the file-level comment above). */
 export function buildLocationChoiceMessage(
-  candidate: Pick<LocationSuggestionCandidate, 'name' | 'address' | 'lat' | 'lng'>,
+  candidate: Pick<LocationSuggestionCandidate, 'name' | 'address' | 'lat' | 'lng' | 'precise'>,
   role: LocationRole,
 ): string | null {
   const label = candidate.address || candidate.name;
   if (!label) return null;
   const coords = `[${candidate.lat.toFixed(5)},${candidate.lng.toFixed(5)}]`;
   const suffix = role === 'pickup' ? ' as my pickup' : role === 'dropoff' ? ' as my dropoff' : '';
-  return `Use ${label} ${coords}${suffix}.`;
+  // Opt-in only: absent or true behaves exactly as before.
+  const approximateNote =
+    candidate.precise === false ? ' (approximate location — Google could not match an exact address)' : '';
+  return `Use ${label} ${coords}${suffix}${approximateNote}.`;
 }
 
 type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;

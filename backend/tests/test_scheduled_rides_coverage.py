@@ -520,6 +520,14 @@ class TestCheckScheduledRides:
         """Unlike zoho's leader-election lock, this one is best-effort: the
         function only returns early if redis_set_nx returns False, but the
         rows it fetches after acquiring must still be processed if True."""
+        # get_app_settings() is called before the lock check and caches its
+        # result process-wide for 60s (settings_loader._settings_cache) via
+        # the same db.get_rows this test patches below — without stubbing it
+        # directly, whichever test in the suite happens to run first on a
+        # cold cache eats an extra get_rows("settings", ...) call here and
+        # spuriously fails assert_not_awaited(). Stub it so this test's
+        # result doesn't depend on what ran before it.
+        monkeypatch.setattr(sr, "get_app_settings", AsyncMock(return_value={"scheduled_dispatch_enabled": True}))
         monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(return_value=False))
         get_rows = AsyncMock()
         monkeypatch.setattr(sr.db, "get_rows", get_rows)
@@ -530,6 +538,10 @@ class TestCheckScheduledRides:
 
     @pytest.mark.anyio
     async def test_lock_redis_unavailable_proceeds_without_lock(self, sr, monkeypatch):
+        # See test_lock_not_acquired_still_proceeds_to_fetch above — same
+        # settings-cache isolation issue would inflate this to 2 awaits on a
+        # cold cache.
+        monkeypatch.setattr(sr, "get_app_settings", AsyncMock(return_value={"scheduled_dispatch_enabled": True}))
         monkeypatch.setattr(sr, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down")))
         get_rows = AsyncMock(return_value=[])
         monkeypatch.setattr(sr.db, "get_rows", get_rows)

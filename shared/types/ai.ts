@@ -52,6 +52,15 @@ export interface LocationSuggestionCandidate {
   /** Google driving route from the rider/pickup when all suggestions routed. */
   driving_distance_km?: number;
   driving_duration_minutes?: number;
+  /** Whether Google's geocode was a real address match vs. an APPROXIMATE/
+   * GEOMETRIC_CENTER guess (street or neighbourhood centroid). Set by
+   * backend/ai/tools_booking.py from `geometry.location_type` via
+   * `_match_quality`. Absent on older/mocked candidates — treat as unknown,
+   * not as precise. */
+  precise?: boolean;
+  /** Raw Google `location_type` (or equivalent) behind `precise`, for
+   * debugging. Set alongside `precise` in backend/ai/tools_booking.py. */
+  match_quality?: string;
 }
 
 /** One vehicle option inside a fare_quote action. Amounts are exact

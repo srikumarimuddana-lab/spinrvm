@@ -16398,7 +16398,7 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   same token — the unit tests confirm the key function's own logic, not the
   full rate-limit-storage round trip (that's the same level of verification
   every other key-function in this file has, per existing test coverage).
-- [ ] **AI1b. Daily-cap fail-open on Redis error — revisit as its own decision.**
+- [x] **AI1b. Daily-cap fail-open on Redis error — revisit as its own decision.**
   Spun off 2026-08-10 while reconciling a merge conflict: a parallel session
   independently built a fail-closed-with-a-floor alternative for
   `orchestrator._over_daily_cap` (process-local counter, generous fixed
@@ -16412,6 +16412,15 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   fail-open gap the same investigation found in `mcp_server.py`'s
   `_over_mcp_daily_cap` (same pattern, separate `/mcp` surface) — not yet
   tracked anywhere.
+  **Decided and done (GitHub #3742): fail-closed with a bounded process-local
+  floor.** New `ai/guardrails.py` module (`fallback_over_cap`,
+  `_FALLBACK_DAILY_CAP = 20`) is invoked from both `orchestrator._over_daily_cap`
+  and `mcp_server._over_mcp_daily_cap` on the Redis-exception path only —
+  normal healthy-Redis behavior is unchanged. Bounds worst-case AI-cost
+  exposure during a Redis outage to `_FALLBACK_DAILY_CAP × replica_count`
+  instead of removing the ceiling entirely; emits `spinr_ai_fallback_cap_total`
+  so the fallback path is observable. See `ai/guardrails.py`'s module
+  docstring for the full reasoning.
 - [x] **AI2. Assistant output is persisted un-scrubbed** — only the user
   message passes `scrub_pii` (`orchestrator.py:145`); assistant text is
   streamed and stored raw in `ai_messages`, asymmetric with

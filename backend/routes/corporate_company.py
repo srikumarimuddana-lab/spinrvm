@@ -29,6 +29,7 @@ try:
         get_corporate_wallet_by_company,
         get_default_payment_method,
         get_member_allowance,
+        get_rows,
         list_allowed_domains,
         list_company_allowance_requests,
         list_company_allowances,
@@ -57,6 +58,7 @@ try:
     from ..services.corporate_allowance_service import apply_grant  # type: ignore
     from ..services.corporate_membership_service import invite_member  # type: ignore
     from ..services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
+    from ..services.corporate_suspension_service import _PRE_PICKUP_STATUSES  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
         add_allowed_domain,
@@ -68,6 +70,7 @@ except ImportError:
         get_corporate_wallet_by_company,
         get_default_payment_method,
         get_member_allowance,
+        get_rows,
         list_allowed_domains,
         list_company_allowance_requests,
         list_company_allowances,
@@ -96,6 +99,7 @@ except ImportError:
     from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
     from services.corporate_stripe_identity import with_corporate_customer_repair  # type: ignore
+    from services.corporate_suspension_service import _PRE_PICKUP_STATUSES  # type: ignore
 
 try:
     from ..services.corporate_member_offboarding_service import cancel_pre_pickup_rides_for_member  # type: ignore
@@ -709,6 +713,35 @@ async def get_policy(
     Returns an empty dict when no policy has been configured yet.
     """
     return _annotate_geofence_enforcement(await get_corporate_policy(company_id) or {})
+
+
+@router.get("/policy/affected-rides-count")
+async def get_policy_affected_rides_count(
+    company_id: str,
+    guard=Depends(require_company_admin),
+):
+    """Count the company's currently in-flight (pre-pickup) rides.
+
+    Used by the admin-dashboard policy-edit confirmation flow (Option 4 of
+    GitHub issue #2683): before saving a policy change, the UI calls this
+    endpoint and, if the count is non-zero, asks the admin to confirm —
+    those rides will still settle under the policy that was in effect when
+    they were booked (see `services/payment_service.py::settle_corporate`'s
+    audit-only policy-edit flag). This endpoint is read-only: it never
+    touches, cancels, or otherwise mutates any ride.
+
+    Deliberately excludes `in_progress` rides — those are already billed at
+    whatever their current in-progress terms are and cannot meaningfully be
+    "affected" by a not-yet-saved edit; the ride state machine also forbids
+    any cancellation path after trip start, so there is nothing an admin
+    warning here could change for them. Uses the same pre-pickup status set
+    as `corporate_suspension_service.cancel_pre_pickup_rides_for_company`.
+    """
+    rides = await get_rows(
+        "rides",
+        {"corporate_account_id": company_id, "status": {"$in": list(_PRE_PICKUP_STATUSES)}},
+    )
+    return {"count": len(rides or [])}
 
 
 @router.put("/policy")

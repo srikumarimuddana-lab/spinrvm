@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import backend.ai.guardrails as guardrails
 import backend.ai.orchestrator as orch
 from backend.ai.providers.base import AIConfigError, StreamEvent, ToolCall
 
@@ -190,9 +191,7 @@ class TestHappyPaths:
         # AI13 regression: a prompt rule alone doesn't stop the model from
         # printing a tool name; the persisted/replayed copy must have it
         # filtered, same convention as the AI2 PII scrub above.
-        adapter = FakeAdapter(
-            [[_text("Let me run "), _text("find_place to check that address for you."), _end()]]
-        )
+        adapter = FakeAdapter([[_text("Let me run "), _text("find_place to check that address for you."), _end()]])
         frames, mocks = await _run(adapter)
         # the client still sees the raw text streamed this turn — only the
         # persisted copy changes.
@@ -654,3 +653,42 @@ class TestConversationLock:
                 frames.append(frame)
         set_nx.assert_not_awaited()
         assert [n for n, _ in frames][-1] == "done"
+
+
+class TestDailyCapFallback:
+    """AI1b (#3742): a Redis error on the daily-cap check falls back to a
+    bounded, process-local cap (ai/guardrails.py) instead of failing open."""
+
+    @pytest.mark.anyio
+    async def test_normal_redis_path_is_unchanged(self):
+        counts = {}
+
+        async def fake_incr(key):
+            counts[key] = counts.get(key, 0) + 1
+            return counts[key]
+
+        with (
+            patch.object(orch, "redis_incr", fake_incr),
+            patch.object(orch, "redis_expire", AsyncMock()),
+        ):
+            assert await orch._over_daily_cap("u1", 2) is False
+            assert await orch._over_daily_cap("u1", 2) is False
+            assert await orch._over_daily_cap("u1", 2) is True
+
+    @pytest.mark.anyio
+    async def test_redis_error_falls_back_to_bounded_local_cap(self):
+        guardrails._fallback_counts.clear()
+        with patch.object(orch, "redis_incr", AsyncMock(side_effect=RuntimeError("redis down"))):
+            for _ in range(guardrails._FALLBACK_DAILY_CAP):
+                assert await orch._over_daily_cap("u1", 1000) is False
+            assert await orch._over_daily_cap("u1", 1000) is True
+
+    @pytest.mark.anyio
+    async def test_redis_error_fallback_respects_smaller_configured_cap(self):
+        """The effective ceiling is min(cap, _FALLBACK_DAILY_CAP) -- a
+        smaller admin-configured cap is never loosened by the fallback."""
+        guardrails._fallback_counts.clear()
+        with patch.object(orch, "redis_incr", AsyncMock(side_effect=RuntimeError("redis down"))):
+            assert await orch._over_daily_cap("u1", 2) is False
+            assert await orch._over_daily_cap("u1", 2) is False
+            assert await orch._over_daily_cap("u1", 2) is True

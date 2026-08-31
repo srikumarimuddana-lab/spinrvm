@@ -60,11 +60,11 @@ function priorityClass(p: string): string {
     return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
-// Quiet Console Stage 3: flag-gated Badge-variant equivalents. "open"
-// falls back to plain `outline` — there's no blue/info Badge variant, and
-// `outline-accent` reuses --primary (#d32f2f, same red family as
-// --destructive #dc2626), so it would misread "open" as escalated. See
-// the Stage 3c report; a dedicated blue/info variant is the real fix.
+// Quiet Console Stage 3: flag-gated Badge-variant equivalents. "open" now
+// maps to badge.tsx's outline-info variant (added after this batch first
+// landed — reuses the existing --info token, same one already used
+// elsewhere for pending/processing states), replacing what was previously
+// a plain-outline fallback for lack of a blue/info variant.
 //
 // High/Urgent priority and a breached SLA both land on outline-destructive
 // too — the raw-color version deliberately used two different reds so an
@@ -73,10 +73,11 @@ function priorityClass(p: string): string {
 // separate table columns with distinct text ("Urgent" vs "Breached ago"),
 // consistent with Quiet Console's "let text, not color, carry categorical
 // distinctions" direction — flagged, not silently different from intent.
-function statusBadgeVariant(status: string): "outline-warning" | "outline-destructive" | "outline" {
+function statusBadgeVariant(status: string): "outline-warning" | "outline-destructive" | "outline-info" | "outline" {
     const s = (status || "").toLowerCase();
     if (s.includes("hold")) return "outline-warning";
     if (s.includes("escal")) return "outline-destructive";
+    if (s.includes("open")) return "outline-info";
     return "outline";
 }
 

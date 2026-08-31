@@ -39,6 +39,15 @@ const badgeVariants = cva(
           "border-warning text-warning [a&]:hover:bg-warning/10",
         "outline-destructive":
           "border-destructive text-destructive [a&]:hover:bg-destructive/10",
+        // Closes a gap Stage 3 hit for real: some states (a mid-severity
+        // safety tier, an "open" ticket) are neither positive nor negative
+        // nor purely categorical — they need a distinct "in-progress/
+        // informational" tone the other four can't honestly cover without
+        // misreading as success/warning/danger. Reuses --info, the
+        // existing WCAG-verified blue token (already used elsewhere for
+        // the same "pending/processing" meaning) — not a new color.
+        "outline-info":
+          "border-info text-info [a&]:hover:bg-info/10",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
       },

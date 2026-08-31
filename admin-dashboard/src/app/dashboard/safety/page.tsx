@@ -131,9 +131,14 @@ function statusBadgeVariant(s: SafetyStatus): "outline-destructive" | "outline-w
     }
 }
 
-function severityBadgeVariant(s: SafetySeverity | null): "outline-destructive" | "outline-warning" | "outline" {
+function severityBadgeVariant(s: SafetySeverity | null): "outline-destructive" | "outline-warning" | "outline-info" | "outline" {
     if (s === "sev1") return "outline-destructive";
     if (s === "sev2") return "outline-warning";
+    // sev3 ("info", lowest severity) — badge.tsx now has a dedicated
+    // outline-info variant (reuses the existing --info token) for exactly
+    // this case, closing the gap the Stage 3c batch correctly flagged
+    // rather than guessed at.
+    if (s === "sev3") return "outline-info";
     return "outline";
 }
 

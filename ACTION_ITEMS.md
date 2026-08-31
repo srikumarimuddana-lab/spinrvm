@@ -12082,6 +12082,34 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** 3 driver-app candidates (`(tabs)/profile.tsx`,
   `settings.tsx`, `addresses.tsx`/`destination-mode.tsx`); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 32 done: `driver-app/app/driver/(tabs)/profile.tsx`'s
+  profile-edit validation (fourth driver-app candidate, email regex).**
+  Extracted `handleSaveProfile`'s fields-required + email-format checks
+  into new `driver-app/utils/driverProfileSchema.ts`
+  (`isProfileFieldsComplete`, `isProfileEmailFormatValid`,
+  `getProfileFormError`) — the screen's own regex was kept as-is rather
+  than swapped for zod's `.email()`. Also consolidated the Save button's
+  `disabled` prop and style expression, both an *exact* duplicate of the
+  fields-required check (unlike partial-overlap `disabled` props left
+  alone elsewhere in this series), onto the same shared
+  `isProfileFieldsComplete(...)` call; removed the now-unused local
+  `EMAIL_REGEX` constant. Pure extraction, byte-for-byte identical to
+  the originals — no bug found, no behavior change. New
+  `driver-app/utils/__tests__/driverProfileSchema.test.ts` (11
+  accept/reject cases). Verification: 11/11 new tests pass; full
+  driver-app suite (`jest`) 124/124 suites, 1402/1402 tests passing on a
+  clean rerun (one transient unrelated flake on first run); `npx tsc
+  --noEmit` clean (repo-wide); `npx eslint` on touched files: 0 errors,
+  0 warnings; **real production build** (`npm run build:web` → `expo
+  export --platform web`) completed successfully. Blast-radius grep
+  found one coincidentally identical regex in an unrelated,
+  already-migrated screen's schema file (`profileSetupSchema.ts` for
+  `app/profile-setup.tsx`, B39 step 6) — confirmed unrelated by
+  inspection. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-profile-zod-step32.md`.
+  **Still open:** 2 driver-app candidates (`settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

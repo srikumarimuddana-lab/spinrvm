@@ -19,6 +19,7 @@ try:
 except ImportError:
     from db import db
     from dependencies import get_admin_user
+    from services.driver_import_service import is_incomplete_onboarding_row  # type: ignore
     from services.fare_service import _d, _f, _round  # noqa: F401
     from utils.redis_client import redis_get, redis_set  # noqa: F401
 

@@ -11616,6 +11616,46 @@ record of what was assumed vs. what was actually true</summary>
   (driver-app's `vehicle-info.tsx` negative-year bug + 6 more driver-app
   candidates; 12 more admin-dashboard candidates); no ADR/migration-order
   doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 16 done: `driver-app/app/vehicle-info.tsx`'s
+  `isFormValid` + submit-time vehicle-year computation, including the
+  silent-invalid-year bug fix.** Extracted the inline `isFormValid`
+  (`form.vehicle_type_id && form.vehicle_make.trim() &&
+  form.vehicle_model.trim() && form.vehicle_year.trim() &&
+  form.license_plate.trim()`) into
+  `driver-app/utils/vehicleInfoFormSchema.ts`'s
+  `isVehicleInfoFormValid(form)`, and the submit-time
+  `parseInt(form.vehicle_year) || 0` into `getVehicleYearValue(vehicleYear)`.
+  This is NOT a pure byte-for-byte extraction — per the user's explicit
+  direction, it also fixes the second bug flagged in the broader sweep:
+  the original `isFormValid` only checked `vehicle_year.trim()` was
+  non-empty, never that it actually parsed as a number, so a non-numeric
+  year (e.g. "abc") passed validation and then silently became
+  `vehicle_year: 0` via `parseInt(...) || 0` at submit time — a garbage
+  value written to the driver's vehicle record with no error shown.
+  `isVehicleYearValid` now requires the trimmed value to parse as a
+  finite integer before the form is considered valid, gating the "Save
+  Vehicle Info" button; `getVehicleYearValue`'s own `|| 0`-equivalent
+  fallback is kept only as a defensive no-op (unreachable once the
+  button is gated). New
+  `driver-app/utils/__tests__/vehicleInfoFormSchema.test.ts` (12
+  accept/reject cases across all 5 predicates + the aggregate + the
+  year-value getter, including the bug-fix case). Verification: 12/12
+  new tests pass; full driver-app suite 120/120 suites, 1349/1349 tests
+  passing on a clean re-run (an initial run showed 11 failures in an
+  unrelated file, `__tests__/services/backgroundMessaging.android.test.ts`
+  — confirmed a pre-existing full-suite flake, not caused by this
+  change: that file passes 18/18 in isolation both with and without this
+  diff, and a full-suite re-run with this exact diff applied passed
+  120/120 with zero failures); `npx tsc --noEmit` clean; `npx eslint`
+  clean on touched files; **real production build** (`npm run build:web`
+  → `expo export --platform web`) completed successfully. Blast-radius
+  grep (`parseInt\(form\.vehicle_year\)`) confirmed no other file
+  duplicates this pattern. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-vehicle-info-zod-step16.md`.
+
+  **Still open:** the remaining 19 candidates from the broader sweep (6
+  more driver-app candidates; 12 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

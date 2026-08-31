@@ -437,7 +437,7 @@ describe('rideStore — createRide double-booking guard', () => {
 
 describe('rideStore — rateRide idempotency', () => {
   test('#4604 finding 3: sends an Idempotency-Key header, same shape as createRide', async () => {
-    mockApi.post.mockResolvedValueOnce({ data: {} });
+    mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
 
     await act(async () => {
       await useRideStore.getState().rateRide('ride-456', 5, 'Great ride', 3);

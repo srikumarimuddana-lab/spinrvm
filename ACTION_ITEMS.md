@@ -16802,7 +16802,7 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `admin_ai_console_limit` (20/minute, matches `admin_ai_suggest_limit`'s
   admin+paid-LLM precedent) as a defensive ceiling on `POST /admin/ai/chat`.
   See `docs/change-log/2026-08-01-ai12-admin-console-rate-limit.md`.
-- [ ] **AI14. Accepted risk: a tapped suggestion is trusted even when its
+- [x] **AI14. Accepted risk: a tapped suggestion is trusted even when its
   geocode is only APPROXIMATE** — prompt rule 6b (PR #2774) treats any
   rider-tapped `location_suggestions` candidate as confirmed, so a numbered
   street address Google could only resolve to a street/neighbourhood centroid
@@ -16820,6 +16820,27 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `precise=False` on the card and let the assistant quote immediately while
   offering the map pin as an optional refinement (the "quote + note" option),
   rather than gating the quote.
+  **Done (2026-08-31), decision AI14(b):** the middle ground above shipped in
+  commit `139e607` (PR #4777, #3742) — `find_place` already surfaced
+  `precise`/`match_quality` per candidate (`tools_booking.py`'s
+  `_match_quality`/`_candidates_from_results`, from Google's real
+  `geometry.location_type` + `partial_match` signal, unchanged by 139e607);
+  that commit is where `shared/utils/aiLocationMessages.ts`'s
+  `buildLocationChoiceMessage` first started appending an
+  "(approximate location — Google could not match an exact address)" marker
+  to the rider-tap message when `candidate.precise === false`, and prompt
+  rule 6b (`backend/ai/prompts.py`) was extended to add one short,
+  capability-agnostic note before the quote/booking card when that marker is
+  present — never re-geocoding, never gating or blocking the quote. **The
+  original accepted-risk framing is preserved, not reopened**: the note text
+  never mentions `map_pin`/dropping a pin (it says "double-check it or let
+  the driver know their exact spot"), so unlike rule 8b's
+  `imprecise_address` gate it never needs to check the `map_pin` client
+  capability and cannot dead-end on a client that lacks it — sidestepping
+  the exact infinite-loop failure mode #2774 fixed, rather than reopening it.
+  See `docs/change-log/2026-08-31-ai14-precise-geocode-note.md` for the full
+  Change Impact Log (written after the fact to close this entry's stale
+  `[ ]` status and missing change-log link).
 - [x] **AI13. No output-side leakage filter** — done: new
   `backend/ai/pii.py::filter_tool_leakage` regexes for snake_case-shaped
   tokens (`\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b`) generally, not just the

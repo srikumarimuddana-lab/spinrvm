@@ -32,6 +32,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from backend.services import driver_import_service as svc
+
 DRIVER = {
     "id": "drv-1",
     "user_id": "usr-1",
@@ -2468,3 +2470,305 @@ class TestAdminGetDriversPreLaunchFilter:
             resp = test_client.get("/api/admin/drivers", params={"pre_launch": "false"})
         assert resp.status_code == 200, resp.text
         assert "id" not in captured["filters"]
+
+
+# ---------------------------------------------------------------------------
+# GET /drivers -- onboarding_complete filter, and its interaction with
+# pre_launch (2026-08-31 legacy driver-count segmentation)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetDriversOnboardingCompleteFilter:
+    """The legacy Mongo import carried over abandoned-onboarding shells as
+    real `drivers` rows (see services/driver_import_service
+    .is_incomplete_onboarding_row), which made every admin driver count read
+    ~3x the real fleet. `onboarding_complete` compiles to the same $in/$nin
+    against `id` the pre_launch filter uses.
+
+    The class below is the point of these tests: BOTH filters target the
+    single `filters["id"]` key, so a naive second assignment would silently
+    clobber the first and widen the result set instead of narrowing it.
+    """
+
+    def test_omitted_applies_no_filter(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_incomplete_onboarding_driver_ids") as fetch_incomplete,
+        ):
+            resp = test_client.get("/api/admin/drivers")
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]
+        fetch_incomplete.assert_not_called()  # never queried unless the param is passed
+
+    def test_true_hides_incomplete_onboarding_rows(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_incomplete_onboarding_driver_ids", return_value={"shell-1"}),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"onboarding_complete": "true"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$nin": ["shell-1"]}
+
+    def test_false_shows_only_incomplete_onboarding_rows(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch(
+                "routes.admin.drivers.fetch_incomplete_onboarding_driver_ids",
+                return_value={"shell-1", "shell-2"},
+            ),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"onboarding_complete": "false"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["filters"]["id"]["$in"]) == {"shell-1", "shell-2"}
+
+    def test_false_with_nothing_incomplete_returns_empty_without_querying_drivers(
+        self, test_client, super_admin_override
+    ):
+        with (
+            patch("db_supabase.get_rows", AsyncMock()) as get_rows,
+            patch("routes.admin.drivers.fetch_incomplete_onboarding_driver_ids", return_value=set()),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"onboarding_complete": "false"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+        get_rows.assert_not_called()
+
+    def test_true_with_nothing_incomplete_applies_no_filter(self, test_client, super_admin_override):
+        """Nothing to exclude -- must not add a vacuous $nin: []."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_incomplete_onboarding_driver_ids", return_value=set()),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"onboarding_complete": "true"})
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]
+
+    # -- interaction with pre_launch: the regression this refactor exists for --
+
+    def test_both_exclusions_intersect_rather_than_clobber(self, test_client, super_admin_override):
+        """pre_launch=false AND onboarding_complete=true: both are exclusions,
+        so BOTH id sets must land in one $nin. A second assignment to
+        filters["id"] would have dropped one of them and returned rows the
+        admin explicitly filtered out."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_pre_launch_flagged_ids", return_value={"flagged-1"}),
+            patch("routes.admin.drivers.fetch_incomplete_onboarding_driver_ids", return_value={"shell-1"}),
+        ):
+            resp = test_client.get(
+                "/api/admin/drivers",
+                params={"pre_launch": "false", "onboarding_complete": "true"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert set(captured["filters"]["id"]["$nin"]) == {"flagged-1", "shell-1"}
+
+    def test_include_then_exclude_narrows_to_the_difference(self, test_client, super_admin_override):
+        """pre_launch=true (include set) AND onboarding_complete=true (exclude
+        set): the flagged shell must be dropped, leaving only the flagged row
+        that is a real driver."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch(
+                "routes.admin.drivers.fetch_pre_launch_flagged_ids",
+                return_value={"flagged-real", "flagged-shell"},
+            ),
+            patch(
+                "routes.admin.drivers.fetch_incomplete_onboarding_driver_ids",
+                return_value={"flagged-shell"},
+            ),
+        ):
+            resp = test_client.get(
+                "/api/admin/drivers",
+                params={"pre_launch": "true", "onboarding_complete": "true"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": ["flagged-real"]}
+
+    def test_two_include_sets_intersect(self, test_client, super_admin_override):
+        """pre_launch=true AND onboarding_complete=false: both are include
+        sets, so the result is their intersection, not whichever ran last."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch(
+                "routes.admin.drivers.fetch_pre_launch_flagged_ids",
+                return_value={"both", "flagged-only"},
+            ),
+            patch(
+                "routes.admin.drivers.fetch_incomplete_onboarding_driver_ids",
+                return_value={"both", "shell-only"},
+            ),
+        ):
+            resp = test_client.get(
+                "/api/admin/drivers",
+                params={"pre_launch": "true", "onboarding_complete": "false"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": ["both"]}
+
+    def test_disjoint_include_sets_return_empty(self, test_client, super_admin_override):
+        """No row can satisfy both, so the route must short-circuit rather
+        than issue an unfiltered query."""
+        with (
+            patch("db_supabase.get_rows", AsyncMock()) as get_rows,
+            patch("routes.admin.drivers.fetch_pre_launch_flagged_ids", return_value={"flagged-only"}),
+            patch("routes.admin.drivers.fetch_incomplete_onboarding_driver_ids", return_value={"shell-only"}),
+        ):
+            resp = test_client.get(
+                "/api/admin/drivers",
+                params={"pre_launch": "true", "onboarding_complete": "false"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+        get_rows.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# admin_get_driver_stats -- onboarded_total / legacy_incomplete breakdown
+# ---------------------------------------------------------------------------
+
+
+def _segmented_stats_rows(table, filters=None, **kwargs):
+    """One real driver, one flag-marked shell, one placeholder-named shell."""
+    if table == "service_areas":
+        return [{"id": "area-1", "name": "Saskatoon"}]
+    if table == "drivers":
+        return [
+            {
+                "id": "real-1",
+                "user_id": "usr-1",
+                "name": "Real Driver",
+                "status": "active",
+                "service_area_id": "area-1",
+                "created_at": "2026-07-01T00:00:00Z",
+                "legacy_import_metadata": {},
+            },
+            {
+                "id": "shell-flagged",
+                "user_id": "usr-2",
+                "name": "Has A Name",
+                "status": "needs_review",
+                "service_area_id": "area-1",
+                "created_at": "2026-07-02T00:00:00Z",
+                "legacy_import_metadata": {"incomplete_profile_in_source": True},
+            },
+            {
+                "id": "shell-placeholder",
+                "user_id": "usr-3",
+                "name": "Unnamed Legacy Driver abc123",
+                "status": "needs_review",
+                "service_area_id": "area-1",
+                "created_at": "2026-07-03T00:00:00Z",
+                "legacy_import_metadata": {},
+            },
+        ]
+    if table == "users":
+        return []
+    return []
+
+
+class TestDriverStatsOnboardingSegmentation:
+    """The legacy import carried abandoned-onboarding shells in as real
+    `drivers` rows, so `total` alone read ~3x the real fleet. These assert
+    the breakdown, and that `total` itself is unchanged for every existing
+    consumer."""
+
+    def test_breakdown_splits_shells_from_real_drivers(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=_segmented_stats_rows)):
+            resp = test_client.get("/api/admin/drivers/stats")
+        assert resp.status_code == 200, resp.text
+        stats = resp.json()["stats"]
+        assert stats["total"] == 3  # unchanged meaning: every driver row
+        assert stats["onboarded_total"] == 1
+        assert stats["legacy_incomplete"] == 2
+
+    def test_breakdown_always_sums_to_total(self, test_client, super_admin_override):
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=_segmented_stats_rows)):
+            resp = test_client.get("/api/admin/drivers/stats")
+        stats = resp.json()["stats"]
+        assert stats["onboarded_total"] + stats["legacy_incomplete"] == stats["total"]
+
+    def test_fleet_with_no_legacy_import_reports_zero_incomplete(self, test_client, super_admin_override):
+        """A driver row carrying neither marker must never be misclassified —
+        this is the shape of every organic signup."""
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=_stats_rows)):
+            resp = test_client.get("/api/admin/drivers/stats")
+        stats = resp.json()["stats"]
+        assert stats["total"] == 2
+        assert stats["legacy_incomplete"] == 0
+        assert stats["onboarded_total"] == 2
+
+    def test_classifies_the_stored_row_not_the_rendered_one(self):
+        """admin_get_driver_stats counts over `all_drivers` (stored rows), not
+        `enriched_drivers`, whose `name` has been replaced by the linked
+        account's display name. Asserted against the predicate directly:
+        driving this through the endpoint would prove nothing, because
+        conftest patches repositories._base.supabase, so the user-enrichment
+        query (get_rows_batched_in) never sees a db_supabase.get_rows patch
+        and users_map is empty either way."""
+        stored = {
+            "id": "shell-placeholder",
+            "name": "Unnamed Legacy Driver abc123",
+            "legacy_import_metadata": {},
+        }
+        # What the enrichment loop would render for the same row once the
+        # linked account carries a normal-looking name.
+        rendered = {**stored, "name": "Actual Person"}
+
+        assert svc.is_incomplete_onboarding_row(stored) is True
+        assert svc.is_incomplete_onboarding_row(rendered) is False

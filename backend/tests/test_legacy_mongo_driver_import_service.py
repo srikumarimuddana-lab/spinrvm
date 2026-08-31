@@ -30,6 +30,7 @@ class _FakeQuery:
         self._filters = []
         self._insert = None
         self._update = None
+        self._range = None
 
     def select(self, *_a, **_k):
         return self
@@ -43,6 +44,11 @@ class _FakeQuery:
         return self
 
     def limit(self, _n):
+        return self
+
+    def range(self, start, end):
+        # Inclusive-end, matching PostgREST/supabase-py semantics.
+        self._range = (start, end)
         return self
 
     def insert(self, rows):
@@ -72,7 +78,11 @@ class _FakeQuery:
             for row in matched:
                 row.update(self._update)
             return _FakeExecute(matched)
-        return _FakeExecute(self._matched())
+        rows = self._matched()
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start : end + 1]
+        return _FakeExecute(rows)
 
 
 class _FakeRpc:
@@ -850,3 +860,112 @@ def test_print_report_dry_run_and_commit_modes(capsys):
 
     svc.print_mongo_driver_import_report(plan, dry_run=False)
     assert "COMMIT" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Abandoned-onboarding classification (2026-08-31 driver-count segmentation)
+# ---------------------------------------------------------------------------
+
+
+class TestIsIncompleteOnboardingRow:
+    """The importer stamps two independent markers on a shell row, and
+    neither alone covers the population: in the real 2026-08-22 batch 16 rows
+    had a placeholder name with incomplete_profile_in_source=false, and 1 had
+    the flag set with a real name. Both must classify as incomplete."""
+
+    def test_flag_true_is_incomplete(self):
+        row = {"name": "Jane Doe", "legacy_import_metadata": {svc.INCOMPLETE_PROFILE_KEY: True}}
+        assert svc.is_incomplete_onboarding_row(row) is True
+
+    def test_placeholder_name_alone_is_incomplete(self):
+        row = {
+            "name": f"{svc.LEGACY_PLACEHOLDER_NAME_PREFIX} 5439f4",
+            "legacy_import_metadata": {svc.INCOMPLETE_PROFILE_KEY: False},
+        }
+        assert svc.is_incomplete_onboarding_row(row) is True
+
+    def test_bare_placeholder_name_is_incomplete(self):
+        """backfill_orphaned_legacy_driver_rows writes the prefix with no
+        id suffix -- a prefix match must still catch it."""
+        row = {"name": svc.LEGACY_PLACEHOLDER_NAME_PREFIX, "legacy_import_metadata": {}}
+        assert svc.is_incomplete_onboarding_row(row) is True
+
+    def test_real_driver_with_flag_false_is_complete(self):
+        row = {"name": "Jane Doe", "legacy_import_metadata": {svc.INCOMPLETE_PROFILE_KEY: False}}
+        assert svc.is_incomplete_onboarding_row(row) is False
+
+    def test_row_without_either_marker_is_complete(self):
+        """An organic (never-imported) driver, and the shape most existing
+        test fixtures use -- must not be misclassified as a shell."""
+        assert svc.is_incomplete_onboarding_row({"id": "d1", "user_id": "u1"}) is False
+
+    def test_null_name_is_complete(self):
+        assert svc.is_incomplete_onboarding_row({"name": None, "legacy_import_metadata": {}}) is False
+
+    def test_flag_must_be_true_not_merely_truthy(self):
+        """`"false"` from a stringly-typed source must not read as flagged."""
+        row = {"name": "Jane Doe", "legacy_import_metadata": {svc.INCOMPLETE_PROFILE_KEY: "false"}}
+        assert svc.is_incomplete_onboarding_row(row) is False
+
+
+class TestFetchIncompleteOnboardingDriverIds:
+    def test_returns_union_of_both_markers(self, monkeypatch):
+        _install(
+            monkeypatch,
+            store={
+                "drivers": [
+                    {"id": "flagged", "name": "Jane Doe", "legacy_import_metadata": {svc.INCOMPLETE_PROFILE_KEY: True}},
+                    {
+                        "id": "placeholder",
+                        "name": f"{svc.LEGACY_PLACEHOLDER_NAME_PREFIX} abc123",
+                        "legacy_import_metadata": {},
+                    },
+                    {"id": "real", "name": "Real Driver", "legacy_import_metadata": {}},
+                ]
+            },
+        )
+        assert svc.fetch_incomplete_onboarding_driver_ids() == {"flagged", "placeholder"}
+
+    def test_returns_empty_set_when_nothing_incomplete(self, monkeypatch):
+        _install(monkeypatch, store={"drivers": [{"id": "real", "name": "Real Driver", "legacy_import_metadata": {}}]})
+        assert svc.fetch_incomplete_onboarding_driver_ids() == set()
+
+    def test_paginates_past_a_single_page(self, monkeypatch):
+        """PostgREST caps an unpaginated select at 1000 rows. This population
+        is 600 today and grows with every legacy batch, so a single-page
+        fetch would silently start dropping ids."""
+        rows = [
+            {
+                "id": f"shell-{i}",
+                "name": f"{svc.LEGACY_PLACEHOLDER_NAME_PREFIX} {i:06d}",
+                "legacy_import_metadata": {},
+            }
+            for i in range(1200)
+        ]
+        _install(monkeypatch, store={"drivers": rows})
+        found = svc.fetch_incomplete_onboarding_driver_ids()
+        assert len(found) == 1200
+        assert "shell-1199" in found
+
+    def test_skips_rows_with_no_id(self, monkeypatch):
+        _install(
+            monkeypatch,
+            store={"drivers": [{"name": f"{svc.LEGACY_PLACEHOLDER_NAME_PREFIX} x", "legacy_import_metadata": {}}]},
+        )
+        assert svc.fetch_incomplete_onboarding_driver_ids() == set()
+
+
+class TestPlaceholderNameConstantIsUsedAtWriteSite:
+    def test_blank_name_row_gets_a_name_matching_the_shared_prefix(self, monkeypatch):
+        """Ties the write site to the constant the read side classifies on --
+        a hand-copied literal at either end would silently stop matching."""
+        _install(monkeypatch)
+        plan = svc.build_mongo_driver_import_plan(
+            [_mongo_row(name="", set_up_profile="false")],
+            service_area=SERVICE_AREA,
+            import_batch="batch-1",
+        )
+        assert not plan.errors, plan.errors
+        driver = plan.drivers_to_insert[0]
+        assert driver["name"].startswith(svc.LEGACY_PLACEHOLDER_NAME_PREFIX)
+        assert svc.is_incomplete_onboarding_row(driver) is True

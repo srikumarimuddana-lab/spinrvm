@@ -25,9 +25,28 @@
  * Conservative defaults are set here. Each hook can override staleTime /
  * gcTime as needed (e.g. active ride uses staleTime=0; config uses 10 min).
  */
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, focusManager } from '@tanstack/react-query';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
+
+// `refetchOnWindowFocus: true` below is a browser-web concept out of the
+// box — TanStack Query's `focusManager` only listens for the DOM's
+// visibilitychange/focus events by default, which don't exist in React
+// Native. Without this wiring, "refetch on app foreground" (and any
+// screen's query that exhausts its retries and waits for a focus refetch
+// to recover — e.g. the driver notifications inbox, live-testing report
+// 2026-08-30: badge count worked via its own independent poll, but the
+// inbox list stayed stuck on a transient failure because this hook-up
+// was missing) silently never fires on iOS/Android. This is the
+// documented TanStack-Query-for-React-Native integration step
+// (https://tanstack.com/query/latest/docs/framework/react/react-native).
+function onAppStateChange(status: AppStateStatus) {
+  if (Platform.OS !== 'web') {
+    focusManager.setFocused(status === 'active');
+  }
+}
+AppState.addEventListener('change', onAppStateChange);
 
 export const queryClient = new QueryClient({
     defaultOptions: {

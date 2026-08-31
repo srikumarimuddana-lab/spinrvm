@@ -2314,3 +2314,157 @@ class TestFleetWidePayoutTools:
         assert resp.status_code == 200, resp.text
         assert captured["apply"] is False
         assert resp.json()["applied"] is False
+
+
+# ---------------------------------------------------------------------------
+# GET /drivers -- legacy_import filter
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetDriversLegacyImportFilter:
+    """`legacy_import_metadata` is JSONB NOT NULL DEFAULT '{}'::jsonb, not
+    nullable -- "not imported" is the default-value row, not NULL. These
+    assert the endpoint compiles `legacy_import=true/false` to the $eq/$ne-
+    against-`{}` filter shape (the same trap EXCLUDE_LEGACY_RIDES in
+    utils/legacy_rides.py exists to avoid), not a bare {col: None}."""
+
+    def test_omitted_applies_no_filter(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers")
+        assert resp.status_code == 200, resp.text
+        assert "legacy_import_metadata" not in captured["filters"]
+
+    def test_true_filters_to_imported_only(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers", params={"legacy_import": "true"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["legacy_import_metadata"] == {"$ne": {}}
+
+    def test_false_filters_to_not_imported_only(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with patch("db_supabase.get_rows", AsyncMock(side_effect=rows)):
+            resp = test_client.get("/api/admin/drivers", params={"legacy_import": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["legacy_import_metadata"] == {"$eq": {}}
+
+
+# ---------------------------------------------------------------------------
+# GET /drivers -- pre_launch filter (2026-08-30 pre-launch data flagging tool)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetDriversPreLaunchFilter:
+    """legacy_import_metadata.pre_launch_test is set by
+    services/pre_launch_flag_service.py. This route has no JSONB-path
+    filter operator of its own, so it resolves flagged ids first
+    (fetch_pre_launch_flagged_ids) and compiles pre_launch=true/false to
+    $in/$nin against `id` -- these assert that compilation, and that
+    omitting the param changes nothing (no silent behavior change for
+    every existing caller of this endpoint)."""
+
+    def test_omitted_applies_no_filter(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_pre_launch_flagged_ids") as fetch_flagged,
+        ):
+            resp = test_client.get("/api/admin/drivers")
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]
+        fetch_flagged.assert_not_called()  # never queried unless the param is actually passed
+
+    def test_true_shows_flagged_only(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_pre_launch_flagged_ids", return_value={"drv-1", "drv-2"}),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"pre_launch": "true"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$in": ["drv-1", "drv-2"]} or set(captured["filters"]["id"]["$in"]) == {
+            "drv-1",
+            "drv-2",
+        }
+
+    def test_true_with_nothing_flagged_returns_empty_without_querying_drivers(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_rows", AsyncMock()) as get_rows,
+            patch("routes.admin.drivers.fetch_pre_launch_flagged_ids", return_value=set()),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"pre_launch": "true"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+        get_rows.assert_not_called()
+
+    def test_false_hides_flagged(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_pre_launch_flagged_ids", return_value={"drv-1"}),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"pre_launch": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$nin": ["drv-1"]}
+
+    def test_false_with_nothing_flagged_applies_no_filter(self, test_client, super_admin_override):
+        """Nothing to exclude -- must not add a vacuous $nin: [] that could
+        be misread as excluding everything."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_pre_launch_flagged_ids", return_value=set()),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"pre_launch": "false"})
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]

@@ -489,3 +489,136 @@ def test_empty_csv_reports_error(test_client, super_admin_override):
     assert body["can_commit"] is False
     assert body["counts"]["rows"] == 0
     assert any(e["field"] == "csv" for e in body["errors"])
+
+
+# --- 2026-08-30: created_at legacy-date fix + backfill -----------------
+#
+# build_plan() previously hardcoded new users' created_at to import time
+# instead of the CSV's own legacy value, so migrated riders showed the
+# import date as their "Joined" date on the admin Users page. See
+# docs/change-log/2026-08-30-rider-created-at-legacy-date-fix.md.
+
+CREATED_AT_HEADER = "phone,email,customer_id,gender,ratings,name,created_at"
+# 1700000000000 ms -> 2023-11-14T22:13:20+00:00
+LEGACY_EPOCH_MS = "1700000000000"
+LEGACY_ISO = "2023-11-14T22:13:20+00:00"
+
+
+def _csv_with_created_at(*rows: str) -> bytes:
+    return ("\n".join([CREATED_AT_HEADER, *rows]) + "\n").encode()
+
+
+def test_commit_uses_legacy_created_at_when_csv_has_one(test_client, super_admin_override):
+    store = _fresh_store()
+    row = f"3065551234,jane@example.com,cus_abc123,female,5,Jane Doe,{LEGACY_EPOCH_MS}"
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post(
+            "/api/admin/riders/import/commit",
+            files={"riders_csv": ("riders.csv", _csv_with_created_at(row), "text/csv")},
+            data={"batch": "batch-1"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["committed"] is True
+    assert len(store["users"]) == 1
+    assert store["users"][0]["created_at"] == LEGACY_ISO
+
+
+def test_commit_falls_back_to_now_without_created_at_column(test_client, super_admin_override):
+    store = _fresh_store()
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = _post(test_client, "/api/admin/riders/import/commit", _csv(GOOD_ROW))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["committed"] is True
+    created_at = store["users"][0]["created_at"]
+    # Not the fixed legacy date -- genuinely import-time, just asserting it's
+    # a real recent ISO timestamp rather than pinning an exact "now" value.
+    assert created_at != LEGACY_ISO
+    assert created_at.startswith("20")
+
+
+def test_created_at_backfill_dry_run_reports_without_writing(test_client, super_admin_override):
+    store = _fresh_store()
+    store["users"] = [
+        {"id": "u-1", "phone": "+13065551234", "created_at": "2026-08-30T00:00:00+00:00", "is_rider": True},
+    ]
+    p_sb, p_audit = _patches(store)
+    row = f"3065551234,,,,,,{LEGACY_EPOCH_MS}"
+    with p_sb, p_audit:
+        resp = test_client.post(
+            "/api/admin/riders/created-at-backfill",
+            files={"riders_csv": ("riders.csv", _csv_with_created_at(row), "text/csv")},
+            data={"apply": "false"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["applied"] is False
+    assert body["fixed"] == 1
+    # Dry run must not write.
+    assert store["users"][0]["created_at"] == "2026-08-30T00:00:00+00:00"
+
+
+def test_created_at_backfill_apply_fixes_mismatch(test_client, super_admin_override):
+    store = _fresh_store()
+    store["users"] = [
+        {"id": "u-1", "phone": "+13065551234", "created_at": "2026-08-30T00:00:00+00:00", "is_rider": True},
+    ]
+    p_sb, p_audit = _patches(store)
+    row = f"3065551234,,,,,,{LEGACY_EPOCH_MS}"
+    with p_sb, p_audit:
+        resp = test_client.post(
+            "/api/admin/riders/created-at-backfill",
+            files={"riders_csv": ("riders.csv", _csv_with_created_at(row), "text/csv")},
+            data={"apply": "true"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["applied"] is True
+    assert body["fixed"] == 1
+    assert store["users"][0]["created_at"] == LEGACY_ISO
+
+
+def test_created_at_backfill_no_mismatch_is_a_noop(test_client, super_admin_override):
+    store = _fresh_store()
+    store["users"] = [
+        {"id": "u-1", "phone": "+13065551234", "created_at": LEGACY_ISO, "is_rider": True},
+    ]
+    p_sb, p_audit = _patches(store)
+    row = f"3065551234,,,,,,{LEGACY_EPOCH_MS}"
+    with p_sb, p_audit:
+        resp = test_client.post(
+            "/api/admin/riders/created-at-backfill",
+            files={"riders_csv": ("riders.csv", _csv_with_created_at(row), "text/csv")},
+            data={"apply": "true"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fixed"] == 0
+
+
+def test_created_at_backfill_skips_non_riders(test_client, super_admin_override):
+    store = _fresh_store()
+    store["users"] = [
+        {"id": "u-1", "phone": "+13065551234", "created_at": "2026-08-30T00:00:00+00:00", "is_rider": False},
+    ]
+    p_sb, p_audit = _patches(store)
+    row = f"3065551234,,,,,,{LEGACY_EPOCH_MS}"
+    with p_sb, p_audit:
+        resp = test_client.post(
+            "/api/admin/riders/created-at-backfill",
+            files={"riders_csv": ("riders.csv", _csv_with_created_at(row), "text/csv")},
+            data={"apply": "true"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fixed"] == 0
+    assert store["users"][0]["created_at"] == "2026-08-30T00:00:00+00:00"
+
+
+def test_created_at_backfill_requires_admin_auth(test_client):
+    row = f"3065551234,,,,,,{LEGACY_EPOCH_MS}"
+    resp = test_client.post(
+        "/api/admin/riders/created-at-backfill",
+        files={"riders_csv": ("riders.csv", _csv_with_created_at(row), "text/csv")},
+        data={"apply": "false"},
+    )
+    assert resp.status_code in (401, 403)

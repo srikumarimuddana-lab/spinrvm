@@ -32,6 +32,8 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers, getServiceAreas } from "@/lib/api";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useTheme } from "next-themes";
+import { chartColors } from "@/components/analytics/chart-palette";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import RideDetailModal from "../rides/_components/ride-detail-modal";
 
@@ -158,6 +160,8 @@ export default function PromotionsPage() {
 
     // Charts filter
     const [chartFilter, setChartFilter] = useState("all"); // all, public, private
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
 
     // Multi-select for private coupon users
     const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -672,7 +676,7 @@ export default function PromotionsPage() {
                                         <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                                         <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(d) => d.slice(5)} className="text-muted-foreground" />
                                         <YAxis tick={{ fontSize: 10 }} className="text-muted-foreground" />
-                                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                                        <Tooltip contentStyle={c.tooltip} />
                                         <Bar dataKey="count" fill="var(--chart-3)" radius={[3, 3, 0, 0]} name="Redemptions" />
                                     </BarChart>
                                 </ResponsiveContainer>
@@ -687,7 +691,7 @@ export default function PromotionsPage() {
                                         <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                                         <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(d) => d.slice(5)} className="text-muted-foreground" />
                                         <YAxis tick={{ fontSize: 10 }} className="text-muted-foreground" />
-                                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v) => [`$${Number(v).toFixed(2)}`, "Amount"]} />
+                                        <Tooltip contentStyle={c.tooltip} formatter={(v) => [`$${Number(v).toFixed(2)}`, "Amount"]} />
                                         <Line dataKey="amount" stroke="var(--chart-2)" strokeWidth={2} dot={false} name="Amount ($)" />
                                     </LineChart>
                                 </ResponsiveContainer>

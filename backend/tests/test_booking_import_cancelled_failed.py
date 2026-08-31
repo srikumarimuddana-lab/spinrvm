@@ -57,7 +57,20 @@ class _FakeQuery:
         self.store.setdefault(self.table, []).extend(rows)
         return self
 
+    def update(self, values):
+        self._update = values
+        return self
+
     def execute(self):
+        if getattr(self, "_update", None) is not None:
+            rows = list(self.store.get(self.table, []))
+            for op, col, val in self._filters:
+                if op == "eq":
+                    rows = [r for r in rows if r.get(col) == val]
+            for r in rows:
+                r.update(self._update)
+            return _FakeExecute(rows)
+
         rows = list(self.store.get(self.table, []))
         for op, col, val in self._filters:
             if "->>" in col:
@@ -131,7 +144,7 @@ def _cancelled_booking(**overrides):
     return row
 
 
-def _plan(bookings, customers=None, drivers=None, earnings=None):
+def _plan(bookings, customers=None, drivers=None, earnings=None, include_cancelled_failed=True):
     return svc.build_plan(
         bookings,
         customers if customers is not None else [_customer()],
@@ -140,6 +153,7 @@ def _plan(bookings, customers=None, drivers=None, earnings=None):
         service_area=SERVICE_AREA,
         vehicle_type=VEHICLE_TYPE,
         batch=BATCH,
+        include_cancelled_failed=include_cancelled_failed,
     )
 
 
@@ -598,3 +612,105 @@ def test_test_account_driver_is_skipped_when_driver_present(monkeypatch):
     plan = _plan([_cancelled_booking()], drivers=[_driver(country_code="91")])
     assert plan.rides_to_insert == []
     assert plan.stats["skipped_test_account"] == 1
+
+
+# --------------------------------------------------------------------------
+# commit_plan(): completed and cancelled/failed rows must never share one
+# PostgREST insert batch -- regression test for the 2026-08-29 production
+# incident (see docs/change-log for the full root cause). PostgREST derives
+# one column list from the UNION of keys across every row in a single
+# `.insert()` call, then writes NULL -- not that row's own schema default --
+# for any row missing a key that's in that union. A completed row's
+# "distance_km" landing in the same call as a cancelled row missing it (by
+# design -- see test_no_fare_earnings_or_payout_fields_are_written above)
+# NULL-overrode it there and PostgREST rejected the whole batch.
+# --------------------------------------------------------------------------
+
+
+def test_commit_never_mixes_completed_and_cancelled_rows_in_one_insert_call(monkeypatch):
+    store = _install_fake(monkeypatch)
+    completed = {
+        "_id": "bk-completed-1",
+        "booking_id": "CBCOMPLETED",
+        "booking_status": "completed",
+        "customer_id": "cus-1",
+        "driver_id": "drv-legacy-1",
+        "created_at": "1770197933837",
+        "start_ride_at": "1770198000000",
+        "complete_delivery_at": "1770198600000",
+        "arrived_pickup_loc_at": "1770197950000",
+        "pickup_address": "123 Main St, Regina, SK",
+        "pickup_lat": "50.4099027",
+        "pickup_long": "-104.6554126",
+        "drop_address": "456 Broad St, Regina, SK",
+        "drop_lat": "50.4059968",
+        "drop_long": "-104.6377971",
+        "distance_in_km": "2.4",
+        "total_amount": "20.53",
+        "gst": "0.98",
+        "coupon_discount": "0",
+        "tip_driver": "0",
+        "you_earn": "16.72",
+        "payment_method": "card",
+    }
+    plan = _plan(
+        [completed, _cancelled_booking()],
+        earnings=[
+            {
+                "_id": "earn-1",
+                "booking_id": "bk-completed-1",
+                "amount": "16.72",
+                "admin_comission_amount": "3.09",
+                "booking_amount": "20.53",
+                "earning_type": "salary",
+            }
+        ],
+    )
+    assert not plan.errors
+    assert {r["status"] for r in plan.rides_to_insert} == {"completed", "cancelled"}
+
+    insert_calls: list[list[dict]] = []
+
+    class _RecordingQuery(_FakeQuery):
+        def insert(self, rows):
+            if self.table == "rides":
+                insert_calls.append(list(rows))
+            return super().insert(rows)
+
+    class _RecordingSupabase(_FakeSupabase):
+        def table(self, name):
+            return _RecordingQuery(name, self.store)
+
+    monkeypatch.setattr(svc, "supabase", _RecordingSupabase(store))
+
+    svc.commit_plan(plan)
+
+    assert len(insert_calls) == 2, "completed and cancelled/failed rows must go in separate insert() calls"
+    statuses_per_call = [{r["status"] for r in call} for call in insert_calls]
+    assert {"completed"} in statuses_per_call
+    assert {"cancelled"} in statuses_per_call
+    # Every row actually reached the store (no row silently dropped by the split).
+    assert len(store["rides"]) == 2
+
+
+# --------------------------------------------------------------------------
+# include_cancelled_failed=False: a per-run operator scope, not a
+# re-litigation of the 2026-08-20 decision (that default stays True).
+# --------------------------------------------------------------------------
+
+
+def test_scope_excludes_cancelled_failed_when_toggled_off(monkeypatch):
+    _install_fake(monkeypatch)
+    plan = _plan([_cancelled_booking()], include_cancelled_failed=False)
+    assert plan.rides_to_insert == []
+    assert plan.stats["skipped_cancelled_failed_excluded_by_scope"] == 1
+    assert plan.stats["cancelled_target_rows"] == 0
+    assert plan.stats["total_rides_planned"] == 0
+
+
+def test_scope_default_still_includes_cancelled_failed(monkeypatch):
+    """The standing decision's default must not have moved."""
+    _install_fake(monkeypatch)
+    plan = _plan([_cancelled_booking()])
+    assert len(plan.rides_to_insert) == 1
+    assert plan.stats["skipped_cancelled_failed_excluded_by_scope"] == 0

@@ -640,14 +640,18 @@ async def calculate_all_fees(
     *,
     _all_areas: Optional[List[Dict[str, Any]]] = None,
     _matched_area: Optional[Dict[str, Any]] = None,
+    _area_fees: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Calculate all area fees + taxes for a ride based on pickup/dropoff location.
 
     ``_all_areas`` and ``_matched_area`` let in-process callers pass
     pre-computed state from an earlier service_areas fetch / polygon
     resolution so this function does not re-query or re-run the
-    point-in-polygon loop. When either is None the behaviour is
-    unchanged.
+    point-in-polygon loop. ``_area_fees`` similarly lets a caller that
+    already knows the matched area (e.g. the fare-estimate endpoint,
+    which calls this once per vehicle type for the same pickup) pass in
+    the ``area_fees`` rows so they aren't re-fetched on every call. When
+    any of these is None the behaviour is unchanged.
 
     Returns {'fees': [...], 'fees_total': float, 'tax_amount': float, 'tax_breakdown': {...}, 'grand_total': float}
     """
@@ -681,10 +685,13 @@ async def calculate_all_fees(
     if not matched_area:
         return result
 
-    # Get all active fees for this area
-    area_fees_list = await db_supabase.get_rows(
-        "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
-    )
+    # Get all active fees for this area (unless caller already fetched them
+    # for this exact matched_area — see _area_fees docstring above).
+    area_fees_list = _area_fees
+    if area_fees_list is None:
+        area_fees_list = await db_supabase.get_rows(
+            "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
+        )
 
     # Pre-compute airport zone check once (reuses all_areas already fetched above).
     # Mirror the strict filter from calculate_airport_fee — a soft-deactivated

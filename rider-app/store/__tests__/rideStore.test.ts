@@ -435,6 +435,22 @@ describe('rideStore — createRide double-booking guard', () => {
   });
 });
 
+describe('rideStore — rateRide idempotency', () => {
+  test('#4604 finding 3: sends an Idempotency-Key header, same shape as createRide', async () => {
+    mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
+
+    await act(async () => {
+      await useRideStore.getState().rateRide('ride-456', 5, 'Great ride', 3);
+    });
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      '/rides/ride-456/rate',
+      { rating: 5, comment: 'Great ride', tip_amount: 3 },
+      { headers: { 'Idempotency-Key': expect.stringMatching(/^rate-user-abc-ride-456-\d+$/) } }
+    );
+  });
+});
+
 describe('rideStore — cancelRide after driver_arrived', () => {
   test('sets error state when backend rejects cancel for arrived driver', async () => {
     useRideStore.setState({

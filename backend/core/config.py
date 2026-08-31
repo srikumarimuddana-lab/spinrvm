@@ -47,6 +47,10 @@ class Settings(BaseSettings):
 
     # Security settings — no defaults; app refuses to start if unset in production
     JWT_SECRET: str
+    # Optional dedicated OTP-hashing pepper (utils/crypto.py::_otp_pepper).
+    # Falls back to JWT_SECRET when unset — safe default, no new required
+    # config. Set this to rotate the OTP pepper independently of JWT_SECRET.
+    OTP_PEPPER: str = ""
     ALGORITHM: str = "HS256"
     # Rider/driver access-token TTL in minutes. Short-lived for security (P0-S3).
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15

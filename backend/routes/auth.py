@@ -152,7 +152,19 @@ _CORPORATE_EMAIL_OTP_TABLE = "corporate_email_otp_records"
 # nothing live: existing users are only re-prompted once
 # app_settings.legacy_consent_notice_enabled flips true (routes/legacy_consent.py,
 # separate change, not this commit).
-CONSENT_VERSION = "consumer-tos-2026-08-v1"
+#
+# Bumped 2026-09-01 (consumer-tos-2026-08-v1 -> consumer-tos-2026-09-v1):
+# maintainer decision (interview, #4637) to re-run consent after the
+# 2026-09-01 ToS/Privacy republish — the live legal_documents rows were
+# re-dated to "September 1, 2026" and the contracting-entity name corrected
+# ("Spinr Technologies Inc." -> "Spinr Mobility Inc.", legal_documents version
+# 1 -> 2). This bump alone still changes nothing live: every existing user's
+# stamped consent_version now trails CONSENT_VERSION, but they are only
+# re-prompted once app_settings.legacy_consent_notice_enabled is flipped true.
+# GO-LIVE ORDER: deploy this bump to prod FIRST, then flip the flag — flipping
+# before the deploy would stamp accepters with the old value and re-prompt
+# them again after deploy.
+CONSENT_VERSION = "consumer-tos-2026-09-v1"
 
 
 class CompanyEmailOtpSendRequest(BaseModel):

@@ -38,7 +38,7 @@ our Privacy Policy for how we handle your information generally.
 | Google (Firebase) | Push notifications, app stability monitoring | Device token, ride status (no rider/driver PII in the payload) | US |
 | Google Maps | Route calculation, ETA | Pickup/drop-off address needed to calculate directions | US |
 | Google (Gemini) | AI-assisted in-app support and text features | Text you enter in those specific features; PII is stripped before sending | US |
-| LogRocket | Session diagnostics (driver app, iOS only — currently disabled on Android) | App usage session data, used to reproduce and fix bugs | [CONFIRM REGION] |
+| LogRocket | Session diagnostics (rider app + driver app, iOS on by default — currently disabled on Android) | App usage session data, used to reproduce and fix bugs | [CONFIRM REGION] |
 | Railway | Backend server hosting | Request traffic passing through the backend | US |
 | Fly.io | Backend server hosting (Toronto region) | Request traffic passing through the backend | Canada (`yyz`) |
 | Vercel | Admin dashboard hosting (not used by the rider or driver apps) | Admin session metadata | Canada (`yyz1`) |

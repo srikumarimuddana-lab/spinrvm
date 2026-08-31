@@ -348,7 +348,9 @@ async def trigger_emergency(
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
 
-        location_text = " Location shared with emergency services." if body.latitude and body.longitude else ""
+        location_text = (
+            " Their live location has been shared with Spinr's safety team." if body.latitude and body.longitude else ""
+        )
         sms_body = (
             f"URGENT: {user_name} triggered an emergency alert during a Spinr ride."
             f"{location_text} Call them or emergency services immediately."

@@ -7274,7 +7274,19 @@ record of what was assumed vs. what was actually true</summary>
   `backend/tests/services/test_fare_service.py`.
 
 ### G1. Stripe first-payout delay + reserve-hold policy not priced into launch cash-flow plan
-- [ ] **Status:** open — identified 2026-08-21 during launch-readiness research; not previously tracked anywhere in this repo.
+- [ ] **Status:** open — identified 2026-08-21 during launch-readiness research; not
+  previously tracked anywhere in this repo. **Updated 2026-08-31:** a concrete
+  cash-flow model was built and added to `docs/finance/stripe-payout-readiness.md`
+  §6 — using real figures (5–10 driver minimum from `saskatoon-launch.md` D-1,
+  Uride's published $200–$1,500/driver bonus comparable from
+  `driver-acquisition-strategy.md` §4) plus two explicitly-flagged placeholder
+  assumptions (rides/driver/day, average fare — no real Spinr ride/pricing data
+  exists yet) to produce a modeled total cash-gap range of **≈$2,050 (low
+  scenario) to ≈$25,500 (high scenario)** across 10%/25%/50% Stripe reserve-hold
+  scenarios. This checkbox stays unchecked: the model is planning input, not the
+  acceptance criterion. The actual acceptance bar below — a real, Stripe-confirmed
+  (not publicly-documented-default) account-specific timeline — is still open and
+  cannot be completed from this session (no Stripe dashboard/API access here).
 - **Issue/gap:** Stripe imposes a non-waivable 7–14 day first-payout delay for new
   platform accounts and can hold reserves for up to 180 days, explicitly triggered by
   "a sales spike, a promotion, or a sudden increase in disputes." Spinr's planned
@@ -7290,16 +7302,21 @@ record of what was assumed vs. what was actually true</summary>
   for a new small-market entrant trying to build driver trust.
 - **Action:** confirm Spinr's actual account-specific Stripe payout timeline and
   reserve policy directly with Stripe (not just public docs) before committing to any
-  bonus-payout timeline; model the cash-flow gap explicitly with finance; consider
-  staggering the driver blitz and rider promo rather than running both at full
-  intensity in week 1. Full detail and mitigation options:
-  `docs/finance/stripe-payout-readiness.md`.
+  bonus-payout timeline; model the cash-flow gap explicitly with finance (**done
+  2026-08-31, see §6 below**); consider staggering the driver blitz and rider promo
+  rather than running both at full intensity in week 1. Full detail and mitigation
+  options: `docs/finance/stripe-payout-readiness.md` (§6 for the dollar model, §4/§6.6
+  for mitigation tradeoffs). **The direct-with-Stripe confirmation itself remains
+  outstanding — not something a coding session can do.**
 - **Files:** none (operational/financial planning, not a code fix) — reference doc at
   `docs/finance/stripe-payout-readiness.md`; cross-referenced from
   `docs/runbooks/saskatoon-launch.md` §P-5 (new gate added same pass).
-- **Acceptance:** real (not publicly-documented-default) Stripe payout timeline
-  confirmed for Spinr's account, and a written answer to "can operating cash cover
-  driver payouts if Stripe holds a reserve during the launch-week spike."
+- **Acceptance (still open):** real (not publicly-documented-default) Stripe payout
+  timeline confirmed for Spinr's account, and a written answer to "can operating cash
+  cover driver payouts if Stripe holds a reserve during the launch-week spike." The
+  second half now has a first-pass written answer (the §6 model: ≈$2K–$25.5K modeled
+  gap, mitigation options laid out) — the first half (actual Stripe confirmation) is
+  the remaining blocker to closing this item.
 
 ### G2. 116 migration files merged to `main` had never been applied to the live database
 - [x] **Status:** CLOSED 2026-08-21 (same session) — schema-drift audit run, confirmed

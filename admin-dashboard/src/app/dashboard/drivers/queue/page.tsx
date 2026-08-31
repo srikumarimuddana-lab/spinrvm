@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useAuthStore } from "@/store/authStore";
 import { QueueStats } from "./_components/queue-stats";
 import { DocumentReviewer } from "../_components/document-reviewer";
 
@@ -81,6 +82,10 @@ const EMPTY_COPY: Record<QueueTab, string> = {
 export default function ApprovalQueuePage() {
     const { allowed: moduleAllowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const currentUserRole = useAuthStore((s) => s.user?.role);
+    const isSuperAdmin = (currentUserRole || "").toLowerCase() === "super_admin";
+    const currentUserModules = useAuthStore((s) => s.user?.modules) ?? [];
+    const canReviewDocuments = isSuperAdmin || currentUserModules.includes("documents");
     const [resp, setResp] = useState<ApprovalQueueResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
@@ -381,6 +386,7 @@ export default function ApprovalQueuePage() {
                 driverName={reviewerDriver?.name}
                 onClose={() => setReviewerDriver(null)}
                 onAfterAction={load}
+                canReview={canReviewDocuments}
             />
         </div>
     );

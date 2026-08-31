@@ -17,6 +17,7 @@ import {
     Tooltip,
     Legend,
 } from "recharts";
+import { useTheme } from "next-themes";
 import { getDeskTrends, getDeskAgents, ZohoTrends } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,8 +30,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { ArrowLeft, BarChart3, Info } from "lucide-react";
-
-const COLORS = ["#3b82f6", "#f59e0b", "#ef4444", "#10b981", "#8b5cf6", "#64748b"];
+import { chartColors, ChartColors } from "@/components/analytics/chart-palette";
 
 function toSeries(rec: Record<string, number> | null | undefined) {
     return Object.entries(rec ?? {}).map(([name, value]) => ({ name, value }));
@@ -45,6 +45,12 @@ function fmtHours(h: number | null): string {
 
 export default function TrendsPage() {
     const { allowed } = useRequireModule("support_tickets");
+    const { resolvedTheme } = useTheme();
+    const c = chartColors(resolvedTheme === "dark");
+    // chart-palette's series never grows a 6th generated hue (by design), so
+    // the overflow bucket for a 6-category status breakdown stays a literal
+    // neutral grey rather than pulling from the shared ramp.
+    const pieColors = [...c.series, "#64748b"];
     const [days, setDays] = useState("14");
     const [assignee, setAssignee] = useState("all");
     const [agents, setAgents] = useState<any[]>([]);
@@ -150,10 +156,10 @@ export default function TrendsPage() {
                                     <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                                     <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                                     <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                                    <Tooltip />
+                                    <Tooltip contentStyle={c.tooltip} />
                                     <Legend />
-                                    <Line type="monotone" dataKey="opened" name="Opened" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
-                                    <Line type="monotone" dataKey="closed" name="Closed" stroke="#10b981" strokeWidth={2} dot={{ r: 2 }} />
+                                    <Line type="monotone" dataKey="opened" name="Opened" stroke={c.series[0]} strokeWidth={2} dot={{ r: 2 }} />
+                                    <Line type="monotone" dataKey="closed" name="Closed" stroke={c.series[1]} strokeWidth={2} dot={{ r: 2 }} />
                                 </LineChart>
                             </ResponsiveContainer>
                         </CardContent>
@@ -167,11 +173,11 @@ export default function TrendsPage() {
                                     <PieChart>
                                         <Pie data={toSeries(data.by_status)} dataKey="value" nameKey="name" outerRadius={80} label>
                                             {toSeries(data.by_status).map((_, i) => (
-                                                <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                                                <Cell key={i} fill={pieColors[i % pieColors.length]} />
                                             ))}
                                         </Pie>
                                         <Legend />
-                                        <Tooltip />
+                                        <Tooltip contentStyle={c.tooltip} />
                                     </PieChart>
                                 </ResponsiveContainer>
                             </CardContent>
@@ -185,8 +191,8 @@ export default function TrendsPage() {
                                         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                                         <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                                         <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                                        <Tooltip />
-                                        <Bar dataKey="value" fill="#f59e0b" />
+                                        <Tooltip contentStyle={c.tooltip} />
+                                        <Bar dataKey="value" fill={c.warn} />
                                     </BarChart>
                                 </ResponsiveContainer>
                             </CardContent>
@@ -200,8 +206,8 @@ export default function TrendsPage() {
                                         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                                         <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                                         <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                                        <Tooltip />
-                                        <Bar dataKey="value" fill="#10b981" />
+                                        <Tooltip contentStyle={c.tooltip} />
+                                        <Bar dataKey="value" fill={c.series[1]} />
                                     </BarChart>
                                 </ResponsiveContainer>
                             </CardContent>
@@ -209,13 +215,15 @@ export default function TrendsPage() {
                     </div>
 
                     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                        <HBarCard title="By category" rec={data.by_category} color="#8b5cf6" />
-                        <ContactsCard contacts={data.top_contacts} />
+                        <HBarCard title="By category" rec={data.by_category} color={c.accent} tooltipStyle={c.tooltip} />
+                        <ContactsCard contacts={data.top_contacts} color={c.neutral} tooltipStyle={c.tooltip} />
                         {Object.keys(data.by_tag ?? {}).length > 0 && (
-                            <HBarCard title="By tag" rec={data.by_tag} color="#ec4899" />
+                            // eslint-disable-next-line no-restricted-syntax -- deliberate accent outside the categorical palette, distinguishing this card from By category (#2816)
+                            <HBarCard title="By tag" rec={data.by_tag} color="#ec4899" tooltipStyle={c.tooltip} />
                         )}
                         {Object.keys(data.by_classification ?? {}).length > 0 && (
-                            <HBarCard title="By classification" rec={data.by_classification} color="#0ea5e9" />
+                            // eslint-disable-next-line no-restricted-syntax -- deliberate accent outside the categorical palette, distinguishing this card from By category/By tag (#2816)
+                            <HBarCard title="By classification" rec={data.by_classification} color="#0ea5e9" tooltipStyle={c.tooltip} />
                         )}
                     </div>
                 </>
@@ -225,7 +233,7 @@ export default function TrendsPage() {
 }
 
 /** Horizontal bar chart for a {label: count} map (good for long category/tag names). */
-function HBarCard({ title, rec, color }: { title: string; rec: Record<string, number> | null | undefined; color: string }) {
+function HBarCard({ title, rec, color, tooltipStyle }: { title: string; rec: Record<string, number> | null | undefined; color: string; tooltipStyle: ChartColors["tooltip"] }) {
     const data = Object.entries(rec ?? {})
         .map(([name, value]) => ({ name, value }))
         .sort((a, b) => b.value - a.value)
@@ -242,7 +250,7 @@ function HBarCard({ title, rec, color }: { title: string; rec: Record<string, nu
                             <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                             <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
                             <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11 }} />
-                            <Tooltip />
+                            <Tooltip contentStyle={tooltipStyle} />
                             <Bar dataKey="value" fill={color} />
                         </BarChart>
                     </ResponsiveContainer>
@@ -252,7 +260,7 @@ function HBarCard({ title, rec, color }: { title: string; rec: Record<string, nu
     );
 }
 
-function ContactsCard({ contacts }: { contacts: Array<{ name: string; count: number }> | null | undefined }) {
+function ContactsCard({ contacts, color, tooltipStyle }: { contacts: Array<{ name: string; count: number }> | null | undefined; color: string; tooltipStyle: ChartColors["tooltip"] }) {
     const rows = contacts ?? [];
     return (
         <Card>
@@ -266,8 +274,8 @@ function ContactsCard({ contacts }: { contacts: Array<{ name: string; count: num
                             <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                             <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
                             <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10 }} />
-                            <Tooltip />
-                            <Bar dataKey="count" fill="#3b82f6" />
+                            <Tooltip contentStyle={tooltipStyle} />
+                            <Bar dataKey="count" fill={color} />
                         </BarChart>
                     </ResponsiveContainer>
                 )}

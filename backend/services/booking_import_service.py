@@ -77,6 +77,7 @@ import io
 import json
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -442,6 +443,12 @@ def build_plan(
     service_area: dict[str, Any],
     vehicle_type: dict[str, Any],
     batch: str,
+    # Per-run operator scope, not a re-litigation of the 2026-08-20 decision
+    # to support importing cancelled/failed bookings (docs/change-log/
+    # 2026-08-20-legacy-cancelled-failed-booking-import.md) -- that decision
+    # stands, and this still defaults to True. This lets one commit be
+    # scoped to completed-only without touching that default for the next.
+    include_cancelled_failed: bool = True,
 ) -> BookingImportPlan:
     plan = BookingImportPlan()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -458,6 +465,7 @@ def build_plan(
     cancelled_failed_targets: list[tuple[int, dict[str, str]]] = []
     skipped_not_completed = 0
     skipped_test_account = 0
+    skipped_cancelled_failed_excluded_by_scope = 0
     cancelled_target_rows = 0
     failed_target_rows = 0
     for idx, b in enumerate(bookings, start=1):
@@ -472,6 +480,9 @@ def build_plan(
                 skipped_test_account += 1
                 continue
             targets.append((idx, b))
+
+        elif status in LEGACY_CANCELLED_STATUSES and not include_cancelled_failed:
+            skipped_cancelled_failed_excluded_by_scope += 1
 
         elif status in LEGACY_CANCELLED_STATUSES:
             # Same test-account intent as the completed branch, adapted for a
@@ -985,6 +996,13 @@ def build_plan(
                 # this row either. With total_fare=0, "pending" is not
                 # misleading -- nothing is actually owed.
                 "payment_status": "pending",
+                # rides.payment_method is NOT NULL -- was missing here (found
+                # alongside the cancelled/failed-branch NOT NULL gap above,
+                # same PostgREST batch-column-union failure mode: any regular
+                # completed row's "payment_method": "card" in the same batch
+                # would NULL-override this row's omitted key). "card" matches
+                # the regular completed path's own historical-default choice.
+                "payment_method": "card",
                 "status": "completed",
                 "created_at": created_at,
                 "ride_requested_at": created_at,
@@ -1056,6 +1074,20 @@ def build_plan(
         legacy_reason = (b.get("cancelled_reason") or "").strip()
         cancellation_reason = legacy_reason or NO_DRIVER_FOUND_REASON
 
+        # This branch deliberately never sets fare/earnings/duration fields
+        # (test_no_fare_earnings_or_payout_fields_are_written) -- those
+        # NOT NULL-with-default columns must fall through to the schema's own
+        # default (0), not an app-level fake value. That only works if this
+        # row is never bulk-inserted in the SAME PostgREST call as a
+        # completed-path row: PostgREST derives one column list from the
+        # UNION of keys across every row in a batch, then writes NULL (not
+        # the column's own default) for any row missing a key that's in that
+        # union. Found 2026-08-29 during a live commit attempt: a completed
+        # row's "distance_km" in the same 200-row batch as this row NULL-
+        # overrode distance_km here and PostgREST rejected the whole batch's
+        # insert (completed rows included). commit_plan() now batches
+        # completed-shaped and cancelled/failed-shaped rows separately so
+        # this row's shape never has to match a completed row's.
         ride = {
             "id": str(uuid.uuid4()),
             "rider_id": rider_id,
@@ -1134,6 +1166,7 @@ def build_plan(
         "bookings_read": len(bookings),
         "skipped_not_completed": skipped_not_completed,
         "skipped_test_account": skipped_test_account,
+        "skipped_cancelled_failed_excluded_by_scope": skipped_cancelled_failed_excluded_by_scope,
         "target_rows": len(targets),
         "skipped_already_imported": skipped_already_imported,
         "skipped_unmatched_both": skipped_unmatched_both,
@@ -1182,8 +1215,27 @@ def commit_plan(plan: BookingImportPlan) -> None:
     if plan.errors:
         raise RuntimeError("refusing to commit with validation errors")
 
-    for i in range(0, len(plan.rides_to_insert), 200):
-        supabase.table("rides").insert(plan.rides_to_insert[i : i + 200]).execute()
+    # Batch completed-shaped and cancelled/failed-shaped rows separately.
+    # PostgREST's bulk insert derives one column list from the UNION of keys
+    # across every row in a single call, then writes NULL -- not that row's
+    # own schema default -- for any row missing a key that's in that union.
+    # The two ride shapes genuinely differ: completed rows (regular and the
+    # zero-fare-completed anomalous case, both status='completed') always set
+    # every fare/earnings/duration column explicitly, while the normal
+    # cancelled/failed branch (status='cancelled') deliberately never does
+    # (test_no_fare_earnings_or_payout_fields_are_written) so those NOT
+    # NULL-with-default columns fall through to their real schema default
+    # instead of a fake app-level zero. Mixing the two shapes in one batch
+    # reproduced a real production failure 2026-08-29: a completed row's
+    # "distance_km" NULL-overrode every cancelled/failed row missing it in
+    # the same 200-row batch, and PostgREST rejected the whole batch,
+    # completed rows included. Splitting by status keeps each PostgREST call
+    # homogeneous so no column list a row omits is ever in that call's union.
+    completed_rows = [r for r in plan.rides_to_insert if r.get("status") == "completed"]
+    cancelled_failed_rows = [r for r in plan.rides_to_insert if r.get("status") != "completed"]
+    for rows in (completed_rows, cancelled_failed_rows):
+        for i in range(0, len(rows), 200):
+            supabase.table("rides").insert(rows[i : i + 200]).execute()
 
     # After rides: driver_insurance_periods.ride_id has a rides(id) FK, and
     # this table is append-only (migration 64's immutability trigger) with
@@ -1358,6 +1410,10 @@ def print_report(plan: BookingImportPlan, *, dry_run: bool) -> None:
 
 DURATION_ESTIMATED_BACKFILL_MARKER = "legacy_duration_estimated_backfill"
 
+# Bounded worker count for apply_duration_estimated_backfill()'s concurrent
+# per-row apply below — same value as driver_import_service._COMMIT_POOL_WORKERS.
+_APPLY_POOL_WORKERS = 20
+
 
 @dataclass
 class DurationEstimatedBackfillItem:
@@ -1483,13 +1539,12 @@ def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, ba
         return []
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    conflicts: list[str] = []
-    for item in plan.updates:
+
+    def _apply_one(item: DurationEstimatedBackfillItem) -> str | None:
         existing = supabase.table("rides").select("legacy_import_metadata").eq("id", item.id).execute().data
         read_meta = dict((existing[0].get("legacy_import_metadata") or {}) if existing else {})
         if "duration_estimated" in read_meta or DURATION_ESTIMATED_BACKFILL_MARKER in read_meta:
-            conflicts.append(item.id)
-            continue
+            return item.id
 
         meta = dict(read_meta)
         meta["duration_estimated"] = item.duration_estimated
@@ -1503,10 +1558,20 @@ def apply_duration_estimated_backfill(plan: DurationEstimatedBackfillPlan, *, ba
             .filter("legacy_import_metadata", "eq", json.dumps(read_meta, sort_keys=True, default=str))
             .execute()
         )
-        if not res.data:
-            conflicts.append(item.id)
+        return item.id if not res.data else None
 
-    return conflicts
+    # Bounded concurrency: each row is an independent read-then-guarded-write
+    # against its own ride id, so this only changes how long the apply takes,
+    # not what gets written or the optimistic-concurrency guard semantics —
+    # same pattern and worker count as
+    # driver_import_service.apply_legacy_sin_dob_import's fix (preempting the
+    # same sequential-per-row commit-timeout bug class found there).
+    with ThreadPoolExecutor(
+        max_workers=_APPLY_POOL_WORKERS, thread_name_prefix="duration-estimated-backfill-apply"
+    ) as pool:
+        results = [fut.result() for fut in [pool.submit(_apply_one, item) for item in plan.updates]]
+
+    return [old_id for old_id in results if old_id is not None]
 
 
 def print_duration_estimated_backfill_report(plan: DurationEstimatedBackfillPlan, *, dry_run: bool) -> None:

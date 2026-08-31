@@ -203,6 +203,17 @@
     @apply border-border outline-ring/50;
   }
   body {
+    /* Base value for --font-geist-sans (consumed by the `font-sans` utility
+       via --theme inline above). Must live on `body`, not `:root`/`.dark`
+       (both match <html>): --font-plus-jakarta-sans is only ever declared
+       via the next/font `variable` class on <body> itself (layout.tsx), and
+       a custom property that references another one resolves using the
+       declaring element's own scope, not a descendant's — verified with a
+       Playwright check (:root-only version left font-family unresolved,
+       falling through to the browser default serif). No .dark duplicate
+       needed: font choice doesn't vary by theme, and `.dark` matches
+       <html> too, same scope problem as `:root`. */
+    --font-geist-sans: var(--font-plus-jakarta-sans);
     @apply bg-background text-foreground;
   }
 }

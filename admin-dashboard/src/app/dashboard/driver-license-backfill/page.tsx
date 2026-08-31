@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useAuthStore } from "@/store/authStore";
 import { getDrivers, updateDriver } from "@/lib/api";
 import { DocumentReviewer } from "../drivers/_components/document-reviewer";
 
@@ -39,6 +40,10 @@ interface GapDriver {
 export default function DriverLicenseBackfillPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const currentUserRole = useAuthStore((s) => s.user?.role);
+    const isSuperAdmin = (currentUserRole || "").toLowerCase() === "super_admin";
+    const currentUserModules = useAuthStore((s) => s.user?.modules) ?? [];
+    const canReviewDocuments = isSuperAdmin || currentUserModules.includes("documents");
     const [drivers, setDrivers] = useState<GapDriver[]>([]);
     const [loading, setLoading] = useState(true);
     const [edits, setEdits] = useState<Record<string, { license_number: string; license_class: string }>>({});
@@ -186,6 +191,7 @@ export default function DriverLicenseBackfillPage() {
                 driverId={reviewerDriver?.id || null}
                 driverName={reviewerDriver?.name}
                 onClose={() => setReviewerDriver(null)}
+                canReview={canReviewDocuments}
             />
         </div>
     );

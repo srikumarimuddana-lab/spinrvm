@@ -1,7 +1,8 @@
 """Bulk rider import — parse, validate, and commit rider CSV uploads.
 
 Columns: customer_id (Stripe cus_…), email, gender, phone, ratings,
-temp_email, timeZone.
+temp_email, timeZone, created_at (legacy epoch-ms signup date, optional --
+used as the new row's real created_at instead of import time).
 
 Follows the same validate-then-commit contract as driver_import_service.
 Reports carry only row numbers + field + message — never raw PII.
@@ -24,7 +25,7 @@ except ImportError:
 
 REQUIRED_COLUMNS = {"phone"}
 
-OPTIONAL_COLUMNS = {"customer_id", "email", "gender", "ratings", "temp_email", "timezone"}
+OPTIONAL_COLUMNS = {"customer_id", "email", "gender", "ratings", "temp_email", "timezone", "created_at"}
 
 HEADER_ALIASES: dict[str, str] = {
     "customerid": "customer_id",
@@ -81,6 +82,26 @@ def normalize_phone(phone: str) -> str:
     if len(digits) == 11 and digits.startswith("1"):
         return f"+{digits}"
     return phone.strip()
+
+
+def _parse_legacy_epoch_ms(value: str) -> str | None:
+    """Legacy epoch-milliseconds timestamp -> ISO-8601 UTC string.
+
+    Duplicated (not imported) from ``driver_import_service._parse_legacy_epoch_ms``
+    -- this module doesn't otherwise depend on the driver importer, matching
+    this repo's existing per-module ``_select_in`` duplication convention
+    rather than adding a new cross-module coupling for one helper.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        ms = int(float(raw))
+    except (TypeError, ValueError):
+        return None
+    if ms <= 0:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
 
 def read_csv_text(text: str) -> list[dict[str, str]]:
@@ -344,6 +365,14 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
             continue
 
         user_id = str(uuid.uuid4())
+        # The account's real signup date, if the CSV carries the legacy
+        # system's own created_at (epoch-ms) -- falls back to import time
+        # only when the source row has none. Found and fixed 2026-08-30:
+        # every prior run of this importer hardcoded now(), so all migrated
+        # riders showed the import date as their "Joined" date on the admin
+        # Users page instead of their real one. See docs/change-log/
+        # 2026-08-30-rider-created-at-legacy-date-fix.md.
+        created_at = _parse_legacy_epoch_ms(row.get("created_at", "")) or now_iso
         user_row: dict[str, Any] = {
             "id": user_id,
             "phone": phone,
@@ -351,7 +380,7 @@ def build_plan(rows: list[dict[str, str]], batch: str) -> RiderImportPlan:
             "is_rider": True,
             "is_driver": False,
             "profile_complete": bool(first_name),
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": created_at,
         }
         if first_name:
             user_row["first_name"] = first_name
@@ -389,3 +418,81 @@ def commit_plan(plan: RiderImportPlan) -> None:
             continue
         upd["updated_at"] = datetime.now(timezone.utc).isoformat()
         supabase.table("users").update(upd).eq("id", user_id).execute()
+
+
+def _epoch_ms_from_iso(value: str | None) -> int | None:
+    """Parse an ISO-8601 timestamp back to epoch milliseconds, for
+    idempotency comparisons that must be format-independent.
+
+    Duplicated (not imported) from ``driver_import_service._epoch_ms_from_iso``
+    -- see its docstring for why a string compare would false-positive on
+    every epoch-ms-derived row. Same per-module duplication convention as
+    ``_parse_legacy_epoch_ms`` above.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return round(dt.timestamp() * 1000)
+
+
+def find_rider_created_at_corrections(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """One-time repair (2026-08-30): read-only, matches a re-uploaded rider
+    CSV's own `created_at` against already-imported `users` rows and reports
+    any whose stored `created_at` doesn't match the legacy value the row
+    carries.
+
+    build_plan() previously hardcoded `created_at` to import time instead of
+    parsing the legacy value (see docs/change-log/2026-08-30-rider-created-
+    at-legacy-date-fix.md) -- rows imported before that fix show the wrong
+    "Joined" date on the admin Users page. Matches by phone, same as the
+    importer itself; only reports riders (``is_rider=True``) with a real
+    parseable legacy `created_at` in the CSV.
+    """
+    phone_to_legacy_created_at: dict[str, str] = {}
+    for row in rows:
+        phone = normalize_phone(row.get("phone", ""))
+        if not phone:
+            continue
+        legacy_created_at = _parse_legacy_epoch_ms(row.get("created_at", ""))
+        if not legacy_created_at:
+            continue
+        # First occurrence wins, matching this file's own users_by_phone
+        # dedup convention in _prefetch_existing.
+        phone_to_legacy_created_at.setdefault(phone, legacy_created_at)
+
+    if not phone_to_legacy_created_at:
+        return []
+
+    phones = sorted(phone_to_legacy_created_at)
+    existing_users: list[dict[str, Any]] = []
+    for i in range(0, len(phones), 200):
+        batch = phones[i : i + 200]
+        existing_users.extend(
+            supabase.table("users").select("id,phone,created_at,is_rider").in_("phone", batch).execute().data or []
+        )
+
+    corrections: list[dict[str, Any]] = []
+    for u in existing_users:
+        if not u.get("is_rider"):
+            continue
+        legacy_created_at = phone_to_legacy_created_at.get(u.get("phone"))
+        if not legacy_created_at:
+            continue
+        if _epoch_ms_from_iso(u.get("created_at")) == _epoch_ms_from_iso(legacy_created_at):
+            continue
+        corrections.append(
+            {
+                "user_id": u["id"],
+                "old_created_at": u.get("created_at"),
+                "new_created_at": legacy_created_at,
+            }
+        )
+    return corrections
+
+
+def apply_rider_created_at_corrections(corrections: list[dict[str, Any]]) -> None:
+    for c in corrections:
+        supabase.table("users").update({"created_at": c["new_created_at"]}).eq("id", c["user_id"]).execute()

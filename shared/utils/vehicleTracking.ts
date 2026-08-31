@@ -147,6 +147,33 @@ export function shortestArcRotationTarget(current: number, targetBearing: number
   return current + delta;
 }
 
+/**
+ * Great-circle destination: the point `distanceM` meters from `origin` along
+ * `bearingDeg`. Used by the course-up camera to shift the map center ahead of
+ * the car so the car sits in the lower third of the screen, like every
+ * navigation UI. Accurate to centimeters at the sub-kilometer distances used.
+ */
+export function destinationPoint(
+  origin: TrackingLatLng,
+  bearingDeg: number,
+  distanceM: number,
+): TrackingLatLng {
+  const δ = distanceM / EARTH_RADIUS_M;
+  const θ = toRad(bearingDeg);
+  const φ1 = toRad(origin.latitude);
+  const λ1 = toRad(origin.longitude);
+  const φ2 = Math.asin(
+    Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ),
+  );
+  const λ2 =
+    λ1 +
+    Math.atan2(
+      Math.sin(θ) * Math.sin(δ) * Math.cos(φ1),
+      Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2),
+    );
+  return { latitude: (φ2 * 180) / Math.PI, longitude: (λ2 * 180) / Math.PI };
+}
+
 /** Where a chosen bearing came from. `route`/`travel` are movement-derived. */
 export type BearingSource = 'route' | 'travel' | 'heading' | 'none';
 

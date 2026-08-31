@@ -1,3 +1,6 @@
+// For more info, see https://github.com/storybookjs/eslint-plugin-storybook#configuration-flat-config-format
+import storybook from "eslint-plugin-storybook";
+
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
@@ -11,6 +14,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "storybook-static/**",
   ]),
   // Downgrade pre-existing violations to warnings so CI doesn't block on legacy code.
   // These should be gradually fixed but must not block feature PRs.
@@ -112,9 +116,31 @@ const eslintConfig = defineConfig([
           message:
             "Raw Tailwind color utility — use a semantic theme token from globals.css instead (bg-card, text-foreground, text-muted-foreground, border-border, bg-primary, text-warning, text-success, text-destructive, ...). If this is a deliberate, contrast-verified exception (e.g. a categorical status-color map), suppress with eslint-disable-next-line and a one-line reason. Tracked: #2816.",
         },
+        // #2816 follow-on (chart-theming pass): a raw hex literal handed directly
+        // to fill=/stroke=/color= duplicates chart-palette.ts's chartColors() —
+        // the dark/light-validated helper every Recharts chart should read its
+        // colors from instead. Scoped to a Literal reachable from a JSXAttribute
+        // literally named fill/stroke/color (exact match, so camelCase SVG
+        // props like stopColor/floodColor and non-chart component props like
+        // backgroundColor don't match) so it can't fire inside chart-palette.ts
+        // itself (no JSX there), inside object-property color maps elsewhere in
+        // the app (Google-Maps polygon options, demand-band configs — those set
+        // fillColor/strokeColor as object properties on an unrelated attribute,
+        // e.g. options={{fillColor: ...}}, never a literal on fill=/stroke=/
+        // color= itself), or on a plain non-color string like fill="url(#grad)"
+        // or stroke="currentColor". A dynamic expression (fill={c.accent}) is
+        // exactly what this migration moved existing charts to — it isn't a
+        // Literal, so it never trips this rule.
+        {
+          selector:
+            "JSXAttribute[name.name=/^(fill|stroke|color)$/] Literal[value=/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/]",
+          message:
+            "Raw hex color on fill=/stroke=/color= — use chartColors(isDark) from @/components/analytics/chart-palette instead (its .series/.good/.warn/.accent/.bad already cover the categorical + semantic cases). If this is a deliberate one-off outside the shared palette (e.g. a distinct non-categorical accent), suppress with eslint-disable-next-line and a one-line reason.",
+        },
       ],
     },
   },
+  ...storybook.configs["flat/recommended"]
 ]);
 
 export default eslintConfig;

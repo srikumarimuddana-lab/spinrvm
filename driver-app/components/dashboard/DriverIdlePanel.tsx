@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,21 +19,96 @@ const Notifications: typeof import('expo-notifications') | null =
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   (!isExpoGo && Platform.OS !== 'web') ? require('expo-notifications') : null;
 
+// Auto-collapse the vehicle/online hud ~2s after going online — before
+// that it's the reassurance a driver checks before tapping GO; once online
+// it's just chrome eating map real estate every second it cruises. A tap
+// re-expands it (re-arming the same timer) if they want to double-check
+// the plate mid-shift. See DriverIdlePanel's onExpandedChange for how the
+// map (index.tsx) tracks this to reclaim mapPadding when collapsed.
+const HUD_AUTO_COLLAPSE_MS = 2_000;
+const HUD_RE_COLLAPSE_MS = 2_500;
+// Content heights the hud animates between — exported so index.tsx's
+// mapPadding can reserve the right amount of map space for each state
+// (same pattern as ActiveRidePanel's onExpandedChange in round 6).
+// Expanded ≈ vehiclePill (~38) + its 10 margin + statusPill (~38).
+export const HUD_EXPANDED_HEIGHT_DP = 90;
+// Collapsed ≈ one compact pill row.
+export const HUD_COLLAPSED_HEIGHT_DP = 34;
+
 interface IdlePanelProps {
   isOnline: boolean;
   onToggleOnline: () => void;
   pulseAnim: any;
+  // Reports the hud's expanded/collapsed state so the map can reserve
+  // mapPadding accordingly — same contract as ActiveRidePanel's
+  // onExpandedChange (round 6).
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   isOnline,
   onToggleOnline,
+  onExpandedChange,
 }) => {
   const { colors } = useTheme();
   const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const driver = useAuthStore(s => s.driver);
+
+  // ── Collapsible hud (vehicle pill + online pill) ──
+  const [hudExpanded, setHudExpanded] = useState(true);
+  useEffect(() => {
+    onExpandedChange?.(hudExpanded);
+  }, [hudExpanded, onExpandedChange]);
+  // Playful spring, not a linear fade — matches ActiveRidePanel's draggable
+  // sheet spring (tension/friction) so transitions feel consistent across
+  // the app rather than each screen inventing its own motion.
+  const hudAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    Animated.spring(hudAnim, {
+      toValue: hudExpanded ? 1 : 0,
+      useNativeDriver: false, // drives height/margin, which the native driver can't touch
+      tension: 70,
+      friction: 8,
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hudExpanded]);
+  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+    if (isOnline) {
+      collapseTimerRef.current = setTimeout(() => setHudExpanded(false), HUD_AUTO_COLLAPSE_MS);
+    } else {
+      // Always show full info in the pre-online state — this is the
+      // reassurance moment (right vehicle/plate on file) before tapping GO.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHudExpanded(true);
+    }
+    return () => { if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current); };
+  }, [isOnline]);
+  const handleHudTap = () => {
+    if (hudExpanded) return;
+    setHudExpanded(true);
+    if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+    collapseTimerRef.current = setTimeout(() => setHudExpanded(false), HUD_RE_COLLAPSE_MS);
+  };
+  // hudAnim is the same verified-safe stable ref idiom as goAnim below
+  // (mutated only via Animated.spring()/.interpolate(), never reassigned).
+  // Precomputed once here (with the required disable comments) so the JSX
+  // below reads plain interpolation values instead of touching the ref
+  // itself at each usage site.
+  // eslint-disable-next-line react-hooks/refs
+  const hudHeight = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [HUD_COLLAPSED_HEIGHT_DP, HUD_EXPANDED_HEIGHT_DP] });
+  // eslint-disable-next-line react-hooks/refs
+  const hudMarginBottom = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [12, 20] });
+  const fullContentOpacity = hudAnim;
+  // eslint-disable-next-line react-hooks/refs
+  const fullContentScale = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] });
+  // eslint-disable-next-line react-hooks/refs
+  const collapsedPillOpacity = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+  // eslint-disable-next-line react-hooks/refs
+  const collapsedPillScale = hudAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.9] });
 
   // Only drivers with status='active' can go online. The button stays
   // pressable in every state so toggleOnline can surface a specific toast
@@ -117,39 +192,91 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   return (
     <View style={[styles.idlePanelContainer, { paddingBottom: insets.bottom + 16 }]} pointerEvents="box-none">
 
-      {/* HUD Info Area */}
-      <View style={styles.hudArea} pointerEvents="box-none">
+      {/* HUD Info Area — animated height so the collapse/expand reads as one
+          continuous playful motion, not an instant cut. overflow:'hidden'
+          clips the fading-out variant during the spring instead of letting
+          it poke past the shrinking box. */}
+      <Animated.View
+        style={[
+          styles.hudArea,
+          {
+            height: hudHeight,
+            marginBottom: hudMarginBottom,
+            overflow: 'hidden',
+          },
+        ]}
+        pointerEvents="box-none"
+      >
+        {/* Full content — vehicle pill + status pill. Fades/scales out as
+            the hud collapses; absolutely positioned once collapsed so it
+            doesn't force the shrinking box back open. */}
+        {/* fullContentOpacity/fullContentScale are plain vars aliased from
+            the verified-safe hudAnim ref above (see its declaration
+            comment) — not a fresh ref read, but the linter's data-flow
+            tracking still traces the alias back to it. */}
+        <Animated.View
+          // eslint-disable-next-line react-hooks/refs
+          style={{
+            width: '100%',
+            alignItems: 'center',
+            // eslint-disable-next-line react-hooks/refs
+            opacity: fullContentOpacity,
+            transform: [{ scale: fullContentScale }],
+            position: hudExpanded ? 'relative' : 'absolute',
+          }}
+          pointerEvents={hudExpanded ? 'box-none' : 'none'}
+        >
+          {vehicleLine ? (
+            <View style={styles.vehiclePill}>
+              <Ionicons name="car-outline" size={14} color={colors.textSecondary} />
+              <Text style={styles.vehiclePillText} numberOfLines={1}>{vehicleLine}</Text>
+              {driver?.license_plate ? (
+                <View style={styles.plateBadge}>
+                  <Text style={styles.plateBadgeText}>{driver.license_plate.toUpperCase()}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
 
-        {/* Vehicle details as persistent text — stays visible offline */}
-        {vehicleLine ? (
-          <View style={styles.vehiclePill}>
-            <Ionicons name="car-outline" size={14} color={colors.textSecondary} />
-            <Text style={styles.vehiclePillText} numberOfLines={1}>{vehicleLine}</Text>
-            {driver?.license_plate ? (
-              <View style={styles.plateBadge}>
-                <Text style={styles.plateBadgeText}>{driver.license_plate.toUpperCase()}</Text>
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-
-
-        {/* Status Indicator Pill */}
-        <View style={styles.statusPillWrapper}>
+          <View style={styles.statusPillWrapper}>
             {isOnline ? (
-                <View style={styles.statusPillOnline} accessibilityRole="text" accessibilityLabel={t('dashboard.youreOnline')}>
-                    <View style={styles.onlineDot} />
-                    <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
-                </View>
+              <View style={styles.statusPillOnline} accessibilityRole="text" accessibilityLabel={t('dashboard.youreOnline')}>
+                <View style={styles.onlineDot} />
+                <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
+              </View>
             ) : (
-                <View style={styles.statusPillOffline} accessibilityRole="text" accessibilityLabel={t('home.offline')}>
-                    <View style={styles.offlineDot} />
-                    <Text allowFontScaling={false} style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
-                </View>
+              <View style={styles.statusPillOffline} accessibilityRole="text" accessibilityLabel={t('home.offline')}>
+                <View style={styles.offlineDot} />
+                <Text allowFontScaling={false} style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
+              </View>
             )}
-        </View>
+          </View>
+        </Animated.View>
 
-      </View>
+        {/* Collapsed pill — tap to re-expand. Only rendered/relevant once
+            online (the offline state never collapses). */}
+        <Animated.View
+          style={{
+            opacity: collapsedPillOpacity,
+            transform: [{ scale: collapsedPillScale }],
+            position: hudExpanded ? 'absolute' : 'relative',
+          }}
+          pointerEvents={hudExpanded ? 'none' : 'box-none'}
+        >
+          <TouchableOpacity
+            style={styles.collapsedHudPill}
+            onPress={handleHudTap}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={t('dashboard.youreOnline')}
+            accessibilityHint="Tap to show vehicle details"
+          >
+            <View style={styles.onlineDot} />
+            <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
+            <Ionicons name="chevron-down" size={12} color={colors.success} />
+          </TouchableOpacity>
+        </Animated.View>
+      </Animated.View>
 
       {/* Floating GO Button */}
       <View style={styles.goButtonArea} pointerEvents="box-none">
@@ -241,6 +368,22 @@ function createStyles(colors: ThemeColors) {
       letterSpacing: 0.5,
     },
 
+    collapsedHudPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.successBg,
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: colors.success,
+      gap: 6,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+      elevation: 3,
+    },
     statusPillWrapper: {
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 2 },

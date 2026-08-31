@@ -15,11 +15,13 @@ import {
 // list page (audit-logs, safety, drivers, users, ...) renders through
 // Table/SortableHead/Card/Button/Input, not raw <div>/<button>/<input>.
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { isStaffRequiredFieldsValid, isStaffPasswordValid } from "@/lib/staffFormSchema";
 
 // Must stay in step with AVAILABLE_MODULES in backend/routes/admin/staff.py.
 // The create/update handlers filter submitted modules against that list, so a
@@ -155,7 +157,7 @@ export default function StaffPage() {
   };
 
   const handleSubmit = async () => {
-    if (!form.email || !form.first_name || !form.last_name) return;
+    if (!isStaffRequiredFieldsValid(form.email, form.first_name, form.last_name)) return;
     try {
       if (editingId) {
         await updateStaff(editingId, {
@@ -165,7 +167,7 @@ export default function StaffPage() {
           modules: form.modules,
         });
       } else {
-        if (!form.password) return;
+        if (!isStaffPasswordValid(form.password)) return;
         await createStaff(form);
       }
       toast({ title: editingId ? "Staff member updated" : "Staff member created" });
@@ -253,17 +255,17 @@ export default function StaffPage() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Staff Management</h1>
-          <p className="text-muted-foreground mt-1">Create staff accounts and control module access</p>
-        </div>
-        <Button onClick={() => { resetForm(); setShowForm(true); }}>
-          <Plus className="h-4 w-4 mr-1.5" />
-          Add Staff
-        </Button>
-      </div>
+      <PageHeader
+        className="flex items-center justify-between mb-8"
+        title="Staff Management"
+        description="Create staff accounts and control module access"
+        actions={
+          <Button onClick={() => { resetForm(); setShowForm(true); }}>
+            <Plus className="h-4 w-4 mr-1.5" />
+            Add Staff
+          </Button>
+        }
+      />
 
       {/* Add/Edit Form */}
       {showForm && (

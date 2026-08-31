@@ -542,6 +542,7 @@ export default function AiConsolePage() {
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
                                 placeholder={target ? "Message as this user…" : "Select a user first"}
+                                aria-label="Message as this user"
                                 disabled={!target || sending}
                             />
                             <Button onClick={() => send()} disabled={!target || sending || !input.trim()}>

@@ -41,6 +41,15 @@ interface DocumentReviewerProps {
     driverName?: string | null;
     onClose: () => void;
     onAfterAction?: () => void;
+    // Whether the signed-in staff member holds the backend's "documents"
+    // module grant, which gates every endpoint this component calls
+    // (getDriverDocuments, reviewDocument, downloadDriverDocument all sit
+    // behind require_module("documents") — see routes/admin/__init__.py).
+    // Defaults to true so every existing caller (and existing tests) keeps
+    // today's behavior unchanged; a caller that also gates a page on the
+    // "drivers" module (which is a *different* grant) should pass this
+    // explicitly to avoid rendering approve/reject controls that will 403.
+    canReview?: boolean;
 }
 
 type DocRow = {
@@ -85,7 +94,7 @@ const statusTone = (status?: string) => {
     }
 };
 
-export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterAction }: DocumentReviewerProps) {
+export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterAction, canReview = true }: DocumentReviewerProps) {
     const { toast } = useToast();
     const [docs, setDocs] = useState<DocRow[]>([]);
     const [index, setIndex] = useState(0);
@@ -127,7 +136,10 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
     }, []);
 
     useEffect(() => {
-        if (!open || !driverId) return;
+        // Without the "documents" grant, getDriverDocuments would 403
+        // (routes/admin/documents.py is mounted behind require_module("documents")) —
+        // skip the call entirely rather than surfacing a fetch error.
+        if (!open || !driverId || !canReview) return;
         setLoading(true);
         setDocs([]);
         setIndex(0);
@@ -141,7 +153,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
             })
             .catch((e) => toast({ title: "Could not load documents", description: String(e?.message || e), variant: "destructive" }))
             .finally(() => setLoading(false));
-    }, [open, driverId, toast, resetDocState]);
+    }, [open, driverId, canReview, toast, resetDocState]);
 
     const goPrev = useCallback(() => { setIndex((i) => Math.max(0, i - 1)); resetDocState(); }, [resetDocState]);
     const goNext = useCallback(() => { setIndex((i) => Math.min(docs.length - 1, i + 1)); resetDocState(); }, [docs.length, resetDocState]);
@@ -291,7 +303,15 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                 </div>
             </div>
 
-            {loading ? (
+            {!canReview ? (
+                <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                    <div className="text-center max-w-sm px-6">
+                        <AlertCircle className="h-10 w-10 mx-auto opacity-30 mb-3" />
+                        <p className="text-sm font-medium text-foreground">You don&apos;t have access to document review</p>
+                        <p className="text-xs mt-1">Ask an admin to grant you the &quot;Documents&quot; module to view or review driver documents.</p>
+                    </div>
+                </div>
+            ) : loading ? (
                 <div className="flex-1 flex items-center justify-center text-muted-foreground">
                     <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading documents…
                 </div>

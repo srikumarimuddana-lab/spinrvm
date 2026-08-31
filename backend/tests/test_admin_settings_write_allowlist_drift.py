@@ -35,6 +35,7 @@ from routes.admin.settings import SettingsUpdateRequest
 # (soavhtdhefowwvforzwb) on 2026-08-22. 129 columns.
 KNOWN_SETTINGS_COLUMNS = frozenset(
     {
+        "admin_command_palette_enabled",
         "admin_theme_v2_enabled",
         "ai_api_key_anthropic",
         "ai_api_key_gemini",

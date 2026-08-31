@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
     View,
     Text,
@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router/react-navigation';
 import {
     useNotifications,
     useMarkNotificationRead,
@@ -58,6 +59,17 @@ export default function NotificationsScreen() {
     // means re-opening this screen renders the inbox instantly while a
     // background refetch keeps it fresh.
     const { data: rawNotifData, isFetching, isPending, isError, refetch } = useNotifications(50);
+
+    // Belt-and-suspenders alongside the AppState/focusManager wiring in
+    // shared/api/queryClient.ts: that covers app-level foreground, this
+    // covers in-app screen focus (e.g. tapping the bell without ever
+    // backgrounding the app) — same pattern as lost-and-found.tsx.
+    useFocusEffect(
+        useCallback(() => {
+            refetch();
+        }, [refetch]),
+    );
+
     const data = rawNotifData as { notifications?: Notification[]; unread_count?: number } | undefined;
     const notifications: Notification[] = data?.notifications ?? [];
     const unreadCount: number = data?.unread_count ?? 0;

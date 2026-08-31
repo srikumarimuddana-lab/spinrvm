@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -234,20 +235,16 @@ export default function VehicleTypesPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Vehicle Types</h1>
-                    <p className="text-muted-foreground mt-1">
-                        Manage the car types available for rides. Add images, set capacity,
-                        and toggle availability.
-                    </p>
-                </div>
-                <Button onClick={openCreate} className="gap-2">
-                    <Plus className="h-4 w-4" />
-                    Add Vehicle Type
-                </Button>
-            </div>
+            <PageHeader
+                title="Vehicle Types"
+                description="Manage the car types available for rides. Add images, set capacity, and toggle availability."
+                actions={
+                    <Button onClick={openCreate} className="gap-2">
+                        <Plus className="h-4 w-4" />
+                        Add Vehicle Type
+                    </Button>
+                }
+            />
 
             {/* Content */}
             {loading ? (

@@ -16,6 +16,7 @@ try:
     from ...routes.users import store_profile_image
     from ...services import lms_service
     from ...services.driver_import_service import dob_source, sin_source
+    from ...services.pre_launch_flag_service import fetch_pre_launch_flagged_ids
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.driver_status_notifications import (
@@ -35,6 +36,7 @@ except ImportError:
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
     from services.driver_import_service import dob_source, sin_source  # type: ignore
+    from services.pre_launch_flag_service import fetch_pre_launch_flagged_ids  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_status_notifications import (  # type: ignore
@@ -446,6 +448,8 @@ async def admin_get_drivers(
     vehicle_type_id: Optional[str] = None,
     photo_status: Optional[str] = None,
     missing_license: bool = False,
+    legacy_import: Optional[bool] = None,
+    pre_launch: Optional[bool] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = None,
 ):
@@ -459,6 +463,12 @@ async def admin_get_drivers(
     UNIQUE(drivers.user_id) so duplicates can't exist at the DB level.
     We still collapse by phone/user_id here so that if a legacy snapshot
     ever restores old state, the admin UI won't show duplicate rows.
+
+    `pre_launch`: filters on the pre-launch-legacy-data flag
+    (`legacy_import_metadata.pre_launch_test`, set by
+    `services/pre_launch_flag_service.py` -- see its module docstring for
+    what actually gets flagged and why). True = flagged only, False = hide
+    flagged, omitted = no filter (default, matches every prior behavior).
     """
 
     filters = {}
@@ -474,6 +484,29 @@ async def admin_get_drivers(
         filters["service_area_id"] = service_area_id
     if vehicle_type_id:
         filters["vehicle_type_id"] = vehicle_type_id
+
+    # `legacy_import_metadata` is JSONB NOT NULL DEFAULT '{}'::jsonb, not
+    # nullable -- "not migrated" is the default-value row, not a NULL one, so
+    # this must use $eq/$ne against `{}` (same trap EXCLUDE_LEGACY_RIDES in
+    # utils/legacy_rides.py exists to avoid; a bare `{col: None}` here would
+    # silently match zero rows instead of "not imported").
+    if legacy_import is not None:
+        filters["legacy_import_metadata"] = {"$ne": {}} if legacy_import else {"$eq": {}}
+
+    # Pre-launch flag filter. The generic filter DSL (repositories/_base.py)
+    # has no JSONB-path operator, so flagged ids are resolved with a
+    # dedicated query first (same pattern `photo_status` below uses for a
+    # cross-table lookup), then fed into the existing `$in`/`$nin` filter --
+    # `filters["id"]` is otherwise unused by this route, so no collision
+    # with `search`'s own `$or` clause (a different top-level key, ANDed).
+    if pre_launch is not None:
+        flagged_ids = fetch_pre_launch_flagged_ids("drivers")
+        if pre_launch:
+            if not flagged_ids:
+                return []
+            filters["id"] = {"$in": list(flagged_ids)}
+        elif flagged_ids:
+            filters["id"] = {"$nin": list(flagged_ids)}
 
     # See the "Driver search" block above the route for the two-query design.
     if search:

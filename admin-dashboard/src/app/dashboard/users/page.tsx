@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -40,7 +41,7 @@ import {
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift } from "lucide-react";
+import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift, Upload } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal, backfillStripeCustomerEmails } from "@/lib/api";
@@ -59,6 +60,9 @@ export default function UsersPage() {
     const [search, setSearch] = useState("");
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
     const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver" | "both">("all");
+    // Legacy-import filter — "imported"/"not_imported" map to the
+    // legacy_import=true/false query param; "all" sends no filter.
+    const [legacyFilter, setLegacyFilter] = useState<"all" | "imported" | "not_imported">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
     // Full detail for the open user (real ride count, recent rides, saved cards),
     // loaded on demand — the list row carries none of this.
@@ -153,6 +157,7 @@ export default function UsersPage() {
                 search: search.trim() || undefined,
                 limit: PAGE_SIZE + 1,
                 offset: page * PAGE_SIZE,
+                legacy_import: legacyFilter === "all" ? undefined : legacyFilter === "imported",
             });
             if (reqId !== reqIdRef.current) return;
             const arr = Array.isArray(data) ? data : [];
@@ -217,7 +222,7 @@ export default function UsersPage() {
         }, 300);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [search, roleFilter]);
+    }, [search, roleFilter, legacyFilter]);
 
     // Re-fetch when page changes.
     useEffect(() => {
@@ -334,44 +339,44 @@ export default function UsersPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         {/* eslint-disable-next-line no-restricted-syntax -- decorative page-header icon tint (#2816) */}
                         <Users className="h-8 w-8 text-sky-500" />
                         Users
-                    </h1>
-                    <p className="text-muted-foreground mt-1">
-                        View and manage registered riders.
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading} aria-label="Refresh">
-                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => {
-                        const next = !showPii;
-                        setShowPii(next);
-                        if (next) logPiiReveal("users", "page_toggle").catch(() => {});
-                    }}>
-                        {showPii ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
-                        {showPii ? "Hide PII" : "Show PII"}
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleBackfillStripeEmails}
-                        disabled={stripeEmailSyncRunning}
-                        title="Attach riders' emails to their Stripe customers so they can be found by address in the Stripe dashboard. Previews the count before writing (super admin)."
-                    >
-                        <CreditCard className="mr-2 h-4 w-4" />
-                        {stripeEmailSyncRunning ? "Syncing…" : "Sync Stripe emails"}
-                    </Button>
-                    <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
-                        <Download className="mr-2 h-4 w-4" /> Export
-                    </Button>
-                </div>
-            </div>
+                    </span>
+                }
+                description="View and manage registered riders."
+                actions={
+                    <div className="flex gap-2">
+                        <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading} aria-label="Refresh">
+                            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => {
+                            const next = !showPii;
+                            setShowPii(next);
+                            if (next) logPiiReveal("users", "page_toggle").catch(() => {});
+                        }}>
+                            {showPii ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
+                            {showPii ? "Hide PII" : "Show PII"}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBackfillStripeEmails}
+                            disabled={stripeEmailSyncRunning}
+                            title="Attach riders' emails to their Stripe customers so they can be found by address in the Stripe dashboard. Previews the count before writing (super admin)."
+                        >
+                            <CreditCard className="mr-2 h-4 w-4" />
+                            {stripeEmailSyncRunning ? "Syncing…" : "Sync Stripe emails"}
+                        </Button>
+                        <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
+                            <Download className="mr-2 h-4 w-4" /> Export
+                        </Button>
+                    </div>
+                }
+            />
 
             {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -462,13 +467,27 @@ export default function UsersPage() {
                         <SelectItem value="both">Dual-role</SelectItem>
                     </SelectContent>
                 </Select>
-                {(search || roleFilter !== "all") && (
+                <div className="flex items-center gap-1.5">
+                    <Upload className="h-4 w-4 text-muted-foreground" />
+                    <Select value={legacyFilter} onValueChange={(v) => setLegacyFilter(v as "all" | "imported" | "not_imported")}>
+                        <SelectTrigger className="w-40" aria-label="Filter by legacy import status">
+                            <SelectValue placeholder="All Users" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Users</SelectItem>
+                            <SelectItem value="imported">Imported only</SelectItem>
+                            <SelectItem value="not_imported">Not imported</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+                {(search || roleFilter !== "all" || legacyFilter !== "all") && (
                     <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => {
                             setSearch("");
                             setRoleFilter("all");
+                            setLegacyFilter("all");
                         }}
                     >
                         Clear filters

@@ -21,6 +21,11 @@ export const getDrivers = (opts: {
     /** ACTION_ITEMS.md B14 backfill queue — drivers missing license_number
      * or license_class. Cannot be combined with `search` (backend 400s). */
     missing_license?: boolean;
+    /** true = legacy-imported drivers only, false = non-imported only, omitted = no filter. */
+    legacy_import?: boolean;
+    /** true = pre-launch-flagged drivers only, false = hide flagged, omitted = no filter.
+     * See services/pre_launch_flag_service.py for what "flagged" means. */
+    pre_launch?: boolean;
     sort_by?: string;
     sort_dir?: "asc" | "desc";
 } = {}) => {
@@ -36,6 +41,8 @@ export const getDrivers = (opts: {
     if (opts.search) sp.set("search", opts.search);
     if (opts.photo_status) sp.set("photo_status", opts.photo_status);
     if (opts.missing_license != null) sp.set("missing_license", String(opts.missing_license));
+    if (opts.legacy_import != null) sp.set("legacy_import", String(opts.legacy_import));
+    if (opts.pre_launch != null) sp.set("pre_launch", String(opts.pre_launch));
     if (opts.sort_by) sp.set("sort_by", opts.sort_by);
     if (opts.sort_dir) sp.set("sort_dir", opts.sort_dir);
     const qs = sp.toString();

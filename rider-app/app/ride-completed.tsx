@@ -607,15 +607,18 @@ function RideCompletedScreenContent() {
                 </TouchableOpacity>
               ))}
               <View style={[styles.tipCustom, customTip ? styles.tipCustomActive : null]}>
-                <Text style={styles.tipDollar}>$</Text>
+                <Text style={[styles.tipDollar, customTip ? styles.tipDollarActive : null]}>$</Text>
                 <TextInput
-                  style={styles.tipCustomInput}
+                  style={[styles.tipCustomInput, customTip ? styles.tipCustomInputActive : null]}
                   placeholder="Other"
-                  placeholderTextColor="#BBB"
+                  placeholderTextColor={colors.textDim}
                   keyboardType="decimal-pad"
                   value={customTip}
                   onChangeText={(t) => { setCustomTip(t); setSelectedTip(null); }}
                   returnKeyType="done"
+                  // Caret has to flip with the fill too, or it is lost against it.
+                  selectionColor={customTip ? colors.background : colors.primary}
+                  accessibilityLabel="Custom tip amount"
                 />
               </View>
             </View>
@@ -957,6 +960,11 @@ export default function RideCompletedScreen() {
 }
 
 function createStyles(colors: ThemeColors) {
+  // Foreground for anything painted on a colors.text-filled surface (the
+  // selected tip pill, the filled custom-tip box). colors.text/colors.background
+  // are a guaranteed-contrasting pair in both themes; a literal '#FFF' is only
+  // correct in light mode and disappears on dark mode's near-white colors.text.
+  const onInverse = colors.background;
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F5F5F5' },
     content: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 20, gap: 10 },
@@ -1083,7 +1091,7 @@ function createStyles(colors: ThemeColors) {
     tipBtnText: {
       fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
     },
-    tipBtnTextActive: { color: '#FFF' },
+    tipBtnTextActive: { color: onInverse },
     tipCustom: {
       flexDirection: 'row', alignItems: 'center',
       backgroundColor: colors.surface, borderRadius: 14, borderWidth: 1.5, borderColor: colors.border,
@@ -1091,10 +1099,14 @@ function createStyles(colors: ThemeColors) {
     },
     tipCustomActive: { borderColor: colors.text, backgroundColor: colors.text },
     tipDollar: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
+    tipDollarActive: { color: onInverse },
     tipCustomInput: {
       fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
       paddingVertical: 10, paddingHorizontal: 4, minWidth: 44,
     },
+    // Without this the typed amount keeps colors.text on a colors.text fill —
+    // the rider types a tip they cannot read.
+    tipCustomInputActive: { color: onInverse },
     // ── Fare card ──
     fareCard: {
       backgroundColor: colors.surface, borderRadius: 16, padding: 20,

@@ -106,8 +106,19 @@ updates:
     ignore:
       - dependency-name: "expo"
         update-types: ["version-update:semver-major"]
+      # react-native minors are SDK-coupled breaking changes: Expo SDK 57
+      # bundles RN 0.86.x, and 0.87 removed rn-get-polyfills, which every
+      # 57.x @expo/metro-config requires — 'expo export'/'eas build' hard-fail
+      # (seen on the 2026-08 expo-stack group PRs). Bump RN only together
+      # with an Expo SDK upgrade.
       - dependency-name: "react-native"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # jest 30.4.x's runtime rewrite calls jest-mock APIs jest-expo's
+      # bundled jest-29-era environments don't provide (clearMocksOnScope) —
+      # every suite fails at startup. Lift this once jest-expo ships
+      # jest-30.4-compatible environments.
+      - dependency-name: "jest"
+        update-types: ["version-update:semver-minor"]
 
   # ─── Driver App ──────────────────────────────────────────────────────────
   - package-ecosystem: npm
@@ -139,8 +150,19 @@ updates:
     ignore:
       - dependency-name: "expo"
         update-types: ["version-update:semver-major"]
+      # react-native minors are SDK-coupled breaking changes: Expo SDK 57
+      # bundles RN 0.86.x, and 0.87 removed rn-get-polyfills, which every
+      # 57.x @expo/metro-config requires — 'expo export'/'eas build' hard-fail
+      # (seen on the 2026-08 expo-stack group PRs). Bump RN only together
+      # with an Expo SDK upgrade.
       - dependency-name: "react-native"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # jest 30.4.x's runtime rewrite calls jest-mock APIs jest-expo's
+      # bundled jest-29-era environments don't provide (clearMocksOnScope) —
+      # every suite fails at startup. Lift this once jest-expo ships
+      # jest-30.4-compatible environments.
+      - dependency-name: "jest"
+        update-types: ["version-update:semver-minor"]
 
   # ─── Shared package ───────────────────────────────────────────────────────
   - package-ecosystem: npm

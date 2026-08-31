@@ -154,6 +154,45 @@ export const adminCommitLegacyDriverImport = (file: File, opts?: LegacyDriverImp
         body: legacyDriverImportFormData(file, opts),
     });
 
+/** One-time repair for the 2026-08-29 production incident: users flagged
+ * is_driver=true via this import's existing-account-link path whose
+ * companion drivers row never landed (a since-fixed commit-ordering bug).
+ * apply=false (default) only reports what would be created. */
+export interface OrphanedDriverBackfillResult {
+    scanned: number;
+    applied: boolean;
+    fixed: number;
+}
+export const adminBackfillOrphanedLegacyDrivers = (
+    apply: boolean,
+    opts?: { serviceAreaId?: string; serviceAreaName?: string },
+) =>
+    request<OrphanedDriverBackfillResult>("/api/admin/legacy-drivers/backfill-orphaned", {
+        method: "POST",
+        body: JSON.stringify({
+            apply,
+            service_area_id: opts?.serviceAreaId,
+            service_area_name: opts?.serviceAreaName,
+        }),
+        headers: { "Content-Type": "application/json" },
+    });
+
+/** One-time repair (2026-08-30): the orphan backfill above stamps a
+ * repaired drivers row's created_at as the repair run's own time; the
+ * driver's real join date is already correct on their linked user's
+ * created_at. apply=false (default) only reports what would change. */
+export interface DriverCreatedAtBackfillResult {
+    scanned: number;
+    applied: boolean;
+    fixed: number;
+}
+export const adminBackfillDriverCreatedAt = (apply: boolean) =>
+    request<DriverCreatedAtBackfillResult>("/api/admin/legacy-drivers/backfill-created-at", {
+        method: "POST",
+        body: JSON.stringify({ apply }),
+        headers: { "Content-Type": "application/json" },
+    });
+
 /* ── Legacy Booking Import (4 CSVs) ───────── */
 // Super-admin-only (backend/routes/admin/booking_import.py). Imports completed
 // rides from the previous app into `rides`, plus one offsetting `payouts` row
@@ -172,6 +211,7 @@ export interface BookingImportCounts {
     bookings_read: number;
     skipped_not_completed: number;
     skipped_test_account: number;
+    skipped_cancelled_failed_excluded_by_scope: number;
     target_rows: number;
     skipped_already_imported: number;
     skipped_unmatched_both: number;
@@ -188,6 +228,20 @@ export interface BookingImportCounts {
     sum_offset_payouts: number;
     sum_tips: number;
     sum_tax: number;
+    // --- cancelled/failed path (added 2026-08-20, A41) --- rides_planned
+    // above is completed-only and predates this path; these are the fields
+    // that account for the rest of what commit actually writes to `rides`.
+    cancelled_target_rows: number;
+    failed_target_rows: number;
+    cancelled_failed_rides_planned: number;
+    cancelled_failed_skipped_already_imported: number;
+    cancelled_failed_skipped_unmatched_both: number;
+    cancelled_failed_zero_fare_completed: number;
+    cancelled_failed_skipped_missing_coordinates: number;
+    cancelled_failed_unmatched_riders: number;
+    cancelled_failed_unmatched_drivers: number;
+    total_rides_planned: number;
+    insurance_periods_planned: number;
 }
 export interface BookingImportReport {
     batch: string;
@@ -220,6 +274,11 @@ export interface BookingImportOptions {
     vehicleTypeId?: string;
     vehicleTypeName?: string;
     batch?: string;
+    // Per-run scope, not a re-litigation of the 2026-08-20 decision to
+    // support cancelled/failed bookings -- that decision stands and the
+    // backend still defaults to true. Lets one commit be scoped down
+    // without changing the default for the next.
+    includeCancelledFailed?: boolean;
 }
 
 function bookingImportFormData(files: BookingImportFiles, opts?: BookingImportOptions): FormData {
@@ -233,6 +292,9 @@ function bookingImportFormData(files: BookingImportFiles, opts?: BookingImportOp
     if (opts?.vehicleTypeId) fd.append("vehicle_type_id", opts.vehicleTypeId);
     if (opts?.vehicleTypeName) fd.append("vehicle_type_name", opts.vehicleTypeName);
     if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.includeCancelledFailed !== undefined) {
+        fd.append("include_cancelled_failed", String(opts.includeCancelledFailed));
+    }
     return fd;
 }
 
@@ -344,6 +406,57 @@ export const adminCommitWalletImport = (files: WalletImportFiles, opts?: WalletI
     request<WalletImportCommitResult>("/api/admin/wallets/import/commit", {
         method: "POST",
         body: walletImportFormData(files, opts),
+    });
+
+/* ── Pre-Launch Legacy Data Flagging (no files) ───── */
+// Super-admin-only (backend/routes/admin/pre_launch_flag.py). Unlike every
+// other tool on this page, this one has no CSV to upload — it operates
+// entirely on already-migrated production data (drivers/rides), flagging
+// dormant pre-launch driver profiles and pre-launch rides so admin views/
+// KPIs can filter them out. Additive only: sets
+// legacy_import_metadata.pre_launch_test = true. Never deletes anything.
+export interface PreLaunchFlagCounts {
+    driver_candidates: number;
+    ride_candidates: number;
+}
+export interface PreLaunchFlagReport {
+    batch: string;
+    counts: PreLaunchFlagCounts;
+    can_commit: boolean;
+}
+export interface PreLaunchFlagCommitResult extends PreLaunchFlagReport {
+    committed: boolean;
+    drivers_flagged?: number;
+    rides_flagged?: number;
+    driver_conflicts?: number;
+    ride_conflicts?: number;
+}
+export interface PreLaunchFlagOptions {
+    batch?: string;
+}
+
+function preLaunchFlagFormData(opts?: PreLaunchFlagOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the plan and return counts. No writes. */
+export const adminPreviewPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
+    request<PreLaunchFlagReport>("/api/admin/legacy/pre-launch-flag/preview", {
+        method: "POST",
+        body: preLaunchFlagFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if there's anything to flag, applies it.
+ * Safe to re-send: an already-flagged row is skipped, never re-flagged or
+ * double-written.
+ */
+export const adminCommitPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
+    request<PreLaunchFlagCommitResult>("/api/admin/legacy/pre-launch-flag/commit", {
+        method: "POST",
+        body: preLaunchFlagFormData(opts),
     });
 
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
@@ -542,6 +655,27 @@ export const adminCommitRiderImport = (file: File, batch?: string) =>
         body: riderImportFormData(file, batch),
     });
 
+/** One-time repair (2026-08-30): build_plan() previously hardcoded new
+ * riders' created_at to import time instead of the CSV's own legacy value,
+ * so already-imported riders show the wrong "Joined" date. Re-upload the
+ * same rider CSV (or any CSV with the same phones + a real created_at
+ * column) to find and fix the mismatch. apply=false (default) only reports
+ * what would change. */
+export interface RiderCreatedAtBackfillResult {
+    scanned_rows: number;
+    applied: boolean;
+    fixed: number;
+}
+export const adminBackfillRiderCreatedAt = (file: File, apply: boolean) => {
+    const fd = new FormData();
+    fd.append("riders_csv", file);
+    fd.append("apply", String(apply));
+    return request<RiderCreatedAtBackfillResult>("/api/admin/riders/created-at-backfill", {
+        method: "POST",
+        body: fd,
+    });
+};
+
 /* ── Legacy SIN/DOB Backfill (2 CSVs) ─────── */
 // Admin-dashboard wrapper for the CLI-only
 // backend/scripts/backfill_legacy_driver_sin_dob.py (Phase 2 of the
@@ -639,6 +773,26 @@ export const adminRegenerateImportedSnapshots = (force: boolean, limit: number =
         headers: { "Content-Type": "application/json" },
     });
 
+/* ── Imported Ride Road-Route Regeneration ───────────── */
+// Admin-dashboard equivalent of scripts/backfill_imported_ride_routes.py --
+// that CLI script needs shell access to the backend; this lets an operator
+// run the same backfill safely through the browser like every other
+// legacy-migration tool on this page.
+export interface RouteRegenerateResult {
+    total: number;
+    success: number;
+    failed: number;
+    message?: string;
+    errors: { ride_id: string; error: string }[];
+}
+
+export const adminRegenerateImportedRoutes = (force: boolean, limit: number = 200) =>
+    request<RouteRegenerateResult>("/api/admin/rides/regenerate-imported-routes", {
+        method: "POST",
+        body: JSON.stringify({ force, limit }),
+        headers: { "Content-Type": "application/json" },
+    });
+
 /* ── Legacy Vehicle-History Backfill (2 CSVs) ── */
 // Super-admin/drivers-module-gated (backend/routes/admin/legacy_vehicle_history_backfill.py).
 // Phase 2 of the 2026-08-27 migration plan: backfills append-only
@@ -717,5 +871,79 @@ export const adminCommitVehicleHistoryBackfill = (files: VehicleHistoryBackfillF
     request<VehicleHistoryBackfillCommitResult>("/api/admin/legacy-drivers/vehicle-history-backfill/commit", {
         method: "POST",
         body: vehicleHistoryBackfillFormData(files, opts),
+    });
+
+/* ── Legacy Saved-Address Backfill (2 CSVs) ── */
+// Users-module-gated (backend/routes/admin/legacy_saved_address_backfill.py).
+// Phase 4 of the 2026-08-27 migration plan: backfills rider saved addresses
+// into the existing, live `saved_addresses` table (the same destination a
+// rider's own self-serve "save an address" action writes to) from the
+// previous app's raw Mongo export. Takes two files — customer_addresses.csv
+// (Mongo ObjectId-keyed) and customers.csv (the same export's customer
+// collection, used only to resolve that ObjectId to a phone number).
+export interface SavedAddressBackfillReportItem {
+    row_num: number;
+    field: string;
+    message: string;
+}
+export interface SavedAddressBackfillCounts {
+    address_rows: number;
+    addresses_to_insert: number;
+    skipped_out_of_province: number;
+    skipped_unmatched_customer: number;
+    skipped_no_rider: number;
+    skipped_already_imported: number;
+}
+export interface SavedAddressBackfillReport {
+    batch: string;
+    can_commit: boolean;
+    counts: SavedAddressBackfillCounts;
+    warnings: SavedAddressBackfillReportItem[];
+    errors: SavedAddressBackfillReportItem[];
+    // Proves a /validate call happened for this exact (batch, both files'
+    // bytes, admin) — /commit requires it back. Binds
+    // sha256(addresses_bytes + "|" + customers_bytes), so swapping either
+    // file between validate and commit invalidates it.
+    validation_token?: string;
+}
+export interface SavedAddressBackfillCommitResult {
+    batch: string;
+    committed: boolean;
+    addresses_inserted?: number;
+    warnings?: SavedAddressBackfillReportItem[];
+    can_commit?: boolean;
+    counts?: SavedAddressBackfillCounts;
+    errors?: SavedAddressBackfillReportItem[];
+}
+export interface SavedAddressBackfillFiles {
+    addresses: File;
+    customers: File;
+}
+export interface SavedAddressBackfillOptions {
+    batch?: string;
+    validationToken?: string;
+}
+
+function savedAddressBackfillFormData(files: SavedAddressBackfillFiles, opts?: SavedAddressBackfillOptions): FormData {
+    const fd = new FormData();
+    fd.append("addresses_csv", files.addresses);
+    fd.append("customers_csv", files.customers);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
+    return fd;
+}
+
+/** Dry-run: parse + validate both CSVs and return the report (no writes). */
+export const adminValidateSavedAddressBackfill = (files: SavedAddressBackfillFiles, opts?: SavedAddressBackfillOptions) =>
+    request<SavedAddressBackfillReport>("/api/admin/riders/saved-address-backfill/validate", {
+        method: "POST",
+        body: savedAddressBackfillFormData(files, opts),
+    });
+
+/** Commit the backfill. Returns committed=false + errors if the CSVs no longer validate. */
+export const adminCommitSavedAddressBackfill = (files: SavedAddressBackfillFiles, opts?: SavedAddressBackfillOptions) =>
+    request<SavedAddressBackfillCommitResult>("/api/admin/riders/saved-address-backfill/commit", {
+        method: "POST",
+        body: savedAddressBackfillFormData(files, opts),
     });
 

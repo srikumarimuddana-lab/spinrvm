@@ -41,7 +41,6 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).toContain('const showPlannedUnderlay =');
     expect(source).toContain("(!hasActualRoute || ride?.route_geometry_status !== 'complete')");
     expect(source).toContain(') : isV2Route ? null : (');
-    expect(source).toContain("? (showPlannedUnderlay ? 'Booked route' : 'Actual route')");
     expect(source).not.toContain('decodePolyline');
     expect(source).not.toContain('fetchFallbackRoute');
   });
@@ -49,6 +48,20 @@ describe('ride-details v2 route rendering contract', () => {
   it('includes revisioned snapshot and incomplete-quality copy in the client PDF HTML', () => {
     expect(source).toContain('Actual route (revision ${routeRevision})');
     expect(source).toContain('Route snapshot unavailable');
+    expect(source).toContain('routeQualityLabel');
+  });
+
+  it('keeps route-provenance diagnostics off the rider screen', () => {
+    // Coverage percentages and reconstruction status are operator diagnostics —
+    // they live on the admin ride-detail modal, which renders routeQualityLabel()
+    // for both the Actual Trip tile and the map label. On the rider's own screen
+    // the fare line carries the disclosure that matters: the backend relabels it
+    // to "Ride fare (X km booked)" whenever the charged distance is the booking
+    // estimate rather than a GPS measurement (relabel_booked_distance_lines).
+    expect(source).not.toContain('styles.routeQualityText');
+    expect(source).not.toContain('Actual route processing');
+    expect(source).not.toContain('Actual route unavailable');
+    // routeQualityLabel itself stays — the emailed receipt still prints it.
     expect(source).toContain('routeQualityLabel');
   });
 

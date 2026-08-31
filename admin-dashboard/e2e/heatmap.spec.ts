@@ -46,7 +46,9 @@ test.describe('admin dashboard: heatmap — interaction', () => {
   test('refresh button is clickable', async ({ page }) => {
     await mockHeatmap(page);
     await page.goto('/dashboard/heatmap');
-    const refreshBtn = page.getByRole('button', { name: /refresh/i });
+    // The live-demand section added a second Refresh button; pin the
+    // historical heat-map one (first in DOM order).
+    const refreshBtn = page.getByRole('button', { name: /refresh/i }).first();
     await expect(refreshBtn).toBeVisible({ timeout: 20000 });
     await refreshBtn.click();
     await expect(page.locator('body')).toBeVisible();

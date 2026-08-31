@@ -27,14 +27,13 @@ const SERVICE_AREAS = [
 
 async function mockCompliance(page: any, opts: { serviceAreas?: unknown[] } = {}) {
   await setupAdminMocks(page, {
-    // CompliancePage gates its entire render on useRequireModule("compliance")
-    // (src/app/dashboard/compliance/page.tsx) — MOCK_ADMIN_USER's default
-    // modules:['dashboard'] doesn't satisfy that, so without this override
-    // `allowed` is always false, the page renders null, and the hook redirects
-    // to /403 — every assertion below then times out waiting for content that
-    // never renders. Mirrors data-transfer.spec.ts's established pattern for
-    // its own module.
-    user: { modules: ['compliance'] },
+    // CompliancePage gates its entire render on useRequireSuperAdmin()
+    // (src/app/dashboard/compliance/page.tsx) — role "admin" is NOT treated
+    // as super_admin by that hook, so without this override `allowed` is
+    // always false, the page never renders, and every assertion below times
+    // out waiting for content that never appears. Mirrors
+    // data-transfer.spec.ts's established pattern for super-admin pages.
+    user: { role: 'super_admin' },
     extra: async (route, url, method) => {
       if (url.includes('/api/admin/service-areas') && method === 'GET') {
         await route.fulfill({
@@ -133,7 +132,7 @@ test.describe('admin dashboard: compliance — interaction', () => {
 
   test('failed report generation shows an error toast, not a crash', async ({ page }) => {
     await setupAdminMocks(page, {
-      user: { modules: ['compliance'] },
+      user: { role: 'super_admin' },
       extra: async (route, url, method) => {
         if (url.includes('/api/admin/compliance/gst-pst-remittance') && method === 'GET') {
           await route.fulfill({
@@ -226,7 +225,7 @@ test.describe('admin dashboard: compliance — service area multi-select', () =>
 
   test('a failed service-areas fetch says so instead of showing an empty dropdown', async ({ page }) => {
     await setupAdminMocks(page, {
-      user: { modules: ['compliance'] },
+      user: { role: 'super_admin' },
       extra: async (route, url, method) => {
         if (url.includes('/api/admin/service-areas') && method === 'GET') {
           await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({}) });

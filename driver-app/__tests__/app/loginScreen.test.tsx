@@ -14,8 +14,11 @@
  *    non-editable while the request is in flight, and both reset in the
  *    `finally` block regardless of outcome
  *  - the Terms of Service / Privacy Policy links each navigate to
- *    `/legal` with their own `type` param, independent of the consent
- *    checkbox's own onPress
+ *    `/legal` with their own `type` param
+ *  - the clickwrap disclosure is always rendered (never scoped to first
+ *    login) and continuing always carries consentAccepted:'true' — the
+ *    checkbox this suite used to pin was replaced by the clickwrap on
+ *    2026-08-28 (docs/change-log/2026-08-28-driver-login-clickwrap-consent.md)
  *  - the early-mount location effect: when permission is already granted,
  *    a last-known position is persisted to AsyncStorage immediately, and
  *    the accurate background fetch persists again on success; when
@@ -79,10 +82,9 @@ jest.mock('expo-location', () => ({
 }));
 
 const mockSetItem = jest.fn();
-// Named (not an inline jest.fn()) so the "consent checkbox scoped to first
-// login" suite below can override its resolved value per-test — every other
-// test in this file relies on the default (null: this device has never
-// authenticated before), which keeps the consent checkbox visible.
+// Named (not an inline jest.fn()) so the clickwrap suite below can override
+// its resolved value per-test and prove the disclosure is NOT scoped to
+// whether this device has authenticated before.
 const mockGetItem = jest.fn((..._args: any[]): Promise<string | null> => Promise.resolve(null));
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: (...a: any[]) => mockGetItem(...a),
@@ -92,15 +94,13 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
 
-function findCheckbox(screen: ReturnType<typeof render>) {
-  return screen.UNSAFE_getByProps({ accessibilityRole: 'checkbox' });
-}
 function findContinueButton(screen: ReturnType<typeof render>) {
   return screen.getByLabelText('Send verification code');
 }
-async function fillValidAndConsent(screen: ReturnType<typeof render>) {
+// Clickwrap consent: no checkbox to tick — entering a valid number is all
+// the setup a send needs (tapping continue IS the acceptance gesture).
+async function fillValidNumber(screen: ReturnType<typeof render>) {
   fireEvent.changeText(screen.getByTestId('phone-input'), '3065550199');
-  fireEvent.press(findCheckbox(screen));
   await flush();
 }
 
@@ -125,7 +125,6 @@ describe('phone number handling', () => {
   it('an under-length number toasts and never calls the API', async () => {
     const screen = render(<LoginScreen />);
     fireEvent.changeText(screen.getByTestId('phone-input'), '30655');
-    fireEvent.press(findCheckbox(screen));
     await act(async () => { fireEvent.press(findContinueButton(screen)); });
     // Button stays disabled (isValid requires exactly 10 digits) so RN
     // never fires the press — but exercise handleSendCode directly isn't
@@ -138,7 +137,7 @@ describe('handleSendCode response branches', () => {
   it('response.success:false toasts a generic failure', async () => {
     mockApiPost.mockResolvedValue({ data: { success: false } });
     const screen = render(<LoginScreen />);
-    await fillValidAndConsent(screen);
+    await fillValidNumber(screen);
     await act(async () => { fireEvent.press(findContinueButton(screen)); });
     await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('error', 'Failed', 'Could not send verification code. Please try again.'));
   });
@@ -146,7 +145,7 @@ describe('handleSendCode response branches', () => {
   it('a thrown error with a server message toasts it under Sign-in Unavailable', async () => {
     mockApiPost.mockRejectedValue({ __serverMessage: 'Verification is temporarily unavailable' });
     const screen = render(<LoginScreen />);
-    await fillValidAndConsent(screen);
+    await fillValidNumber(screen);
     await act(async () => { fireEvent.press(findContinueButton(screen)); });
     await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('error', 'Sign-in Unavailable', 'Verification is temporarily unavailable'));
   });
@@ -154,7 +153,7 @@ describe('handleSendCode response branches', () => {
   it('a thrown error with no extractable message toasts a generic Connection Error', async () => {
     mockApiPost.mockRejectedValue({});
     const screen = render(<LoginScreen />);
-    await fillValidAndConsent(screen);
+    await fillValidNumber(screen);
     await act(async () => { fireEvent.press(findContinueButton(screen)); });
     await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('error', 'Connection Error', 'Unable to reach server. Please check your connection.'));
   });
@@ -165,7 +164,7 @@ describe('loading state', () => {
     let resolveFn!: (v: any) => void;
     mockApiPost.mockReturnValue(new Promise((resolve) => { resolveFn = resolve; }));
     const screen = render(<LoginScreen />);
-    await fillValidAndConsent(screen);
+    await fillValidNumber(screen);
     act(() => { fireEvent.press(findContinueButton(screen)); });
 
     expect(screen.getByTestId('phone-input').props.editable).toBe(false);
@@ -188,31 +187,36 @@ describe('terms links', () => {
   });
 });
 
-describe('consent checkbox scoped to first login', () => {
-  it('shows the checkbox when this device has never authenticated before (AsyncStorage empty)', async () => {
+// The 2026-08-20 first-login consent *checkbox* (#4635) was replaced by an
+// always-visible clickwrap disclosure on 2026-08-28
+// (docs/change-log/2026-08-28-driver-login-clickwrap-consent.md). The
+// consent-scoping intent of #4635 survives server-side: the backend only
+// reads consent_accepted for brand-new accounts. What this suite now pins is
+// the clickwrap contract on this screen.
+describe('clickwrap consent disclosure', () => {
+  it('renders the disclosure on a device that has never authenticated (AsyncStorage empty)', async () => {
     mockGetItem.mockResolvedValueOnce(null);
     const screen = render(<LoginScreen />);
     await flush();
-    expect(() => findCheckbox(screen)).not.toThrow();
     expect(screen.queryByLabelText('login.termsOfService')).not.toBeNull();
+    expect(screen.queryByLabelText('login.privacyPolicy')).not.toBeNull();
   });
 
-  it('hides the checkbox once this device has completed a login before (AsyncStorage flag set)', async () => {
+  it('still renders the disclosure on a device that has authenticated before — never scoped away', async () => {
     mockGetItem.mockResolvedValueOnce('true');
     const screen = render(<LoginScreen />);
     await flush();
-    expect(() => findCheckbox(screen)).toThrow();
-    expect(screen.queryByLabelText('login.termsOfService')).toBeNull();
+    // The sentence must be visible at the moment of the tap it describes.
+    expect(screen.queryByLabelText('login.termsOfService')).not.toBeNull();
   });
 
-  it('fails open to showing the checkbox if the AsyncStorage read rejects', async () => {
-    mockGetItem.mockRejectedValueOnce(new Error('storage unavailable'));
+  it('renders no consent checkbox at all (replaced by the clickwrap gesture)', async () => {
     const screen = render(<LoginScreen />);
     await flush();
-    expect(() => findCheckbox(screen)).not.toThrow();
+    expect(screen.UNSAFE_queryByProps({ accessibilityRole: 'checkbox' })).toBeNull();
   });
 
-  it('still lets "Send Verification Code" continue when the checkbox is hidden', async () => {
+  it('continuing sends the OTP and carries consentAccepted:"true" to /otp', async () => {
     mockGetItem.mockResolvedValueOnce('true');
     const screen = render(<LoginScreen />);
     await flush();

@@ -6,6 +6,11 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 
 import re
 
+try:
+    from ..users import MAX_EMERGENCY_CONTACTS
+except ImportError:
+    from routes.users import MAX_EMERGENCY_CONTACTS  # type: ignore
+
 from . import _deps
 from ._deps import (  # noqa: F401
     APIRouter,
@@ -342,7 +347,9 @@ async def trigger_emergency(
     _notified_contact_ids: set = set()
     try:
         sms_settings = await _deps.get_app_settings()
-        contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
+        contacts_rows = await _deps.db_supabase.get_rows(
+            "emergency_contacts", {"user_id": current_user["id"]}, limit=MAX_EMERGENCY_CONTACTS
+        )
         contacts = await _decrypt_emergency_contacts(contacts_rows)
 
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])
@@ -695,7 +702,9 @@ async def trigger_emergency_rideless(
     _notified_contact_ids: set = set()
     try:
         sms_settings = app_settings
-        contacts_rows = await _deps.db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
+        contacts_rows = await _deps.db_supabase.get_rows(
+            "emergency_contacts", {"user_id": current_user["id"]}, limit=MAX_EMERGENCY_CONTACTS
+        )
         contacts = await _decrypt_emergency_contacts(contacts_rows)
 
         user = await _deps.db_supabase.get_user_by_id(current_user["id"])

@@ -78,6 +78,14 @@ from typing import Any, Dict, Optional
 
 _RIDER_EMAIL_OTP_TABLE = "rider_email_verification_otp"
 
+# #4599 Finding 4: the insert-time cap and the SOS fan-out read limit used to
+# be two separate literals (3 here, 5 in routes/rides/safety.py) with no
+# shared source of truth -- safe today only because 3 < 5, but a future edit
+# to either number without the other would silently reintroduce the old
+# "extra contacts never notified" gap. Hoisted to module level so
+# safety.py can import the same value instead of a second hardcoded number.
+MAX_EMERGENCY_CONTACTS = 3
+
 logger = logging.getLogger(__name__)
 
 api_router = APIRouter(prefix="/users", tags=["Users"])
@@ -871,7 +879,6 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
             detail="Could not verify contact limit. Please try again.",
         ) from e
 
-    MAX_EMERGENCY_CONTACTS = 3
     if len(existing) >= MAX_EMERGENCY_CONTACTS:
         raise HTTPException(
             status_code=400,

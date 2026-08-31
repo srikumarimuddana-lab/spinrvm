@@ -170,11 +170,15 @@ describe('RideDetailsScreen', () => {
     expect(allText(r2)).toContain('disputed');
   });
 
-  it('shows the "Imported" badge and no-GPS disclaimer when the backend flags the ride as legacy', async () => {
+  it('shows the "Imported" badge when the backend flags the ride as legacy', async () => {
+    // The no-GPS disclaimer that used to accompany this badge (and the
+    // route-status pill below) was deliberately removed in 327d3e845
+    // ("drop the route-provenance caption from Ride Details") — owner
+    // directive to keep operator diagnostics off the rider screen. The
+    // "Imported" badge itself stays; only the disclaimer sentence is gone.
     mockApiGet.mockResolvedValue({ data: { ...RIDE_COMPLETED, show_legacy_badge: true } });
     const r = await renderScreen();
     expect(allText(r)).toContain('Imported');
-    expect(allText(r)).toContain('Imported from the previous app — no GPS was recorded for this ride');
   });
 
   it('hides the "Imported" badge and disclaimer for an ordinary ride even with legacy_import_metadata present', async () => {
@@ -532,31 +536,28 @@ describe('map rendering (pickup_lat/dropoff_lat present)', () => {
     expect(polylines.length).toBe(2);
     await act(async () => { MapViewNode.props.onMapReady(); await flush(); });
     expect(mockFitToCoordinates).toHaveBeenCalled();
-    // hasActualRoute is true here (a real trip_in_progress segment exists),
-    // so the quality text takes the "Actual route · <quality>" branch, not
-    // the isV2Route/routeIsProcessing one — that's covered separately below.
-    expect(allText(r)).toContain('Actual route ·');
   });
 
-  it('shows "Actual route unavailable" for a v2 ride whose geometry finished processing with no usable actual route', async () => {
-    mockApiGet.mockResolvedValue({
-      data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'complete' },
-    });
-    const r = await renderScreen();
-    expect(allText(r)).toContain('Actual route unavailable');
-  });
-
-  it('shows the legacy "Planned route preview" label for a pre-v2 ride with no actual route', async () => {
-    const r = await renderScreen(); // RIDE_COMPLETED default: no route_schema_version, no actual_route_segments
-    expect(allText(r)).toContain('Planned route · Planned route preview');
-  });
-
-  it('shows "Actual route processing" for a v2 ride with no actual route yet while geometry is still processing', async () => {
+  // The "Actual route · <quality>" / "Actual route unavailable" / "Planned
+  // route · Planned route preview" / "Actual route processing" status pill
+  // (and its "no GPS was recorded" disclaimer variant, covered above) was
+  // deliberately removed in 327d3e845 ("drop the route-provenance caption
+  // from Ride Details") — owner directive: coverage percentages and
+  // reconstruction status are operator diagnostics, not something a rider
+  // can act on, and stay on the admin ride-detail modal only. The four
+  // tests that used to assert this pill's text variants are gone with it;
+  // this one instead pins the diagnostics staying off the rider screen,
+  // mirroring ride-details-route.test.tsx's source-contract regression
+  // guard for the same removal.
+  it('never re-renders the removed route-status pill text on the rider screen', async () => {
     mockApiGet.mockResolvedValue({
       data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'processing' },
     });
     const r = await renderScreen();
-    expect(allText(r)).toContain('Actual route processing');
+    const text = allText(r);
+    expect(text).not.toContain('Actual route processing');
+    expect(text).not.toContain('Actual route unavailable');
+    expect(text).not.toContain('Planned route preview');
   });
 });
 

@@ -11814,6 +11814,32 @@ record of what was assumed vs. what was actually true</summary>
   **Still open:** the remaining 15 candidates from the broader sweep (6
   driver-app candidates; 8 more admin-dashboard candidates); no
   ADR/migration-order doc written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 21 done: `admin-dashboard/src/app/dashboard/safety/page.tsx`'s
+  incident-log + merge-duplicate validation (fifth admin-dashboard
+  candidate, safety tier).** Extracted both of the page's ad hoc
+  validation blocks: the manual "Log a safety incident" dialog's
+  `handleSubmit` (category + description required) and the
+  incident-detail drawer's `handleMerge` (canonical target ID required,
+  cannot merge into itself) — into new
+  `admin-dashboard/src/lib/safetyIncidentFormSchema.ts`
+  (`getLogIncidentFormError`, `getMergeIncidentError` + predicates + a
+  documentation zod schema). Pure extraction, byte-for-byte identical to
+  the original `if` blocks + `toast(...)` calls — no bug found, no
+  behavior change. New
+  `admin-dashboard/src/lib/__tests__/safetyIncidentFormSchema.test.ts`
+  (13 accept/reject cases). Verification: 13/13 new tests pass; full
+  admin-dashboard suite (`vitest run`) 49/49 suites, 497/497 tests
+  passing, 0 regressions; `npx tsc --noEmit` clean (repo-wide); `npx
+  eslint` on touched files: 0 errors, 3 pre-existing warnings, unchanged
+  by this diff; **real production build** (`npm run build`) completed
+  successfully. Blast-radius grep confirmed no other file duplicates
+  either form's distinctive error copy. Merge button's `disabled` prop
+  duplicates only the presence check (not the self-merge check) and was
+  left untouched, same discipline as prior steps. Full Change Impact
+  Log: `docs/change-log/2026-08-31-b39-admin-safety-incident-zod-step21.md`.
+  **Still open:** the remaining 14 candidates from the broader sweep (6
+  driver-app candidates; 7 more admin-dashboard candidates); no
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

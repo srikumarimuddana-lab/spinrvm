@@ -46,6 +46,7 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { IncidentEvidencePhotos } from "./_components/incident-evidence-photos";
+import { getLogIncidentFormError, getMergeIncidentError } from "@/lib/safetyIncidentFormSchema";
 import {
     getSafetyIncident,
     getSafetyIncidents,
@@ -492,8 +493,9 @@ function CreateIncidentDialog({
     };
 
     const handleSubmit = async () => {
-        if (!category.trim() || !description.trim()) {
-            toast({ title: "Category and description are required", variant: "destructive" });
+        const formError = getLogIncidentFormError(category, description);
+        if (formError) {
+            toast({ title: formError, variant: "destructive" });
             return;
         }
         setSaving(true);
@@ -610,15 +612,12 @@ function IncidentDetailDrawer({
     const [merging, setMerging] = useState(false);
 
     const handleMerge = async () => {
+        const mergeError = getMergeIncidentError(mergeTargetId, incident.id);
+        if (mergeError) {
+            toast({ title: mergeError, variant: "destructive" });
+            return;
+        }
         const targetId = mergeTargetId.trim();
-        if (!targetId) {
-            toast({ title: "Enter the canonical incident ID to merge into", variant: "destructive" });
-            return;
-        }
-        if (targetId === incident.id) {
-            toast({ title: "Cannot merge an incident into itself", variant: "destructive" });
-            return;
-        }
         setMerging(true);
         try {
             const res = await mergeSafetyIncident(incident.id, targetId);

@@ -16362,6 +16362,15 @@ Remaining, roughly in order of user impact:
   rather than the mark. A light-on-dark variant would let the email invert
   fully. Design decision, not a code one — see
   `docs/change-log/2026-08-09-email-header-uber-format.md`.
+  **Candidate generated 2026-08-31, not a decision:** a mechanical recolor
+  (charcoal wordmark → `#F2F2F7`, red spiral → `#FF453A`, both the exact
+  `darkColors` tokens `.claude/context/brand-spinr.md` documents; not an
+  invented palette) is at
+  `docs/design-drafts/spinr_logo_light_on_dark_CANDIDATE.png`, with a
+  black-background preview and full reasoning at
+  `docs/design-drafts/2026-08-31-n18-light-on-dark-logo-candidate.md`. Not
+  wired into any template/app asset — this exists so the design decision
+  has something concrete to react to, not to preempt it.
 - [x] **N17 closed**: added `company_app_name` (default `"Spinr"`) as a new,
   independent setting alongside `company_name` (the legal entity) —
   `schemas.AppSettings.company_app_name`, wired through

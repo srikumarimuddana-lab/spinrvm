@@ -12016,6 +12016,33 @@ record of what was assumed vs. what was actually true</summary>
   `(tabs)/profile.tsx`, `settings.tsx`,
   `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
   written yet. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 29 done: `driver-app/app/become-driver.tsx`'s
+  onboarding-wizard validation (first driver-app candidate, KYC
+  onboarding — the highest-risk driver-app item per this sweep's own
+  ordering).** Extracted `validateStep`'s case-1 (personal-info
+  requiredness) and case-2 (vehicle-year + vehicle-info-completeness,
+  the SK "vehicle < 10 years old" rule's client-side mirror) checks, and
+  `handleSubmit`'s CRC-consent guard, into new
+  `driver-app/utils/becomeDriverSchema.ts` (`isPersonalStepValid`,
+  `hasAnyVehicleInfo`, `isVehicleYearValid`, `isVehicleInfoComplete`,
+  `getVehicleStepError`, `isCrcConsentValid`). Pure extraction,
+  byte-for-byte identical to the original `Alert.alert`-driven checks —
+  no bug found, no behavior change. New
+  `driver-app/utils/__tests__/becomeDriverSchema.test.ts` (19
+  accept/reject cases). Verification: 19/19 new tests pass; full
+  driver-app suite (`jest`) 121/121 suites, 1368/1368 tests passing, 0
+  regressions; `npx tsc --noEmit` clean (repo-wide); `npx eslint` on
+  touched files: 0 errors, 0 warnings; **real production build**
+  (`npm run build:web` → `expo export --platform web`) completed
+  successfully. Blast-radius grep confirmed no other file uses these
+  `Alert.alert` strings; submit button's `disabled` prop duplicates the
+  CRC-consent check but also includes `isLoading` (not exact) and was
+  left untouched. Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-driver-become-driver-zod-step29.md`.
+  **Still open:** 5 driver-app candidates (`emergency-contacts.tsx`,
+  `report-safety.tsx`, `(tabs)/profile.tsx`, `settings.tsx`,
+  `addresses.tsx`/`destination-mode.tsx`); no ADR/migration-order doc
+  written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -15713,6 +15713,19 @@ record of what was assumed vs. what was actually true</summary>
 
 ### G9. SK PST-on-rideshare applicability has never been confirmed against a primary source, only three verbal determinations
 - [ ] **Status:** open — identified 2026-08-22, spun off while closing B26.
+  **Update 2026-08-31:** a fourth confirmation — PST is not charged on
+  Saskatchewan rideshare — was given directly by the repo owner this
+  session. This matches the current, unchanged operational setting
+  (`pst_enabled=false`, GST-only) — no code/config change needed. Recording
+  it here per the item's own point that verbal confirmations should be
+  tracked, not silently trusted: this is a fourth verbal determination, not
+  the primary-source citation (PST-46 bulletin text, Ministry of Finance
+  response, or tax-advisor letter) the item's own acceptance bar calls for.
+  Leaving the checkbox open and the acceptance criterion unchanged for that
+  reason — flagging the gap rather than closing it outright on a verbal
+  confirmation alone, consistent with why this item exists in the first
+  place (the 2026-08-14 revert's own doc: "the next flip... will be the
+  first one with real financial consequences").
 - **Issue/gap:** Saskatchewan `service_areas` currently run GST-only
   (`pst_enabled=false`), and that's now the operationally-settled answer
   after three consistent repo-owner confirmations (2026-08-11 said PST

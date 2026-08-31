@@ -5571,11 +5571,23 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   confirmed as a genuine **data gap**; a third, independent bug was found
   and fixed while building the remediation tool (admin driver-edit route
   wrote `license_number` as plaintext instead of Vault-encrypting it —
-  see below). The backfill **queue/tooling is now built and live**
-  (`/dashboard/driver-license-backfill`); the actual 22-driver data entry
-  is a manual step for an admin to do in that screen, not something this
-  session can perform (requires reading real government ID photos). The
-  larger OCR/automated-onboarding proposal is written up but **not
+  see below). The manual-admin-entry backfill **queue/tooling remains
+  built and live** (`/dashboard/driver-license-backfill`) and is
+  **unchanged/unremoved** — see below — but **PIVOTED (2026-08-31,
+  product-owner decision): the manual-admin-entry approach for the
+  22-driver data gap itself was parked** in favour of a **driver-facing
+  self-serve flow** — each affected driver is pushed a one-time reminder
+  and enters their own licence number/class in the driver app. Built
+  (2026-08-31): `POST /admin/drivers/notify-missing-license` (admin-
+  triggered, one-time campaign, reuses the same `missing_license` cohort
+  filter and the existing push-send utility), `license_class` added to
+  the driver's own `PUT /drivers/me`, and a missing-licence banner +
+  entry modal on the driver-app Profile screen. **This only builds the
+  mechanism — the 22 drivers have NOT actually completed their data yet;
+  that depends on the campaign being triggered and drivers responding.**
+  Full Change Impact Log:
+  `docs/change-log/2026-08-31-b14-driver-self-serve-license-entry.md`.
+  The larger OCR/automated-onboarding proposal is written up but **not
   started**, pending a scope/vendor decision.
 - **Why (address):** both real SGI templates (`D00032`/`D00033`) ship
   dedicated `Street address`/`City/town`/`Provincestate`/`Postalzip code`
@@ -5651,15 +5663,23 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   tests), `admin-dashboard/src/app/dashboard/driver-license-backfill/page.tsx`
   (new), `admin-dashboard/src/lib/api.ts`, `admin-dashboard/src/components/sidebar.tsx`,
   `docs/proposals/2026-07-29-driver-document-ocr-onboarding-automation.md`
-  (new).
+  (new). **Self-serve pivot (2026-08-31), see Change Impact Log above for
+  the full table:** `backend/routes/admin/drivers.py` (`_MISSING_LICENSE_FILTER`
+  constant + `POST /drivers/notify-missing-license`), `backend/routes/drivers/profile.py`
+  (`license_class` self-serve), `backend/tests/test_admin_extended.py` +
+  `backend/tests/test_drivers_extended.py` (new tests), `driver-app/app/driver/(tabs)/profile.tsx`,
+  `driver-app/app/_layout.tsx`, `driver-app/utils/licenseInfoFormSchema.ts` (new),
+  `shared/store/authStore.ts`.
 - **Acceptance (address, done):** generated D00032/D00033 PDFs have each
   address component in its correct dedicated field, verified by
   regenerating both forms and reading every field back. **Acceptance
   (encryption fix, done):** regression test confirms plaintext never
-  reaches the DB write. **Acceptance (licence data, pending):** not
-  gating — tracked here until an admin actually works through the
-  `/dashboard/driver-license-backfill` queue and a decision is made on
-  the larger proposal.
+  reaches the DB write. **Acceptance (licence data, pending):** the
+  manual `/dashboard/driver-license-backfill` queue is parked, not
+  removed. The self-serve mechanism (push campaign + driver-app entry
+  form) is built and tested, but not yet triggered — the 22 drivers'
+  actual data entry remains open until the campaign is run and drivers
+  respond.
 
 ### B15. Rider/driver SOS: DB insert has no fallback on failure, and "PagerDuty" in domain-safety.md doesn't exist in code
 - [x] **Status:** CLOSED (2026-08-22) — (c) was actually already resolved

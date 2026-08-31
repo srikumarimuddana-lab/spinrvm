@@ -37,6 +37,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { ScreenHeader } from '../../../components/ScreenHeader';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { isProfileFieldsComplete, getProfileFormError } from '../../../utils/driverProfileSchema';
+import { getLicenseInfoFormError } from '../../../utils/licenseInfoFormSchema';
 
 // Module-level (not component-scope) so react-hooks/purity doesn't treat
 // this Date.now() read as an impure call "during render" — the compiler's
@@ -112,6 +113,13 @@ function ProfileScreenInner() {
   const [editGender, setEditGender] = useState('');
   const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Licence self-serve entry modal — ACTION_ITEMS.md B14.
+  const [showLicenseModal, setShowLicenseModal] = useState(false);
+  const [editLicenseNumber, setEditLicenseNumber] = useState('');
+  const [editLicenseClass, setEditLicenseClass] = useState('');
+  const [isSavingLicense, setIsSavingLicense] = useState(false);
+  const missingLicenseInfo = !driverData?.license_number || !driverData?.license_class;
 
 
   const genderOptions = [
@@ -239,6 +247,43 @@ function ProfileScreenInner() {
     }
   };
 
+  const openLicenseModal = () => {
+    setEditLicenseNumber(driverData?.license_number || '');
+    setEditLicenseClass(driverData?.license_class || '');
+    setShowLicenseModal(true);
+  };
+
+  // ACTION_ITEMS.md B14 self-serve entry — writes through the same
+  // encrypting PUT /drivers/me path a driver already uses for every other
+  // profile field (backend/routes/drivers/profile.py encrypts
+  // license_number via _encrypt_driver_pii before the DB write; license_class
+  // is not Vault PII). Reuses the existing endpoint on purpose — no new
+  // write path was introduced.
+  const handleSaveLicense = async () => {
+    const formError = getLicenseInfoFormError({
+      licenseNumber: editLicenseNumber,
+      licenseClass: editLicenseClass,
+    });
+    if (formError) return showToast('error', 'Missing Info', formError);
+
+    Keyboard.dismiss();
+    setIsSavingLicense(true);
+    try {
+      const res = await api.put<Driver>('/drivers/me', {
+        license_number: editLicenseNumber.trim(),
+        license_class: editLicenseClass.trim().toUpperCase(),
+      });
+      if (res.data) useAuthStore.setState({ driver: res.data });
+      refetchDriverMe();
+      setShowLicenseModal(false);
+      showToast('success', 'Licence Info Saved', 'Thanks — your licence details have been updated.');
+    } catch (err: any) {
+      showToast('error', 'Update Failed', getApiErrorMessage(err, 'Failed to save your licence info. Please try again.'));
+    } finally {
+      setIsSavingLicense(false);
+    }
+  };
+
   const handleLogout = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
@@ -348,6 +393,16 @@ function ProfileScreenInner() {
               <Ionicons name="close-circle" size={14} color="#fff" />
               <Text style={styles.photoStatusText}>Photo rejected — update needed</Text>
             </View>
+          )}
+          {missingLicenseInfo && (
+            <TouchableOpacity
+              style={[styles.photoStatusBanner, { backgroundColor: 'rgba(245, 158, 11, 0.9)' }]}
+              onPress={openLicenseModal}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="card-outline" size={14} color="#fff" />
+              <Text style={styles.photoStatusText}>Add your driver's licence info</Text>
+            </TouchableOpacity>
           )}
 
           <Text style={styles.name}>
@@ -914,6 +969,92 @@ function ProfileScreenInner() {
               </View>
             </View>
           </Modal>
+        </View>
+      </Modal>
+
+      {/* Licence Self-Serve Modal — ACTION_ITEMS.md B14. Reuses modalStyles
+          from the Edit Profile modal above (same card/field visual language). */}
+      <Modal
+        visible={showLicenseModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowLicenseModal(false)}
+      >
+        <View style={modalStyles.container}>
+          <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+          <ScreenHeader title="Driver's Licence" onBack={() => setShowLicenseModal(false)} />
+          <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+            <ScrollView
+              contentContainerStyle={[modalStyles.content, { paddingBottom: Math.max(insets.bottom, 16) + 140 }]}
+              keyboardShouldPersistTaps="handled"
+              automaticallyAdjustKeyboardInsets={true}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={modalStyles.infoBox}>
+                <Ionicons name="information-circle" size={18} color={colors.primary} />
+                <Text style={modalStyles.infoText}>
+                  We're missing your driver's licence number and class on file.
+                  Add them below to keep your account in good standing.
+                </Text>
+              </View>
+
+              <Text style={modalStyles.sectionTitle}>Licence Details</Text>
+              <View style={modalStyles.card}>
+                <View style={modalStyles.field}>
+                  <Text style={modalStyles.fieldLabel}>Licence Number *</Text>
+                  <TextInput
+                    style={modalStyles.fieldInput}
+                    value={editLicenseNumber}
+                    onChangeText={setEditLicenseNumber}
+                    placeholder="S1234-5678-9012"
+                    placeholderTextColor="#B0B7C0"
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                  />
+                </View>
+                <View style={modalStyles.divider} />
+                <View style={modalStyles.field}>
+                  <Text style={modalStyles.fieldLabel}>Licence Class *</Text>
+                  <TextInput
+                    style={modalStyles.fieldInput}
+                    value={editLicenseClass}
+                    onChangeText={setEditLicenseClass}
+                    placeholder="5"
+                    placeholderTextColor="#B0B7C0"
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                  />
+                  <Text style={modalStyles.fieldHelper}>
+                    Found on your SGI driver's licence — usually "5" or "5A".
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ height: 20 }} />
+            </ScrollView>
+
+            <View style={[modalStyles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
+              <TouchableOpacity
+                style={[
+                  modalStyles.saveButton,
+                  (!editLicenseNumber.trim() || !editLicenseClass.trim() || isSavingLicense) &&
+                    modalStyles.saveButtonDisabled,
+                ]}
+                onPress={handleSaveLicense}
+                disabled={!editLicenseNumber.trim() || !editLicenseClass.trim() || isSavingLicense}
+                activeOpacity={0.85}
+              >
+                {isSavingLicense ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                    <Text style={modalStyles.saveButtonText}>Save Licence Info</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 

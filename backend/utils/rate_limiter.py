@@ -446,6 +446,12 @@ wallet_import_commit_limit = default_limiter.limit("10/hour")
 pre_launch_flag_preview_limit = default_limiter.limit("30/hour")
 pre_launch_flag_commit_limit = default_limiter.limit("10/hour")
 
+# Migration data-quality scan (2026-08-31) — same small-fixed-dataset,
+# generous-headroom reasoning as pre-launch flagging above (currently ~18
+# affected rides in production, not thousands).
+data_quality_scan_preview_limit = default_limiter.limit("30/hour")
+data_quality_scan_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and

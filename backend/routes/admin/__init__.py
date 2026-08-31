@@ -100,6 +100,7 @@ from .legacy_vehicle_history_backfill import router as legacy_vehicle_history_ba
 from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
+from .migration_data_quality import router as migration_data_quality_router
 from .migration_status import router as migration_status_router
 from .monitoring import router as monitoring_router
 from .pre_launch_flag import router as pre_launch_flag_router
@@ -243,6 +244,11 @@ admin_router.include_router(wallet_import_router, dependencies=[Depends(require_
 # across core drivers/rides tables, same require_super_admin boundary as
 # the importers above.
 admin_router.include_router(pre_launch_flag_router, dependencies=[Depends(require_super_admin)])
+# Migration data-quality scan (2026-08-31) -- additive-only, flags rides
+# with a missing driver/rider, a placeholder address, or $0 fare in
+# legacy_import_metadata.data_quality. Bulk write across the core rides
+# table, same require_super_admin boundary as the importers above.
+admin_router.include_router(migration_data_quality_router, dependencies=[Depends(require_super_admin)])
 # Migration checklist status panel (2026-08-31) -- read-only, no writes.
 # Same require_super_admin boundary as every other Bulk Operations tool it
 # summarizes, even though it can't itself change any of the tables it reads.

@@ -55,6 +55,23 @@ def _log_combined_tax_fallback(statement: dict, tax_collected_str: str, tax_by_t
         tax_collected_str,
         tax_by_type,
     )
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.capture_message(
+            "driver_statement_pdf_gst_pst_fallback",
+            level="error",
+            tags={"domain": "drivers", "surface": "backend"},
+            contexts={
+                "driver_statement": {
+                    "driver_id": str(driver_id),
+                    "period": str(period_label),
+                    "tax_collected": tax_collected_str,
+                }
+            },
+        )
+    except Exception as sentry_err:  # pragma: no cover - telemetry must never break statement generation
+        logger.debug("driver_statement_pdf: Sentry capture unavailable for GST/PST fallback: %s", sentry_err)
 
 
 def generate_driver_statement_pdf(statement: dict) -> bytes:

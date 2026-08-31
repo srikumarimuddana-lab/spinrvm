@@ -245,7 +245,12 @@ function DriverArrivedScreenContent() {
       {/* Header */}
       <SafeAreaView edges={['top']} style={styles.headerOverlay}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.hBtn} onPress={handleCancelPress}>
+          <TouchableOpacity
+            style={styles.hBtn}
+            onPress={handleCancelPress}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel ride"
+          >
             <Ionicons name="arrow-back" size={22} color={colors.text} />
           </TouchableOpacity>
           <View style={styles.arrivedChip}>
@@ -274,7 +279,12 @@ function DriverArrivedScreenContent() {
               <Ionicons name="key" size={18} color="rgba(255,255,255,0.8)" />
               <Text style={styles.otpTitle}>Pickup PIN</Text>
             </View>
-            <TouchableOpacity onPress={handleCopyOtp} activeOpacity={0.8}>
+            <TouchableOpacity
+              onPress={handleCopyOtp}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Copy pickup PIN"
+            >
               <View style={styles.otpDigits}>
                 {pickupOtp.split('').map((d, i) => (
                   <View key={i} style={styles.otpBox}>
@@ -310,7 +320,12 @@ function DriverArrivedScreenContent() {
                   </Text>
                 </View>
               </View>
-              <TouchableOpacity style={styles.msgBtn} onPress={handleMessage}>
+              <TouchableOpacity
+                style={styles.msgBtn}
+                onPress={handleMessage}
+                accessibilityRole="button"
+                accessibilityLabel="Message driver"
+              >
                 <Ionicons name="chatbubble" size={18} color={colors.primary} />
               </TouchableOpacity>
             </View>
@@ -378,10 +393,20 @@ function DriverArrivedScreenContent() {
               <Ionicons name="chatbubble" size={18} color="#FFF" />
               <Text style={styles.actionPrimaryText}>Message Driver</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionIcon} onPress={handleShareTrip}>
+            <TouchableOpacity
+              style={styles.actionIcon}
+              onPress={handleShareTrip}
+              accessibilityRole="button"
+              accessibilityLabel="Share trip"
+            >
               <Ionicons name="share-outline" size={20} color={colors.text} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionIcon} onPress={handleCopyOtp}>
+            <TouchableOpacity
+              style={styles.actionIcon}
+              onPress={handleCopyOtp}
+              accessibilityRole="button"
+              accessibilityLabel="Copy pickup PIN"
+            >
               <Ionicons name="copy-outline" size={20} color={colors.text} />
             </TouchableOpacity>
           </View>

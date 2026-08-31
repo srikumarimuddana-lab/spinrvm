@@ -218,7 +218,12 @@ export default function PickOnMapScreen() {
       {/* Header */}
       <SafeAreaView style={styles.headerOverlay} edges={['top']}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>
@@ -229,7 +234,12 @@ export default function PickOnMapScreen() {
       </SafeAreaView>
 
       {/* Recenter button */}
-      <TouchableOpacity style={styles.recenterBtn} onPress={handleRecenter}>
+      <TouchableOpacity
+        style={styles.recenterBtn}
+        onPress={handleRecenter}
+        accessibilityRole="button"
+        accessibilityLabel="Recenter on my location"
+      >
         <Ionicons name="locate" size={22} color={colors.text} />
       </TouchableOpacity>
 

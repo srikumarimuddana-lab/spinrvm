@@ -13256,25 +13256,71 @@ record of what was assumed vs. what was actually true</summary>
   purely the external Codecov *reporting* path, not CI's own gate.
 
 ### C24. "Coverage Regression" guardrail cannot fail while `CODECOV_TOKEN` is unset — every PR auto-passes it
-- [x] **Status:** partially CLOSED 2026-08-16, same day as found. The
-  **honesty half** is fixed: `ci-guardrails.yml`'s "Assert no regression"
-  step now distinguishes `base_pct <= 0` (no baseline — cannot verify
-  anything) from a genuinely verified pass/fail, sets a
-  `baseline_status` job output (`no-baseline` vs `verified`), and
-  `guardrail-summary` renders the PR-facing table row as
-  `⚠️ not verified (no baseline — see ACTION_ITEMS.md C24)` instead of a
-  bare ✅ when there's no baseline — the false "PASS: Coverage within
-  tolerance" message is gone; the step's own log and the PR summary now
-  both say plainly that no regression check happened. **Still open:** this
-  does not add real regression detection back — that still needs a real
-  `CODECOV_TOKEN` (same blocker as C12, no account access available in any
-  session so far). Deliberately did **not** make `base_pct <= 0` a hard
-  `sys.exit(1)` — job-level `continue-on-error: true` was already present
-  before this fix and a missing token isn't any individual PR author's
-  fault; turning it into a blocking failure for every PR until someone
-  adds the token would be a bigger, more disruptive behavior change than
-  this fix's actual goal (truthful reporting), and wasn't asked for.
-- **What's wrong:** `.github/workflows/ci-guardrails.yml`'s "Fetch base
+- [x] **Status:** CLOSED 2026-08-27 — the self-computed-baseline
+  recommendation below (item 1) is implemented, so real regression
+  detection is back and the third-party dependency is gone entirely. The
+  Codecov API call (`Fetch base branch coverage from Codecov`,
+  `CODECOV_TOKEN`, `codecov.io/api/v2/...`) has been replaced end-to-end
+  by a locally-computed base-branch number: `coverage-regression-gate`
+  now resolves the true merge-base via `git merge-base "$BASE" HEAD`
+  (matching the fix already established for the same class of stale-SHA
+  bug by C21/C14 and used by `migration-check.yml`), checks that commit
+  out (`git checkout --quiet <merge-base-sha>`, tolerant of failure so a
+  bad checkout degrades to the honest `no-baseline` path below rather
+  than crashing the job), re-runs the identical `pytest --cov=. --cov-
+  report=json:...` command the PR-branch step already uses, and reads the
+  aggregate `%` from `coverage.py`'s own JSON report — same source format
+  the PR-side number already used, no new tool. To avoid literally
+  doubling every PR's runtime (this job's own full-suite run is ~15-18
+  min per `shared-coverage-run`'s comment), the base-branch computation is
+  cached via `actions/cache` keyed on the merge-base SHA
+  (`coverage-regression-base-<sha>`) — a given commit's coverage never
+  changes, so only the first PR against a given `main` tip on any day
+  pays for the second full run; every later PR sharing that base gets a
+  cache hit. `CODECOV_TOKEN` is no longer referenced anywhere in
+  `ci-guardrails.yml` (confirmed by grep — zero hits for `CODECOV` or
+  `codecov` in the file).
+  - **`baseline_status` mechanism preserved, not replaced:** the
+    `no-baseline` vs `verified` job output this entry's 2026-08-16 partial
+    fix introduced is kept as the honesty mechanism, just re-scoped to a
+    different (much rarer) failure mode. `verified` is now the normal
+    case for every PR (a self-computed base has no external dependency
+    left to silently fail) rather than the exception; `no-baseline` is a
+    defensive fallback reserved for a genuine failure of the base-branch
+    checkout or test run itself (e.g. an unresolvable merge-base SHA, or
+    the base-commit `pytest` run crashing outright with no readable
+    `coverage.json`) — see the "Compute base-branch coverage (cache miss
+    only)" step's own `continue-on-error: true` comment for why that
+    degrades to `no-baseline` instead of hard-failing the job.
+    `guardrail-summary` still renders the honest
+    `⚠️ not verified (no baseline — see ACTION_ITEMS.md C24)` row for
+    that fallback case, unchanged.
+  - **Verified 2026-08-31** by running the workflow's exact shell/Python
+    logic directly against this repo (no live Actions runner available in
+    this environment): `git merge-base origin/main HEAD` resolved
+    cleanly; a `git worktree add` checkout of that merge-base commit plus
+    a scoped `pytest --cov=. --cov-report=json:...` run (same JSON-report
+    mechanism the gate uses; scoped to `-k corporate_wallet` rather than
+    the full 804-file suite for sandbox time, since this was a logic
+    check, not a full-suite timing test) produced a real base-branch
+    number (22.22%), matched against the same run's PR-side number
+    (22.22%, same commit in this case since HEAD and the merge-base
+    coincide on this branch) through the identical `Assert no regression`
+    delta/tolerance Python — output `Delta: +0.00%`, `PASS: Coverage
+    within tolerance`, `baseline_status=verified`. Also ran a plain
+    `yaml.safe_load()` parse of the workflow file — parses clean, 14
+    jobs. Not verified: an actual GitHub Actions run of the full,
+    unscoped 15-18-minute suite (no runner available here), and the
+    `actions/cache` hit/miss behavior itself (cache semantics can't be
+    exercised outside real Actions infrastructure).
+  - **C12 unaffected:** confirmed via grep that C12's separate, already-
+    closed scope (removing Codecov *upload* steps from `ci.yml`) was not
+    touched by this fix or this verification — the only `codecov`
+    references left in either workflow file are `ci.yml`'s "Codecov
+    upload removed 2026-08-16" comments, and this item's own historical
+    text below.
+- **What's wrong (historical — see Status above for current state):**
+  `.github/workflows/ci-guardrails.yml`'s "Fetch base
   branch coverage from Codecov" step (`base_coverage` job step, ~line 82)
   calls `https://codecov.io/api/v2/github/.../branches/{base}/coverage`
   with `Authorization: Bearer ${CODECOV_TOKEN}`. With no `CODECOV_TOKEN`

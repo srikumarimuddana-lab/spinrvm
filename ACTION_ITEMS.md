@@ -12222,6 +12222,37 @@ record of what was assumed vs. what was actually true</summary>
   admin-dashboard are genuinely fully closed (steps 17-34, all verified
   above); rider-app's 2 remain: `manage-cards.tsx`,
   `emergency-contacts.tsx`. Checkbox stays `[ ]`.
+- **2026-08-31 update — step 35 done: `rider-app/app/manage-cards.tsx`'s
+  `handleAddCard` validation (penultimate candidate in the entire
+  21-candidate broader sweep).** Extracted the three sequential checks
+  (card-details-complete state, cardholder-name presence, Stripe SDK
+  readiness) into new `rider-app/utils/manageCardsSchema.ts`
+  (`isCardDetailsComplete`, `isCardholderNameValid`, `isStripeReady`,
+  `getManageCardsFormError`). Pure extraction, byte-for-byte identical
+  to the original three `if` blocks + `showToast(...)` calls — no bug
+  found, no behavior change. Renamed the call site's local `error`
+  variable to `validationError` to avoid a naming collision with the
+  repo's `no-restricted-syntax` eslint rule (it text-matches
+  `error.message` to catch raw API-error surfacing; this `error` was
+  the validation-result object, not an API error, but shared the same
+  `.message` shape — a false-positive trigger, fixed by renaming rather
+  than suppressing the rule). New
+  `rider-app/utils/__tests__/manageCardsSchema.test.ts` (9 accept/reject
+  cases). Verification: 9/9 new tests pass; existing
+  `__tests__/manageCardsScreen.test.tsx` (31 tests, asserts on this
+  same toast copy) still passes unchanged; full rider-app suite
+  (`jest`) 137/137 suites, 1925/1925 tests passing, 0 regressions;
+  `npx tsc --noEmit` clean; `npx eslint` clean on touched files (after
+  the rename above); **real production build** (`npm run build:web` →
+  `expo export --platform web`) completed successfully. Blast-radius
+  grep confirmed the only other match for this toast copy is the
+  existing UI test asserting on it (re-run and confirmed passing), and
+  a `.metro-cache` build artifact (not source). Full Change Impact Log:
+  `docs/change-log/2026-08-31-b39-rider-manage-cards-zod-step35.md`.
+
+  **Still open:** 1 candidate — the last item in the entire 21-candidate
+  broader sweep: rider-app's `emergency-contacts.tsx`. No
+  ADR/migration-order doc written yet. Checkbox stays `[ ]`.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getDisputes, getDisputeStats, resolveDispute } from "@/lib/api";
+import { getPartialRefundError } from "@/lib/disputeResolutionSchema";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import ChargebacksTab from "./chargebacks-tab";
 
@@ -123,16 +124,10 @@ export default function DisputesPage() {
     setResolveError(null);
 
     if (resolution === "partial_refund") {
-      const amount = parseFloat(refundAmount);
-      if (isNaN(amount) || amount <= 0) {
-        setResolveError("Refund amount must be greater than zero");
-        return;
-      }
       const originalFareAmount = Number(selected.original_fare || 0);
-      if (amount > originalFareAmount) {
-        setResolveError(
-          `Refund cannot exceed the original fare of $${originalFareAmount.toFixed(2)}`
-        );
+      const error = getPartialRefundError(refundAmount, originalFareAmount);
+      if (error) {
+        setResolveError(error);
         return;
       }
     }

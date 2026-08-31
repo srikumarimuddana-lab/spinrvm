@@ -45,7 +45,16 @@ dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions
 # (Deliberately avoiding literal quote marks combined with at-signs in this
 # very comment block -- an earlier draft of this note described the match
 # shape with actual punctuation and triggered the identical false positive
-# on this file, recursively.)
+# on this file, recursively. That earlier draft's own text is still in this
+# branch's history as part of the commit that first added this section, so
+# its three fingerprints are ignored below too, alongside the two original
+# source-file ones -- the git-history scan (G5a) walks every commit's own
+# diff, not just the current file content, so a since-corrected line still
+# needs its introducing commit covered for as long as that commit remains
+# in history.)
 11449da03fff1925283613313dc0f728618e4793:backend/tests/test_admin_migration_driver_repair.py:spinr-driver-export-pii:7
 11449da03fff1925283613313dc0f728618e4793:backend/tests/test_admin_migration_driver_repair.py:spinr-driver-export-pii:19
 195837db8f18aae2bf3328fe3c5df310d79d9770:backend/services/migration_driver_repair_service.py:spinr-driver-export-pii:81
+60a0552a4a4448b8a6e859e537a3a5fa360d8dba:.gitleaksignore:spinr-driver-export-pii:33
+60a0552a4a4448b8a6e859e537a3a5fa360d8dba:.gitleaksignore:spinr-driver-export-pii:39
+60a0552a4a4448b8a6e859e537a3a5fa360d8dba:.gitleaksignore:spinr-driver-export-pii:42

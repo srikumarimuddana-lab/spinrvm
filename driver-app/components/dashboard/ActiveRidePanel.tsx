@@ -351,8 +351,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // ride_incentive_claims and is only written at completion — so the panel has
   // to add the projected bonus itself. Without this the headline dropped to the
   // bare fare the moment the driver accepted, under-quoting the offer they took.
-  const fareEarnings = ride.driver_earnings ?? ride.total_fare ?? 0;
-  const bonusEarnings = totalBonus ?? 0;
+  // Round each part once and sum the rounded parts, so the split line beneath
+  // always adds up to the headline above it. driver_earnings is a FLOAT column,
+  // so rounding the sum independently of the parts can disagree by a cent.
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const fareEarnings = round2(ride.driver_earnings ?? ride.total_fare ?? 0);
+  const bonusEarnings = round2(totalBonus ?? 0);
   const hasBonus = bonusEarnings > 0;
   const earnings = fareEarnings + bonusEarnings;
   const distKm = ride.distance_km ?? 0;

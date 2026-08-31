@@ -23,7 +23,7 @@ import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
 import { onRideRated } from '@shared/utils/appRating';
 import { getCustomTipAmount } from '../utils/customTipSchema';
@@ -137,21 +137,6 @@ function RideCompletedScreenContent() {
     ],
     [actualSections, hasActualRoute, isV2Route, plannedSegments, showPlannedUnderlay],
   );
-  const routeLabel = hasActualRoute
-    ? 'Actual route'
-    : isV2Route
-      ? (showPlannedUnderlay ? 'Booked route' : 'Actual route')
-      : 'Planned route';
-  const routeQuality = routeQualityLabel(currentRide?.route_quality);
-  const routeIsProcessing =
-    currentRide?.route_geometry_status === 'pending' || currentRide?.route_geometry_status === 'processing';
-  const routeStatus = hasActualRoute
-    ? routeQuality
-    : isV2Route
-      ? routeIsProcessing
-        ? 'Actual route processing'
-        : 'Actual route unavailable'
-      : 'Planned route preview';
 
   useCompletedRouteRefresh(currentRide, async () => {
     if (rideId) await fetchRide(rideId);
@@ -748,10 +733,6 @@ function RideCompletedScreenContent() {
 
             {/* Address overlay */}
             <View style={styles.mapOverlay}>
-              <View style={styles.mapRouteStatus}>
-                <Ionicons name={hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
-                <Text style={styles.mapRouteStatusText} numberOfLines={1}>{routeLabel} · {routeStatus}</Text>
-              </View>
               <View style={styles.mapAddrRow}>
                 <View style={[styles.mapAddrDot, { backgroundColor: '#10B981' }]} />
                 <Text style={styles.mapAddrText} numberOfLines={1}>{currentRide?.pickup_address || 'Pickup'}</Text>
@@ -1165,10 +1146,6 @@ function createStyles(colors: ThemeColors) {
         mapOverlay: {
       position: 'absolute', bottom: 8, left: 8, right: 8,
       backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 10, padding: 10, paddingHorizontal: 14,
-        },
-        mapRouteStatus: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 7 },
-        mapRouteStatusText: {
-          flex: 1, fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#2563EB',
         },
     mapAddrRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     mapAddrDot: { width: 8, height: 8, borderRadius: 4 },

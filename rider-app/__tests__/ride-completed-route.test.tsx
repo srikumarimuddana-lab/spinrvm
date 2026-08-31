@@ -42,7 +42,6 @@ describe('completed ride route presentation contract', () => {
   it('does not let a generated snapshot replace drawable actual geometry', () => {
     expect(screenSource).not.toContain('isActualSnapshot');
     expect(screenSource).not.toContain('currentRide?.route_snapshot_url');
-    expect(screenSource).toContain('Actual route unavailable');
   });
 
   it('never feeds the planned route into RouteLine for completed v2 rides', () => {
@@ -53,14 +52,23 @@ describe('completed ride route presentation contract', () => {
     expect(screenSource).toContain('const showPlannedUnderlay =');
     expect(screenSource).toContain("(!hasActualRoute || currentRide?.route_geometry_status !== 'complete')");
     expect(screenSource).toContain(') : isV2Route ? null : (');
-    expect(screenSource).toContain("? (showPlannedUnderlay ? 'Booked route' : 'Actual route')");
-    expect(screenSource).toContain("? 'Actual route processing'");
-    expect(screenSource).toContain("? 'Actual route'");
-    expect(screenSource).toContain('routeQualityLabel');
     expect(screenSource).toContain('currentRide.actual_completion_point');
     expect(rideStoreSource).toContain('actual_route_segments?:');
     expect(rideStoreSource).toContain('actual_completion_point?:');
     expect(rideStoreSource).toContain('actual_duration_minutes?:');
+  });
+
+  it('keeps route-provenance diagnostics off the post-trip screen', () => {
+    // The map overlay kept a "<label> · <quality>" pill above the addresses.
+    // Coverage percentages and reconstruction status are operator diagnostics;
+    // they live on the admin ride-detail modal, which still renders
+    // routeQualityLabel(). The addresses themselves are unchanged.
+    expect(screenSource).not.toContain('routeQualityLabel');
+    expect(screenSource).not.toContain('mapRouteStatus');
+    expect(screenSource).not.toContain('Actual route processing');
+    expect(screenSource).not.toContain('Actual route unavailable');
+    expect(screenSource).not.toContain('Planned route preview');
+    expect(screenSource).toContain('styles.mapAddrRow');
   });
 
   it('shows the GPS-measured distance with the billed distance as legacy fallback', () => {

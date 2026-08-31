@@ -365,8 +365,9 @@ describe('RideCompletedScreen', () => {
       ],
     };
     const r = await renderScreen();
-    // hasActualRoute -> "Actual route" label rendered.
-    expect(allText(r)).toContain('Actual route');
+    // The map draws the actual geometry; no provenance pill accompanies it —
+    // coverage/reconstruction copy is admin-only now.
+    expect(allText(r)).not.toContain('Actual route');
     const mapView = r.root.findByType(RNMapView as any);
     await act(async () => { mapView.props.onMapReady(); await flush(); });
     expect(mockFitToCoordinates).toHaveBeenCalled();

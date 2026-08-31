@@ -177,9 +177,14 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     total_bonus = None
     quest_hint = None
     try:
-        _matched = await match_ride_incentives(db_supabase, ride)
-        if _matched:
-            incentives, total_bonus = incentive_display_payload(_matched)
+        # [] / 0.0 when the lookup succeeded and matched nothing; both stay None
+        # only when the lookup itself failed. The client needs to tell those
+        # apart — otherwise a transient DB blip mid-trip is indistinguishable
+        # from "this ride has no bonus" and the earnings headline drops by the
+        # bonus and pops back on the next poll.
+        incentives, total_bonus = incentive_display_payload(
+            await match_ride_incentives(db_supabase, ride)
+        )
     except Exception as e:
         logger.error(f"get_active_ride: incentive lookup failed: {e}", exc_info=True)
 

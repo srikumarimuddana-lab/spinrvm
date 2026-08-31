@@ -26,7 +26,13 @@ interface CompletedRide {
   booking_fee?: number;
   tip_amount?: number;
   total_fare?: number;
+  /** Fare-only. The bonus lives in ride_incentive_claims — use `total_earned`
+      for the headline, and keep this for the fare line of the breakdown. */
   driver_earnings?: number;
+  /** driver_earnings + tip + incentive + tax + cancel fee, from the frozen
+      earnings snapshot. Absent on a legacy/failed-snapshot response. */
+  total_earned?: number;
+  incentive_amount?: number;
   distance_km?: number;
   duration_minutes?: number;
   pickup_address?: string;
@@ -71,6 +77,13 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
     hour: 'numeric',
     minute: '2-digit',
   });
+  // The offer, the in-trip panel and this screen must all quote one number.
+  // driver_earnings is fare-only, so falling back to it here made the headline
+  // drop by the bonus at the exact moment the work finished.
+  const bonus = n(completedRide?.incentive_amount);
+  const earned = completedRide?.total_earned != null
+    ? n(completedRide.total_earned)
+    : n(completedRide?.driver_earnings) + bonus;
   const rideFareTotal = n(completedRide?.base_fare) + n(completedRide?.distance_fare) + n(completedRide?.time_fare);
   const totalFare = n(completedRide?.total_fare) || rideFareTotal + n(completedRide?.booking_fee) + n(completedRide?.tip_amount);
 
@@ -123,7 +136,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           >
             <Text style={styles.earningsHeroLabel}>{t('tripCompleted.yourEarnings')}</Text>
             <Text style={styles.earningsHeroAmount} allowFontScaling={false}>
-              ${money(completedRide?.driver_earnings)}
+              ${earned.toFixed(2)}
             </Text>
             <View style={styles.keepBadge}>
               <Ionicons name="shield-checkmark" size={14} color="#fff" />
@@ -187,10 +200,16 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
                 <Text style={[styles.fareItemValue, styles.positiveValue]}>${money(completedRide?.tip_amount)}</Text>
               </View>
             )}
+            {bonus > 0 && (
+              <View style={styles.fareRow}>
+                <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.bonus')}</Text>
+                <Text style={[styles.fareItemValue, styles.positiveValue]}>${money(bonus)}</Text>
+              </View>
+            )}
             <View style={styles.fareDivider} />
             <View style={styles.fareRow}>
               <Text allowFontScaling={false} style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
-              <Text style={styles.fareEarningsValue}>${money(completedRide?.driver_earnings)}</Text>
+              <Text style={styles.fareEarningsValue}>${earned.toFixed(2)}</Text>
             </View>
           </View>
 
@@ -263,8 +282,9 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
                   `${t('tripCompleted.timeFare')}:     $${money(completedRide?.time_fare)}`,
                   n(completedRide?.booking_fee) > 0 ? `${t('tripCompleted.bookingFee')}:   $${money(completedRide?.booking_fee)}` : null,
                   n(completedRide?.tip_amount) > 0 ? `${t('tripCompleted.tip')}:           $${money(completedRide?.tip_amount)}` : null,
+                  bonus > 0 ? `${t('tripCompleted.bonus')}:         $${money(bonus)}` : null,
                   '━━━━━━━━━━━━━━━━━━━━━━━',
-                  `${t('tripCompleted.receiptYourEarnings')}: $${money(completedRide?.driver_earnings)}`,
+                  `${t('tripCompleted.receiptYourEarnings')}: $${earned.toFixed(2)}`,
                   '',
                   completedRide.id ? `${t('tripCompleted.receiptTripId')}: ${completedRide.id}` : null,
                   '',

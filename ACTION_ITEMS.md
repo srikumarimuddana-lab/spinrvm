@@ -12476,12 +12476,17 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B40. `saved_addresses` (rider home/work address book) has RLS enabled but zero policies — anon/authenticated fully denied, only the service-role backend can read/write
 
-- [ ] **Status:** open. Found 2026-08-30 while building the Phase 4 legacy
-  saved-address backfill (`docs/migration/2026-08-27-legacy-data-full-
-  migration-approach.md` §4) — confirmed directly against production
-  (`pg_policy` returns zero rows for `saved_addresses`, `pg_class.
-  relrowsecurity = true`). This is the first place this gap is documented
-  anywhere in the repo.
+- [x] **Status:** done (2026-08-31). Found 2026-08-30 while building the
+  Phase 4 legacy saved-address backfill (`docs/migration/2026-08-27-legacy-
+  data-full-migration-approach.md` §4) — confirmed directly against
+  production (`pg_policy` returns zero rows for `saved_addresses`,
+  `pg_class.relrowsecurity = true`). This is the first place this gap is
+  documented anywhere in the repo. Closed by
+  `backend/migrations/378_saved_addresses_rls_policies.sql` (SELECT/INSERT/
+  DELETE policies, `auth.uid()::text = user_id` — the column is `TEXT`, not
+  `UUID`) plus new DB-role-level RLS tests
+  (`backend/tests/rls/test_saved_addresses_rls.py`, 9/9 passing). Full
+  writeup: `docs/change-log/2026-08-31-b40-saved-addresses-rls-policies.md`.
 - **Why it isn't urgent today:** RLS-enabled-with-no-policy denies all
   access to the `anon`/`authenticated` roles by default (fail-closed, not
   fail-open) — it isn't a live vulnerability. `routes/addresses.py` already

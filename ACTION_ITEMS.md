@@ -12555,7 +12555,21 @@ record of what was assumed vs. what was actually true</summary>
   (standby drifts silently).
 
 ### C4. Staff MFA rollout comms
-- [ ] **Status:** code shipped; people not yet notified
+- [ ] **Status:** code shipped; people not yet notified. **Half of the
+  acceptance criteria confirmed 2026-08-31** (read-only against
+  production, `soavhtdhefowwvforzwb`): `admin_staff` has exactly 2 rows
+  today, both `role='super_admin'`, both `is_active=true`, and both
+  already `mfa_enabled=true` — the "≥2 active super_admin accounts for
+  the lost-phone reset path" requirement is satisfied with real evidence,
+  not assumed. `ADMIN_MFA_ENFORCED` defaults `true` in
+  `backend/core/config.py` (env-var, not re-verified against the live
+  Fly/Railway env this pass — that's C3's scope). Because only these 2
+  accounts exist and both already have MFA on, nobody would currently hit
+  a surprise forced-enrollment prompt — the comms are still worth sending
+  (documents policy for the next staff account) but this is lower urgency
+  than the item's original framing implied. Ready-to-send draft at
+  `docs/comms/2026-08-31-staff-mfa-rollout-notice.md` — not sent by this
+  session, no Slack/email integration available here.
 - **Action:** tell all admin staff that the next login forces authenticator enrollment
   (ADMIN_MFA_ENFORCED). Ensure ≥2 active super_admin accounts exist for the
   lost-phone reset path.

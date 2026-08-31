@@ -16,6 +16,7 @@ import { showToast } from '../store/toastStore';
 import { getManageCardsFormError } from '../utils/manageCardsSchema';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 
 interface Card {
   id: string;
@@ -79,6 +80,8 @@ const SELECTED_GAP = 14;       // clearance around the expanded card
 
 export default function ManageCardsScreen() {
   const router = useRouter();
+  // #1231 finding 17: card entry must never enter session replay.
+  useLogRocketPrivacyScreen();
   // When opened from a stuck ride-payment ("Change Card" escape), forPayment=1
   // and rideId is set: picking/adding a card bounces back to ride-completed to
   // re-charge that trip on the chosen card.

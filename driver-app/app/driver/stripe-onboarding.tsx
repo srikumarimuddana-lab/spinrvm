@@ -37,6 +37,7 @@ import { ensureFreshToken, getAuthHeader } from '@shared/api/client';
 // eslint-disable-next-line import/no-named-as-default
 import SpinrConfig from '@shared/config/spinr.config';
 import { useDriverMe } from '@shared/hooks/queries';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { useTheme } from '@shared/theme/ThemeContext';
 
 const EMBEDDED_URL = `${SpinrConfig.backendUrl}/api/v1/drivers/stripe-embedded`;
@@ -52,6 +53,8 @@ export default function StripeOnboardingScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { colors } = useTheme();
+    // #1231 finding 17: payout/banking onboarding must never enter session replay.
+    useLogRocketPrivacyScreen();
     const { refetch } = useDriverMe();
     const webRef = useRef<WebView>(null);
 

@@ -72,8 +72,8 @@ If your account is deactivated, you may appeal within [NUMBER, E.G. 30
 DAYS] using the Appeal screen in the driver app. Include any information
 you believe is relevant — Spinr's safety team did not have, or may not have
 correctly weighed. A different reviewer than the one who made the original
-decision will review your appeal and respond within [NUMBER, E.G. 10
-BUSINESS DAYS]. An appeal outcome is final, but you may raise a legal claim
+decision is expected to review your appeal, which will receive a response
+within [NUMBER, E.G. 10 BUSINESS DAYS]. An appeal outcome is final, but you may raise a legal claim
 independently of this appeals process where you believe you have one — this
 policy does not waive any right you have under the Independent Contractor
 Agreement or applicable law.
@@ -111,6 +111,21 @@ validity before you can go online again.
    `driver-appeals@spinr.ca` email alternative it previously offered as an
    either/or does not exist anywhere in code (no mailbox, no route
    referencing it) and should not be offered until it's actually built.
-3. Cross-reference `docs/legal/community-guidelines.md` and
+3. **Fixed 2026-08-31 (#4738)**: `admin_resolve_driver_appeal()`
+   (`backend/routes/admin/driver_appeals.py`) does not, and cannot from
+   application code alone, verify the resolving admin differs from whoever
+   made the original suspend/ban decision — its own docstring says so. The
+   "different reviewer" sentence above was published as though it were a
+   system guarantee when it is actually a safety-team process expectation,
+   so the copy here (and the matching driver-facing text at
+   `appeal.tsx:122`) was softened from "will review" to "is expected to
+   review" to match what's actually enforced. Real backend enforcement
+   (recording and checking `resolved_by` against the original
+   suspending admin) remains a legitimate follow-up if the safety team
+   later wants this as a hard guarantee instead of a process expectation —
+   tracked separately, not done here since it's a new constraint on an
+   admin workflow that needs its own review (e.g. a small on-call team
+   where the same admin may legitimately need to resolve their own action).
+4. Cross-reference `docs/legal/community-guidelines.md` and
    `docs/legal/non-discrimination-policy.md` for consistency on what counts
    as a "serious violation" — all three should describe the same standard.

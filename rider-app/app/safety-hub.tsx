@@ -21,6 +21,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { useSafetyPanelConfig } from '@shared/hooks/useSafetyPanelConfig';
 import { useEmergencyContacts } from '@shared/hooks/useEmergencyContacts';
 import { getSOSLocation } from '@shared/utils/sosLocation';
+import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 
 // Hoisted out of SafetyHubScreen (react-hooks/static-components) — was
 // redeclared on every render, resetting any implicit state each time.
@@ -57,6 +58,8 @@ function Row({
 export default function SafetyHubScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  // #1231 finding 17: safety/SOS screens must never enter session replay.
+  useLogRocketPrivacyScreen();
   const styles = React.useMemo(() => createStyles(colors), [colors]);
   const [coords, setCoords] = useState<{ lat?: number; lng?: number }>({});
   const cfg = useSafetyPanelConfig(coords.lat, coords.lng, true);

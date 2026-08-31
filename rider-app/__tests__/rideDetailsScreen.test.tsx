@@ -170,11 +170,16 @@ describe('RideDetailsScreen', () => {
     expect(allText(r2)).toContain('disputed');
   });
 
-  it('shows the "Imported" badge and no-GPS disclaimer when the backend flags the ride as legacy', async () => {
+  it('shows the "Imported" badge when the backend flags the ride as legacy', async () => {
+    // The inline "Imported from the previous app — no GPS was recorded"
+    // disclaimer (and the route-quality caption it was folded into) was
+    // deliberately removed from this screen in 327d3e8 — an operator
+    // diagnostic, not something a rider can act on; the badge alone is the
+    // rider-facing signal. See ride-details-route.test.tsx's "keeps
+    // route-provenance diagnostics off the rider screen".
     mockApiGet.mockResolvedValue({ data: { ...RIDE_COMPLETED, show_legacy_badge: true } });
     const r = await renderScreen();
     expect(allText(r)).toContain('Imported');
-    expect(allText(r)).toContain('Imported from the previous app — no GPS was recorded for this ride');
   });
 
   it('hides the "Imported" badge and disclaimer for an ordinary ride even with legacy_import_metadata present', async () => {
@@ -532,31 +537,63 @@ describe('map rendering (pickup_lat/dropoff_lat present)', () => {
     expect(polylines.length).toBe(2);
     await act(async () => { MapViewNode.props.onMapReady(); await flush(); });
     expect(mockFitToCoordinates).toHaveBeenCalled();
-    // hasActualRoute is true here (a real trip_in_progress segment exists),
-    // so the quality text takes the "Actual route · <quality>" branch, not
-    // the isV2Route/routeIsProcessing one — that's covered separately below.
-    expect(allText(r)).toContain('Actual route ·');
   });
 
-  it('shows "Actual route unavailable" for a v2 ride whose geometry finished processing with no usable actual route', async () => {
+  // The "Actual route · <quality>" / "Actual route unavailable" / "Planned
+  // route · Planned route preview" / "Actual route processing" caption below
+  // the map was deliberately removed in 327d3e8 (owner directive — coverage
+  // percentages and reconstruction status are an operator diagnostic, not
+  // something a rider can act on; the same info stays on the admin panel via
+  // routeQualityLabel()). This pins that removal stays in place across each
+  // of the geometry-status branches that used to drive the caption text, so
+  // a future edit to this screen doesn't silently reintroduce it. See
+  // ride-details-route.test.tsx's "keeps route-provenance diagnostics off
+  // the rider screen" for the source-level version of the same pin.
+  it('never shows the removed route-quality diagnostic caption, in any geometry-status branch', async () => {
+    const forbidden = [
+      'Actual route ·', 'Actual route unavailable',
+      'Planned route · Planned route preview', 'Actual route processing',
+    ];
+
+    mockApiGet.mockResolvedValue({
+      data: {
+        ...RIDE_WITH_COORDS,
+        route_schema_version: 2,
+        route_geometry_status: 'processing',
+        actual_route_segments: [
+          { phase: 'trip_in_progress', coordinates: [[52.13, -106.67], [52.14, -106.65]] },
+        ],
+      },
+    });
+    // Each render below is unmounted before the next is created — renderScreen()
+    // assigns to a single shared module-level `renderer`, and this test (unlike
+    // every other one in this file) renders more than once, so only unmounting
+    // at the very end (the file's own afterEach) would leave the earlier
+    // instances' fetchRide effects running past the end of the test.
+    const rHasActual = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rHasActual)).not.toContain(s));
+    act(() => { rHasActual.unmount(); });
+
     mockApiGet.mockResolvedValue({
       data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'complete' },
     });
-    const r = await renderScreen();
-    expect(allText(r)).toContain('Actual route unavailable');
-  });
+    const rUnavailable = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rUnavailable)).not.toContain(s));
+    act(() => { rUnavailable.unmount(); });
 
-  it('shows the legacy "Planned route preview" label for a pre-v2 ride with no actual route', async () => {
-    const r = await renderScreen(); // RIDE_COMPLETED default: no route_schema_version, no actual_route_segments
-    expect(allText(r)).toContain('Planned route · Planned route preview');
-  });
+    // RIDE_COMPLETED: no route_schema_version, no actual_route_segments —
+    // explicitly reset (this describe block's own beforeEach defaults to
+    // RIDE_WITH_COORDS, not RIDE_COMPLETED).
+    mockApiGet.mockResolvedValue({ data: RIDE_COMPLETED });
+    const rLegacyPlanned = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rLegacyPlanned)).not.toContain(s));
+    act(() => { rLegacyPlanned.unmount(); });
 
-  it('shows "Actual route processing" for a v2 ride with no actual route yet while geometry is still processing', async () => {
     mockApiGet.mockResolvedValue({
       data: { ...RIDE_WITH_COORDS, route_schema_version: 2, route_geometry_status: 'processing' },
     });
-    const r = await renderScreen();
-    expect(allText(r)).toContain('Actual route processing');
+    const rProcessing = await renderScreen();
+    forbidden.forEach((s) => expect(allText(rProcessing)).not.toContain(s));
   });
 });
 

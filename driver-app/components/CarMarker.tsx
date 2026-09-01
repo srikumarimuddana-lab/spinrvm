@@ -116,6 +116,23 @@ interface CarMarkerProps {
      */
     ring?: { color: string; pulsing: boolean } | null;
     /**
+     * Fired every playback tick with the position this marker is actually
+     * rendering (route-snapped when on-route, TICK_MS-delayed per the
+     * playback buffer). A caller that derives a camera position FROM this
+     * vehicle's location (e.g. a follow camera that shifts its center ahead
+     * of the car) MUST anchor on this position, not a separately-held raw
+     * GPS fix — otherwise the camera tracks the live, undelayed position
+     * while the icon renders PLAYBACK_DELAY_MS behind it, and any further
+     * offset the camera applies (e.g. "pin the car low") compounds in the
+     * same direction as that delay instead of being measured from the
+     * icon's actual position. At speed, the two can drift far enough apart
+     * that the icon renders outside the visible map area — live-testing
+     * report 2026-08-31: "icon missing" at 46 km/h in course-up mode. See
+     * onBearingChange above for the identical reasoning applied to
+     * rotation instead of position.
+     */
+    onPositionChange?: (coordinate: TrackingLatLng) => void;
+    /**
      * Fired every playback tick with the bearing this marker is actually
      * rendering (the same value driving its own icon rotation, TICK_MS-
      * delayed spline/route-aware smoothing included). A caller that also
@@ -217,6 +234,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     imageUri,
     routeCoordinates,
     ring,
+    onPositionChange,
     onBearingChange,
 }) => {
     const markerRef = useRef<any>(null);
@@ -243,12 +261,17 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     useEffect(() => {
         headingRef.current = heading;
     }, [heading]);
-    // Latest onBearingChange, read by the ticker (which must not re-fire per
-    // callback-identity change — same reasoning as headingRef above).
+    // Latest onBearingChange/onPositionChange, read by the ticker (which
+    // must not re-fire per callback-identity change — same reasoning as
+    // headingRef above).
     const onBearingChangeRef = useRef(onBearingChange);
     useEffect(() => {
         onBearingChangeRef.current = onBearingChange;
     }, [onBearingChange]);
+    const onPositionChangeRef = useRef(onPositionChange);
+    useEffect(() => {
+        onPositionChangeRef.current = onPositionChange;
+    }, [onPositionChange]);
 
     // Route lookup happens inside the position effect via a ref so a route
     // refresh (live-route poll returns a new array every ~20 s) re-snaps the
@@ -407,6 +430,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             // otherwise render it raw (off-route/detour honesty).
             const snap = snapToRoute(p.coordinate, routeRef.current, MAX_ROUTE_SNAP_M);
             const target = snap?.coordinate ?? p.coordinate;
+            onPositionChangeRef.current?.(target);
 
             const from = prevTargetRef.current;
             const movedM = distanceMeters(

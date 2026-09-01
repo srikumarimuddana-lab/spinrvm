@@ -658,6 +658,27 @@ function DriverDashboard() {
   const handleMarkerBearingChange = useCallback((bearing: number) => {
     camBearingRef.current = bearing;
   }, []);
+  // Camera anchor position: same story as bearing above, applied to WHERE
+  // the camera centers, not just which way it points. CarMarker renders
+  // PLAYBACK_DELAY_MS (5s) behind the raw `location` fix. Anchoring the
+  // camera on the raw fix instead of the marker's own rendered position
+  // meant the camera tracked the live position while the icon lagged
+  // 5s/~lagDistance behind it — and the "pin car low" ahead-offset below
+  // then shifted the camera further in the SAME direction the icon was
+  // already lagging, compounding rather than cancelling. At driving speed
+  // the two can end up far enough apart that the icon renders outside the
+  // visible map area (live-testing report 2026-08-31: "icon missing" at
+  // 46 km/h). Anchoring on the marker's own reported position instead means
+  // the ahead-offset is always measured from where the icon actually is, so
+  // the two can never drift apart. Falls back to the raw fix only before
+  // CarMarker's first tick has reported one (e.g. right after mount).
+  const markerPosRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const handleMarkerPositionChange = useCallback(
+    (coord: { latitude: number; longitude: number }) => {
+      markerPosRef.current = coord;
+    },
+    [],
+  );
   useEffect(() => {
     if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
@@ -670,9 +691,8 @@ function DriverDashboard() {
     // Pin the car low: shift the center ahead of the car along the travel
     // bearing by ~18% of the visible map height (WebMercator meters-per-
     // pixel at this zoom/latitude), so the road ahead fills the screen.
-    let center: { latitude: number; longitude: number } = {
-      latitude: c.latitude, longitude: c.longitude,
-    };
+    let center: { latitude: number; longitude: number } =
+      markerPosRef.current ?? { latitude: c.latitude, longitude: c.longitude };
     if (mapHeading !== 0 || (courseUp && camBearingRef.current != null)) {
       const metersPerPx =
         (156543.03392 * Math.cos((c.latitude * Math.PI) / 180)) / Math.pow(2, zoom);
@@ -932,6 +952,7 @@ function DriverDashboard() {
             imageUri={markerImageUri}
             routeCoordinates={routeCoords.length > 1 ? routeCoords : null}
             ring={ownMarkerRing}
+            onPositionChange={handleMarkerPositionChange}
             onBearingChange={handleMarkerBearingChange}
           />
         )}

@@ -34,9 +34,11 @@ from ._shared import (  # noqa: F401
 try:
     from ...utils.company_details import load_company_details
     from ...utils.legacy_rides import drop_legacy_rides
+    from ...utils.pii import client_safe_detail
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from utils.company_details import load_company_details  # type: ignore
     from utils.legacy_rides import drop_legacy_rides  # type: ignore
+    from utils.pii import client_safe_detail
 
 router = APIRouter()
 
@@ -494,7 +496,7 @@ async def email_driver_statement(
         statement = await build_statement(driver, period_type, start_d, driver_name=driver_name)
     except ValueError as e:
         # Misaligned anchor (weekly not a Monday / monthly not the 1st).
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="Invalid statement period")) from e
 
     background_tasks.add_task(_email_statement_document, current_user["id"], email, statement)
     return {"message": f"Your earnings statement for {statement['period_label']} is on its way. Check your email."}

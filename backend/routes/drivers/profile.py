@@ -199,13 +199,15 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
                 ),
             )
         try:
+            from ...utils.pii import client_safe_detail
             from ...utils.sin import sin_last4, validate_sin
         except ImportError:  # pragma: no cover - dual-import pattern
+            from utils.pii import client_safe_detail  # type: ignore
             from utils.sin import sin_last4, validate_sin  # type: ignore
         try:
             validated = validate_sin(str(updates["sin"]))
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail=client_safe_detail(exc, fallback="Invalid SIN")) from exc
         # `sin` is encrypted by _encrypt_driver_pii on the way to the DB;
         # last4 is stored in the clear so on-file state is visible without a
         # decrypt, and it is the only part ever displayed.

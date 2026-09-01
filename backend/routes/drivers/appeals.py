@@ -20,8 +20,10 @@ from ._shared import get_own_driver_row
 
 try:
     from ...services import driver_appeals as appeals_service
+    from ...utils.pii import client_safe_detail
 except ImportError:  # pragma: no cover - direct module imports in tests
     from services import driver_appeals as appeals_service  # type: ignore
+    from utils.pii import client_safe_detail
 
 router = APIRouter()
 
@@ -76,6 +78,6 @@ async def submit_appeal(req: SubmitAppealRequest, current_user: Dict = Depends(g
             detail="You already have a pending appeal. We'll respond to that one before you can submit another.",
         ) from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=client_safe_detail(e, fallback="Invalid appeal request")) from e
 
     return appeal

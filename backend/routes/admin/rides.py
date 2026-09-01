@@ -253,9 +253,9 @@ async def admin_get_rides(
     services/pre_launch_flag_service.py). True = flagged only, False = hide
     flagged, omitted = no filter (default, matches every prior behavior).
     """
-    filters = await _build_rides_filters(status, is_scheduled, search, date_from, date_to, service_area_id, pre_launch)
+    import asyncio  # noqa: PLC0415
 
-    total_count = await db_supabase.count_documents("rides", filters)
+    filters = await _build_rides_filters(status, is_scheduled, search, date_from, date_to, service_area_id, pre_launch)
 
     if sort_by and sort_by in _VALID_SORT_COLUMNS:
         order_col = sort_by
@@ -267,7 +267,10 @@ async def admin_get_rides(
         order_col = "created_at"
         order_desc = True
 
-    rides = await db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset)
+    total_count, rides = await asyncio.gather(
+        db_supabase.count_documents("rides", filters),
+        db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset),
+    )
     out = await _enrich_rides(rides)
     return {"rides": out, "total_count": total_count, "limit": limit, "offset": offset}
 
@@ -396,6 +399,11 @@ async def admin_get_unpaid_rides(
         offset=offset,
         order="created_at",
         desc=True,
+        columns=(
+            "id,status,payment_status,payment_retry_count,"
+            "total_fare,tip_amount,pickup_address,dropoff_address,"
+            "rider_id,driver_id,created_at,ride_completed_at"
+        ),
     )
 
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
@@ -1175,17 +1183,31 @@ async def admin_get_ride_stats():
     month_start = today_start.replace(day=1)
     next_month = (month_start + timedelta(days=32)).replace(day=1)
 
-    today_count = await db_supabase.get_ride_count_by_date_range(today_start.isoformat(), now.isoformat())
-    yesterday_count = await db_supabase.get_ride_count_by_date_range(
-        yesterday_start.isoformat(), today_start.isoformat()
-    )
-    this_week_count = await db_supabase.get_ride_count_by_date_range(week_start.isoformat(), week_end.isoformat())
-    this_month_count = await db_supabase.get_ride_count_by_date_range(month_start.isoformat(), next_month.isoformat())
+    import asyncio  # noqa: PLC0415
 
-    # Revenue stats from completed rides — aggregated in Postgres (today +
-    # month) instead of fetching up to 10,000 rides per window and summing.
-    today_money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": today_start.isoformat(), "p_end": None})
-    month_money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": month_start.isoformat(), "p_end": None})
+    chart_start = today_start - timedelta(days=13)
+    chart_end = today_start + timedelta(days=1)
+
+    # All 7 queries are independent — run in parallel.
+    (
+        today_count,
+        yesterday_count,
+        this_week_count,
+        this_month_count,
+        today_money,
+        month_money,
+        count_rows,
+    ) = await asyncio.gather(
+        db_supabase.get_ride_count_by_date_range(today_start.isoformat(), now.isoformat()),
+        db_supabase.get_ride_count_by_date_range(yesterday_start.isoformat(), today_start.isoformat()),
+        db_supabase.get_ride_count_by_date_range(week_start.isoformat(), week_end.isoformat()),
+        db_supabase.get_ride_count_by_date_range(month_start.isoformat(), next_month.isoformat()),
+        db_supabase.rpc("admin_ride_money_rollup", {"p_start": today_start.isoformat(), "p_end": None}),
+        db_supabase.rpc("admin_ride_money_rollup", {"p_start": month_start.isoformat(), "p_end": None}),
+        db_supabase.rpc(
+            "admin_ride_daily_counts", {"p_start": chart_start.isoformat(), "p_end": chart_end.isoformat()}
+        ),
+    )
 
     def _rollup(rollup: Any) -> Dict[str, Any]:
         row = rollup[0] if isinstance(rollup, list) and rollup else rollup
@@ -1196,15 +1218,6 @@ async def admin_get_ride_stats():
     total_tips = float(Decimal(str(today_row.get("sum_tip") or 0)))
     completed_count = int(today_row.get("completed_count") or 0)
     month_revenue = float(Decimal(str(_rollup(month_money).get("sum_total_fare") or 0)))
-
-    # Daily chart data for last 14 days — one grouped query instead of 14
-    # sequential COUNT round-trips.
-    chart_start = today_start - timedelta(days=13)
-    chart_end = today_start + timedelta(days=1)
-    count_rows = await db_supabase.rpc(
-        "admin_ride_daily_counts",
-        {"p_start": chart_start.isoformat(), "p_end": chart_end.isoformat()},
-    )
     chart_buckets: Dict[str, int] = {str(r.get("day")): int(r.get("rides") or 0) for r in (count_rows or [])}
     daily_chart = [
         {

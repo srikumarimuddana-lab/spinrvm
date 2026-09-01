@@ -629,7 +629,7 @@ async def save_upload(file: UploadFile) -> str:
         return _extract_signed_url(url_res)
     except Exception as e:
         logger.error(f"Failed to upload to Supabase Storage: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not save file: {e}") from e
+        raise HTTPException(status_code=500, detail="Could not save file") from e
 
 
 # --- Helpers ---
@@ -1271,7 +1271,7 @@ async def upload_file(
             public_url = _extract_signed_url(signed_res)
         except Exception as e:
             logger.exception("Supabase Storage upload failed: {}", e)
-            raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
+            raise HTTPException(status_code=500, detail="Storage upload failed") from e
 
         return {
             "success": True,
@@ -1285,7 +1285,7 @@ async def upload_file(
         raise
     except Exception as e:
         logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}") from e
+        raise HTTPException(status_code=500, detail="Upload failed") from e
 
 
 @files_router.get("/{file_id}")

@@ -31,6 +31,7 @@ try:
     from ...services.zoho_desk_service import ZohoDeskError
     from ...utils.audit_logger import log_admin_action
     from ...utils.company_details import CompanyDetails, load_company_details
+    from ...utils.pii import redact_client_text
     from ...utils.rate_limiter import admin_ai_suggest_limit
 except ImportError:  # pragma: no cover - direct module import in tests
     import db_supabase
@@ -41,6 +42,7 @@ except ImportError:  # pragma: no cover - direct module import in tests
     from services.zoho_desk_service import ZohoDeskError
     from utils.audit_logger import log_admin_action
     from utils.company_details import CompanyDetails, load_company_details
+    from utils.pii import redact_client_text
     from utils.rate_limiter import admin_ai_suggest_limit
 
 logger = logging.getLogger(__name__)
@@ -53,7 +55,10 @@ _MIRROR_TABLE = "zoho_desk_tickets"
 
 
 def _err(e: ZohoDeskError) -> HTTPException:
-    return HTTPException(status_code=e.status, detail=str(e.message))
+    # Vendor upstream text. `status` is 502/503 today, so the 5xx sanitiser
+    # already covers the wire — redacting at the source keeps that true if a
+    # future caller raises with a 4xx status.
+    return HTTPException(status_code=e.status, detail=redact_client_text(e.message))
 
 
 import html as _html

@@ -24,7 +24,7 @@ AS $$
                              WHERE created_at >= p_year_start), 0)
     )
     FROM driver_bonuses
-    WHERE driver_id = p_driver_id;
+    WHERE driver_id = p_driver_id::uuid;
 $$;
 
 COMMENT ON FUNCTION public.admin_driver_bonus_summary(text, timestamptz) IS

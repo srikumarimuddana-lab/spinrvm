@@ -105,7 +105,7 @@
     "eslint": "^9.8.0",
     "eslint-config-expo": "~57.0.1",
     "jest": "30.3.0",
-    "jest-expo": "~57.0.4",
+    "jest-expo": "~57.0.5",
     "patch-package": "^8.0.1",
     "typescript": "~5.9.2"
   },

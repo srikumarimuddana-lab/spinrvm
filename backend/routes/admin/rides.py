@@ -3503,22 +3503,14 @@ async def admin_close_payout_period(
         range_end = datetime(body.year, body.month + 1, 1, tzinfo=timezone.utc)
     period_key = f"{body.year:04d}-{body.month:02d}"
 
-    # Snapshot the completed payout id list for the audit row. Bounded
-    # at 5000 — beyond that we'd want a separate snapshot table, but
-    # for Spinr-scale fleets this is plenty.
-    rows = await db_supabase.get_rows(
-        "payouts",
-        {
-            "status": "completed",
-            "processed_at": {"$gte": range_start.isoformat(), "$lt": range_end.isoformat()},
-        },
-        limit=5000,
+    snap_result = await db_supabase.rpc(
+        "admin_payout_period_snapshot",
+        {"p_start": range_start.isoformat(), "p_end": range_end.isoformat()},
     )
-    payout_ids = [r.get("id") for r in rows if r.get("id")]
-    total_amount = round(
-        float(sum((Decimal(str(r.get("amount") or 0)) for r in rows), Decimal("0"))),
-        2,
-    )
+    snap = snap_result[0] if isinstance(snap_result, list) and snap_result else (snap_result or {})
+    payout_count = int(snap.get("payout_count") or 0)
+    total_amount = round(float(snap.get("total_amount") or 0), 2)
+    payout_ids = snap.get("payout_ids") or []
 
     audit_id = await log_admin_action(
         admin,
@@ -3529,22 +3521,18 @@ async def admin_close_payout_period(
             "period": period_key,
             "range_start": range_start.isoformat(),
             "range_end": range_end.isoformat(),
-            "payout_count": len(payout_ids),
+            "payout_count": payout_count,
             "total_amount": total_amount,
-            # First 50 ids inline; the count is the authoritative number.
-            # If we ever need the full list later we'd add a separate
-            # period_close_snapshot table, but inline is fine for audit.
-            "payout_ids": payout_ids[:50],
+            "payout_ids": payout_ids,
         },
     )
 
     logger.info(
-        f"Payout period {period_key} closed by admin {admin.get('id')} — "
-        f"{len(payout_ids)} payouts, total ${total_amount}"
+        f"Payout period {period_key} closed by admin {admin.get('id')} — {payout_count} payouts, total ${total_amount}"
     )
     return {
         "period": period_key,
-        "payout_count": len(payout_ids),
+        "payout_count": payout_count,
         "total_amount": total_amount,
         "audit_log_id": audit_id,
     }

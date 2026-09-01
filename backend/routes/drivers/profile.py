@@ -601,7 +601,7 @@ async def get_demand_heatmap(
             {
                 "status": "scheduled",
                 "service_area_id": area_id,
-                "scheduled_pickup_time": {"$gte": now.isoformat(), "$lte": cutoff_scheduled},
+                "scheduled_time": {"$gte": now.isoformat(), "$lte": cutoff_scheduled},
             },
             limit=5_000,
             columns="pickup_lat,pickup_lng",

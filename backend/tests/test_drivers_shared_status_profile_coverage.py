@@ -1609,6 +1609,40 @@ class TestGetDemandHeatmapV2:
         assert cell["baseline"] == 0, "single-ride baseline is below k_floor and must be zeroed"
         assert cell["scheduled"] == 0
 
+    async def test_v2_scheduled_query_filters_on_real_column(self):
+        """The scheduled-component query must filter on ``rides.scheduled_time``.
+
+        Regression test: it filtered on ``scheduled_pickup_time``, a column that
+        does not exist. PostgREST answered 400, ``get_rows`` raised, and every
+        v2-enabled driver's heatmap call 500'd — the app hid the legend pill on
+        its first failed fetch, so the feature looked simply absent. The mocked
+        client never validates column names, which is why this only surfaced in
+        production; pin the column here so a rename cannot silently break it.
+        """
+        from backend.routes.drivers import profile as profile_mod
+
+        driver = {"id": "d1", "user_id": "u1", "service_area_id": "area-1"}
+        captured = []
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "service_areas":
+                return [self._service_area()]
+            if table == "rides" and filters.get("status") == "scheduled":
+                captured.append(filters)
+            return []
+
+        with (
+            patch("backend.routes.drivers.profile.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            _heatmap_ctx(self._v2_settings()),
+        ):
+            await profile_mod.get_demand_heatmap(current_user={"id": "u1"})
+
+        assert len(captured) == 1, "expected exactly one scheduled-rides query"
+        assert "scheduled_time" in captured[0]
+        assert "scheduled_pickup_time" not in captured[0]
+
     async def test_v2_baseline_below_k_floor_is_suppressed(self):
         """A single-ride baseline cell must NOT survive (PIPEDA k-anonymity).
 

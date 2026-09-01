@@ -7607,10 +7607,10 @@ jest-environment-node@^29.7.0:
     jest-mock "^29.7.0"
     jest-util "^29.7.0"
 
-jest-expo@~57.0.4:
-  version "57.0.4"
-  resolved "https://registry.yarnpkg.com/jest-expo/-/jest-expo-57.0.4.tgz#06358f5fac6375a9d9b5834a82332ef6f09c272d"
-  integrity sha512-EpTc8zizYWepKXHdHYuYBdEP0mZLjZfB1ldb2dyLKHug0HYFGuBnQ3Qp3gmBWCj3rSRaJYP90Lq/qPozzx2Khg==
+jest-expo@~57.0.5:
+  version "57.0.5"
+  resolved "https://registry.yarnpkg.com/jest-expo/-/jest-expo-57.0.5.tgz#149c0b57cc309614ea2ceb39ce622b6dcb19155a"
+  integrity sha512-U08fwjaDBwnnbKnZcOA0WQbHfKqOWTCGku+IdCaekrLZmfbbZr3P1WqEsXHo6ntidQ3DmW+TT6G1aOp+ChYfKA==
   dependencies:
     "@jest/create-cache-key-function" "^29.2.1"
     "@jest/globals" "^29.2.1"

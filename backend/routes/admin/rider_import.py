@@ -29,10 +29,12 @@ try:
     from ...dependencies import get_admin_user
     from ...services import rider_import_service as import_svc
     from ...utils.audit_logger import log_admin_action
+    from ...utils.pii import client_safe_detail
 except ImportError:
     from dependencies import get_admin_user
     from services import rider_import_service as import_svc
     from utils.audit_logger import log_admin_action
+    from utils.pii import client_safe_detail
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +72,7 @@ async def _read_csv_rows(riders_csv: UploadFile) -> list[dict[str, str]]:
     try:
         rows = import_svc.read_csv_text(text)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="CSV could not be parsed")) from e
     if len(rows) > MAX_ROWS:
         raise HTTPException(status_code=422, detail=f"CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import")
     return rows

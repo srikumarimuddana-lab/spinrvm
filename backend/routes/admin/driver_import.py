@@ -40,6 +40,7 @@ try:
         sign_driver_import_token,
         verify_driver_import_token,
     )
+    from ...utils.pii import client_safe_detail, redact_client_text
     from ...utils.rate_limiter import driver_import_commit_limit
 except ImportError:
     from dependencies import get_admin_user  # noqa: F401
@@ -50,6 +51,7 @@ except ImportError:
         sign_driver_import_token,
         verify_driver_import_token,
     )
+    from utils.pii import client_safe_detail, redact_client_text
     from utils.rate_limiter import driver_import_commit_limit  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -85,7 +87,7 @@ async def _read_csv_rows(drivers_csv: UploadFile) -> tuple[list[dict[str, str]],
     try:
         rows = import_svc.read_csv_text(text)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="CSV could not be parsed")) from e
     if len(rows) > MAX_ROWS:
         raise HTTPException(status_code=422, detail=f"CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import")
     return rows, csv_sha256
@@ -108,7 +110,10 @@ async def _build_plan(
         )
     except RuntimeError as e:
         # Unknown / ambiguous service area — a caller-fixable 400, not a 500.
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(
+            status_code=400,
+            detail=client_safe_detail(e, fallback="Unknown or ambiguous service area"),
+        ) from e
     return await asyncio.to_thread(import_svc.build_plan, rows, [], None, service_area, batch)
 
 
@@ -178,7 +183,8 @@ async def commit_driver_import(
     except DriverImportTokenError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Validate this CSV before committing (or re-validate — the file or batch changed): {e}",
+            detail=f"Validate this CSV before committing (or re-validate — the file or batch changed): "
+            f"{redact_client_text(e)}",
         ) from e
     plan = await _build_plan(rows, service_area_id, service_area_name, batch)
 

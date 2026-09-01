@@ -673,9 +673,26 @@ function DriverDashboard() {
   // the two can never drift apart. Falls back to the raw fix only before
   // CarMarker's first tick has reported one (e.g. right after mount).
   const markerPosRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  // Read-during-render mirror for the route line's traveled-erasure below
+  // (see the RouteLine vehiclePosition prop) — react-hooks/refs correctly
+  // flags reading markerPosRef.current directly in JSX as unsafe (a ref
+  // isn't meant to be read during render; React can't tell when to
+  // re-render on a ref-only change). State is the safe way to feed a
+  // continuously-updating value into render. Throttled to ~3m of movement
+  // (matching the route-line trim's own error tolerance) rather than every
+  // 500ms marker tick, so this doesn't force a screen re-render more often
+  // than the existing GPS-driven `location` state already does.
+  const [markerPosForRender, setMarkerPosForRender] = useState<
+    { latitude: number; longitude: number } | null
+  >(null);
   const handleMarkerPositionChange = useCallback(
     (coord: { latitude: number; longitude: number }) => {
       markerPosRef.current = coord;
+      setMarkerPosForRender((prev) =>
+        !prev || haversineMeters(prev.latitude, prev.longitude, coord.latitude, coord.longitude) >= 3
+          ? coord
+          : prev,
+      );
     },
     [],
   );
@@ -1056,11 +1073,24 @@ function DriverDashboard() {
                   same colours as every other map. Falls back to a straight
                   pickup→destination gradient only when Directions failed and no
                   real path resolved, so the driver still sees where they're
-                  headed instead of a blank map. */}
+                  headed instead of a blank map. vehiclePosition erases the
+                  traveled portion behind the driver as they progress
+                  (Uber/Lyft-style) — anchored on the same marker-reported
+                  position the follow camera uses (markerPosForRender, the
+                  render-safe mirror of markerPosRef), not a raw fix, for the
+                  same single-source-of-truth reason documented on that ref
+                  above; falls back to the raw fix only before CarMarker's
+                  first tick has reported one. */}
               <RouteLine
                 path={routeCoords}
                 pickup={directionsFailed ? origin : null}
                 destination={directionsFailed ? destination : null}
+                vehiclePosition={
+                  markerPosForRender ??
+                  (location?.coords?.latitude != null && location?.coords?.longitude != null
+                    ? { latitude: location.coords.latitude, longitude: location.coords.longitude }
+                    : null)
+                }
               />
             </React.Fragment>
           );

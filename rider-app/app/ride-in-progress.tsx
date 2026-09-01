@@ -723,11 +723,18 @@ function RideInProgressScreenContent() {
             )}
 
             {/* Live road-snapped route (/live-route + planned polyline coords),
-                drawn via the shared orange→red gradient line + pins. */}
+                drawn via the shared orange→red gradient line + pins.
+                vehiclePosition erases the traveled portion behind the driver
+                as the trip progresses (Uber/Lyft-style live tracking). */}
             <RouteLine
               path={tripRouteCoords}
               pickup={routeOrigin}
               destination={routeDestination}
+              vehiclePosition={
+                currentDriver?.lat != null && currentDriver?.lng != null
+                  ? { latitude: currentDriver.lat, longitude: currentDriver.lng }
+                  : null
+              }
             />
             <RoutePins
               pickup={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}

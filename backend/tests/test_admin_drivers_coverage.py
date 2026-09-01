@@ -1312,8 +1312,12 @@ class TestDriverStats:
             assert params["p_driver_ids"] == ["drv-1"]
             return [{"by_driver": {"drv-1": "50.00"}, "total": "50.00"}]
 
+        async def batched_in(table, column, values, extra_filters=None, **kw):
+            return []
+
         with (
             patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.get_rows_batched_in", AsyncMock(side_effect=batched_in)),
             patch("db_supabase.rpc", AsyncMock(side_effect=rpc)),
         ):
             resp = test_client.get("/api/admin/drivers/stats")

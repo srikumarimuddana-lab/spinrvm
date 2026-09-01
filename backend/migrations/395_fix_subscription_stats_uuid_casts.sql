@@ -1,24 +1,17 @@
--- 385_admin_subscription_stats_rollup_fn.sql
+-- 395_fix_subscription_stats_uuid_casts.sql
 --
 -- Purpose:
---   Replace Python-side fetch of ALL driver_subscriptions (10k) +
---   ALL subscription_payments (20k) in admin_get_subscription_stats
---   (routes/admin/subscriptions.py) with server-side aggregation.
+--   Fix uuid/text type mismatches in admin_subscription_stats_rollup (385).
+--   driver_subscriptions.driver_id and plan_id are uuid;
+--   drivers.id is text; subscription_plans.id is uuid.
+--   Adds ::text casts so cross-table comparisons and COALESCE work.
 --
---   Returned keys:
---     total_real / active / expired / cancelled: subscriber counts
---       (excludes pending/superseded checkout rows without payment_status='paid')
---     active_mrr: sum of active subscription prices
---     total_revenue / range_revenue / range_count: payment sums
---     plan_breakdown: [{plan_id, name, count, active, revenue}]
---     daily_revenue: [{day, amount}] within date range
---     daily_subscribers: [{day, count}] new subs within date range
---
--- Money-function safety: read-only, STABLE, SECURITY DEFINER, pinned
--- search_path, EXECUTE revoked from anon/authenticated.
+-- Supersedes: 385_admin_subscription_stats_rollup_fn.sql (append-only;
+--   original left unchanged, this CREATE OR REPLACE overwrites it).
 --
 -- Rollback:
---   DROP FUNCTION IF EXISTS public.admin_subscription_stats_rollup(
+--   Re-apply migration 385 to restore the original (broken) version,
+--   or DROP FUNCTION IF EXISTS public.admin_subscription_stats_rollup(
 --       timestamptz, timestamptz, text[]);
 
 CREATE OR REPLACE FUNCTION public.admin_subscription_stats_rollup(
@@ -39,7 +32,7 @@ BEGIN
         SELECT ds.*
         FROM driver_subscriptions ds
         WHERE p_area_ids IS NULL
-           OR ds.driver_id IN (
+           OR ds.driver_id::text IN (
                SELECT id FROM drivers WHERE service_area_id = ANY(p_area_ids)
            )
     ),
@@ -65,7 +58,7 @@ BEGIN
         SELECT sp.*
         FROM subscription_payments sp
         WHERE p_area_ids IS NULL
-           OR sp.driver_id IN (
+           OR sp.driver_id::text IN (
                SELECT id FROM drivers WHERE service_area_id = ANY(p_area_ids)
            )
     ),
@@ -80,20 +73,20 @@ BEGIN
     ),
     plan_sub_stats AS (
         SELECT
-            COALESCE(plan_id, 'unknown') AS pid,
+            COALESCE(plan_id::text, 'unknown') AS pid,
             MAX(plan_name)               AS sub_plan_name,
             COUNT(*)                                      AS sub_count,
             COUNT(*) FILTER (WHERE status = 'active')     AS active_count
         FROM real_subs
-        GROUP BY COALESCE(plan_id, 'unknown')
+        GROUP BY COALESCE(plan_id::text, 'unknown')
     ),
     plan_pay_stats AS (
         SELECT
-            COALESCE(plan_id, 'unknown') AS pid,
+            COALESCE(plan_id::text, 'unknown') AS pid,
             MAX(plan_name)               AS pay_plan_name,
             COALESCE(SUM(amount), 0)     AS revenue
         FROM scoped_payments
-        GROUP BY COALESCE(plan_id, 'unknown')
+        GROUP BY COALESCE(plan_id::text, 'unknown')
     ),
     plan_merged AS (
         SELECT
@@ -102,7 +95,7 @@ BEGIN
                 s.sub_plan_name,
                 p.pay_plan_name,
                 (SELECT name FROM subscription_plans sp2
-                 WHERE sp2.id = COALESCE(s.pid, p.pid) LIMIT 1),
+                 WHERE sp2.id::text = COALESCE(s.pid, p.pid) LIMIT 1),
                 'Unknown'
             ) AS name,
             COALESCE(s.sub_count, 0)    AS count,
@@ -167,7 +160,8 @@ COMMENT ON FUNCTION public.admin_subscription_stats_rollup(
 ) IS
     'Subscription stats aggregation for admin_get_subscription_stats: subscriber '
     'counts by status, MRR, total/range revenue, per-plan breakdown, daily charts. '
-    'Replaces 10k-sub + 20k-payment Python-side fetch+loop.';
+    'Replaces 10k-sub + 20k-payment Python-side fetch+loop. '
+    'v2 (migration 395): fixes uuid/text cast mismatches from migration 385.';
 
 REVOKE EXECUTE ON FUNCTION public.admin_subscription_stats_rollup(
     timestamptz, timestamptz, text[]

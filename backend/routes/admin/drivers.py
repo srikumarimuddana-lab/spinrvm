@@ -32,6 +32,7 @@ try:
         status_message,
         verification_message,
     )
+    from ...utils.pii import client_safe_detail, redact_client_text
     from ...utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
@@ -59,6 +60,7 @@ except ImportError:
         status_message,
         verification_message,
     )
+    from utils.pii import client_safe_detail, redact_client_text  # type: ignore
     from utils.rate_limiter import admin_sin_reveal_limit, admin_sin_update_limit  # noqa: F401
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
@@ -2599,7 +2601,12 @@ async def admin_get_driver_training(
     except lms_service.LMSNotConfiguredError as e:
         raise HTTPException(status_code=503, detail="LMS integration is not configured") from e
     except lms_service.LMSUpstreamError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        # Fixed message. This is a 5xx, so http_exception_handler already
+        # replaces any non-sentinel detail before it reaches the client; the
+        # redacted upstream reason goes to the log instead, where the
+        # request_id ties it back to this response.
+        logger.error("[LMS] upstream error: %s", redact_client_text(e))
+        raise HTTPException(status_code=502, detail="Upstream LMS error") from e
 
     return {
         "matched": bool(payload.get("matched")),
@@ -3954,9 +3961,11 @@ async def admin_update_driver_sin(
     try:
         validated = validate_sin(body.sin)
     except ValueError as exc:
-        # validate_sin messages never echo the digits, so this is safe to
-        # return (and to let FastAPI log).
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # validate_sin's messages never echo the digits, so the text itself is
+        # safe. It is still routed through client_safe_detail: this is the SIN
+        # endpoint, and the guard test's allowlist is empty by design so a
+        # future message change here cannot quietly become a leak.
+        raise HTTPException(status_code=422, detail=client_safe_detail(exc, fallback="Invalid SIN")) from exc
 
     # Audit BEFORE the write, same as reveal: a failed attempt still leaves a
     # record of the intent. Last-4 only on both sides of the change.

@@ -23,11 +23,13 @@ try:
     from ...dependencies import get_admin_user
     from ...services import driver_appeals as appeals_service
     from ...utils.audit_logger import log_admin_action
+    from ...utils.pii import client_safe_detail
     from .drivers import DriverActionRequest, admin_driver_action
 except ImportError:  # pragma: no cover - direct module imports in tests
     from dependencies import get_admin_user  # type: ignore
     from services import driver_appeals as appeals_service  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore
+    from utils.pii import client_safe_detail  # type: ignore
 
     from .drivers import DriverActionRequest, admin_driver_action  # type: ignore
 
@@ -60,7 +62,9 @@ async def admin_list_driver_appeals(
     try:
         return await appeals_service.list_appeals(status=status)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(
+            status_code=400, detail=client_safe_detail(e, fallback="Invalid appeal status filter")
+        ) from e
 
 
 @router.get("/driver-appeals/stats")

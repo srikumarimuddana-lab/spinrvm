@@ -52,7 +52,7 @@ async def approve_export_request(
     except approvals.RequestNotFound as e:
         raise HTTPException(status_code=404, detail="Export approval request not found") from e
     except approvals.RequestAlreadyDecided as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        raise HTTPException(status_code=409, detail="This export request has already been decided") from e
     except approvals.SelfApprovalError as e:
         raise HTTPException(status_code=403, detail="You cannot approve your own export request") from e
 
@@ -79,7 +79,7 @@ async def deny_export_request(
     except approvals.RequestNotFound as e:
         raise HTTPException(status_code=404, detail="Export approval request not found") from e
     except approvals.RequestAlreadyDecided as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        raise HTTPException(status_code=409, detail="This export request has already been decided") from e
     except approvals.SelfApprovalError as e:
         raise HTTPException(status_code=403, detail="You cannot deny your own export request") from e
 

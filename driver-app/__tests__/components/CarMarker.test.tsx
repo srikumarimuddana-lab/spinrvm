@@ -181,4 +181,24 @@ describe('CarMarker — onBearingChange (shared bearing source for map camera + 
     expect(() => act(() => jest.advanceTimersByTime(500))).not.toThrow();
     unmount();
   });
+
+  it('fires onPositionChange with the exact position the ticker renders that tick', () => {
+    const onPositionChange = jest.fn();
+    const { unmount } = render(
+      <CarMarker coordinate={coord} onPositionChange={onPositionChange} />,
+    );
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+    // A caller (the map camera) anchoring on this position sees exactly
+    // where the icon renders — the fix this test guards: before it, a
+    // follow camera anchored on the raw (undelayed) GPS fix instead, which
+    // could drift far enough from the icon's actual (delayed) position that
+    // the icon rendered outside the visible map area at speed.
+    expect(onPositionChange).toHaveBeenCalledWith({
+      latitude: 50.446,
+      longitude: -104.6189,
+    });
+    unmount();
+  });
 });

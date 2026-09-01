@@ -81,7 +81,7 @@ export const adminSearchUsers = (opts: {
         method: "POST",
         body: JSON.stringify(opts),
     });
-// `limit` defaults to the backend's own max (500, routes/admin/drivers.py)
+// `limit` defaults to the backend's max (500, routes/admin/drivers.py)
 // rather than its 50-row default -- the Rides tab's own filter/sort/paginate
 // is entirely client-side over whatever this call fetches, so a driver with
 // 51+ rides used to silently never show rows past the old default (A30

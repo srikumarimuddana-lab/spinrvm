@@ -266,54 +266,29 @@ async def get_audit_log_top_actors(
     limit: int = Query(20, ge=1, le=200),
     _admin: dict = Depends(require_module("audit")),
 ):
-    """Corporate + admin portal review, round 2: "no 'who touched the
-    most' rollup views — every threat hunt needs raw SQL." Aggregates
-    audit_logs by actor over a bounded recent window so a SOC investigation
-    doesn't start from a blank raw-SQL prompt every time.
-
-    Same shape as monitoring.py::get_email_deliverability (bounded days
-    window, single get_rows fetch capped at 5000, Counter aggregation in
-    Python) rather than a Postgres GROUP BY RPC — this table doesn't have
-    one, and standing one up is out of scope for a SOC convenience view.
+    """Aggregates audit_logs by actor over a bounded recent window so a SOC
+    investigation doesn't start from a blank raw-SQL prompt every time.
+    Uses the admin_audit_actor_stats Postgres RPC (migration 394) for
+    server-side GROUP BY instead of fetching 5k rows into Python.
     """
-    from collections import Counter
-
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    rows = await db_supabase.get_rows(
-        "audit_logs",
-        {"created_at": {"$gte": since}},
-        order="created_at",
-        desc=True,
-        limit=5000,
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rpc_result = await db_supabase.rpc(
+        "admin_audit_actor_stats",
+        {"p_since": since.isoformat(), "p_limit": limit},
     )
-    by_actor: Counter = Counter()
-    actions_by_actor: Dict[str, Counter] = {}
-    for row in rows:
-        actor = row.get("actor_id") or "unknown"
-        by_actor[actor] += 1
-        actions_by_actor.setdefault(actor, Counter())[row.get("action") or "unknown"] += 1
+    st = rpc_result[0] if isinstance(rpc_result, list) and rpc_result else (rpc_result or {})
 
-    top = [
-        {
-            "actor_id": actor,
-            "action_count": count,
-            "top_actions": [
-                {"action": action, "count": action_count}
-                for action, action_count in actions_by_actor[actor].most_common(5)
-            ],
-        }
-        for actor, count in by_actor.most_common(limit)
-    ]
-    actor_ids = [t["actor_id"] for t in top if t["actor_id"] != "unknown"]
+    actors_raw = st.get("actors") or []
+    actor_ids = [a["actor_id"] for a in actors_raw if a.get("actor_id") != "unknown"]
     actor_map = await _resolve_actor_emails(actor_ids)
-    for t in top:
-        t["actor_email"] = actor_map.get(t["actor_id"], "")
+    for a in actors_raw:
+        a["actor_email"] = actor_map.get(a.get("actor_id", ""), "")
     return {
         "days": days,
-        "window_start": since,
-        "rows_scanned": len(rows),
-        "rows_scanned_capped": len(rows) >= 5000,
-        "actors": top,
+        "window_start": since.isoformat(),
+        "rows_scanned": int(st.get("rows_scanned") or 0),
+        "rows_scanned_capped": False,
+        "actors": actors_raw,
     }
 
 

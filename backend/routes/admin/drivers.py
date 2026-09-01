@@ -64,9 +64,9 @@ except ImportError:
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
 try:
-    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides
+    from ...utils.legacy_rides import drop_legacy_offset_payouts
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
-    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides  # type: ignore
+    from utils.legacy_rides import drop_legacy_offset_payouts  # type: ignore
 
 try:
     from ...utils.profile_completeness import compute_profile_completeness
@@ -191,6 +191,18 @@ def _mask_license_number(plain: Optional[str]) -> Optional[str]:
     if not s:
         return None
     return s[-4:] if len(s) > 4 else s
+
+
+async def _safe_imported_ride_count(driver_id: str) -> int:
+    """Count legacy-imported rides for the payouts summary context line."""
+    try:
+        return await db_supabase.count_documents(
+            "rides",
+            {"driver_id": driver_id, "status": "completed", "legacy_import_metadata": {"$notnull": True}},
+        )
+    except Exception:
+        logger.error("payouts-summary: imported-ride count failed for %s", driver_id, exc_info=True)
+        return -1
 
 
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
@@ -2360,43 +2372,18 @@ async def admin_get_driver_live_stats(driver_id: str):
     the active fleet) and removes the staleness without requiring a
     background-loop rollup or denorm trigger.
     """
-    rides = await db_supabase.get_rows(
-        "rides",
-        {"driver_id": driver_id},
-        limit=5000,
+    rpc_result = await db_supabase.rpc(
+        "admin_driver_ride_summary",
+        {"p_driver_id": driver_id},
     )
+    rs = rpc_result[0] if isinstance(rpc_result, list) and rpc_result else (rpc_result or {})
 
-    completed = [r for r in rides if r.get("status") == "completed"]
-    total_assigned = len(rides)
-    completed_count = len(completed)
-
-    # driver_earnings is the post-platform-fee amount the driver actually
-    # gets — same field the rider receipt + driver payout summary uses.
-    #
-    # P1-A / Phase-3 cross-surface finding #2 (docs/audit/2026-08-11-driver-
-    # rider-migration-audit.md): this header must exclude legacy-imported
-    # rides the same way admin_get_driver_payouts_summary (the Payouts tab
-    # on the same driver detail screen) already does — previously this
-    # "Earnings" card and that tab showed two different numbers for the
-    # same driver. total_assigned/completed_count/acceptance_rate are left
-    # unfiltered on purpose: legacy rides are always status='completed'
-    # (booking_import_service only imports completed bookings), so
-    # excluding them there would change the acceptance-rate denominator in
-    # a way the audit didn't ask for and this fix doesn't need to touch.
-    total_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in drop_legacy_rides(completed)))
-
-    rated = [r for r in completed if (r.get("rider_rating") or 0) > 0]
-    avg_rating = round(sum(float(r["rider_rating"]) for r in rated) / len(rated), 2) if rated else None
-
-    # Acceptance rate: same formula as routes/admin/analytics.py uses for
-    # the rankings page (completed / total_assigned). Approximate — a true
-    # rate would compare against offers sent, not assigned rides — but
-    # it's the same definition operators already see elsewhere.
+    total_assigned = int(rs.get("total_assigned") or 0)
+    completed_count = int(rs.get("completed_count") or 0)
+    total_earnings = float(rs.get("lifetime_earnings") or 0)
+    avg_rating = float(rs["avg_rider_rating"]) if rs.get("avg_rider_rating") is not None else None
     acceptance_rate = round((completed_count / total_assigned) * 100, 1) if total_assigned > 0 else None
-
-    cancelled_by_driver = sum(
-        1 for r in rides if r.get("status") == "cancelled" and "driver" in (r.get("cancellation_reason") or "").lower()
-    )
+    cancelled_by_driver = int(rs.get("cancelled_by_driver") or 0)
 
     # The detail slideout reads the driver's avatar from here rather than the
     # bulk drivers list, which no longer ships profile_image (see
@@ -3050,16 +3037,23 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # ---- Aggregate from rides ----
-    # Legacy-imported rides and their 'legacy_import' offset payout are both
-    # excluded, matching routes/drivers/earnings.py — the driver's own screen
-    # and this tab must not disagree about what Spinr owes. See
-    # utils/legacy_rides for why dropping both halves leaves the math intact.
-    rides = await db_supabase.get_rows(
-        "rides",
-        {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
-        limit=10000,
+    # ---- Aggregate from rides + bonuses (server-side RPCs) ----
+    year_start = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc).isoformat()
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    ride_rpc, bonus_rpc, imported_rides_excluded = await asyncio.gather(
+        db_supabase.rpc(
+            "admin_driver_ride_summary",
+            {"p_driver_id": driver_id, "p_year_start": year_start, "p_recent_cutoff": thirty_days_ago},
+        ),
+        db_supabase.rpc(
+            "admin_driver_bonus_summary",
+            {"p_driver_id": driver_id, "p_year_start": year_start},
+        ),
+        _safe_imported_ride_count(driver_id),
     )
+    rs = ride_rpc[0] if isinstance(ride_rpc, list) and ride_rpc else (ride_rpc or {})
+    bs = bonus_rpc[0] if isinstance(bonus_rpc, list) and bonus_rpc else (bonus_rpc or {})
 
     def _dec(x: Any) -> Decimal:
         try:
@@ -3067,59 +3061,31 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         except (InvalidOperation, ValueError):
             return Decimal("0")
 
-    lifetime_ride_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
-    lifetime_tips = sum((_dec(r.get("tip_amount")) for r in rides), Decimal("0"))
-
-    # How many of this driver's completed rides were EXCLUDED as previous-app
-    # imports. Without this the card reads "0 completed rides · $0.00" while
-    # the Rides tab beside it shows 15, and nothing on screen explains the
-    # contradiction — the operator is left assuming data loss. Counted, not
-    # fetched: a HEAD-style count keeps the payload small.
-    imported_rides_excluded = 0
-    try:
-        imported_rides_excluded = await db_supabase.count_documents(
-            "rides",
-            {"driver_id": driver_id, "status": "completed", "legacy_import_metadata": {"$notnull": True}},
-        )
-    except Exception:
-        # Presentation-only context. Never fail the whole payouts tab over it,
-        # but do surface it — a silent zero here would itself be misleading.
-        logger.error("payouts-summary: imported-ride count failed for %s", driver_id, exc_info=True)
-        imported_rides_excluded = -1  # -1 = unknown, distinct from a real zero
-
-    # ---- Aggregate from driver_bonuses (quest/referral/adjustment) ----
-    bonus_rows = await db_supabase.get_rows(
-        "driver_bonuses",
-        {"driver_id": driver_id},
-        limit=10000,
-    )
-    total_bonuses = sum((_dec(b.get("amount") or 0) for b in bonus_rows), Decimal("0"))
+    lifetime_ride_earnings = _dec(rs.get("lifetime_earnings"))
+    lifetime_tips = _dec(rs.get("lifetime_tips"))
+    total_bonuses = _dec(bs.get("total_bonuses"))
     lifetime_earnings = lifetime_ride_earnings + total_bonuses
 
-    year_start = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc).isoformat()
-    ytd_ride_earnings = sum(
-        (
-            _dec(r.get("driver_earnings"))
-            for r in rides
-            if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= year_start
-        ),
-        Decimal("0"),
-    )
-    ytd_bonuses = sum(
-        (_dec(b.get("amount") or 0) for b in bonus_rows if (b.get("created_at") or "") >= year_start),
-        Decimal("0"),
-    )
+    ytd_ride_earnings = _dec(rs.get("ytd_earnings"))
+    ytd_bonuses = _dec(bs.get("ytd_bonuses"))
     ytd_earnings = ytd_ride_earnings + ytd_bonuses
 
-    # Active days in last 30d — same definition the driver app's "Active
-    # days" earnings metric uses (≥1 completed ride on that calendar date).
-    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    recent_dates = {
-        (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "")[:10]
-        for r in rides
-        if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= thirty_days_ago
-    }
-    active_days_30d = len([d for d in recent_dates if d])
+    active_days_30d = int(rs.get("active_days_recent") or 0)
+
+    # ---- Bonus display list (small, bounded by endpoint `limit`) ----
+    bonus_rows = await db_supabase.get_rows(
+        "driver_bonuses", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit
+    )
+    bonus_display = [
+        {
+            "id": b.get("id"),
+            "amount": float(_dec(b.get("amount") or 0)),
+            "kind": b.get("kind"),
+            "description": b.get("description"),
+            "created_at": b.get("created_at"),
+        }
+        for b in bonus_rows
+    ]
 
     # ---- Aggregate from payouts ----
     # limit=5000 mirrors get_driver_balance (routes/drivers/earnings.py): the
@@ -3276,7 +3242,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             "pending_in_flight": float(pending_in_flight),
             "pending_balance": float(pending_balance),
             "on_hold": float(on_hold),
-            "rides_count": len(rides),
+            "rides_count": int(rs.get("completed_count") or 0),
             # Completed rides imported from the previous app and therefore NOT
             # counted in lifetime_earnings (-1 = count unavailable).
             "imported_rides_excluded": imported_rides_excluded,
@@ -3321,16 +3287,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             }
             for p in payouts[:limit]
         ],
-        "bonuses": [
-            {
-                "id": b.get("id"),
-                "amount": float(_dec(b.get("amount") or 0)),
-                "kind": b.get("kind"),
-                "description": b.get("description"),
-                "created_at": b.get("created_at"),
-            }
-            for b in sorted(bonus_rows, key=lambda x: x.get("created_at") or "", reverse=True)
-        ],
+        "bonuses": bonus_display,
     }
 
 

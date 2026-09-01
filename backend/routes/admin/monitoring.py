@@ -364,18 +364,29 @@ async def get_email_deliverability(
     recipient_user_id only, and suppression rows expose reason/source, not the
     address.
     """
-    from collections import Counter
     from datetime import datetime, timedelta, timezone
 
     days = max(1, min(int(days or 7), 90))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-    rows = await get_rows("email_send_log", {"created_at": {"$gte": since}}, order="created_at", desc=True, limit=5000)
-    by_status = Counter((r.get("status") or "unknown") for r in rows)
-    by_provider = Counter((r.get("provider") or "none") for r in rows)
-    by_type = Counter((r.get("email_type") or "unknown") for r in rows)
-    total = len(rows)
-    failed = by_status.get("failed", 0)
+    stats_rpc, recent_fail_rows, suppression_list_size, recent_supp = await asyncio.gather(
+        db_supabase.rpc("admin_email_log_stats", {"p_since": since}),
+        get_rows(
+            "email_send_log",
+            {"created_at": {"$gte": since}, "status": "failed"},
+            order="created_at",
+            desc=True,
+            limit=25,
+        ),
+        count_documents("email_suppressions", {}),
+        get_rows("email_suppressions", {}, order="created_at", desc=True, limit=25),
+    )
+    st = stats_rpc[0] if isinstance(stats_rpc, list) and stats_rpc else (stats_rpc or {})
+    by_status = st.get("by_status") or {}
+    by_provider = st.get("by_provider") or {}
+    by_type = st.get("by_type") or {}
+    total = int(st.get("total") or 0)
+    failed = int(by_status.get("failed") or 0)
 
     recent_failures = [
         {
@@ -385,12 +396,8 @@ async def get_email_deliverability(
             "recipient_user_id": r.get("recipient_user_id"),
             "created_at": r.get("created_at"),
         }
-        for r in rows
-        if r.get("status") == "failed"
-    ][:25]
-
-    suppression_list_size = await count_documents("email_suppressions", {})
-    recent_supp = await get_rows("email_suppressions", {}, order="created_at", desc=True, limit=25)
+        for r in (recent_fail_rows or [])
+    ]
     recent_suppressions = [
         {
             "reason": s.get("reason"),

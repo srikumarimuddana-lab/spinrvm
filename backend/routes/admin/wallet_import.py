@@ -48,6 +48,7 @@ try:
     from ...dependencies import get_admin_user
     from ...services import wallet_import_service as import_svc
     from ...utils.audit_logger import log_admin_action
+    from ...utils.pii import redact_client_text
     from ...utils.rate_limiter import (
         wallet_import_commit_limit,
         wallet_import_validate_limit,
@@ -56,6 +57,7 @@ except ImportError:
     from dependencies import get_admin_user  # noqa: F401
     from services import wallet_import_service as import_svc  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.pii import redact_client_text
     from utils.rate_limiter import (  # type: ignore
         wallet_import_commit_limit,
         wallet_import_validate_limit,
@@ -102,7 +104,7 @@ async def _read_csv_rows(upload: UploadFile, label: str) -> list[dict[str, str]]
     try:
         rows = import_svc.read_csv_text(text)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=f"{label} CSV: {e}") from e
+        raise HTTPException(status_code=422, detail=f"{label} CSV: {redact_client_text(e)}") from e
     if len(rows) > MAX_ROWS:
         raise HTTPException(
             status_code=422,

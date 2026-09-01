@@ -45,12 +45,14 @@ try:
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
     from ...utils.background import spawn as _spawn
+    from ...utils.pii import client_safe_detail
 except ImportError:
     from dependencies import get_admin_user  # noqa: F401
     from services import stripe_mapping_import_service as import_svc  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.background import spawn as _spawn  # type: ignore
+    from utils.pii import client_safe_detail
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ async def _read_rows(mapping_csv: UploadFile, kind: str) -> list[dict[str, str]]
     try:
         rows = import_svc.parse_mapping_rows(text, kind)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="CSV could not be parsed")) from e
     if len(rows) > MAX_ROWS:
         raise HTTPException(status_code=422, detail=f"CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import")
     return rows

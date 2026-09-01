@@ -467,8 +467,18 @@ function DriverArrivingScreenContent() {
               }}
             />
           )}
-          {/* Driver → pickup leg — same real coords, drawn via the shared gradient. */}
-          <RouteLine path={driverRouteCoords} />
+          {/* Driver → pickup leg — same real coords, drawn via the shared gradient.
+              vehiclePosition erases the line behind the driver as they approach
+              (Uber/Lyft-style live tracking) instead of always showing the whole
+              leg regardless of progress. */}
+          <RouteLine
+            path={driverRouteCoords}
+            vehiclePosition={
+              currentDriver?.lat != null && currentDriver?.lng != null
+                ? { latitude: currentDriver.lat, longitude: currentDriver.lng }
+                : null
+            }
+          />
 
           {/* Pickup → dropoff route: use saved polyline or cached coords first;
               only call Directions API as a last resort. */}

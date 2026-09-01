@@ -1,0 +1,23 @@
+# Submits the latest finished iOS production store build to App Store Connect.
+# Manually triggered (no `on:` trigger) — run via EAS dashboard, `eas workflow:run`,
+# or the Expo MCP workflow_run tool. Exists because this repo's sessions cannot
+# always reach `eas submit` directly (see docs/change-log/2026-09-01-expo-ios-
+# build-scenegeometry-fix.md for the build-fix thread that led to this file).
+name: Submit latest iOS production build
+
+jobs:
+  get_build:
+    name: Get latest finished iOS production build
+    type: get-build
+    params:
+      platform: ios
+      profile: production
+      distribution: store
+      channel: production
+  submit:
+    name: Submit to App Store
+    type: submit
+    needs: [get_build]
+    params:
+      build_id: ${{ needs.get_build.outputs.build_id }}
+      profile: production

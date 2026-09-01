@@ -70,6 +70,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 'Spinr Driver uses your camera to scan and upload your driver license, vehicle insurance, and vehicle registration documents, and to verify your identity for payouts.',
             NSPhotoLibraryUsageDescription:
                 'Spinr Driver accesses your photo library so you can upload existing photos of your driver license, vehicle insurance, and vehicle registration.',
+            // ITMS-90683: App Store Connect rejected 2.0.0 (24) during
+            // processing (2026-09-01) because the compiled binary references
+            // speech-recognition APIs — pulled in by a bundled SDK (the
+            // CarPlay/in-car integration), not by app code (no JS references
+            // exist). Apple requires the purpose string even when the app
+            // itself never invokes the API.
+            NSSpeechRecognitionUsageDescription:
+                'Spinr Driver can use speech recognition for hands-free voice interactions in its in-car (CarPlay) integration.',
             // Lets Linking.canOpenURL() detect whether Google Maps / Waze are
             // installed before deep-linking turn-by-turn navigation (Settings →
             // Navigation). Without these whitelisted, canOpenURL always returns

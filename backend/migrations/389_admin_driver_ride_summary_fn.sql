@@ -40,14 +40,14 @@ BEGIN
         'ytd_earnings',        COALESCE(SUM(driver_earnings) FILTER (
                                    WHERE status = 'completed'
                                      AND legacy_import_metadata = '{}'::jsonb
-                                     AND COALESCE(ride_completed_at, completed_at, created_at) >= p_year_start), 0),
+                                     AND COALESCE(ride_completed_at, created_at) >= p_year_start), 0),
         'ytd_tips',            COALESCE(SUM(tip_amount) FILTER (
                                    WHERE status = 'completed'
                                      AND legacy_import_metadata = '{}'::jsonb
-                                     AND COALESCE(ride_completed_at, completed_at, created_at) >= p_year_start), 0),
-        'active_days_recent',  COUNT(DISTINCT COALESCE(ride_completed_at, completed_at, created_at)::date) FILTER (
+                                     AND COALESCE(ride_completed_at, created_at) >= p_year_start), 0),
+        'active_days_recent',  COUNT(DISTINCT COALESCE(ride_completed_at, created_at)::date) FILTER (
                                    WHERE status = 'completed'
-                                     AND COALESCE(ride_completed_at, completed_at, created_at) >= p_recent_cutoff)
+                                     AND COALESCE(ride_completed_at, created_at) >= p_recent_cutoff)
     ) INTO v_result
     FROM rides
     WHERE driver_id = p_driver_id;

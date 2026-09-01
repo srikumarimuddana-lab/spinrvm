@@ -53,6 +53,7 @@ try:
         sign_driver_import_token,
         verify_driver_import_token,
     )
+    from ...utils.pii import redact_client_text
     from ...utils.rate_limiter import legacy_vehicle_history_backfill_commit_limit
 except ImportError:
     from dependencies import get_admin_user  # noqa: F401
@@ -63,6 +64,7 @@ except ImportError:
         sign_driver_import_token,
         verify_driver_import_token,
     )
+    from utils.pii import redact_client_text
     from utils.rate_limiter import legacy_vehicle_history_backfill_commit_limit  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -103,7 +105,7 @@ async def _read_csv(upload: UploadFile, *, max_rows: int, label: str) -> tuple[l
     try:
         rows = import_svc.read_mongo_export_csv_text(text)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=f"{label}: {e}") from e
+        raise HTTPException(status_code=422, detail=f"{label}: {redact_client_text(e)}") from e
     if len(rows) > max_rows:
         raise HTTPException(status_code=422, detail=f"{label} has {len(rows)} rows; the limit is {max_rows}")
     return rows, raw
@@ -202,7 +204,8 @@ async def commit_legacy_vehicle_history_backfill(
     except DriverImportTokenError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Validate these CSVs before committing (or re-validate — a file or batch changed): {e}",
+            detail=f"Validate these CSVs before committing (or re-validate — a file or batch changed): "
+            f"{redact_client_text(e)}",
         ) from e
     plan = await _build_plan(vehicle_rows, driver_rows)
 

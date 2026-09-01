@@ -57,6 +57,7 @@ try:
         sign_driver_import_token,
         verify_driver_import_token,
     )
+    from ...utils.pii import client_safe_detail, redact_client_text
     from ...utils.rate_limiter import legacy_sin_dob_backfill_commit_limit
 except ImportError:
     from dependencies import get_admin_user  # noqa: F401
@@ -67,6 +68,7 @@ except ImportError:
         sign_driver_import_token,
         verify_driver_import_token,
     )
+    from utils.pii import client_safe_detail, redact_client_text
     from utils.rate_limiter import legacy_sin_dob_backfill_commit_limit  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -96,7 +98,7 @@ async def _read_one_csv(upload: UploadFile) -> tuple[list[dict[str, str]], bytes
     try:
         rows = import_svc.read_mongo_export_csv_text(text)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="CSV could not be parsed")) from e
     if len(rows) > MAX_ROWS:
         raise HTTPException(status_code=422, detail=f"CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import")
     return rows, raw
@@ -192,7 +194,8 @@ async def commit_legacy_sin_dob_backfill(
     except DriverImportTokenError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Validate these CSVs before committing (or re-validate — a file or batch changed): {e}",
+            detail=f"Validate these CSVs before committing (or re-validate — a file or batch changed): "
+            f"{redact_client_text(e)}",
         ) from e
     plan = await _build_plan(bank_rows, driver_rows)
 

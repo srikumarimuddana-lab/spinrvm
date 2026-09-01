@@ -15,6 +15,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 
+try:  # dual-import (python -m backend.server vs top-level) — see CLAUDE.md
+    from .pii import redact_client_text
+except ImportError:  # pragma: no cover - exercised by the top-level entrypoint
+    from utils.pii import redact_client_text  # type: ignore
+
 # B-P2-1: short ALL-CAPS sentinels (e.g. ERR_AUTH_UNAVAILABLE,
 # ERR_OTP_LOCKED) are vetted by the route author and let mobile clients
 # branch UI without parsing English. Anything else on a 5xx response is
@@ -748,6 +753,34 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             pass
         detail = "Internal server error"
         sanitized = True
+    elif 400 <= exc.status_code < 500 and isinstance(detail, str) and detail:
+        # C6/WS-E: 4xx details stay pass-through by design (they are the
+        # user-facing UX copy — "Invalid phone number", "Card declined"), so
+        # they are REDACTED, not replaced. Redaction is a no-op on vetted copy
+        # and only bites on interpolated exception text, which is why it is safe
+        # to apply blanket. That blanket is the second layer of the defense: a
+        # future `detail=str(e)` that skips client_safe_detail() still cannot
+        # leak a SIN, email, server path or token from here.
+        redacted = redact_client_text(detail)
+        if redacted != detail:
+            try:
+                # The POST-redaction text, deliberately. The plan for this
+                # workstream called for logging the pre-redaction detail, but
+                # CLAUDE.md's PIPEDA rule ("what can NEVER appear in logs")
+                # forbids exactly the values redaction just caught — writing
+                # them to the log to prove they were kept out of the response
+                # would move the breach, not close it. The redacted form still
+                # names which route and which pattern fired, which is what a
+                # "route is leaking, go fix it" alert needs.
+                logger.warning(
+                    f"[{request_id}] Redacted 4xx HTTPException detail at "
+                    f"{request.method} {request.url.path}: status={exc.status_code} "
+                    f"redacted_detail={redacted[:200]}"
+                )
+            except Exception:  # noqa: S110
+                # Never let logging take down the error handler itself.
+                pass
+            detail = redacted
 
     error_obj: Dict[str, Any] = {
         "code": exc.status_code,

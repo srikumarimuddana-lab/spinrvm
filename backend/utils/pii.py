@@ -357,3 +357,113 @@ def first_name_only(user: dict | None, fallback: str = "") -> str:
     """
     first = ((user or {}).get("first_name") or "").strip()
     return first or fallback
+
+
+# ── Client-facing exception-text redaction (C6 / WS-E) ──────────────
+# A separate concern from the log/audit helpers above. Those protect data we
+# choose to emit; this one protects data we never chose to emit at all — the
+# text of an arbitrary exception that a route interpolated into an HTTP
+# `detail`. An admin CSV importer raising ValueError("row 8: bad sin 123 456
+# 789 for nighil@example.com") hands that string to the client verbatim.
+#
+# The value patterns live in ai/pii.py (scrub_pii) and are reused rather than
+# re-derived: one definition of "what a phone number looks like" for the whole
+# codebase. This module adds only the patterns scrub_pii has no reason to carry,
+# because they are exception-shaped rather than message-shaped: server file
+# paths, credential-shaped tokens, and bare/date-shaped identifiers.
+try:  # dual-import (python -m backend.server vs top-level) — see CLAUDE.md
+    from ..ai.pii import scrub_pii as _scrub_pii_values
+except ImportError:  # pragma: no cover - exercised by the top-level entrypoint
+    from ai.pii import scrub_pii as _scrub_pii_values  # type: ignore
+
+#: Longest client-visible exception text. Long enough to carry "row 214, column
+#: `sin`: ..." (which is the whole point of not replacing the message outright),
+#: short enough that a dumped row or a stack-trace-in-a-string is cut off.
+CLIENT_DETAIL_MAX_LEN = 300
+
+_CLIENT_TEXT_PATTERNS: list[tuple[_re.Pattern, str]] = [
+    # Credential-shaped tokens FIRST: a JWT's payload segment is base64 and can
+    # contain digit runs that a later pattern would partially rewrite, leaving a
+    # mangled-but-still-usable token behind. Redact the whole thing up front.
+    (
+        _re.compile(r"\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}"),
+        "[REDACTED-TOKEN]",
+    ),
+    # Provider secret keys. Stripe (sk_/rk_ live+test), Supabase service-role and
+    # generic `Bearer <blob>`. These reach exception text through upstream SDK
+    # errors that echo the request they failed on.
+    (_re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{8,}"), "[REDACTED-TOKEN]"),
+    (_re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{12,}"), "[REDACTED-TOKEN]"),
+    # Absolute server filesystem paths. Deliberately root-anchored to a known
+    # system prefix rather than "anything with slashes": an unanchored path
+    # pattern also eats the API route names ("/admin/drivers/import") that make
+    # an error message actionable, which is over-redaction, not safety.
+    (
+        _re.compile(
+            r"(?:/(?:home|usr|var|opt|app|tmp|root|etc|srv|Users)|[A-Za-z]:\\\\?)"
+            r"[\w.\\/-]*"
+        ),
+        "[REDACTED-PATH]",
+    ),
+    # Bare 9-digit SIN. ai/pii.py's GOVID pattern requires a separator, because
+    # in a *log line* an ungated 9-digit run collides with this codebase's own
+    # numeric ids. Here the trade-off inverts: this text is going to a client, an
+    # over-redacted admin error is a support ticket while an under-redacted one
+    # is a PIPEDA breach, so the bare form is redacted too. Digit boundaries keep
+    # it off longer runs (timestamps, cents amounts, Stripe ids).
+    (_re.compile(r"(?<!\d)\d{9}(?!\d)"), "[REDACTED-GOVID]"),
+    # Date-shaped runs (ISO, slashed NA order). A DOB in a backfill error is
+    # exactly this shape; so is a timestamp, which is why the replacement keeps
+    # the *shape* visible. The row/column identifiers an admin needs to act are
+    # unaffected.
+    (_re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)"), "[REDACTED-DATE]"),
+    (_re.compile(r"(?<!\d)\d{2}/\d{2}/\d{4}(?!\d)"), "[REDACTED-DATE]"),
+]
+
+
+def redact_client_text(text: Any, *, max_len: int = CLIENT_DETAIL_MAX_LEN) -> str:
+    """Redact PII/secrets from text that is about to be returned to a client.
+
+    Redaction, not replacement: a legitimate UX message ("Invalid phone
+    number", "Card declined") contains no matching pattern and comes back
+    byte-for-byte unchanged, so this is safe to apply to *every* 4xx detail.
+    That blanket application is the point — it means a future
+    ``detail=str(e)`` cannot leak even if the author forgets the helper.
+
+    Returns the redacted text truncated to ``max_len`` (with an explicit
+    ``…[truncated]`` marker so a reader knows the message was cut rather than
+    the exception genuinely ending there).
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    if not text:
+        return text
+    # Value patterns shared with the AI egress path (phones, emails, GPS,
+    # postal codes, PANs, grouped SINs).
+    out = _scrub_pii_values(text)
+    for pattern, replacement in _CLIENT_TEXT_PATTERNS:
+        out = pattern.sub(replacement, out)
+    if len(out) > max_len:
+        out = out[:max_len].rstrip() + "…[truncated]"
+    return out
+
+
+def client_safe_detail(exc: BaseException, *, fallback: str) -> str:
+    """Build an HTTP ``detail`` from an exception without leaking its text.
+
+    Use at any site that would otherwise write ``detail=str(e)``. The admin
+    still learns which row/field failed; the SIN, email, path or token that
+    made the row fail does not travel with it.
+
+    ``fallback`` is used when the exception carries no usable text (bare
+    ``KeyError()``, a message that was entirely redacted, or one that is pure
+    punctuation) — an empty ``detail`` is worse than a generic one because the
+    client renders it as a blank error.
+    """
+    redacted = redact_client_text(str(exc) or "")
+    # "Usable" means at least one alphanumeric character survived redaction.
+    # A detail of "[REDACTED-GOVID]" alone tells the admin nothing the fallback
+    # would not, and reads like a bug.
+    if not _re.search(r"[A-Za-z0-9]", _re.sub(r"\[REDACTED-[A-Z]+\]", "", redacted)):
+        return fallback
+    return redacted

@@ -97,3 +97,40 @@ None beyond restoring the ability to ship iOS builds. `expo-image`'s `imageLoade
 - Same as Round 1: no local iOS build possible; the next EAS build is the real gate.
 - The two integrity-less stanzas were validated against yarn's resolver locally but not against a real fetch (egress blocked); EAS's yarn will do the first real fetch of those two tarballs.
 - Whether further latent Xcode errors hide behind `getModule` (EAS reveals errors in batches); each round has strictly progressed, and no other bumped package shows post-57.0.14 API usage by construction (57.0.14 is the newest published core).
+
+---
+
+# Round 3 (same day) — driver build rejected by App Store Connect processing: ITMS-90683
+
+## Issue/gap identified
+Driver 2.0.0 (24) uploaded successfully but sat at "Waiting for Apple to process this build" for ~3.5 h, then Apple emailed the Apple-ID mailbox: **ITMS-90683 — Missing purpose string in Info.plist**, `NSSpeechRecognitionUsageDescription` required for `SpinrDriver.app`. The build never reached TestFlight. (Rider 2.0.0 (22) processed fine — its speech strings are injected by the `expo-speech-recognition` config plugin, a package driver does not have.)
+
+## Root cause
+The compiled driver binary references speech-recognition APIs via a **bundled SDK, not app code** — driver-app source has zero speech/Siri references (grep-verified). The likely carrier is the CarPlay/in-car SDK `@iternio/react-native-auto-play` (bumped 0.4.7 → 0.5.13 in the same dependency wave that started this incident; its iOS pod compiles in via autolinking and CarPlay surfaces include voice control) — not definitively attributable because the iternio repo is private and the pod source could not be inspected from this environment. Attribution is secondary: Apple's rule is that the purpose string is required "while your app might not use these APIs."
+
+## Fix/remediation
+Added `NSSpeechRecognitionUsageDescription` to `driver-app/app.config.ts` `ios.infoPlist` with a user-facing string grounded in the in-car integration ("Spinr Driver can use speech recognition for hands-free voice interactions in its in-car (CarPlay) integration."), plus a code comment carrying the ITMS-90683 context. The in-flight doomed rebuild (`843e84f4`, same config as build 24) was cancelled before completion.
+
+## Risk & impact on existing functionality
+Info.plist-only, additive. No behavior change: the key adds a permission *prompt string*, shown only if speech recognition is ever actually requested at runtime — which no current code path does. No other consumer reads this key.
+
+## User experience effect
+None at runtime today. App Store listing/privacy surface gains a speech-recognition purpose string.
+
+## Files modified
+| file path | what changed | why |
+|---|---|---|
+| `driver-app/app.config.ts` | added `NSSpeechRecognitionUsageDescription` to `ios.infoPlist` | ITMS-90683 processing rejection of 2.0.0 (24) |
+
+## Rollback plan
+`git revert` — additive single-key config change; nothing depends on it.
+
+## Verification performed
+- Apple's rejection email quoted verbatim by the operator (ITMS-90683, key named explicitly).
+- `node --experimental-strip-types --check` passes on the edited config.
+- Grep-verified no driver-app source references speech APIs (so no permission prompt can newly appear).
+- Real verification is the next build + ASC processing round: a fresh driver build (→ 2.0.0 (25)) built from this commit, submitted via the `submit-ios.yml` EAS workflow, must clear Apple processing and appear in TestFlight.
+
+## What was NOT verified
+- Which exact pod links `SFSpeechRecognizer` (iternio repo private; binary not inspectable here). If a second ITMS key is demanded next round (e.g. mic), same fix pattern applies — though Apple's email listing only one key suggests the rest are satisfied.
+- No iOS build/prebuild run locally (environment cannot).

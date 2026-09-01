@@ -474,7 +474,7 @@ async def _resolve_driver_search_user_ids(tokens: List[str]) -> List[str]:
 
 @router.get("/drivers")
 async def admin_get_drivers(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     search: Optional[str] = None,
     is_verified: Optional[bool] = None,

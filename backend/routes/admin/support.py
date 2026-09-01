@@ -157,9 +157,12 @@ async def admin_get_disputes(
 async def admin_get_dispute_stats():
     """Aggregate dispute counts and refund totals across all rows."""
     try:
-        rows = await db_supabase.get_rows("disputes", {}, limit=10000)
+        result = await db_supabase.rpc("admin_dispute_stats_rollup", {})
+        row = result[0] if isinstance(result, list) and result else result
+        if not isinstance(row, dict):
+            row = {}
     except Exception:
-        logger.warning("disputes table may not exist yet")
+        logger.warning("disputes table may not exist yet or RPC missing", exc_info=True)
         return {
             "open": 0,
             "under_review": 0,
@@ -168,18 +171,13 @@ async def admin_get_dispute_stats():
             "total_refunded": 0,
         }
 
-    counts = {"open": 0, "under_review": 0, "resolved": 0, "rejected": 0}
-    total_refunded = Decimal(0)
-    for d in rows or []:
-        s = d.get("status")
-        if s in counts:
-            counts[s] += 1
-        if s == "resolved":
-            try:
-                total_refunded += Decimal(str(d.get("refund_amount") or 0))
-            except (TypeError, ValueError):
-                pass
-    return {**counts, "total_refunded": float(to_decimal(total_refunded))}
+    return {
+        "open": int(row.get("open") or 0),
+        "under_review": int(row.get("under_review") or 0),
+        "resolved": int(row.get("resolved") or 0),
+        "rejected": int(row.get("rejected") or 0),
+        "total_refunded": float(Decimal(str(row.get("total_refunded") or 0))),
+    }
 
 
 @router.get("/disputes/chargebacks")

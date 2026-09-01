@@ -438,24 +438,30 @@ async def admin_get_cloud_messages(
 async def admin_get_cloud_message_stats():
     """Get cloud messaging statistics."""
     try:
-        all_messages = await db_supabase.get_rows("cloud_messages", {}, limit=10000)
+        result = await db_supabase.rpc("admin_cloud_message_stats_rollup", {})
+        row = result[0] if isinstance(result, list) and result else result
+        if not isinstance(row, dict):
+            row = {}
     except Exception:
-        logger.error("cloud_messages table missing or query failed", exc_info=True)
-        all_messages = []
+        logger.error("cloud_messages table missing or RPC missing", exc_info=True)
+        return {
+            "total_messages": 0,
+            "total_sent": 0,
+            "total_scheduled": 0,
+            "total_failed": 0,
+            "total_recipients_reached": 0,
+            "success_rate": 0,
+        }
 
-    total = len(all_messages)
-    total_sent = sum(1 for m in all_messages if m.get("status") == "sent")
-    total_scheduled = sum(1 for m in all_messages if m.get("status") == "scheduled")
-    total_failed = sum(1 for m in all_messages if m.get("status") == "failed")
-    total_reached = sum(m.get("successful", 0) for m in all_messages)
-    total_recipients = sum(m.get("total_recipients", 0) for m in all_messages)
+    total_reached = int(row.get("total_reached") or 0)
+    total_recipients = int(row.get("total_recipients") or 0)
     success_rate = round((total_reached / total_recipients * 100), 1) if total_recipients > 0 else 0
 
     return {
-        "total_messages": total,
-        "total_sent": total_sent,
-        "total_scheduled": total_scheduled,
-        "total_failed": total_failed,
+        "total_messages": int(row.get("total") or 0),
+        "total_sent": int(row.get("sent") or 0),
+        "total_scheduled": int(row.get("scheduled") or 0),
+        "total_failed": int(row.get("failed") or 0),
         "total_recipients_reached": total_reached,
         "success_rate": success_rate,
     }

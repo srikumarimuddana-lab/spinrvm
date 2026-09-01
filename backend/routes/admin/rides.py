@@ -1334,15 +1334,15 @@ async def admin_get_ride_financials(
     booking_airport = _m("sum_admin_earnings")
 
     # Incentives paid out in the window (platform-funded; ride_incentive_claims
-    # is append-only, keyed by claimed_at).
+    # is append-only, keyed by claimed_at). Summed server-side (migration 382).
     incentives = 0.0
     try:
-        claims = await db_supabase.get_rows(
-            "ride_incentive_claims",
-            {"claimed_at": {"$gte": start.isoformat(), "$lt": end.isoformat()}},
-            limit=10000,
+        inc_result = await db_supabase.rpc(
+            "admin_incentive_claims_sum",
+            {"p_start": start.isoformat(), "p_end": end.isoformat()},
         )
-        incentives = float(sum(Decimal(str(c.get("bonus_amount") or 0)) for c in claims))
+        inc_val = inc_result[0] if isinstance(inc_result, list) and inc_result else inc_result
+        incentives = float(Decimal(str(inc_val or 0)))
     except Exception:
         logger.warning("ride_incentive_claims rollup failed for financials", exc_info=True)
 
@@ -2544,13 +2544,18 @@ async def admin_get_earnings_overview(
     prev_cancel_rate = _cancel_rate(prev["trips"], prev_cx["count"])
 
     # ── Spinr Pass MRR snapshots ─────────────────────────────────────────
-    # Sum the monthly price of subscriptions active at each cutoff. Cheap
-    # query — bounded by the count of subs ever created.
-    all_subs = await db_supabase.get_rows("driver_subscriptions", {}, limit=10000)
-    cur_mrr = float(sum((Decimal(str(s.get("price") or 0)) for s in _active_subs_at(all_subs, end)), Decimal("0")))
-    prev_mrr = float(
-        sum((Decimal(str(s.get("price") or 0)) for s in _active_subs_at(all_subs, prev_end)), Decimal("0"))
+    # Summed server-side (migration 383) instead of fetching all 10k subs.
+    cur_mrr_result, prev_mrr_result = await asyncio.gather(
+        db_supabase.rpc("admin_mrr_at_cutoff", {"p_cutoff": end.isoformat()}),
+        db_supabase.rpc("admin_mrr_at_cutoff", {"p_cutoff": prev_end.isoformat()}),
     )
+
+    def _mrr_val(r: Any) -> float:
+        v = r[0] if isinstance(r, list) and r else r
+        return float(Decimal(str(v or 0)))
+
+    cur_mrr = _mrr_val(cur_mrr_result)
+    prev_mrr = _mrr_val(prev_mrr_result)
 
     # Net revenue = per-ride platform margin + subscription MRR pro-rated
     # for the window length. For 7d window, attribute 7/30 of the MRR
@@ -2988,129 +2993,78 @@ async def admin_get_payouts_overview(
     outstanding_now_calc = max(_agg_dec("earned_up_to_end") - _agg_dec("paid_up_to_end"), Decimal("0"))
     outstanding_prev = max(_agg_dec("earned_up_to_prev") - _agg_dec("paid_up_to_prev"), Decimal("0"))
 
-    # ── Period-windowed payouts ──────────────────────────────────────────
-    # The per-row metrics below only look at the current + previous windows, so
-    # fetch just that slice rather than the entire payouts table. A payout's
-    # effective timestamp is processed_at when present else created_at, so a row
-    # qualifies if either is at/after the earliest window bound (prev_start).
-    window_lo = prev_start.isoformat()
-    all_payouts = await db_supabase.get_rows(
-        "payouts",
-        {"$or": [{"created_at": {"$gte": window_lo}}, {"processed_at": {"$gte": window_lo}}]},
-        limit=200000,
+    # ── Period-windowed payouts (aggregated server-side, migration 384) ──
+    # Replaces a 200k-row Python-side fetch+loop with a single RPC that
+    # returns counts/sums by status, median settlement hours, daily series,
+    # failure reasons, top drivers, and at-risk drivers.
+    pw_result = await db_supabase.rpc(
+        "admin_payout_window_stats",
+        {
+            "p_cur_start": start.isoformat(),
+            "p_cur_end": end.isoformat(),
+            "p_prev_start": prev_start.isoformat(),
+            "p_prev_end": prev_end.isoformat(),
+            "p_service_area_id": service_area_id,
+        },
     )
+    pw = pw_result[0] if isinstance(pw_result, list) and pw_result else pw_result
+    if not isinstance(pw, dict):
+        pw = {}
+    pw_cur = pw.get("cur") or {}
+    pw_prev = pw.get("prev") or {}
 
-    # ── Period-windowed payout metrics ───────────────────────────────────
-    def _in_window(p: Dict[str, Any], lo: datetime, hi: datetime) -> bool:
-        # Completed payouts use processed_at when present (matches the
-        # actual settlement date); pending/failed use created_at since
-        # processed_at is null. Either way it's the operationally-relevant
-        # timestamp.
-        ts = p.get("processed_at") or p.get("created_at") or ""
-        return lo.isoformat() <= ts <= hi.isoformat()
+    def _pw_f(d: dict, key: str) -> float:
+        return float(Decimal(str(d.get(key) or 0)))
 
-    cur_payouts = [p for p in all_payouts if _in_scope(p) and _in_window(p, start, end)]
-    prev_payouts = [p for p in all_payouts if _in_scope(p) and _in_window(p, prev_start, prev_end)]
+    def _pw_i(d: dict, key: str) -> int:
+        return int(d.get(key) or 0)
 
-    def _by_status(rows: list, *statuses: str) -> list:
-        return [p for p in rows if p.get("status") in statuses]
+    # Success rate: completed / (completed + failed), pending excluded.
+    def _success_rate(completed_count: int, failed_count: int) -> float:
+        terminal = completed_count + failed_count
+        return round((completed_count / terminal) * 100, 1) if terminal > 0 else 0.0
 
-    cur_completed = _by_status(cur_payouts, "completed")
-    prev_completed = _by_status(prev_payouts, "completed")
-    cur_pending = _by_status(cur_payouts, "pending", "processing")
-    prev_pending = _by_status(prev_payouts, "pending", "processing")
-    cur_failed = _by_status(cur_payouts, "failed")
-    prev_failed = _by_status(prev_payouts, "failed")
+    cur_success = _success_rate(_pw_i(pw_cur, "completed_count"), _pw_i(pw_cur, "failed_count"))
+    prev_success = _success_rate(_pw_i(pw_prev, "completed_count"), _pw_i(pw_prev, "failed_count"))
 
-    def _amt(rows: list) -> float:
-        return float(sum((Decimal(str(r.get("amount") or 0)) for r in rows), Decimal("0")))
+    cur_median_hours = float(pw.get("cur_median_hours") or 0)
+    prev_median_hours = float(pw.get("prev_median_hours") or 0)
 
-    # ── Success rate ──
-    # Pending excluded from denominator — outcome unknown. completed /
-    # (completed + failed) over rows that have reached a terminal state.
-    def _success_rate(completed: list, failed: list) -> float:
-        terminal = len(completed) + len(failed)
-        return round((len(completed) / terminal) * 100, 1) if terminal > 0 else 0.0
+    cur_completed_amt = _pw_f(pw_cur, "completed_amount")
+    cur_completed_cnt = _pw_i(pw_cur, "completed_count")
+    prev_completed_amt = _pw_f(pw_prev, "completed_amount")
+    prev_completed_cnt = _pw_i(pw_prev, "completed_count")
+    cur_avg = round(cur_completed_amt / cur_completed_cnt, 2) if cur_completed_cnt else 0.0
+    prev_avg = round(prev_completed_amt / prev_completed_cnt, 2) if prev_completed_cnt else 0.0
 
-    cur_success = _success_rate(cur_completed, cur_failed)
-    prev_success = _success_rate(prev_completed, prev_failed)
-
-    # ── Median time to payout (hours) ──
-    # Difference between created_at (request) and processed_at (Stripe
-    # confirmed). Only over completed payouts that have both fields.
-    def _median_hours(completed: list) -> float:
-        deltas: list[float] = []
-        for p in completed:
-            requested = p.get("created_at")
-            settled = p.get("processed_at")
-            if not requested or not settled:
-                continue
-            try:
-                t_req = datetime.fromisoformat(requested.replace("Z", "+00:00"))
-                t_set = datetime.fromisoformat(settled.replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            secs = (t_set - t_req).total_seconds()
-            if secs >= 0:
-                deltas.append(secs / 3600.0)
-        if not deltas:
-            return 0.0
-        deltas.sort()
-        n = len(deltas)
-        mid = n // 2
-        return round((deltas[mid] if n % 2 else (deltas[mid - 1] + deltas[mid]) / 2.0), 2)
-
-    cur_median_hours = _median_hours(cur_completed)
-    prev_median_hours = _median_hours(prev_completed)
-
-    # ── Avg payout amount ──
-    cur_avg = round(_amt(cur_completed) / len(cur_completed), 2) if cur_completed else 0.0
-    prev_avg = round(_amt(prev_completed) / len(prev_completed), 2) if prev_completed else 0.0
-
-    # ── Daily series for the chart ──
+    # Daily series — fill gaps with zero for days without payouts.
     daily: Dict[str, Dict[str, Any]] = {}
-    cursor = start.date()
+    cursor_dt = start.date()
     end_date = end.date()
-    while cursor <= end_date:
-        daily[cursor.isoformat()] = {
-            "date": cursor.isoformat(),
+    while cursor_dt <= end_date:
+        daily[cursor_dt.isoformat()] = {
+            "date": cursor_dt.isoformat(),
             "paid_out": 0.0,
             "pending": 0.0,
             "failed": 0.0,
         }
-        cursor += timedelta(days=1)
-    for p in cur_payouts:
-        ts = p.get("processed_at") or p.get("created_at") or ""
-        day = ts[:10]
-        if day not in daily:
-            continue
-        amt = float(Decimal(str(p.get("amount") or 0)))
-        if p.get("status") == "completed":
-            daily[day]["paid_out"] = round(daily[day]["paid_out"] + amt, 2)
-        elif p.get("status") in ("pending", "processing"):
-            daily[day]["pending"] = round(daily[day]["pending"] + amt, 2)
-        elif p.get("status") == "failed":
-            daily[day]["failed"] = round(daily[day]["failed"] + amt, 2)
+        cursor_dt += timedelta(days=1)
+    for row in pw.get("daily_series") or []:
+        day_key = str(row.get("day") or "")
+        if day_key in daily:
+            daily[day_key]["paid_out"] = float(Decimal(str(row.get("paid_out") or 0)))
+            daily[day_key]["pending"] = float(Decimal(str(row.get("pending") or 0)))
+            daily[day_key]["failed"] = float(Decimal(str(row.get("failed") or 0)))
 
     # ── Pass 2: failure breakdown + at-risk + blocked drivers ────────────
-
-    # Failure reasons — group by error_message text. Tight bucket bag
-    # so frontend just renders the top few. Empty / null message lumps
-    # into "Unknown".
-    failure_buckets: Dict[str, Dict[str, float]] = {}
-    for p in cur_failed:
-        reason_raw = (p.get("error_message") or "").strip()
-        # Normalise long stripe error strings to the first 60 chars so
-        # similar variants group together; full string is still on the
-        # payout row if an operator clicks through.
-        reason = (reason_raw[:60] + "…") if len(reason_raw) > 60 else (reason_raw or "Unknown")
-        bucket = failure_buckets.setdefault(reason, {"count": 0, "amount": 0.0})
-        bucket["count"] += 1
-        bucket["amount"] += float(Decimal(str(p.get("amount") or 0)))
-    failure_reasons = sorted(
-        [{"reason": r, "count": int(b["count"]), "amount": round(b["amount"], 2)} for r, b in failure_buckets.items()],
-        key=lambda x: (-x["count"], -x["amount"]),
-    )[:8]
+    failure_reasons = [
+        {
+            "reason": r.get("reason", "Unknown"),
+            "count": int(r.get("count") or 0),
+            "amount": round(float(Decimal(str(r.get("amount") or 0))), 2),
+        }
+        for r in (pw.get("failure_reasons") or [])
+    ]
 
     # Stuck pending payouts — pending/processing more than 48h after creation
     # (manual-intervention queue). All-time signal, computed in SQL above.
@@ -3127,35 +3081,13 @@ async def admin_get_payouts_overview(
         "outstanding_balance": float(to_decimal(_agg_dec("blocked_outstanding"))),
     }
 
-    # Top earning drivers in window — sum of completed payout amounts
-    # per driver. Capped at 10 so the response stays small.
-    completed_by_driver: Dict[str, Dict[str, float]] = {}
-    for p in cur_completed:
-        did = p.get("driver_id")
-        if not did:
-            continue
-        b = completed_by_driver.setdefault(did, {"amount": 0.0, "count": 0})
-        b["amount"] += float(Decimal(str(p.get("amount") or 0)))
-        b["count"] += 1
-    top_driver_ids = sorted(completed_by_driver.keys(), key=lambda did: -completed_by_driver[did]["amount"])[:10]
+    # Top earning drivers + at-risk drivers come from the RPC (migration 384).
+    pw_top = pw.get("top_drivers") or []
+    pw_at_risk = pw.get("at_risk_drivers") or []
 
-    # At-risk drivers — ≥ 2 failures in window. Ops follows up
-    # personally; multi-fail is rarely a transient issue.
-    failed_by_driver: Dict[str, Dict[str, Any]] = {}
-    for p in cur_failed:
-        did = p.get("driver_id")
-        if not did:
-            continue
-        b = failed_by_driver.setdefault(did, {"count": 0, "last_reason": None, "last_at": ""})
-        b["count"] += 1
-        ts = p.get("created_at") or ""
-        if ts > b["last_at"]:
-            b["last_at"] = ts
-            b["last_reason"] = p.get("error_message") or "Unknown"
-    at_risk_driver_ids = [did for did, b in failed_by_driver.items() if b["count"] >= 2]
+    top_driver_ids = [r["driver_id"] for r in pw_top if r.get("driver_id")]
+    at_risk_driver_ids = [r["driver_id"] for r in pw_at_risk if r.get("driver_id")]
 
-    # Enrich names in a single batch fetch for both lists. Cheap because
-    # the union of top + at-risk is bounded at ≤ 20 driver_ids.
     enrich_ids = list(set(top_driver_ids) | set(at_risk_driver_ids))
     drivers_map: Dict[str, Any] = {}
     users_map: Dict[str, Any] = {}
@@ -3170,25 +3102,24 @@ async def admin_get_payouts_overview(
 
     top_drivers = [
         {
-            "driver_id": did,
-            "name": _display_name(did),
-            "amount": round(completed_by_driver[did]["amount"], 2),
-            "payout_count": int(completed_by_driver[did]["count"]),
+            "driver_id": r["driver_id"],
+            "name": _display_name(r["driver_id"]),
+            "amount": round(float(Decimal(str(r.get("amount") or 0))), 2),
+            "payout_count": int(r.get("count") or 0),
         }
-        for did in top_driver_ids
+        for r in pw_top
+        if r.get("driver_id")
     ]
-    at_risk_drivers = sorted(
-        [
-            {
-                "driver_id": did,
-                "name": _display_name(did),
-                "failure_count": int(failed_by_driver[did]["count"]),
-                "last_reason": failed_by_driver[did]["last_reason"],
-            }
-            for did in at_risk_driver_ids
-        ],
-        key=lambda x: -x["failure_count"],
-    )[:10]
+    at_risk_drivers = [
+        {
+            "driver_id": r["driver_id"],
+            "name": _display_name(r["driver_id"]),
+            "failure_count": int(r.get("count") or 0),
+            "last_reason": r.get("last_reason") or "Unknown",
+        }
+        for r in pw_at_risk
+        if r.get("driver_id")
+    ]
 
     # ── Pass 4: T4A snapshot ─────────────────────────────────────────────
     # CRA T4A threshold for self-employed contractor reporting in Canada is
@@ -3243,13 +3174,13 @@ async def admin_get_payouts_overview(
         },
         "metrics": {
             "outstanding_payable": _metric(float(outstanding_now_calc), float(outstanding_prev)),
-            "total_paid_out": _metric(_amt(cur_completed), _amt(prev_completed)),
-            "pending_in_flight": _metric(_amt(cur_pending), _amt(prev_pending)),
-            "failed_amount": _metric(_amt(cur_failed), _amt(prev_failed)),
+            "total_paid_out": _metric(cur_completed_amt, prev_completed_amt),
+            "pending_in_flight": _metric(_pw_f(pw_cur, "pending_amount"), _pw_f(pw_prev, "pending_amount")),
+            "failed_amount": _metric(_pw_f(pw_cur, "failed_amount"), _pw_f(pw_prev, "failed_amount")),
             "success_rate_pct": _metric(cur_success, prev_success),
             "median_time_to_payout_hours": _metric(cur_median_hours, prev_median_hours),
             "avg_payout_amount": _metric(cur_avg, prev_avg),
-            "payouts_count": _metric(len(cur_payouts), len(prev_payouts)),
+            "payouts_count": _metric(_pw_i(pw_cur, "total_count"), _pw_i(pw_prev, "total_count")),
         },
         "daily_series": list(daily.values()),
         # Pass 2 — operational queues. None are PoP because they're

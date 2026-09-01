@@ -825,30 +825,52 @@ async def admin_get_driver_stats(
     else:
         range_end = range_end.replace(hour=23, minute=59, second=59, microsecond=0)
 
-    # Fetch all service areas for lookups
-    service_areas = await db_supabase.get_rows("service_areas", order="name", limit=200)
-    area_map = {a["id"]: a.get("name", "Unknown") for a in service_areas}
+    # ── Parallel fetch: round 1 ──
+    # Four independent queries run concurrently. Only the columns needed for
+    # counting/classification are fetched — the enriched driver rows are not
+    # returned in the response (removed 2026-08-27, P1 #10), so full SELECT *
+    # was pure waste on every poll.
+    _DRIVER_STATS_COLS = (
+        "id,user_id,status,is_online,is_verified,service_area_id,"
+        "total_rides,rating,created_at,name,phone,deleted_at,"
+        "legacy_import_metadata,"
+        "license_expiry_date,insurance_expiry_date,"
+        "vehicle_inspection_expiry_date,background_check_expiry_date"
+    )
 
-    # ── Fetch drivers ──
     driver_filters: Dict[str, Any] = {}
     if service_area_id:
         driver_filters["service_area_id"] = service_area_id
-    all_drivers = await db_supabase.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
 
-    # Enrich with user info (batch)
-    user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
-    # Batched: `$in` compiles to a `id=in.(...)` URL parameter, and the whole
-    # fleet's user_ids is a ~35 KB request line that the edge proxy rejects with
-    # a plain-text 400 before PostgREST ever sees it (surfaces as the opaque
-    # "JSON could not be generated"). This endpoint returned 500 for every admin
-    # because of it.
-    users_list = await db_supabase.get_rows_batched_in("users", "id", user_ids)
-    users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
+    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}, **EXCLUDE_LEGACY_RIDES}
 
-    # Auto-detect needs_review: active drivers with expired docs or pending re-uploads.
-    # Capped at 500 for the inline needs_review flag; full paginated list via
-    # GET /documents/pending (A-P4-4).
-    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=500)
+    service_areas, all_drivers, all_docs, all_rides = await asyncio.gather(
+        db_supabase.get_rows("service_areas", order="name", limit=200),
+        db_supabase.get_rows(
+            "drivers",
+            driver_filters,
+            order="created_at",
+            desc=True,
+            limit=5000,
+            columns=_DRIVER_STATS_COLS,
+        ),
+        db_supabase.get_rows(
+            "driver_documents",
+            {"status": "pending"},
+            limit=500,
+            columns="driver_id",
+        ),
+        db_supabase.get_rows(
+            "rides",
+            ride_filters,
+            order="created_at",
+            desc=True,
+            limit=5000,
+            columns="created_at,status,driver_earnings,driver_id",
+        ),
+    )
+
+    area_map = {a["id"]: a.get("name", "Unknown") for a in service_areas}
     pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -859,9 +881,10 @@ async def admin_get_driver_stats(
         "background_check_expiry_date",
     ]
 
+    # Classify driver status in-place for counting. No user enrichment needed —
+    # enriched rows are not returned (removed 2026-08-27, P1 #10).
     enriched_drivers = []
     for d in all_drivers:
-        u = users_map.get(d.get("user_id"))
         driver_status = d.get("status", "pending")
 
         # Account deletion soft-deletes the drivers row but cannot change
@@ -884,17 +907,7 @@ async def admin_get_driver_stats(
             if driver_status == "active" and d.get("id") in pending_doc_driver_ids:
                 driver_status = "needs_review"
 
-        enriched_drivers.append(
-            {
-                **d,
-                "status": driver_status,
-                "first_name": u.get("first_name") if u else d.get("first_name"),
-                "last_name": u.get("last_name") if u else d.get("last_name"),
-                "name": _user_display_name(u) or d.get("name"),
-                "email": u.get("email") if u else None,
-                "phone": u.get("phone") if u else d.get("phone"),
-            }
-        )
+        enriched_drivers.append({**d, "status": driver_status})
 
     # ── Compute overall driver stats ──
     total = len(enriched_drivers)
@@ -942,20 +955,45 @@ async def admin_get_driver_stats(
     # signal. admin_driver_earnings_rollup (migration 370) does the GROUP BY
     # server-side and keeps the same semantics: completed only, legacy-excluded,
     # lifetime (matching total_rides_sum, also a lifetime counter).
+    # ── Parallel fetch: round 2 ──
+    # Earnings RPC and pending-photos count both depend on driver_ids/user_ids
+    # from round 1 but are independent of each other.
     driver_ids_set = {d["id"] for d in enriched_drivers}
-    earnings_by_driver: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
-    if driver_ids_set:
-        _rollup_rows = await db_supabase.rpc(
+    user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
+
+    async def _fetch_earnings():
+        if not driver_ids_set:
+            return {}
+        rows = await db_supabase.rpc(
             "admin_driver_earnings_rollup",
             {"p_driver_ids": list(driver_ids_set)},
         )
-        _rollup = _rollup_rows[0] if isinstance(_rollup_rows, list) and _rollup_rows else _rollup_rows
-        if not isinstance(_rollup, dict):
-            _rollup = {}
-        for did, amount in (_rollup.get("by_driver") or {}).items():
-            # Decimal(str(...)) — the RPC returns NUMERIC as a JSON string/number;
-            # never float() it (CLAUDE.md money rule).
-            earnings_by_driver[did] = Decimal(str(amount or 0))
+        rollup = rows[0] if isinstance(rows, list) and rows else rows
+        if not isinstance(rollup, dict):
+            return {}
+        out: Dict[str, Decimal] = {}
+        for did, amount in (rollup.get("by_driver") or {}).items():
+            out[did] = Decimal(str(amount or 0))
+        return out
+
+    async def _fetch_pending_photos():
+        if not user_ids:
+            return 0
+        rows = await db_supabase.get_rows_batched_in(
+            "users",
+            "id",
+            user_ids,
+            extra_filters={"profile_image_status": "pending_review"},
+            columns="id",
+        )
+        return len(rows)
+
+    earnings_by_driver_raw, pending_photos_count = await asyncio.gather(
+        _fetch_earnings(),
+        _fetch_pending_photos(),
+    )
+    earnings_by_driver: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    earnings_by_driver.update(earnings_by_driver_raw)
 
     total_earnings_sum = float(sum(earnings_by_driver.values(), Decimal("0")))
     avg_rating = 0.0
@@ -1009,10 +1047,7 @@ async def admin_get_driver_stats(
     # Legacy-imported rides excluded (same P0-B reasoning as above) so a
     # historical bulk import doesn't show up as a spike in "new" fleet
     # activity/earnings on whatever day it happened to be imported.
-    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}, **EXCLUDE_LEGACY_RIDES}
-    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
-
-    # Filter rides to only those belonging to our driver set
+    # Rides were already fetched in round 1 (limited columns).
     relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
 
     daily_rides: Dict[str, int] = defaultdict(int)
@@ -1078,8 +1113,7 @@ async def admin_get_driver_stats(
             "total_rides": total_rides_sum,
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,
-            # Drivers whose profile photo is awaiting admin approval.
-            "pending_photos": sum(1 for u in users_map.values() if u.get("profile_image_status") == "pending_review"),
+            "pending_photos": pending_photos_count,
         },
         "area_stats": list(area_stats.values()),
         "charts": {

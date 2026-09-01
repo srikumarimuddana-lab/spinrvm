@@ -39,7 +39,7 @@ BEGIN
         SELECT ds.*
         FROM driver_subscriptions ds
         WHERE p_area_ids IS NULL
-           OR ds.driver_id IN (
+           OR ds.driver_id::text IN (
                SELECT id FROM drivers WHERE service_area_id = ANY(p_area_ids)
            )
     ),
@@ -65,7 +65,7 @@ BEGIN
         SELECT sp.*
         FROM subscription_payments sp
         WHERE p_area_ids IS NULL
-           OR sp.driver_id IN (
+           OR sp.driver_id::text IN (
                SELECT id FROM drivers WHERE service_area_id = ANY(p_area_ids)
            )
     ),
@@ -80,20 +80,20 @@ BEGIN
     ),
     plan_sub_stats AS (
         SELECT
-            COALESCE(plan_id, 'unknown') AS pid,
+            COALESCE(plan_id::text, 'unknown') AS pid,
             MAX(plan_name)               AS sub_plan_name,
             COUNT(*)                                      AS sub_count,
             COUNT(*) FILTER (WHERE status = 'active')     AS active_count
         FROM real_subs
-        GROUP BY COALESCE(plan_id, 'unknown')
+        GROUP BY COALESCE(plan_id::text, 'unknown')
     ),
     plan_pay_stats AS (
         SELECT
-            COALESCE(plan_id, 'unknown') AS pid,
+            COALESCE(plan_id::text, 'unknown') AS pid,
             MAX(plan_name)               AS pay_plan_name,
             COALESCE(SUM(amount), 0)     AS revenue
         FROM scoped_payments
-        GROUP BY COALESCE(plan_id, 'unknown')
+        GROUP BY COALESCE(plan_id::text, 'unknown')
     ),
     plan_merged AS (
         SELECT
@@ -102,7 +102,7 @@ BEGIN
                 s.sub_plan_name,
                 p.pay_plan_name,
                 (SELECT name FROM subscription_plans sp2
-                 WHERE sp2.id = COALESCE(s.pid, p.pid) LIMIT 1),
+                 WHERE sp2.id::text = COALESCE(s.pid, p.pid) LIMIT 1),
                 'Unknown'
             ) AS name,
             COALESCE(s.sub_count, 0)    AS count,

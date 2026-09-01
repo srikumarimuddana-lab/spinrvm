@@ -64,9 +64,9 @@ except ImportError:
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
 try:
-    from ...utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides
+    from ...utils.legacy_rides import drop_legacy_offset_payouts
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
-    from utils.legacy_rides import EXCLUDE_LEGACY_RIDES, drop_legacy_offset_payouts, drop_legacy_rides  # type: ignore
+    from utils.legacy_rides import drop_legacy_offset_payouts  # type: ignore
 
 try:
     from ...utils.profile_completeness import compute_profile_completeness
@@ -191,6 +191,18 @@ def _mask_license_number(plain: Optional[str]) -> Optional[str]:
     if not s:
         return None
     return s[-4:] if len(s) > 4 else s
+
+
+async def _safe_imported_ride_count(driver_id: str) -> int:
+    """Count legacy-imported rides for the payouts summary context line."""
+    try:
+        return await db_supabase.count_documents(
+            "rides",
+            {"driver_id": driver_id, "status": "completed", "legacy_import_metadata": {"$notnull": True}},
+        )
+    except Exception:
+        logger.error("payouts-summary: imported-ride count failed for %s", driver_id, exc_info=True)
+        return -1
 
 
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
@@ -842,9 +854,7 @@ async def admin_get_driver_stats(
     if service_area_id:
         driver_filters["service_area_id"] = service_area_id
 
-    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}, **EXCLUDE_LEGACY_RIDES}
-
-    service_areas, all_drivers, all_docs, all_rides = await asyncio.gather(
+    service_areas, all_drivers, all_docs = await asyncio.gather(
         db_supabase.get_rows("service_areas", order="name", limit=200),
         db_supabase.get_rows(
             "drivers",
@@ -859,14 +869,6 @@ async def admin_get_driver_stats(
             {"status": "pending"},
             limit=500,
             columns="driver_id",
-        ),
-        db_supabase.get_rows(
-            "rides",
-            ride_filters,
-            order="created_at",
-            desc=True,
-            limit=5000,
-            columns="created_at,status,driver_earnings,driver_id",
         ),
     )
 
@@ -925,15 +927,24 @@ async def admin_get_driver_stats(
     # `onboarded_total`. Flagging is a heuristic (see the predicate), so it
     # must never silently remove a row from the fleet count.
     legacy_review_count = sum(1 for d in all_drivers if is_suspect_legacy_import_row(d))
-    # A deleted account is never "online", whatever its stale intent flag says.
-    online = sum(1 for d in enriched_drivers if d.get("is_online") and d.get("status") != "deleted")
-    active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
-    pending_count = sum(1 for d in enriched_drivers if d.get("status") == "pending")
-    needs_review_count = sum(1 for d in enriched_drivers if d.get("status") == "needs_review")
-    suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
-    banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
-    deleted_count = sum(1 for d in enriched_drivers if d.get("status") == "deleted")
-    total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
+    # Single pass over enriched_drivers for status counts, online flag, and
+    # total_rides — replaces 8 separate iterations.
+    status_counts: Dict[str, int] = defaultdict(int)
+    online = 0
+    total_rides_sum = 0
+    for d in enriched_drivers:
+        s = d.get("status")
+        if s:
+            status_counts[s] += 1
+        if d.get("is_online") and s != "deleted":
+            online += 1
+        total_rides_sum += int(d.get("total_rides") or 0)
+    active_count = status_counts["active"]
+    pending_count = status_counts["pending"]
+    needs_review_count = status_counts["needs_review"]
+    suspended_count = status_counts["suspended"]
+    banned_count = status_counts["banned"]
+    deleted_count = status_counts["deleted"]
 
     # P1-A (docs/audit/2026-08-11-driver-rider-migration-audit.md): `drivers.
     # total_earnings` is never written by any code path (same dead column
@@ -1043,26 +1054,29 @@ async def admin_get_driver_stats(
             day_key = dt.strftime("%Y-%m-%d")
             daily_joins[day_key] += 1
 
-    # Rides + earnings per day (for drivers matching the service_area filter).
-    # Legacy-imported rides excluded (same P0-B reasoning as above) so a
-    # historical bulk import doesn't show up as a spike in "new" fleet
-    # activity/earnings on whatever day it happened to be imported.
-    # Rides were already fetched in round 1 (limited columns).
-    relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
-
-    daily_rides: Dict[str, int] = defaultdict(int)
-    daily_earnings: Dict[str, float] = defaultdict(float)
-    for r in relevant_rides:
-        dt = parse_iso_utc(r.get("created_at"))
-        if dt is None:
+    # Rides + earnings per day — server-side GROUP BY (migration 388).
+    # Replaces fetching up to 5k ride rows and bucketing in Python. Also
+    # lifts the silent 5000-row cap — SQL counts are exact.
+    ride_chart_driver_ids = list(driver_ids_set) if service_area_id else None
+    ride_chart_result = await db_supabase.rpc(
+        "admin_daily_ride_stats",
+        {
+            "p_start": range_start.isoformat(),
+            "p_end": range_end.isoformat(),
+            "p_driver_ids": ride_chart_driver_ids,
+        },
+    )
+    ride_chart_rows = ride_chart_result if isinstance(ride_chart_result, list) else []
+    if len(ride_chart_rows) == 1 and isinstance(ride_chart_rows[0], list):
+        ride_chart_rows = ride_chart_rows[0]
+    daily_rides: Dict[str, int] = {}
+    daily_earnings: Dict[str, float] = {}
+    for row in ride_chart_rows:
+        if not isinstance(row, dict):
             continue
-        if range_start <= dt <= range_end:
-            day_key = dt.strftime("%Y-%m-%d")
-            daily_rides[day_key] += 1
-            if r.get("status") == "completed":
-                daily_earnings[day_key] = float(
-                    Decimal(str(daily_earnings[day_key])) + Decimal(str(r.get("driver_earnings") or 0))
-                )
+        day_key = str(row.get("day") or "")
+        daily_rides[day_key] = int(row.get("rides") or 0)
+        daily_earnings[day_key] = round(float(Decimal(str(row.get("earnings") or 0))), 2)
 
     # Build chart arrays
     joins_chart = []
@@ -2358,43 +2372,18 @@ async def admin_get_driver_live_stats(driver_id: str):
     the active fleet) and removes the staleness without requiring a
     background-loop rollup or denorm trigger.
     """
-    rides = await db_supabase.get_rows(
-        "rides",
-        {"driver_id": driver_id},
-        limit=5000,
+    rpc_result = await db_supabase.rpc(
+        "admin_driver_ride_summary",
+        {"p_driver_id": driver_id},
     )
+    rs = rpc_result[0] if isinstance(rpc_result, list) and rpc_result else (rpc_result or {})
 
-    completed = [r for r in rides if r.get("status") == "completed"]
-    total_assigned = len(rides)
-    completed_count = len(completed)
-
-    # driver_earnings is the post-platform-fee amount the driver actually
-    # gets — same field the rider receipt + driver payout summary uses.
-    #
-    # P1-A / Phase-3 cross-surface finding #2 (docs/audit/2026-08-11-driver-
-    # rider-migration-audit.md): this header must exclude legacy-imported
-    # rides the same way admin_get_driver_payouts_summary (the Payouts tab
-    # on the same driver detail screen) already does — previously this
-    # "Earnings" card and that tab showed two different numbers for the
-    # same driver. total_assigned/completed_count/acceptance_rate are left
-    # unfiltered on purpose: legacy rides are always status='completed'
-    # (booking_import_service only imports completed bookings), so
-    # excluding them there would change the acceptance-rate denominator in
-    # a way the audit didn't ask for and this fix doesn't need to touch.
-    total_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in drop_legacy_rides(completed)))
-
-    rated = [r for r in completed if (r.get("rider_rating") or 0) > 0]
-    avg_rating = round(sum(float(r["rider_rating"]) for r in rated) / len(rated), 2) if rated else None
-
-    # Acceptance rate: same formula as routes/admin/analytics.py uses for
-    # the rankings page (completed / total_assigned). Approximate — a true
-    # rate would compare against offers sent, not assigned rides — but
-    # it's the same definition operators already see elsewhere.
+    total_assigned = int(rs.get("total_assigned") or 0)
+    completed_count = int(rs.get("completed_count") or 0)
+    total_earnings = float(rs.get("lifetime_earnings") or 0)
+    avg_rating = float(rs["avg_rider_rating"]) if rs.get("avg_rider_rating") is not None else None
     acceptance_rate = round((completed_count / total_assigned) * 100, 1) if total_assigned > 0 else None
-
-    cancelled_by_driver = sum(
-        1 for r in rides if r.get("status") == "cancelled" and "driver" in (r.get("cancellation_reason") or "").lower()
-    )
+    cancelled_by_driver = int(rs.get("cancelled_by_driver") or 0)
 
     # The detail slideout reads the driver's avatar from here rather than the
     # bulk drivers list, which no longer ships profile_image (see
@@ -2639,40 +2628,41 @@ async def admin_get_referral_leaderboard(
     """
     rides_required, reward_amount = _referral_terms()
 
-    def _money(x) -> Decimal:
-        try:
-            return Decimal(str(x))
-        except (InvalidOperation, TypeError, ValueError):
-            return Decimal("0")
+    # Server-side aggregation (migration 386) replaces 20k-row fetch + Python loop.
+    rpc_result = await db_supabase.rpc("admin_driver_referral_board", {"p_limit": limit})
+    rb = rpc_result[0] if isinstance(rpc_result, list) and rpc_result else rpc_result
+    if not isinstance(rb, dict):
+        rb = {}
 
-    claims = await db_supabase.get_rows(
-        "referral_payouts",
-        {"kind": "driver"},
-        columns="referrer_user_id,referrer_reward,status",
-        limit=20000,
-    )
-    by_referrer: dict[str, dict] = {}
-    for c in claims:
-        ruid = c.get("referrer_user_id")
-        if not ruid:
-            continue
-        agg = by_referrer.setdefault(ruid, {"total": 0, "qualified": 0, "earnings": Decimal("0")})
-        agg["total"] += 1
-        if c.get("status") == "paid":
-            agg["qualified"] += 1
-            agg["earnings"] += _money(c.get("referrer_reward"))
+    rpc_leaders = rb.get("leaders") or []
+    ref_user_ids = [r["referrer_user_id"] for r in rpc_leaders if r.get("referrer_user_id")]
 
-    fleet_total_referrals = sum(a["total"] for a in by_referrer.values())
-    top = sorted(by_referrer.items(), key=lambda kv: kv[1]["total"], reverse=True)[:limit]
+    # Batch-fetch user + driver info (≤ limit rows, no N+1).
+    users_map: dict[str, dict] = {}
+    drivers_by_uid: dict[str, dict] = {}
+    if ref_user_ids:
+        user_rows = await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": ref_user_ids}},
+            columns="id,first_name,last_name",
+            limit=len(ref_user_ids),
+        )
+        users_map = {u["id"]: u for u in user_rows}
+        drv_rows = await db_supabase.get_rows(
+            "drivers",
+            {"user_id": {"$in": ref_user_ids}},
+            columns="id,user_id,name,referral_code",
+            limit=len(ref_user_ids),
+        )
+        drivers_by_uid = {d["user_id"]: d for d in drv_rows if d.get("user_id")}
 
     leaders: list[dict] = []
-    for ref_user_id, agg in top:
-        ref_user = await db_supabase.get_user_by_id(ref_user_id)
-        drv = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": ref_user_id}, limit=1)
-        )
+    for r in rpc_leaders:
+        ruid = r.get("referrer_user_id")
+        ref_user = users_map.get(ruid) or {}
+        drv = drivers_by_uid.get(ruid)
         name = (
-            f"{(ref_user or {}).get('first_name', '')} {(ref_user or {}).get('last_name', '')}".strip()
+            f"{ref_user.get('first_name', '')} {ref_user.get('last_name', '')}".strip()
             or (drv or {}).get("name")
             or "Driver"
         )
@@ -2681,16 +2671,16 @@ async def admin_get_referral_leaderboard(
                 "driver_id": (drv or {}).get("id"),
                 "driver_code": _driver_referral_code(drv) if drv else None,
                 "name": name,
-                "total_referrals": agg["total"],
-                "qualified_referrals": agg["qualified"],
-                "referral_earnings": agg["earnings"],
+                "total_referrals": int(r.get("total") or 0),
+                "qualified_referrals": int(r.get("qualified") or 0),
+                "referral_earnings": Decimal(str(r.get("earnings") or 0)),
             }
         )
 
     return {
         "leaders": leaders,
-        "fleet_total_referrals": fleet_total_referrals,
-        "fleet_total_referrers": len(by_referrer),
+        "fleet_total_referrals": int(rb.get("fleet_total_referrals") or 0),
+        "fleet_total_referrers": int(rb.get("fleet_total_referrers") or 0),
         "reward_amount": reward_amount,
         "rides_required": rides_required,
     }
@@ -2714,36 +2704,59 @@ async def admin_get_rider_referral_leaderboard(
             RIDER_REFERRER_REWARD,
         )
 
-    users = await db_supabase.get_rows(
-        "users", {}, columns="id,referral_code_used,referred_by,first_name,last_name", limit=10000
+    # Fetch only users that were referred via a rider code (not ALL 10k users).
+    referred_users = await db_supabase.get_rows(
+        "users",
+        {"referred_by": {"$notnull": True}, "referral_code_used": {"$notnull": True}},
+        columns="id,referral_code_used,referred_by",
+        limit=10000,
     )
     by_referrer: dict[str, list[str]] = {}
-    name_by_id: dict[str, str] = {}
-    for u in users:
-        name_by_id[u["id"]] = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or "Rider"
+    for u in referred_users:
         code = u.get("referral_code_used")
         rid = u.get("referred_by")
-        # Rider referrals use a RIDE-prefixed code and store the referrer's user id.
         if code and str(code).upper().startswith("RIDE") and rid:
             by_referrer.setdefault(rid, []).append(u["id"])
 
     fleet_total = sum(len(v) for v in by_referrer.values())
     top = sorted(by_referrer.items(), key=lambda kv: len(kv[1]), reverse=True)[:limit]
 
+    # Batch-fetch completed ride counts for all referees (replaces N+1).
+    all_referee_ids = list(set(uid for _, referee_ids in top for uid in referee_ids))
+    from collections import Counter
+
+    ride_counts: Counter = Counter()
+    if all_referee_ids:
+        completed_rides = await db_supabase.get_rows(
+            "rides",
+            {"rider_id": {"$in": all_referee_ids}, "status": "completed"},
+            columns="rider_id",
+            limit=50000,
+        )
+        ride_counts = Counter(r["rider_id"] for r in completed_rides)
+
+    # Batch-fetch referrer names and paid earnings in parallel.
+    top_referrer_ids = [rid for rid, _ in top]
+    name_by_id: dict[str, str] = {}
+    if top_referrer_ids:
+        referrer_users = await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": top_referrer_ids}},
+            columns="id,first_name,last_name",
+            limit=len(top_referrer_ids),
+        )
+        for u in referrer_users:
+            name_by_id[u["id"]] = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or "Rider"
+
+    paid_results = await asyncio.gather(*(paid_referral_earnings(rid, "rider") for rid, _ in top))
+
     leaders: list[dict] = []
-    for referrer_id, referee_ids in top:
-        qualified = 0
-        for ride_user_id in referee_ids:
-            completed = await db_supabase.count_documents("rides", {"rider_id": ride_user_id, "status": "completed"})
-            if completed >= RIDER_REFERRAL_RIDES_REQUIRED:
-                qualified += 1
-        # Snapshotted PAID earnings when available; estimate fallback otherwise.
-        paid = await paid_referral_earnings(referrer_id, "rider")
+    for i, (referrer_id, referee_ids) in enumerate(top):
+        qualified = sum(1 for uid in referee_ids if ride_counts.get(uid, 0) >= RIDER_REFERRAL_RIDES_REQUIRED)
+        paid = paid_results[i]
         leader_earnings = paid if paid is not None else (qualified * RIDER_REFERRER_REWARD)
         leaders.append(
             {
-                # driver_id/driver_code reuse the shared UI fields — here they
-                # carry the referrer's user id and RIDE code.
                 "driver_id": referrer_id,
                 "driver_code": f"RIDE{referrer_id[:8].upper()}",
                 "name": name_by_id.get(referrer_id, "Rider"),
@@ -2851,23 +2864,19 @@ async def admin_get_referral_analytics(
     ]
 
     # ---- Top of funnel: sign-ups via a referral code (users.referred_by) ----
+    # Server-side count (migration 387) replaces fetching ALL 10k users.
     total_referred: int | None = None
     if not service_area_id:
-        users = await db_supabase.get_rows(
-            "users", {}, columns="referred_by,referral_code_used,created_at", limit=10000
+        count_result = await db_supabase.rpc(
+            "admin_referred_user_count",
+            {"p_kind": source, "p_start": start, "p_end": end},
         )
-        total_referred = 0
-        for u in users:
-            code = u.get("referral_code_used")
-            rid = u.get("referred_by")
-            if not (rid and code):
-                continue
-            is_rider = str(code).upper().startswith("RIDE")
-            if (source == "rider") != is_rider:
-                continue
-            if not _in_range(u.get("created_at")):
-                continue
-            total_referred += 1
+        if isinstance(count_result, list) and count_result:
+            total_referred = int(count_result[0]) if not isinstance(count_result[0], dict) else 0
+        elif isinstance(count_result, (int, float)):
+            total_referred = int(count_result)
+        else:
+            total_referred = 0
 
     # A display ratio (not a monetary amount) — float is fine here; do NOT copy
     # this pattern into any fare/payout path, which must stay Decimal.
@@ -3028,16 +3037,23 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # ---- Aggregate from rides ----
-    # Legacy-imported rides and their 'legacy_import' offset payout are both
-    # excluded, matching routes/drivers/earnings.py — the driver's own screen
-    # and this tab must not disagree about what Spinr owes. See
-    # utils/legacy_rides for why dropping both halves leaves the math intact.
-    rides = await db_supabase.get_rows(
-        "rides",
-        {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
-        limit=10000,
+    # ---- Aggregate from rides + bonuses (server-side RPCs) ----
+    year_start = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc).isoformat()
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    ride_rpc, bonus_rpc, imported_rides_excluded = await asyncio.gather(
+        db_supabase.rpc(
+            "admin_driver_ride_summary",
+            {"p_driver_id": driver_id, "p_year_start": year_start, "p_recent_cutoff": thirty_days_ago},
+        ),
+        db_supabase.rpc(
+            "admin_driver_bonus_summary",
+            {"p_driver_id": driver_id, "p_year_start": year_start},
+        ),
+        _safe_imported_ride_count(driver_id),
     )
+    rs = ride_rpc[0] if isinstance(ride_rpc, list) and ride_rpc else (ride_rpc or {})
+    bs = bonus_rpc[0] if isinstance(bonus_rpc, list) and bonus_rpc else (bonus_rpc or {})
 
     def _dec(x: Any) -> Decimal:
         try:
@@ -3045,64 +3061,31 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         except (InvalidOperation, ValueError):
             return Decimal("0")
 
-    lifetime_ride_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
-    lifetime_tips = sum((_dec(r.get("tip_amount")) for r in rides), Decimal("0"))
-
-    # How many of this driver's completed rides were EXCLUDED as previous-app
-    # imports. Without this the card reads "0 completed rides · $0.00" while
-    # the Rides tab beside it shows 15, and nothing on screen explains the
-    # contradiction — the operator is left assuming data loss. Counted, not
-    # fetched: a HEAD-style count keeps the payload small.
-    imported_rides_excluded = 0
-    try:
-        imported_rides_excluded = len(
-            await db_supabase.get_rows(
-                "rides",
-                {"driver_id": driver_id, "status": "completed", "legacy_import_metadata": {"$notnull": True}},
-                columns="id",
-                limit=10000,
-            )
-            or []
-        )
-    except Exception:
-        # Presentation-only context. Never fail the whole payouts tab over it,
-        # but do surface it — a silent zero here would itself be misleading.
-        logger.error("payouts-summary: imported-ride count failed for %s", driver_id, exc_info=True)
-        imported_rides_excluded = -1  # -1 = unknown, distinct from a real zero
-
-    # ---- Aggregate from driver_bonuses (quest/referral/adjustment) ----
-    bonus_rows = await db_supabase.get_rows(
-        "driver_bonuses",
-        {"driver_id": driver_id},
-        limit=10000,
-    )
-    total_bonuses = sum((_dec(b.get("amount") or 0) for b in bonus_rows), Decimal("0"))
+    lifetime_ride_earnings = _dec(rs.get("lifetime_earnings"))
+    lifetime_tips = _dec(rs.get("lifetime_tips"))
+    total_bonuses = _dec(bs.get("total_bonuses"))
     lifetime_earnings = lifetime_ride_earnings + total_bonuses
 
-    year_start = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc).isoformat()
-    ytd_ride_earnings = sum(
-        (
-            _dec(r.get("driver_earnings"))
-            for r in rides
-            if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= year_start
-        ),
-        Decimal("0"),
-    )
-    ytd_bonuses = sum(
-        (_dec(b.get("amount") or 0) for b in bonus_rows if (b.get("created_at") or "") >= year_start),
-        Decimal("0"),
-    )
+    ytd_ride_earnings = _dec(rs.get("ytd_earnings"))
+    ytd_bonuses = _dec(bs.get("ytd_bonuses"))
     ytd_earnings = ytd_ride_earnings + ytd_bonuses
 
-    # Active days in last 30d — same definition the driver app's "Active
-    # days" earnings metric uses (≥1 completed ride on that calendar date).
-    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    recent_dates = {
-        (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "")[:10]
-        for r in rides
-        if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= thirty_days_ago
-    }
-    active_days_30d = len([d for d in recent_dates if d])
+    active_days_30d = int(rs.get("active_days_recent") or 0)
+
+    # ---- Bonus display list (small, bounded by endpoint `limit`) ----
+    bonus_rows = await db_supabase.get_rows(
+        "driver_bonuses", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit
+    )
+    bonus_display = [
+        {
+            "id": b.get("id"),
+            "amount": float(_dec(b.get("amount") or 0)),
+            "kind": b.get("kind"),
+            "description": b.get("description"),
+            "created_at": b.get("created_at"),
+        }
+        for b in bonus_rows
+    ]
 
     # ---- Aggregate from payouts ----
     # limit=5000 mirrors get_driver_balance (routes/drivers/earnings.py): the
@@ -3259,7 +3242,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             "pending_in_flight": float(pending_in_flight),
             "pending_balance": float(pending_balance),
             "on_hold": float(on_hold),
-            "rides_count": len(rides),
+            "rides_count": int(rs.get("completed_count") or 0),
             # Completed rides imported from the previous app and therefore NOT
             # counted in lifetime_earnings (-1 = count unavailable).
             "imported_rides_excluded": imported_rides_excluded,
@@ -3304,16 +3287,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             }
             for p in payouts[:limit]
         ],
-        "bonuses": [
-            {
-                "id": b.get("id"),
-                "amount": float(_dec(b.get("amount") or 0)),
-                "kind": b.get("kind"),
-                "description": b.get("description"),
-                "created_at": b.get("created_at"),
-            }
-            for b in sorted(bonus_rows, key=lambda x: x.get("created_at") or "", reverse=True)
-        ],
+        "bonuses": bonus_display,
     }
 
 

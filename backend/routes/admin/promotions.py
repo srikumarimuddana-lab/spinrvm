@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -343,16 +342,11 @@ async def admin_get_promo_usage(
 @router.get("/promotions/stats")
 async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="range")):
     """Get promotion statistics with daily usage data."""
-    # Promos table is bounded (< 10k ever in practice); load all for counts.
-    all_promos = await db_supabase.get_rows("promotions", {}, limit=2000)
-
     now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
 
-    # Derive DB-level date cutoff so we never load more than 30d of usage rows.
     range_start = None
     if date_range == "today":
-        range_start = today
+        range_start = now.strftime("%Y-%m-%d")
     elif date_range == "yesterday":
         range_start = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     elif date_range == "week":
@@ -362,90 +356,48 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
     elif date_range == "month":
         range_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
     else:
-        # Default: last 30 days so we never do an unbounded table scan.
         range_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    usage_filter: Dict[str, Any] = {"created_at": {"$gte": range_start}}
     try:
-        all_usage = await db_supabase.get_rows(
-            "promo_applications",
-            usage_filter,
-            order="created_at",
-            desc=True,
-            limit=5000,
+        rpc_result = await db_supabase.rpc(
+            "admin_promo_stats",
+            {"p_range_start": range_start, "p_now": now.isoformat()},
         )
     except Exception:
-        logger.error("promo_applications table missing or query failed", exc_info=True)
-        all_usage = []
+        logger.error("admin_promo_stats RPC failed", exc_info=True)
+        rpc_result = None
 
-    filtered_usage = all_usage
+    st = rpc_result[0] if isinstance(rpc_result, list) and rpc_result else (rpc_result or {})
 
-    # Promo counts
-    total_codes = len([p for p in all_promos if p.get("promo_type") != "private"])
-    active_codes = len([p for p in all_promos if p.get("promo_type") != "private" and p.get("is_active")])
-    expired_codes = len(
-        [
-            p
-            for p in all_promos
-            if p.get("promo_type") != "private"
-            and not p.get("is_active")
-            and p.get("expiry_date")
-            and p.get("expiry_date", "") < now.isoformat()
-        ]
-    )
-    total_private = len([p for p in all_promos if p.get("promo_type") == "private"])
-    active_private = len([p for p in all_promos if p.get("promo_type") == "private" and p.get("is_active")])
-
-    # Usage stats
-    total_redemptions = len(filtered_usage)
-    total_discount = float(sum(Decimal(str(u.get("discount_applied", 0))) for u in filtered_usage))
-
-    # Daily usage for charts (last 30 days), split by promo type so the
-    # admin dashboard's "Public codes only" / "Private coupons only" chart
-    # filter has real per-type data to select from (previously the filter
-    # was wired up client-side with no backend breakdown to filter against).
-    promo_is_private = {p["id"]: p.get("promo_type") == "private" for p in all_promos}
-
-    daily: Dict[str, Dict[str, Any]] = {}
+    daily_from_rpc = st.get("daily_usage") or []
+    daily_map = {d["date"]: d for d in daily_from_rpc if isinstance(d, dict)}
+    daily_usage = []
     for i in range(30):
         d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
-        daily[d] = {
-            "date": d,
-            "count": 0,
-            "amount": 0.0,
-            "public_count": 0,
-            "public_amount": 0.0,
-            "private_count": 0,
-            "private_amount": 0.0,
-        }
-
-    for u in all_usage:
-        d = u.get("created_at", "")[:10]
-        if d not in daily:
-            continue
-        discount = Decimal(str(u.get("discount_applied", 0)))
-        is_private = promo_is_private.get(u.get("promo_id"), False)
-
-        daily[d]["count"] += 1
-        daily[d]["amount"] = float(Decimal(str(daily[d]["amount"])) + discount)
-
-        if is_private:
-            daily[d]["private_count"] += 1
-            daily[d]["private_amount"] = float(Decimal(str(daily[d]["private_amount"])) + discount)
+        if d in daily_map:
+            daily_usage.append(daily_map[d])
         else:
-            daily[d]["public_count"] += 1
-            daily[d]["public_amount"] = float(Decimal(str(daily[d]["public_amount"])) + discount)
-
-    daily_usage = sorted(daily.values(), key=lambda x: x["date"])
+            daily_usage.append(
+                {
+                    "date": d,
+                    "count": 0,
+                    "amount": 0.0,
+                    "public_count": 0,
+                    "public_amount": 0.0,
+                    "private_count": 0,
+                    "private_amount": 0.0,
+                }
+            )
+    daily_usage.sort(key=lambda x: x["date"])
 
     return {
-        "total_codes": total_codes,
-        "active_codes": active_codes,
-        "expired_codes": expired_codes,
-        "total_private": total_private,
-        "active_private": active_private,
-        "total_redemptions": total_redemptions,
-        "total_discount_given": round(total_discount, 2),
+        "total_codes": int(st.get("total_codes") or 0),
+        "active_codes": int(st.get("active_codes") or 0),
+        "expired_codes": int(st.get("expired_codes") or 0),
+        "total_private": int(st.get("total_private") or 0),
+        "active_private": int(st.get("active_private") or 0),
+        "total_redemptions": int(st.get("total_redemptions") or 0),
+        "total_discount_given": round(float(st.get("total_discount") or 0), 2),
         "daily_usage": daily_usage,
     }
 

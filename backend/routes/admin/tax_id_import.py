@@ -50,6 +50,7 @@ try:
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
     from ...utils.background import spawn
+    from ...utils.pii import client_safe_detail
     from ...utils.rate_limiter import tax_id_import_commit_limit, tax_id_import_validate_limit
     from ...utils.sin import sin_last4, validate_sin
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
@@ -61,6 +62,7 @@ except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore # noqa: F401
     from utils.background import spawn  # type: ignore
+    from utils.pii import client_safe_detail
     from utils.rate_limiter import tax_id_import_commit_limit, tax_id_import_validate_limit  # type: ignore
     from utils.sin import sin_last4, validate_sin  # type: ignore
 
@@ -109,7 +111,7 @@ async def _read_rows(tax_csv: UploadFile) -> list[dict[str, str]]:
     try:
         rows = _parse_rows(text)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="CSV could not be parsed")) from e
     if len(rows) > MAX_ROWS:
         raise HTTPException(status_code=422, detail=f"CSV has {len(rows)} rows; the limit is {MAX_ROWS} per import")
     return rows

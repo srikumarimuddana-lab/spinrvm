@@ -18,12 +18,14 @@ try:
     from ...services.data_transfer import entity_import_service as import_svc
     from ...services.data_transfer import observability
     from ...utils.audit_logger import log_admin_action
+    from ...utils.pii import client_safe_detail
     from ...utils.rate_limiter import data_transfer_import_commit_limit, data_transfer_import_validate_limit
 except ImportError:
     from dependencies import get_admin_user
     from services.data_transfer import entity_import_service as import_svc
     from services.data_transfer import observability
     from utils.audit_logger import log_admin_action
+    from utils.pii import client_safe_detail
     from utils.rate_limiter import data_transfer_import_commit_limit, data_transfer_import_validate_limit
 
 logger = logging.getLogger(__name__)
@@ -69,7 +71,7 @@ async def validate_bundle_import(
     try:
         entities = import_svc.parse_bundle_zip(raw)
     except import_svc.BundleParseError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="Bundle could not be parsed")) from e
     plan = await import_svc.build_plan(entities)
     return _report(plan)
 
@@ -95,7 +97,7 @@ async def commit_bundle_import(
     try:
         entities = import_svc.parse_bundle_zip(raw)
     except import_svc.BundleParseError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(status_code=422, detail=client_safe_detail(e, fallback="Bundle could not be parsed")) from e
     plan = await import_svc.build_plan(entities)
 
     if not plan.can_commit:

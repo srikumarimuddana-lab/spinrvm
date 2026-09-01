@@ -35,6 +35,7 @@ try:
     from ...utils.audit_logger import log_admin_action
     from ...utils.driver_statement import PERIOD_TYPES, build_custom_statement, build_statement
     from ...utils.driver_statement_pdf import generate_driver_statement_pdf
+    from ...utils.pii import client_safe_detail
     from ...utils.rate_limiter import (
         admin_statement_download_limit,
         admin_statement_email_limit,
@@ -51,6 +52,7 @@ except ImportError:
         build_statement,
     )
     from utils.driver_statement_pdf import generate_driver_statement_pdf  # type: ignore
+    from utils.pii import client_safe_detail  # type: ignore
     from utils.rate_limiter import (  # type: ignore
         admin_statement_download_limit,
         admin_statement_email_limit,
@@ -109,7 +111,10 @@ async def _build_for_selection(
             )
     except ValueError as e:
         # Misaligned anchor or invalid/oversized range from the builder.
-        raise HTTPException(status_code=422, detail=str(e)) from e
+        raise HTTPException(
+            status_code=422,
+            detail=client_safe_detail(e, fallback="Invalid statement period"),
+        ) from e
     raise HTTPException(
         status_code=422,
         detail="Provide period_type+period_start or start+end dates",
@@ -176,7 +181,11 @@ async def download_driver_statement(
         "driver_statement_download",
         "drivers",
         driver_id,
-        {"period_type": statement["period_type"], "period_start": statement["period_start"], "period_end": statement["period_end"]},
+        {
+            "period_type": statement["period_type"],
+            "period_start": statement["period_start"],
+            "period_end": statement["period_end"],
+        },
     )
     filename = f"spinr-statement-{statement['period_type']}-{statement['period_start']}-{driver_id[:8]}.pdf"
     return Response(

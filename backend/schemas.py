@@ -670,10 +670,28 @@ class AppSettings(BaseModel):
     # True (Phase 2 only, T12/T13 — not yet built) would route the dispatch
     # claim/offer/insurance-period write batch through
     # backend/repositories/dispatch_pool.py's direct AsyncConnectionPool
-    # instead of supabase-py. Flipping this off is the entire rollback
-    # procedure once Phase 2 ships: no redeploy, ≤60s propagation via this
-    # model's settings_loader cache. Also requires DISPATCH_POOL_DSN
+    # instead of supabase-py. Also requires DISPATCH_POOL_DSN
     # (backend/core/config.py) to be set — see that field's comment.
+    #
+    # THE SWITCH IS NOT SYMMETRIC — read this before relying on it:
+    #
+    #   OFF -> ON  requires a restart. core/lifespan.init_database reads this
+    #     flag exactly once, at startup, and only then opens the pool. Turning
+    #     it on against a running process changes nothing: there is no pool to
+    #     use, and no watcher re-reads the flag.
+    #   ON -> OFF  is the fast path, and only because Phase 2's call sites are
+    #     REQUIRED to re-read this flag per dispatch attempt (via
+    #     settings_loader.get_app_settings, ≤60s cache TTL) and fall back to
+    #     the PostgREST claim path when it is false. That re-read is what makes
+    #     rollback a no-redeploy operation; the pool itself stays open until
+    #     the next restart, which is harmless (an idle pool holds min_size
+    #     connections and serves nobody).
+    #
+    # So: rolling BACK is ≤60s and needs no deploy. Rolling FORWARD is a
+    # deploy/restart. If T12/T13 ever stops re-reading the flag per attempt
+    # and caches "use the direct pool" at startup instead, this stops being a
+    # rollback switch at all and becomes a boot-time setting — do not make
+    # that change without replacing the rollback procedure documented here.
     dispatch_direct_pool_enabled: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

@@ -9,7 +9,7 @@ flags as "self-disclosed as never run" in
 `docs/change-log/2026-08-27-p2-dispatch-loop-optimization.md`.
 **Review-only.** No behavior changes were made to `matching.py` or
 `driver_repo.py`. This document plus new backlog entries in
-`ACTION_ITEMS.md` (C51–C53) are the sole deliverables.
+`ACTION_ITEMS.md` (C54–C56) are the sole deliverables.
 
 ## Files reviewed
 
@@ -78,7 +78,7 @@ claim. Verdict: the comment's claim is accurate.
   regression suite in `test_dispatch_db_errors.py`, which pins exactly this
   behavior for the sibling `match_and_claim_driver` helper). What is *not*
   covered is what happens to **already-claimed** drivers from earlier loop
-  iterations when this exception fires mid-loop — see Finding C51 below.
+  iterations when this exception fires mid-loop — see Finding C54 below.
 
 ### 3. `record_period_transition`'s swallow-on-failure — **an accepted, documented exception to the no-swallow rule; fine as designed**
 
@@ -109,7 +109,7 @@ verify is *actually wired* in the live Grafana/Sentry alert config (only
 `spinr_dispatch_offer_to_accept_duration_ms` and a payment-settlement-failure
 rule were found in `metrics-agent/grafana/alert-rules.yaml`; no
 `spinr_insurance_period_write_failed_total` rule exists there). See Finding
-C52.
+C55.
 
 ### 4. Insurance Period 2 timing / batch-offer model correctness — **fine, matches the AGENTS.md rule as adapted for batch-offer**
 
@@ -181,8 +181,8 @@ no offer"), but its actual query is generic: any driver that is
 older than `RECLAIM_THRESHOLD_SECONDS` (90s), with **no pending offer and no
 active ride**, gets released. This condition is agnostic to *why* the
 driver never got an offer — it equally covers the mid-claim-loop exception
-scenario in Finding C51 below, not just the crash/restart case it was
-originally written for. See C51 for why this is a partial mitigation
+scenario in Finding C54 below, not just the crash/restart case it was
+originally written for. See C54 for why this is a partial mitigation
 (recovery within ~90–150s, not immediate) rather than a full substitute for
 symmetric handling in the claim loop itself.
 
@@ -190,9 +190,9 @@ symmetric handling in the claim loop itself.
 
 | # | Finding | Severity | Filed as |
 |---|---|---|---|
-| 1 | Claim-loop mid-iteration exception leaves earlier already-claimed drivers unreleased until the 90–150s orphan-claim reaper cycle, unlike the symmetric release-on-failure the `ride_offers` insert path already has | Moderate | `ACTION_ITEMS.md` C51 |
-| 2 | No automated Period-2/general insurance-period reconciler exists (only Period-3 has one, `stale_p3_closer.py`); the write-failure alert path described in the runbook has no confirmed live Grafana/Sentry rule in `metrics-agent/grafana/alert-rules.yaml` | Minor | `ACTION_ITEMS.md` C52 |
-| 3 | `claim_driver_atomic`'s `run_sync` call for what is functionally a write uses the default `"read"` retry policy (3 attempts w/ backoff) rather than an explicit `"write"`/`"idempotent_write"` policy; currently safe by construction (a retried-after-success call just returns `None`, which the caller correctly treats as "not claimed" and does not double-claim) but undocumented and inconsistent with this file's own read/write retry-policy convention | Informational | `ACTION_ITEMS.md` C53 |
+| 1 | Claim-loop mid-iteration exception leaves earlier already-claimed drivers unreleased until the 90–150s orphan-claim reaper cycle, unlike the symmetric release-on-failure the `ride_offers` insert path already has | Moderate | `ACTION_ITEMS.md` C54 |
+| 2 | No automated Period-2/general insurance-period reconciler exists (only Period-3 has one, `stale_p3_closer.py`); the write-failure alert path described in the runbook has no confirmed live Grafana/Sentry rule in `metrics-agent/grafana/alert-rules.yaml` | Minor | `ACTION_ITEMS.md` C55 |
+| 3 | `claim_driver_atomic`'s `run_sync` call for what is functionally a write uses the default `"read"` retry policy (3 attempts w/ backoff) rather than an explicit `"write"`/`"idempotent_write"` policy; currently safe by construction (a retried-after-success call just returns `None`, which the caller correctly treats as "not claimed" and does not double-claim) but undocumented and inconsistent with this file's own read/write retry-policy convention | Informational | `ACTION_ITEMS.md` C56 |
 
 No `critical` findings were filed. Every gap identified above already has
 a partial or full runtime mitigation that this review could point to in the

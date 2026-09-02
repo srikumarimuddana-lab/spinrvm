@@ -18,6 +18,16 @@ import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
+// held_for_review is the pre-charge GPS-spoof gate (backend/routes/rides/
+// payments.py::process_payment) — distinct from a normal not-yet-charged
+// "Pending" so the rider isn't left thinking a retry on their end would help.
+const paymentStatusLabel = (status: string | undefined | null): string => {
+  if (status === 'paid') return 'Paid';
+  if (status === 'failed') return 'Failed';
+  if (status === 'held_for_review') return 'Under review';
+  return 'Pending';
+};
+
 const _num = (n: any): number => {
   const v = typeof n === 'number' ? n : parseFloat(String(n ?? 0));
   return Number.isFinite(v) ? v : 0;
@@ -467,7 +477,7 @@ export default function RideDetailsScreen() {
                       ? 'Company Account'
                       : ride.card_last4 ? `Card •••• ${ride.card_last4}` : 'Card'}
                   {' · '}
-                  {ride.payment_status === 'paid' ? 'Paid' : ride.payment_status === 'failed' ? 'Failed' : 'Pending'}
+                  {paymentStatusLabel(ride.payment_status)}
                 </Text>
               </View>
             </View>
@@ -527,7 +537,7 @@ export default function RideDetailsScreen() {
                       ? 'Company Account'
                       : ride.card_last4 ? `Card •••• ${ride.card_last4}` : 'Card'}
                   {' · '}
-                  {ride.payment_status === 'paid' ? 'Paid' : ride.payment_status === 'failed' ? 'Failed' : 'Pending'}
+                  {paymentStatusLabel(ride.payment_status)}
                 </Text>
               </View>
             </View>

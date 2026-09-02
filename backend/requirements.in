@@ -18,6 +18,15 @@ realtime>=0.9.0
 # Not needed by the FastAPI server itself (which uses supabase-py). Required
 # when running migrations outside of Docker: pip install -r requirements.txt.
 psycopg2-binary>=2.9.9
+# psycopg v3 (binary + pool extras) — C50 Phase 1 (docs/audit/2026-09-02-pgbouncer-
+# direct-pool-migration-plan.md, decision D1). Backs the new, currently-unused
+# backend/repositories/dispatch_pool.py AsyncConnectionPool; NOT asyncpg, so this
+# stays one driver family with run_migrations.py / verify_restore.py /
+# audit_migration_drift.py, which already prefer psycopg v3 and fall back to
+# psycopg2. Installing this flips those three scripts from their psycopg2
+# fallback branch onto their v3 branch — see the T8 Change Impact Log entry.
+# Flag-gated (dispatch_direct_pool_enabled, default off) and dark until T12/T13.
+psycopg[binary,pool]>=3.2.0
 
 # Authentication
 firebase-admin>=7.5.0

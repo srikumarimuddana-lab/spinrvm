@@ -1,5 +1,5 @@
 """C50 Phase 2 (T14) — real-Postgres tests for the ``dispatch_claim_batch``
-RPC (migration 401), run against the actual throwaway ``postgres:15``
+RPC (migration 402), run against the actual throwaway ``postgres:15``
 container/harness Phase 1's T11 built (``backend/tests/direct_pool/
 conftest.py``).
 
@@ -7,7 +7,7 @@ Companion to ``backend/tests/test_dispatch_claim_parity.py`` (mocked,
 Python-side parity). This file is the one that actually calls the SQL
 function and inspects real rows -- it is the ground truth for:
 
-  * the claim/skip/release logic (migration 401's translation of
+  * the claim/skip/release logic (migration 402's translation of
     driver_repo.py's claim_driver_atomic + matching.py's revalidation),
   * the ride_offers rows it inserts,
   * the driver_insurance_periods rows record_insurance_period_transition

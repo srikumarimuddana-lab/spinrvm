@@ -11,7 +11,7 @@ Production deployments must supply REDIS_URL.
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,75 @@ def _local_keys_matching(pattern: str) -> list:
     import fnmatch
 
     return [k for k in list(_local.keys()) if fnmatch.fnmatch(k, pattern)]
+
+
+# ── In-process fallback store: hashes ──────────────────────────────────────────
+# Separate from ``_local`` (which holds plain strings) since a HASH and a
+# STRING at the same key name are different Redis types — keeping them apart
+# avoids a hash write silently clobbering (or being clobbered by) a string
+# write to a key that happens to collide.
+# Each entry: { 'fields': dict[str, str], 'expires_at': float | None }
+_local_hashes: dict = {}
+
+
+def _local_hash_is_expired(key: str) -> bool:
+    entry = _local_hashes.get(key)
+    if not entry:
+        return True
+    exp = entry.get("expires_at")
+    return exp is not None and time.monotonic() > exp
+
+
+def _local_hgetall(key: str) -> dict:
+    if _local_hash_is_expired(key):
+        _local_hashes.pop(key, None)
+        return {}
+    return dict(_local_hashes[key]["fields"])
+
+
+def _local_hset(key: str, mapping: dict, ttl: Optional[int] = None) -> None:
+    if _local_hash_is_expired(key):
+        _local_hashes.pop(key, None)
+    entry = _local_hashes.setdefault(key, {"fields": {}, "expires_at": None})
+    entry["fields"].update({str(k): str(v) for k, v in mapping.items()})
+    if ttl:
+        entry["expires_at"] = time.monotonic() + ttl
+
+
+# ── In-process fallback store: sorted sets ─────────────────────────────────────
+# Each entry: { 'members': dict[str, float], 'expires_at': float | None }
+_local_zsets: dict = {}
+
+
+def _local_zset_is_expired(key: str) -> bool:
+    entry = _local_zsets.get(key)
+    if not entry:
+        return True
+    exp = entry.get("expires_at")
+    return exp is not None and time.monotonic() > exp
+
+
+def _local_zadd(key: str, mapping: dict, ttl: Optional[int] = None) -> None:
+    if _local_zset_is_expired(key):
+        _local_zsets.pop(key, None)
+    entry = _local_zsets.setdefault(key, {"members": {}, "expires_at": None})
+    entry["members"].update({str(member): float(score) for member, score in mapping.items()})
+    if ttl:
+        entry["expires_at"] = time.monotonic() + ttl
+
+
+def _local_zrem(key: str, member: str) -> None:
+    if _local_zset_is_expired(key):
+        _local_zsets.pop(key, None)
+        return
+    _local_zsets[key]["members"].pop(str(member), None)
+
+
+def _local_zrangebyscore(key: str, min_score: float) -> set:
+    if _local_zset_is_expired(key):
+        _local_zsets.pop(key, None)
+        return set()
+    return {m for m, score in _local_zsets[key]["members"].items() if score >= min_score}
 
 
 # ── Redis client (lazy init) ──────────────────────────────────────────────────
@@ -245,6 +314,119 @@ async def redis_delete_pattern(pattern: str) -> int:
     for k in keys:
         _local_delete(k)
     return len(keys)
+
+
+async def redis_hgetall(key: str) -> dict:
+    """HGETALL — full field/value mapping for a hash key. ``{}`` on a miss."""
+    r = await _get_redis()
+    if r is not None:
+        try:
+            return await r.hgetall(key) or {}
+        except Exception as e:
+            logger.error(f"[REDIS] redis_hgetall({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
+    return _local_hgetall(key)
+
+
+async def redis_hset(key: str, mapping: dict, ttl: Optional[int] = None) -> None:
+    """HSET key field value [field value ...] — merges ``mapping`` into the
+    hash (existing fields not present in ``mapping`` are left untouched),
+    then EXPIREs the whole key when ``ttl`` is given."""
+    r = await _get_redis()
+    if r is not None:
+        try:
+            await r.hset(key, mapping=mapping)
+            if ttl:
+                await r.expire(key, ttl)
+            return
+        except Exception as e:
+            logger.error(f"[REDIS] redis_hset({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
+    _local_hset(key, mapping, ttl)
+
+
+async def redis_zadd(key: str, mapping: dict, ttl: Optional[int] = None) -> None:
+    """ZADD key score member [score member ...] — ``mapping`` is
+    ``{member: score}``, then EXPIREs the whole key when ``ttl`` is given."""
+    r = await _get_redis()
+    if r is not None:
+        try:
+            await r.zadd(key, mapping)
+            if ttl:
+                await r.expire(key, ttl)
+            return
+        except Exception as e:
+            logger.error(f"[REDIS] redis_zadd({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
+    _local_zadd(key, mapping, ttl)
+
+
+async def redis_zrem(key: str, member: str) -> None:
+    """ZREM key member — remove one member from a sorted set."""
+    r = await _get_redis()
+    if r is not None:
+        try:
+            await r.zrem(key, member)
+            return
+        except Exception as e:
+            logger.error(f"[REDIS] redis_zrem({key!r}, {member!r}) failed — Redis configured but unavailable: {e}")
+            raise
+    _local_zrem(key, member)
+
+
+async def redis_zrangebyscore_many(keys: list[str], min_score: float) -> set:
+    """Union of ZRANGEBYSCORE(key, min_score, +inf) across multiple sorted-set
+    keys, in one Redis round-trip via a pipeline. Empty input → set().
+
+    Used by the H3 dispatch index to OR together every candidate cell's
+    zset (drivers seen in the last INDEX_TTL_SECONDS) without N sequential
+    round-trips per query.
+    """
+    if not keys:
+        return set()
+    r = await _get_redis()
+    if r is not None:
+        try:
+            pipe = r.pipeline(transaction=False)
+            for key in keys:
+                pipe.zrangebyscore(key, min_score, "+inf")
+            results = await pipe.execute()
+        except Exception as e:
+            logger.error(
+                f"[REDIS] redis_zrangebyscore_many({len(keys)} keys) failed — Redis configured but unavailable: {e}"
+            )
+            raise
+        members: set = set()
+        for result in results:
+            members.update(result or [])
+        return members
+    members = set()
+    for key in keys:
+        members.update(_local_zrangebyscore(key, min_score))
+    return members
+
+
+async def redis_eval(script: str, numkeys: int, *keys_and_args) -> Any:
+    """EVAL script numkeys key [key ...] arg [arg ...] — run a Lua script.
+
+    Raises ``RuntimeError`` when Redis is unconfigured (``REDIS_URL`` unset):
+    there is no in-process Lua interpreter to fall back to, so this is the
+    deliberate "not supported here" signal — callers (e.g.
+    ``utils/h3_location_index.py``'s ``upsert_driver``) catch it and run an
+    equivalent pure-Python path instead. Any other error (Redis configured
+    but the EVAL itself failed) raises the real exception, matching every
+    other function in this module.
+    """
+    r = await _get_redis()
+    if r is None:
+        raise RuntimeError("redis_eval requires REDIS_URL to be set — no local Lua interpreter")
+    try:
+        return await r.eval(script, numkeys, *keys_and_args)
+    except RuntimeError:
+        raise
+    except Exception as e:
+        logger.error(f"[REDIS] redis_eval failed — Redis configured but unavailable: {e}")
+        raise
 
 
 # ── Observability helpers ─────────────────────────────────────────────────────

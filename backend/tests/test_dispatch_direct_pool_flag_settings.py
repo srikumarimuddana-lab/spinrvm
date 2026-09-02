@@ -6,7 +6,7 @@ switch for the PostgREST -> direct-pool dispatch migration
 the same wiring as the tracking-overhaul flags in
 test_tracking_rollout_flags_settings.py: a plain boolean on
 SettingsUpdateRequest, no credential masking, no super-admin gate, backed by
-migration 400's column (see test_settings_column_parity.py for why a column
+migration 401's column (see test_settings_column_parity.py for why a column
 is required, not optional, for any field accepted by the API).
 """
 
@@ -109,7 +109,7 @@ def test_flag_is_not_masked_as_a_credential():
     assert _FLAG not in _SUPER_ADMIN_ONLY_FIELDS
 
 
-def test_migration_400_adds_the_column_with_false_default():
+def test_migration_401_adds_the_column_with_false_default():
     """See test_settings_column_parity.py's module docstring: any field
     SettingsUpdateRequest accepts without a matching `settings` column 500s
     the WHOLE save (PGRST204) on first use, not just this field."""
@@ -117,10 +117,10 @@ def test_migration_400_adds_the_column_with_false_default():
     from pathlib import Path
 
     sql = (
-        Path(__file__).resolve().parents[1] / "migrations" / "400_settings_dispatch_direct_pool_enabled.sql"
+        Path(__file__).resolve().parents[1] / "migrations" / "401_settings_dispatch_direct_pool_enabled.sql"
     ).read_text(encoding="utf-8")
     match = re.search(rf"{_FLAG}\s+BOOLEAN NOT NULL DEFAULT (TRUE|FALSE)", sql, re.IGNORECASE)
-    assert match, f"{_FLAG} not declared with an explicit boolean default in migration 400"
+    assert match, f"{_FLAG} not declared with an explicit boolean default in migration 401"
     assert match.group(1).upper() == "FALSE", (
         f"{_FLAG} must default FALSE -- applying the migration must not enable an unbuilt (Phase 2) code path."
     )

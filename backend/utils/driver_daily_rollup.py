@@ -50,6 +50,17 @@ INTERVAL_SECONDS = 1800  # 30 min — keeps closed-day stats fresh for admin vie
 _LOCK_KEY = "spinr:lock:driver_daily_rollup"
 _LOCK_TTL_SECONDS = 1790
 _ROW_LIMIT = 10000
+# Cap on concurrent per-driver work (GPS RPC + upsert) in one rollup_driver_day
+# call. The RPC + write are inherently per-driver (no batch SQL function or
+# bulk-upsert-with-selective-created_at helper exists without new shared
+# infra), so this loop used to run them one at a time — for a fleet of
+# hundreds of active drivers that's hundreds of sequential round-trip-sets
+# every 30 minutes, on every replica, the same N+1 shape that made the
+# "Weekly Payouts" admin tab hang (see docs/change-log/2026-09-02-*). Bounded
+# concurrency instead of unbounded (asyncio.gather with no limit) — this
+# runs against the live DB connection pool on every replica simultaneously,
+# so an unbounded fan-out risks exhausting it.
+_ROLLUP_CONCURRENCY = 20
 # Regina hour after which the nightly 7-day sweep may run (02:00 local —
 # quiet hours; catches late GPS tails and any missed intermediate days).
 _SWEEP_AFTER_LOCAL_HOUR = 2
@@ -147,70 +158,110 @@ async def rollup_driver_day(stat_date: date_cls) -> Dict[str, Any]:
 
     all_driver_ids = await _drivers_active_in_window(win_start_iso, win_end_iso)
     all_driver_ids |= set(rides_by_driver.keys())
+    driver_ids_list = list(all_driver_ids)
 
-    created = updated = failed = 0
-    for driver_id in all_driver_ids:
+    # Batch the two per-driver READ lookups the loop below used to make one
+    # call each for (existence check + driver->service_area) — see
+    # _ROLLUP_CONCURRENCY's comment. The GPS RPC and the final insert/update
+    # stay per-driver (no batch RPC or bulk-selective-upsert helper exists),
+    # but run concurrently instead of one at a time.
+    existing_ids: set[str] = set()
+    service_area_by_id: Dict[str, Optional[str]] = {}
+    if driver_ids_list:
         try:
-            gps = await _phase_stats(driver_id, win_start_iso, win_end_iso)
-        except Exception:
-            logger.error(
-                "daily_rollup: compute_driver_phase_distances failed driver=%s date=%s",
-                driver_id,
-                stat_date,
-                exc_info=True,
+            existing_rows = await db_supabase.get_rows_batched_in(
+                "driver_daily_stats",
+                "driver_id",
+                driver_ids_list,
+                {"stat_date": stat_date.isoformat()},
+                columns="driver_id",
+                limit=_ROW_LIMIT,
             )
-            failed += 1
-            continue
-
-        rides = rides_by_driver.get(driver_id, [])
-        rides_completed = sum(1 for r in rides if r.get("status") == "completed")
-        rides_cancelled = sum(1 for r in rides if r.get("status") == "cancelled")
-        total_earnings = float(
-            sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides if r.get("status") == "completed")
-        )
-        total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in rides if r.get("status") == "completed"))
-
-        drv = await db_supabase.get_driver_by_id(driver_id)
-        idle_km = float(gps.get("idle_km") or 0)
-        navigating_km = float(gps.get("navigating_km") or 0)
-        trip_km = float(gps.get("trip_km") or 0)
-
-        stat_row = {
-            "id": f"{driver_id}_{stat_date.isoformat()}",
-            "driver_id": driver_id,
-            "stat_date": stat_date.isoformat(),
-            "day_tz": "regina",
-            "service_area_id": drv.get("service_area_id") if drv else None,
-            "online_minutes": int(gps.get("online_minutes") or 0),
-            "idle_km": round(idle_km, 2),
-            "navigating_km": round(navigating_km, 2),
-            "trip_km": round(trip_km, 2),
-            "total_km": round(idle_km + navigating_km + trip_km, 2),
-            "idle_seconds": int(gps.get("idle_seconds") or 0),
-            "navigating_seconds": int(gps.get("navigating_seconds") or 0),
-            "trip_seconds": int(gps.get("trip_seconds") or 0),
-            "first_online_at": gps.get("first_online_at"),
-            "last_online_at": gps.get("last_online_at"),
-            "rides_completed": rides_completed,
-            "rides_cancelled": rides_cancelled,
-            "rides_declined": declines_by_driver.get(driver_id, 0),
-            "total_earnings": round(total_earnings, 2),
-            "total_tips": round(total_tips, 2),
-            "updated_at": now_iso,
-        }
-
-        try:
-            existing = await db_supabase.get_rows("driver_daily_stats", {"id": stat_row["id"]}, limit=1)
-            if existing:
-                await db_supabase.update_one("driver_daily_stats", {"id": stat_row["id"]}, stat_row)
-                updated += 1
-            else:
-                stat_row["created_at"] = now_iso
-                await db_supabase.insert_one("driver_daily_stats", stat_row)
-                created += 1
+            existing_ids = {r["driver_id"] for r in existing_rows if r.get("driver_id")}
         except Exception:
-            logger.error("daily_rollup: upsert failed driver=%s date=%s", driver_id, stat_date, exc_info=True)
-            failed += 1
+            logger.error("daily_rollup: batched existence lookup failed date=%s", stat_date, exc_info=True)
+        try:
+            driver_rows = await db_supabase.get_rows_batched_in(
+                "drivers",
+                "id",
+                driver_ids_list,
+                {"deleted_at": {"$notnull": False}},  # matches get_driver_by_id's soft-delete exclusion
+                columns="id,service_area_id",
+                limit=_ROW_LIMIT,
+            )
+            service_area_by_id = {d["id"]: d.get("service_area_id") for d in driver_rows if d.get("id")}
+        except Exception:
+            logger.error("daily_rollup: batched driver lookup failed date=%s", stat_date, exc_info=True)
+
+    counts = {"created": 0, "updated": 0, "failed": 0}
+    _slots = asyncio.Semaphore(_ROLLUP_CONCURRENCY)
+
+    async def _process_driver(driver_id: str) -> None:
+        async with _slots:
+            try:
+                gps = await _phase_stats(driver_id, win_start_iso, win_end_iso)
+            except Exception:
+                logger.error(
+                    "daily_rollup: compute_driver_phase_distances failed driver=%s date=%s",
+                    driver_id,
+                    stat_date,
+                    exc_info=True,
+                )
+                counts["failed"] += 1
+                return
+
+            rides = rides_by_driver.get(driver_id, [])
+            rides_completed = sum(1 for r in rides if r.get("status") == "completed")
+            rides_cancelled = sum(1 for r in rides if r.get("status") == "cancelled")
+            total_earnings = float(
+                sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides if r.get("status") == "completed")
+            )
+            total_tips = float(
+                sum(Decimal(str(r.get("tip_amount") or 0)) for r in rides if r.get("status") == "completed")
+            )
+
+            idle_km = float(gps.get("idle_km") or 0)
+            navigating_km = float(gps.get("navigating_km") or 0)
+            trip_km = float(gps.get("trip_km") or 0)
+
+            stat_row = {
+                "id": f"{driver_id}_{stat_date.isoformat()}",
+                "driver_id": driver_id,
+                "stat_date": stat_date.isoformat(),
+                "day_tz": "regina",
+                "service_area_id": service_area_by_id.get(driver_id),
+                "online_minutes": int(gps.get("online_minutes") or 0),
+                "idle_km": round(idle_km, 2),
+                "navigating_km": round(navigating_km, 2),
+                "trip_km": round(trip_km, 2),
+                "total_km": round(idle_km + navigating_km + trip_km, 2),
+                "idle_seconds": int(gps.get("idle_seconds") or 0),
+                "navigating_seconds": int(gps.get("navigating_seconds") or 0),
+                "trip_seconds": int(gps.get("trip_seconds") or 0),
+                "first_online_at": gps.get("first_online_at"),
+                "last_online_at": gps.get("last_online_at"),
+                "rides_completed": rides_completed,
+                "rides_cancelled": rides_cancelled,
+                "rides_declined": declines_by_driver.get(driver_id, 0),
+                "total_earnings": round(total_earnings, 2),
+                "total_tips": round(total_tips, 2),
+                "updated_at": now_iso,
+            }
+
+            try:
+                if driver_id in existing_ids:
+                    await db_supabase.update_one("driver_daily_stats", {"id": stat_row["id"]}, stat_row)
+                    counts["updated"] += 1
+                else:
+                    stat_row["created_at"] = now_iso
+                    await db_supabase.insert_one("driver_daily_stats", stat_row)
+                    counts["created"] += 1
+            except Exception:
+                logger.error("daily_rollup: upsert failed driver=%s date=%s", driver_id, stat_date, exc_info=True)
+                counts["failed"] += 1
+
+    await asyncio.gather(*(_process_driver(d) for d in driver_ids_list))
+    created, updated, failed = counts["created"], counts["updated"], counts["failed"]
 
     result = {
         "stat_date": stat_date.isoformat(),

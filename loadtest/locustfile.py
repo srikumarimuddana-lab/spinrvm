@@ -52,6 +52,13 @@ except ImportError:  # harness still runs rider-only without it
     websocket = None
 
 BASE_OTP = os.environ.get("LOADTEST_OTP", "1234")
+# T16 staging-run fix: the previous default "+1****55" contains literal
+# "*" characters and is not valid E.164 — SendOTPRequest/VerifyOTPRequest
+# (schemas.py) both pattern-validate phone as ^\+1\d{10}$ (exactly 10
+# digits after +1), so every bot login would 422 immediately. "306555" is
+# a real Saskatoon area code (306) + the NANP-reserved-for-fiction "555"
+# exchange, so the synthetic numbers are obviously fake and can never
+# collide with a real subscriber number. 6 digits + a 4-digit suffix = 10.
 PHONE_PREFIX = os.environ.get("LOADTEST_PHONE_PREFIX", "+1306555")
 CENTER_LAT = float(os.environ.get("LOADTEST_CENTER_LAT", "52.1332"))
 CENTER_LNG = float(os.environ.get("LOADTEST_CENTER_LNG", "-106.6700"))
@@ -83,12 +90,20 @@ def _login(client, phone: str) -> tuple[str, dict]:
     client.post(f"{API}/auth/send-otp", json={"phone": phone}, name="auth:send-otp")
     r = client.post(
         f"{API}/auth/verify-otp",
-        json={"phone": phone, "otp": BASE_OTP},
+        # T16 staging-run fix: the live VerifyOTPRequest schema (schemas.py)
+        # names this field "code", not "otp", and consent_accepted=True is
+        # required for a first-time signup (PIPEDA explicit-consent gate,
+        # routes/auth.py ~:1177) or the request 400s. Discovered when this
+        # harness was finally run for real (never-executed until T16) —
+        # see docs/audit/2026-09-02-t16-staging-load-test-results.md.
+        json={"phone": phone, "code": BASE_OTP, "consent_accepted": True},
         name="auth:verify-otp",
     )
     r.raise_for_status()
     body = r.json()
-    return body["access_token"], body.get("user") or {}
+    # AuthResponse (schemas.py) names the access token "token", not
+    # "access_token" — same never-executed-harness mismatch as above.
+    return body["token"], body.get("user") or {}
 
 
 class RiderBot(HttpUser):
@@ -128,7 +143,14 @@ class RiderBot(HttpUser):
         book = self.client.post(
             f"{API}/rides",
             json={
-                "vehicle_type_id": choice.get("vehicle_type_id") or choice.get("id"),
+                # T16 staging-run fix: /rides/estimate nests the vehicle type
+                # under choice["vehicle_type"]["id"] (estimates.py:613/629),
+                # not a top-level "vehicle_type_id"/"id" field — the previous
+                # lookup always evaluated to None, which is why every
+                # rides:create 422'd with "vehicle_type_id: Input should be
+                # a valid string" the first time this harness was actually
+                # run. See docs/audit/2026-09-02-t16-staging-load-test-results.md.
+                "vehicle_type_id": (choice.get("vehicle_type") or {}).get("id"),
                 "pickup_address": "Loadtest pickup",
                 "pickup_lat": pickup[0],
                 "pickup_lng": pickup[1],

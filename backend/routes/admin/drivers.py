@@ -2490,15 +2490,36 @@ async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> d
         limit=200,
     )
 
+    # Batch-resolve referee driver rows and their completed-ride counts instead
+    # of 2 round trips per referee (was up to 400 sequential round trips for a
+    # 200-referee driver — same N+1 shape as find_blocked_drivers/rollup, fixed
+    # the same way: get_rows_batched_in once, group in memory).
+    referred_user_ids = [u["id"] for u in referred_users if u.get("id")]
+    ref_drivers = (
+        await db_supabase.get_rows_batched_in("drivers", "user_id", referred_user_ids, columns="id,user_id")
+        if referred_user_ids
+        else []
+    )
+    ref_drv_by_user_id = {d["user_id"]: d for d in ref_drivers if d.get("user_id")}
+    ref_driver_ids = [d["id"] for d in ref_drivers if d.get("id")]
+    completed_rides = (
+        await db_supabase.get_rows_batched_in(
+            "rides", "driver_id", ref_driver_ids, {"status": "completed"}, columns="driver_id"
+        )
+        if ref_driver_ids
+        else []
+    )
+    completed_counts: dict[str, int] = {}
+    for r in completed_rides:
+        did = r.get("driver_id")
+        if did:
+            completed_counts[did] = completed_counts.get(did, 0) + 1
+
     referees: list[dict] = []
     qualified = 0
     for u in referred_users:
-        ref_drv = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": u["id"]}, limit=1)
-        )
-        completed = 0
-        if ref_drv:
-            completed = await db_supabase.count_documents("rides", {"driver_id": ref_drv["id"], "status": "completed"})
+        ref_drv = ref_drv_by_user_id.get(u["id"])
+        completed = completed_counts.get(ref_drv["id"], 0) if ref_drv else 0
         is_qualified = bool(ref_drv) and completed >= rides_required
         if is_qualified:
             qualified += 1

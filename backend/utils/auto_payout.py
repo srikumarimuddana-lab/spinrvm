@@ -221,6 +221,28 @@ _SKIP_NOTIFICATIONS: dict[str, tuple[str, str]] = {
 # work-list, not an unbounded blob; find_blocked_drivers() is the full view.
 _MAX_SKIP_IDS_PER_REASON = 100
 
+# Cap on how many per-driver error strings go into the batch row's free-text
+# error_summary. Past this, entries are dropped silently unless the count is
+# stated explicitly — see _error_summary_text.
+_MAX_ERROR_SUMMARY_ENTRIES = 50
+
+
+def _error_summary_text(errors: list[str]) -> str | None:
+    """Join errors[] for storage, stating the truncation instead of hiding it.
+
+    A bad week (e.g. a Stripe outage mid-run) can produce more entries than
+    the cap; silently dropping the rest would leave ops reading a summary
+    that looks complete when it isn't.
+    """
+    if not errors:
+        return None
+    shown = errors[:_MAX_ERROR_SUMMARY_ENTRIES]
+    text = "; ".join(shown)
+    hidden = len(errors) - len(shown)
+    if hidden > 0:
+        text += f" (+{hidden} more)"
+    return text
+
 
 def _eligibility_skip_reason(driver: dict) -> str | None:
     """CRA + destination-account gates, mirroring the driver-initiated paths.
@@ -858,7 +880,7 @@ async def run_weekly_auto_payout() -> dict:
                 "drivers_paid": drivers_paid,
                 "drivers_failed": drivers_failed,
                 "total_amount": total_amount,  # Decimal — serialized downstream
-                "error_summary": "; ".join(errors[:50]) if errors else None,
+                "error_summary": _error_summary_text(errors),
                 # counts = everyone skipped; drivers_with_balance = the ones
                 # with money actually held up, i.e. the ops follow-up list.
                 "skipped_summary": ({"counts": skipped, "drivers_with_balance": skipped_drivers} if skipped else None),

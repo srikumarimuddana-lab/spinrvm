@@ -953,3 +953,29 @@ class TestStandardCashoutDisabled:
             await request_payout(current_user={"id": "user_001"})
         assert exc_info.value.status_code == 410
         assert len(exc_info.value.detail) <= 140  # driver-app toast clamps at 140 chars
+
+
+# ── error_summary truncation marker ──────────────────────────────────
+
+
+class TestErrorSummaryText:
+    def test_empty_errors_is_none(self):
+        from backend.utils.auto_payout import _error_summary_text
+
+        assert _error_summary_text([]) is None
+
+    def test_under_cap_joins_without_marker(self):
+        from backend.utils.auto_payout import _error_summary_text
+
+        errors = [f"driver_{i}: reserve_error" for i in range(5)]
+        text = _error_summary_text(errors)
+        assert text == "; ".join(errors)
+        assert "more" not in text
+
+    def test_over_cap_states_hidden_count(self):
+        from backend.utils.auto_payout import _MAX_ERROR_SUMMARY_ENTRIES, _error_summary_text
+
+        errors = [f"driver_{i}: reserve_error" for i in range(_MAX_ERROR_SUMMARY_ENTRIES + 7)]
+        text = _error_summary_text(errors)
+        assert text.endswith("(+7 more)")
+        assert "; ".join(errors[:_MAX_ERROR_SUMMARY_ENTRIES]) in text

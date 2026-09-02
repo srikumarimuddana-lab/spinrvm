@@ -153,6 +153,7 @@ Task format follows `docs/LAUNCH_GATE_IMPLEMENTATION_PLAN.md`: **Files · Effort
 **T10 — Feature flag.**
 - **Files:** `backend/schemas.py` (`AppSettings`, add `dispatch_direct_pool_enabled: bool = False` with a comment naming it the rollback switch), `backend/routes/admin/settings.py` (admin update model), `docs/ENVIRONMENT_VARIABLES.md` (`app_settings` table row).
 - **Effort:** S · **Depends on:** — · **Verify:** admin PUT round-trip test in the existing settings test module; default off. · **Rollback:** it *is* the rollback — flip off, ≤ 60 s propagation, no redeploy.
+- **Asymmetry — binds T12/T13:** `lifespan.init_database` reads this flag once, at startup (T9), so the switch is not symmetric. Flipping it **on** against a running process opens no pool; enabling is a restart. Flipping it **off** closes no pool either — the ≤ 60 s no-redeploy rollback above holds *only if* the T12/T13 claim-path call sites re-read the flag per dispatch attempt (`settings_loader.get_app_settings`) and fall back to PostgREST when false. A T12/T13 that resolves "direct pool vs PostgREST" once at startup would silently downgrade this rollback to a redeploy. Treat the per-attempt re-read as a requirement of T13, not an implementation detail.
 
 **T11 — Real-Postgres test harness + CI step.**
 - **Files:** `backend/tests/direct_pool/conftest.py` (new; copy the `tests/rls/conftest.py` pattern — `TEST_DATABASE_URL`, throwaway `CREATE DATABASE`, self-skip), `.github/workflows/ci.yml` (`backend-test` job).

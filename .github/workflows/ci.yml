@@ -737,19 +737,19 @@ jobs:
         working-directory: rider-app
         run: yarn install --frozen-lockfile
 
-      # --profile production pins these to eas.json's store-distribution
-      # profile explicitly, matching every other EAS-build workflow in this
-      # repo (eas-native-build.yml, deploy-driver-play-testing.yml). Previously
-      # unset — pre-change default resolution under --non-interactive was not
-      # verified against this repo's real eas build:list history before this
-      # change; confirm actual shipped profile history if that matters.
+      # No --profile flag here (deliberately held, not an oversight): the
+      # question of what profile a main-branch [build] trigger should
+      # actually produce — this job has never pinned one explicitly — is
+      # captured for discussion, see ACTION_ITEMS.md B25 area / this PR's
+      # discussion. Do not add --profile production without that decision
+      # being made first.
       - name: Build iOS (Rider)
         working-directory: rider-app
-        run: eas build --platform ios --profile production --non-interactive
+        run: eas build --platform ios --non-interactive
 
       - name: Build Android (Rider)
         working-directory: rider-app
-        run: eas build --platform android --profile production --non-interactive
+        run: eas build --platform android --non-interactive
 
       # Driver-app was previously missing here even though this job's `needs`
       # already required driver-app-test to pass — gating on a test job whose
@@ -761,11 +761,11 @@ jobs:
 
       - name: Build iOS (Driver)
         working-directory: driver-app
-        run: eas build --platform ios --profile production --non-interactive
+        run: eas build --platform ios --non-interactive
 
       - name: Build Android (Driver)
         working-directory: driver-app
-        run: eas build --platform android --profile production --non-interactive
+        run: eas build --platform android --non-interactive
 
   # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:

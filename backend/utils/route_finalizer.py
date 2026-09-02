@@ -28,6 +28,7 @@ try:
     from .route_distance import compute_segmented_road_route
     from .route_reconstruction import reconstruct_completed_route
     from .route_segments import SegmentedRoute, segment_route
+    from .route_validation import validate_trip_route
     from .trip_distance import compute_trip_distances, load_ride_breadcrumbs
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
@@ -38,6 +39,7 @@ except ImportError:
     from utils.route_distance import compute_segmented_road_route  # type: ignore
     from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
+    from utils.route_validation import validate_trip_route  # type: ignore
 
 # geo_utils lives at the backend root, one level above utils — keep its import in
 # its own block so its parent-relative path can't drag the sibling imports above
@@ -894,6 +896,38 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             # Provenance of the reconstruction's tail anchor: a recorded
             # completion fix vs. the booked dropoff fallback (audit surface).
             quality["completion_anchor_source"] = completion_anchor_source
+
+        # Flag-gated (dark by default) GPS-spoof check: road-match the
+        # already-loaded breadcrumbs against OSRM/Google Roads and record the
+        # verdict on this durable, replay-safe finalization write — never a
+        # bespoke spawn() in the /complete request path (that pattern was
+        # deliberately removed; see test_ride_completion_location.py). The
+        # gate itself lives in routes/rides/payments.py::process_payment,
+        # which reads quality["gps_route_validation"] off this same
+        # ride_routes row and fails open if it hasn't landed yet. Kept behind
+        # its own flag (not p2_route_geometry_enabled or a payment flag) so a
+        # dark rollout costs zero extra OSRM/Google calls until enabled.
+        try:
+            _spoof_check_enabled = bool(
+                ((await get_app_settings()) or {}).get("gps_spoof_charge_gate_enabled", False)
+            )
+        except Exception:
+            logger.error(
+                "gps_spoof_charge_gate_enabled flag read failed for ride_id=%s; treating as off",
+                ride_id,
+                exc_info=True,
+            )
+            _spoof_check_enabled = False
+        if _spoof_check_enabled:
+            try:
+                validation_result = await validate_trip_route(points)
+                if validation_result:
+                    quality["gps_route_validation"] = validation_result
+            except Exception:
+                # Best-effort: a validation failure must never fail route
+                # finalization or leave the route stuck pending. payments.py
+                # treats a missing verdict as "not ready yet" and fails open.
+                logger.error("gps spoof validation failed for ride_id=%s", ride_id, exc_info=True)
 
         # Flag-gated ADDITIVE pickup-leg (Period 2) geometry: observed-only (no
         # road matching — no extra provider spend), phase-tagged segments

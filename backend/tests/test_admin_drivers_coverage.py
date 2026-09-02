@@ -1443,9 +1443,22 @@ class TestDriverReferrals:
             # `me` lookup for the inbound referred_by chain -- no row means
             # this driver was not referred by anyone.
             return []
-        if table == "drivers" and filters.get("user_id") == "usr-referee-1":
-            return [{"id": "drv-referee-1"}]
         return []
+
+    def _batched(self, completed_count: int):
+        """get_rows_batched_in side_effect: referee driver lookup + completed
+        rides lookup, batched instead of one round trip per referee."""
+
+        async def side_effect(table, column, values, extra_filters=None, *, columns="*", **kw):
+            if table == "drivers" and column == "user_id":
+                return [{"id": "drv-referee-1", "user_id": "usr-referee-1"}] if "usr-referee-1" in values else []
+            if table == "rides" and column == "driver_id":
+                if "drv-referee-1" not in values:
+                    return []
+                return [{"driver_id": "drv-referee-1"} for _ in range(completed_count)]
+            return []
+
+        return side_effect
 
     def test_driver_not_found_404(self, test_client, super_admin_override):
         with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
@@ -1456,7 +1469,7 @@ class TestDriverReferrals:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=REFERRER_DRIVER)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
-            patch("db_supabase.count_documents", AsyncMock(return_value=3)),
+            patch("db_supabase.get_rows_batched_in", AsyncMock(side_effect=self._batched(3))),
             patch(
                 "routes.admin.drivers.resolve_referral_terms",
                 AsyncMock(return_value={"rides": 3, "referrer": 25}),
@@ -1479,7 +1492,7 @@ class TestDriverReferrals:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=REFERRER_DRIVER)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
-            patch("db_supabase.count_documents", AsyncMock(return_value=1)),
+            patch("db_supabase.get_rows_batched_in", AsyncMock(side_effect=self._batched(1))),
             patch(
                 "routes.admin.drivers.resolve_referral_terms",
                 AsyncMock(return_value={"rides": 3, "referrer": 25}),
@@ -1492,6 +1505,34 @@ class TestDriverReferrals:
         assert body["qualified_referrals"] == 0
         assert body["referees"][0]["status"] == "in_progress"
         assert body["referees"][0]["rides_remaining"] == 2
+
+    def test_no_referees_short_circuits_without_batched_calls(self, test_client, super_admin_override):
+        """Empty referred_user_ids must not call get_rows_batched_in at all --
+        proves the empty-input guard, matching the auto_payout batching fix's
+        same guard."""
+
+        async def _rows_no_referees(table, filters=None, **kwargs):
+            filters = filters or {}
+            if table == "users" and "referral_code_used" in filters:
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=REFERRER_DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=_rows_no_referees)),
+            patch("db_supabase.get_rows_batched_in", AsyncMock()) as batched,
+            patch(
+                "routes.admin.drivers.resolve_referral_terms",
+                AsyncMock(return_value={"rides": 3, "referrer": 25}),
+            ),
+            patch("routes.admin.drivers.paid_referral_earnings", AsyncMock(return_value=None)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/referrals")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["total_referrals"] == 0
+        assert body["referees"] == []
+        batched.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

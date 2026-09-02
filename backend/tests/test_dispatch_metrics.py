@@ -295,6 +295,62 @@ async def test_db_call_counter_tracks_real_run_sync_calls():
     assert _base.get_db_call_count() == 0
 
 
+@pytest.mark.anyio
+async def test_db_call_counter_includes_calls_made_in_gather_children():
+    """run_sync calls issued from asyncio.gather() children must reach the
+    parent's count.
+
+    Regression test. _match_driver_to_ride_attempt fans its enrichment reads
+    out through asyncio.gather() (_fetch_rider -> get_user_by_id,
+    _fetch_incentives -> match_ride_incentives' run_sync), and asyncio runs
+    each gathered coroutine in a *copy* of the current context. A plain
+    ContextVar[int] counter therefore had its child increments written to
+    that copy and thrown away, so every spinr_dispatch_attempt_db_calls
+    observation silently under-reported the enrichment phase -- the exact
+    phase the C50 PostgREST -> direct-pool sizing decision depends on.
+
+    The sequential test above cannot catch this: it never crosses a task
+    boundary. This one does, and fails (1 instead of 5) against the plain-int
+    implementation.
+    """
+    import asyncio
+
+    from repositories import _base
+
+    async def _child_doing_two_calls():
+        await _base.run_sync(lambda: "row", retry_policy="read")
+        await _base.run_sync(lambda: "row", retry_policy="read")
+
+    _base.reset_db_call_count()
+    await _base.run_sync(lambda: "row", retry_policy="read")  # 1 in the parent
+    await asyncio.gather(_child_doing_two_calls(), _child_doing_two_calls())  # 4 in children
+
+    assert _base.get_db_call_count() == 5
+
+
+@pytest.mark.anyio
+async def test_db_call_counter_isolates_concurrent_dispatch_attempts():
+    """Two dispatch attempts running concurrently must not pool their counts.
+
+    The mutable-container counter that makes the gather case above work must
+    not reintroduce cross-attempt bleed: reset_db_call_count() rebinds a new
+    container per attempt, and each attempt runs in its own task context, so
+    each must observe only its own calls.
+    """
+    import asyncio
+
+    from repositories import _base
+
+    async def _attempt(n_calls: int) -> int:
+        _base.reset_db_call_count()
+        for _ in range(n_calls):
+            await _base.run_sync(lambda: "row", retry_policy="read")
+        return _base.get_db_call_count()
+
+    # Distinct call counts so a pooled counter cannot coincidentally match.
+    assert await asyncio.gather(_attempt(2), _attempt(5), _attempt(3)) == [2, 5, 3]
+
+
 # ── T3 (C50 Phase 0): per-phase dispatch timing + db-calls histogram ──────
 #
 # Pins that _match_driver_to_ride_attempt wraps its claim / offer_insert /

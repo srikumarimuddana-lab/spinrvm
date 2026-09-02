@@ -773,6 +773,67 @@ class TestBlockedDriverVisibility:
         assert blocked[0]["pending_amount"] == "75.00"
 
 
+class TestFindBlockedDriversBalanceCheckCap:
+    """Regression coverage for the "Weekly Payouts" admin tab hanging forever:
+    a fleet with many gate-failing, near-zero-balance drivers (never-active
+    signups) used to make find_blocked_drivers balance-check the entire
+    drivers table before giving up — each check itself several sequential
+    round trips. _MAX_BALANCE_CHECKS bounds that."""
+
+    @pytest.mark.anyio
+    async def test_stops_after_max_balance_checks_and_logs(self, caplog):
+        from backend.utils.auto_payout import _MAX_BALANCE_CHECKS, find_blocked_drivers
+
+        # More gate-failing, zero-balance drivers than the cap allows — none
+        # of them ever contribute a result, so without the cap this loop
+        # would balance-check every single one before exhausting the page.
+        many_drivers = [
+            _driver(id=f"drv_{i}", user_id=f"u{i}", stripe_account_id=None) for i in range(_MAX_BALANCE_CHECKS + 20)
+        ]
+        checks = {"n": 0}
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers":
+                return many_drivers
+            if table == "rides":
+                checks["n"] += 1
+                return []  # $0 balance -> never appended to results
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+            patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
+            caplog.at_level("WARNING"),
+        ):
+            blocked = await find_blocked_drivers(limit=50)
+
+        assert blocked == []
+        # Two "rides" queries per balance check (completed + cancelled, run
+        # concurrently) -> checks["n"] counts balance-check attempts * 2.
+        assert checks["n"] <= _MAX_BALANCE_CHECKS * 2
+        assert any("balance-check cap" in r.message for r in caplog.records)
+
+    @pytest.mark.anyio
+    async def test_finds_real_blocked_drivers_within_the_cap(self):
+        """The cap must not swallow genuinely blocked drivers that appear
+        before it's reached."""
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        tables = {
+            "drivers": [_driver(gst_bn=None)],
+            "rides_completed": [_ride(driver_earnings="75.00", tax_amount="0.00")],
+        }
+        with (
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=_mock_db(tables)),
+            patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
+        ):
+            blocked = await find_blocked_drivers(limit=50)
+
+        assert len(blocked) == 1
+        assert blocked[0]["driver_id"] == DRIVER_ID
+
+
 class TestOverCapHold:
     """Gap #1 remediation: an over-cap balance gets a durable
     'held_over_cap' payouts row and a dedicated metric label, instead of

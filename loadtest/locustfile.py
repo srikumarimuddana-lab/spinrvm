@@ -34,6 +34,25 @@ Env knobs:
 
 SLA gates (CLAUDE.md performance table) are asserted at test end via the
 test_stop hook: fare estimate P95 < 300 ms, accept round-trip P95 < 2 s.
+
+T16 ROUND 2 HARNESS FIX — pre-authenticated token cache instead of
+per-spawn OTP login:
+Round 1 found that `on_start` calling send-otp+verify-otp for every bot at
+ramp-up drove the whole 60-bot pool (sharing one egress IP) straight
+through the 6/min send-otp and 5/min verify-otp per-IP rate limits (a
+harness capacity artifact, not a platform finding — see
+docs/audit/2026-09-02-t16-staging-load-test-results.md). Fix: run
+`preauth_bots.py` ONCE before the timed test, staggered at 4 logins/min
+(below the 5/min verify-otp ceiling), which authenticates every bot user
+up front and writes tokens to a JSON cache (`results/bot_tokens.json` by
+default, `LOADTEST_TOKEN_CACHE` to override). `on_start` below reads a
+cached token instead of touching the OTP endpoints at all — so the timed
+run itself never exercises the OTP rate limiter, and the real limiter in
+backend/routes/auth.py is completely untouched. Falls back to a live OTP
+login (single bot, no stagger) only when the cache is missing/exhausted —
+fine for a quick ad-hoc smoke test with a handful of users, but NOT a
+substitute for pre-auth at the full 60-bot scale (it would just reproduce
+the round-1 failure mode).
 """
 
 from __future__ import annotations
@@ -41,6 +60,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import threading
 import time
 
 import gevent
@@ -51,59 +71,113 @@ try:
 except ImportError:  # harness still runs rider-only without it
     websocket = None
 
-BASE_OTP = os.environ.get("LOADTEST_OTP", "1234")
-# T16 staging-run fix: the previous default "+1****55" contains literal
-# "*" characters and is not valid E.164 — SendOTPRequest/VerifyOTPRequest
-# (schemas.py) both pattern-validate phone as ^\+1\d{10}$ (exactly 10
-# digits after +1), so every bot login would 422 immediately. "306555" is
-# a real Saskatoon area code (306) + the NANP-reserved-for-fiction "555"
-# exchange, so the synthetic numbers are obviously fake and can never
-# collide with a real subscriber number. 6 digits + a 4-digit suffix = 10.
-PHONE_PREFIX = os.environ.get("LOADTEST_PHONE_PREFIX", "+1306555")
-CENTER_LAT = float(os.environ.get("LOADTEST_CENTER_LAT", "52.1332"))
-CENTER_LNG = float(os.environ.get("LOADTEST_CENTER_LNG", "-106.6700"))
-API = "/api/v1"
+from bot_common import API, BASE_OTP, TOKEN_CACHE_PATH, jitter_point, next_phone
+
+_jitter_point = jitter_point  # kept as a module-local alias; call sites unchanged below
+_next_phone = next_phone
 
 # ride_id -> pickup OTP, published by the rider bot that booked the ride so
 # the driver bot that wins the offer can verify pickup. In-process is correct:
 # this harness owns both sides of the marketplace.
 RIDE_OTPS: dict[str, str] = {}
 
-_phone_counter = {"rider": 0, "driver": 0}
+# ── Pre-authenticated token cache (T16 round 2 harness fix) ────────────────
+# Loaded once per Locust worker process; each on_start pops the next unused
+# entry for its bot kind. A lock guards the pop because Locust spawns bots
+# across gevent greenlets that could interleave between the list-index read
+# and the append to `_used`, even though gevent itself is cooperative —
+# cheap insurance, not a measured race.
+_token_cache_lock = threading.Lock()
+_token_cache: dict[str, list[dict]] | None = None
+_token_cache_idx = {"rider": 0, "driver": 0}
 
 
-def _next_phone(kind: str) -> str:
-    # Riders take even suffixes, drivers odd, so the two pools never collide.
-    _phone_counter[kind] += 1
-    suffix = _phone_counter[kind] * 2 + (1 if kind == "driver" else 0)
-    return f"{PHONE_PREFIX}{suffix:04d}"
+def _load_token_cache() -> dict[str, list[dict]] | None:
+    global _token_cache
+    if _token_cache is not None:
+        return _token_cache
+    if not os.path.exists(TOKEN_CACHE_PATH):
+        return None
+    with open(TOKEN_CACHE_PATH, "r", encoding="utf-8") as f:
+        _token_cache = json.load(f)
+    return _token_cache
 
 
-def _jitter_point(radius_deg: float = 0.02) -> tuple[float, float]:
-    return (
-        CENTER_LAT + random.uniform(-radius_deg, radius_deg),
-        CENTER_LNG + random.uniform(-radius_deg, radius_deg),
-    )
+def _next_cached_credential(kind: str) -> dict | None:
+    """Pop the next unused pre-authenticated bot for `kind`, if the cache has one."""
+    cache = _load_token_cache()
+    if not cache:
+        return None
+    pool = cache.get(f"{kind}s") or []
+    with _token_cache_lock:
+        idx = _token_cache_idx[kind]
+        if idx >= len(pool):
+            return None
+        _token_cache_idx[kind] = idx + 1
+        return pool[idx]
 
 
-def _login(client, phone: str) -> tuple[str, dict]:
+def _live_login(client, phone: str) -> tuple[str, str | None, dict]:
+    """Fall-back path: log a single bot in live via OTP (no stagger).
+
+    Only safe for small ad-hoc runs — at the full 60-bot pool this
+    reproduces the exact rate-limit artifact preauth_bots.py exists to
+    avoid. See module docstring.
+    """
     client.post(f"{API}/auth/send-otp", json={"phone": phone}, name="auth:send-otp")
     r = client.post(
         f"{API}/auth/verify-otp",
-        # T16 staging-run fix: the live VerifyOTPRequest schema (schemas.py)
-        # names this field "code", not "otp", and consent_accepted=True is
-        # required for a first-time signup (PIPEDA explicit-consent gate,
-        # routes/auth.py ~:1177) or the request 400s. Discovered when this
-        # harness was finally run for real (never-executed until T16) —
-        # see docs/audit/2026-09-02-t16-staging-load-test-results.md.
+        # T16 round-1 fix: VerifyOTPRequest's field is "code", not "otp",
+        # and consent_accepted=True is required for a first-time signup
+        # (PIPEDA explicit-consent gate, routes/auth.py ~:1177).
         json={"phone": phone, "code": BASE_OTP, "consent_accepted": True},
         name="auth:verify-otp",
     )
     r.raise_for_status()
     body = r.json()
     # AuthResponse (schemas.py) names the access token "token", not
-    # "access_token" — same never-executed-harness mismatch as above.
-    return body["token"], body.get("user") or {}
+    # "access_token" — same never-executed-harness mismatch as round 1.
+    return body["token"], body.get("refresh_token"), body.get("user") or {}
+
+
+def _login(client, kind: str) -> tuple[str, str | None, dict]:
+    """Get a bot credential: prefer the pre-auth cache, fall back to live OTP.
+
+    Returns (access_token, refresh_token, user_dict).
+    """
+    cached = _next_cached_credential(kind)
+    if cached is not None:
+        return cached["token"], cached.get("refresh_token"), cached.get("user") or {}
+    # Cache missing/exhausted — live login, single bot, no stagger. Fine for
+    # a small smoke test; at 60 bots this recreates the round-1 429 storm.
+    phone = _next_phone(kind)
+    return _live_login(client, phone)
+
+
+def _refresh_access_token(client, refresh_token: str) -> str | None:
+    """Exchange a refresh token for a fresh access token (POST /auth/refresh).
+
+    /auth/refresh is limited to 20/minute per IP (backend/routes/auth.py:1675)
+    — a much looser ceiling than the OTP endpoints, and refreshes are spread
+    across the run's duration rather than bunched at spawn, so 60 bots each
+    refreshing once near their 15-minute access-token expiry (rider/driver
+    TTL per AGENTS.md) stays comfortably under it. Returns None on failure
+    (caller keeps using the old token; the next request's 401 will be the
+    real signal something is wrong).
+    """
+    if not refresh_token:
+        return None
+    try:
+        r = client.post(
+            f"{API}/auth/refresh",
+            json={"refresh_token": refresh_token},
+            name="auth:refresh",
+        )
+        if r.status_code != 200:
+            return None
+        return r.json().get("token")
+    except Exception:
+        return None
 
 
 class RiderBot(HttpUser):
@@ -111,10 +185,25 @@ class RiderBot(HttpUser):
     wait_time = between(5, 20)
 
     def on_start(self):
-        self.phone = _next_phone("rider")
-        token, user = _login(self.client, self.phone)
+        token, refresh_token, user = _login(self.client, "rider")
         self.client.headers["Authorization"] = f"Bearer {token}"
+        self.refresh_token = refresh_token
         self.user_id = user.get("id")
+        # T16 round-2 fix: tokens now come from the pre-auth cache and are
+        # reused for the whole run instead of re-logging-in per spawn — see
+        # module docstring. Access tokens are short-lived (15 min per
+        # AGENTS.md); refresh proactively partway through so a run longer
+        # than that window (e.g. Scenario B's 30 min) doesn't start 401ing
+        # near the end. /auth/refresh is a much looser 20/minute-per-IP
+        # limit than the OTP endpoints and refreshes are spread out by each
+        # bot's own random jitter below, not bunched at spawn.
+        if self.refresh_token:
+            gevent.spawn_later(random.uniform(600, 720), self._proactive_refresh)
+
+    def _proactive_refresh(self):
+        new_token = _refresh_access_token(self.client, self.refresh_token)
+        if new_token:
+            self.client.headers["Authorization"] = f"Bearer {new_token}"
 
     @task
     def ride_lifecycle(self):
@@ -204,9 +293,9 @@ class DriverBot(HttpUser):
     wait_time = between(1, 2)
 
     def on_start(self):
-        self.phone = _next_phone("driver")
-        token, user = _login(self.client, self.phone)
+        token, refresh_token, user = _login(self.client, "driver")
         self.token = token
+        self.refresh_token = refresh_token
         self.client.headers["Authorization"] = f"Bearer {token}"
         self.user_id = user.get("id")
         self.lat, self.lng = _jitter_point()
@@ -223,6 +312,18 @@ class DriverBot(HttpUser):
         )
         if websocket is not None:
             gevent.spawn(self._ws_loop)
+        # T16 round-2 fix: see RiderBot.on_start — same reused-token +
+        # proactive-refresh pattern. self.token (used by _ws_loop's auth
+        # frame) is updated too, so a reconnect after refresh still
+        # authenticates with a live token.
+        if self.refresh_token:
+            gevent.spawn_later(random.uniform(600, 720), self._proactive_refresh)
+
+    def _proactive_refresh(self):
+        new_token = _refresh_access_token(self.client, self.refresh_token)
+        if new_token:
+            self.token = new_token
+            self.client.headers["Authorization"] = f"Bearer {new_token}"
 
     def on_stop(self):
         try:

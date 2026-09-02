@@ -119,6 +119,31 @@ def is_open() -> bool:
     return _pool is not None
 
 
+def _in_use(pool: Optional["AsyncConnectionPool"]) -> float:
+    """Connections currently checked out of `pool`.
+
+    psycopg_pool reports `pool_size` (every connection the pool manages —
+    idle ones included) and `pool_available` (the idle subset). In-use is the
+    difference. Reading `pool_size` alone counts idle connections as busy, so
+    a freshly-opened pool sitting at DISPATCH_POOL_MIN_SIZE=1 with nothing in
+    flight would report 1 connection in use forever, and the gauge could
+    never fall to 0 — which is exactly the signal Phase 2 needs it for
+    (saturation against DISPATCH_POOL_MAX_SIZE).
+
+    Falls back to `pool_size` if `pool_available` is absent so a stats-key
+    change degrades to the previous behaviour rather than raising on the
+    dispatch path, and clamps at 0 because the two keys are sampled under
+    separate locks and can momentarily disagree under concurrency.
+    """
+    if pool is None:
+        return 0.0
+    stats = pool.get_stats() or {}
+    size = float(stats.get("pool_size", 0) or 0)
+    if "pool_available" not in stats:
+        return size
+    return max(size - float(stats.get("pool_available", 0) or 0), 0.0)
+
+
 async def init_pool(dispatch_direct_pool_enabled: bool) -> Optional["AsyncConnectionPool"]:
     """Open the direct-pool `AsyncConnectionPool`, or do nothing.
 
@@ -238,10 +263,10 @@ async def acquire() -> AsyncIterator["psycopg.AsyncConnection"]:
     try:
         async with _pool.connection(timeout=remaining if remaining is not None else None) as conn:
             _metric_observe("spinr_db_direct_pool_wait_ms", (_time.monotonic() - _wait_start) * 1000.0)
-            _metric_gauge("spinr_db_direct_pool_in_use", float(_pool.get_stats().get("pool_size", 0)))
+            _metric_gauge("spinr_db_direct_pool_in_use", _in_use(_pool))
             yield conn
     finally:
-        _metric_gauge("spinr_db_direct_pool_in_use", float(_pool.get_stats().get("pool_size", 0)) if _pool else 0.0)
+        _metric_gauge("spinr_db_direct_pool_in_use", _in_use(_pool))
 
 
 async def run_query(sql: str, params: tuple = (), *, fetch: str = "all") -> Any:

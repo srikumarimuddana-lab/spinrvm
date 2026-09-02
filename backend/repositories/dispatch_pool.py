@@ -296,8 +296,6 @@ async def run_query(sql: str, params: tuple = (), *, fetch: str = "all") -> Any:
     the transaction-mode discipline in the module docstring — do not call
     this repeatedly and expect state (a `SET`, a temp table, an advisory
     lock) to persist across calls.
-
-    Not called from anywhere yet — Phase 2 (T13) is the first real caller.
     """
     import time as _time
 
@@ -317,6 +315,73 @@ async def run_query(sql: str, params: tuple = (), *, fetch: str = "all") -> Any:
         except Exception as exc:
             redacted = _redact_pg_error(str(exc))
             logger.error(f"[dispatch_pool] query failed: {redacted}")
+            raise
+        finally:
+            _metric_observe("spinr_db_direct_query_duration_ms", (_time.monotonic() - _t0) * 1000.0)
+
+
+async def claim_batch(
+    ride_id: str,
+    driver_ids: list,
+    eta_seconds: list,
+    max_offers: int,
+    offered_at,
+    expires_at,
+) -> list[dict]:
+    """Call the `dispatch_claim_batch` RPC (migration 402) over the direct pool.
+
+    C50 Phase 2 (T12/T13) — the first real caller of this pool. Wraps the
+    single-statement RPC call in the same one-transaction-per-call
+    discipline as `run_query` (a `SELECT * FROM fn(...)` is one statement,
+    already atomic; the explicit `conn.transaction()` block matters for
+    prepared-statement/rollback semantics, not for adding extra atomicity
+    the RPC doesn't already have on its own).
+
+    `driver_ids` and `eta_seconds` must be the same length and in the same
+    order — the RPC does not re-rank; Python ranking stays authoritative
+    (see matching.py's candidate-read/ranking phase, which stays on
+    PostgREST in this phase and is unchanged by this function).
+
+    Returns a list of dicts, one per driver dispatch_claim_batch actually
+    attempted (not just successes) — each has keys `driver_id`, `claimed`
+    (bool), `driver_row` (dict, present only when claimed), `ride_offer_id`
+    (str, present only when claimed). See migration 402's header for why
+    unclaimed attempts are included: the caller needs the full attempted
+    set to invalidate_driver_cache for every one of them, matching what
+    claim_driver_atomic already does today on the PostgREST path.
+
+    Raises whatever `run_query`/`acquire` raise on failure (pool not open,
+    deadline exhausted, or a Postgres error) — no swallowing here. Per D2
+    in the plan doc (fail loud, no silent PostgREST fallback), the caller
+    in matching.py is responsible for logging and re-raising so the
+    existing retry-chain re-arms exactly as today's offer-insert failure
+    path does.
+    """
+    import time as _time
+
+    from psycopg.rows import dict_row  # type: ignore
+
+    _t0 = _time.monotonic()
+    async with acquire() as conn:
+        try:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(
+                        "SELECT * FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
+                        (
+                            ride_id,
+                            list(driver_ids),
+                            list(eta_seconds),
+                            int(max_offers),
+                            offered_at,
+                            expires_at,
+                        ),
+                    )
+                    rows = await cur.fetchall()
+            return list(rows)
+        except Exception as exc:
+            redacted = _redact_pg_error(str(exc))
+            logger.error(f"[dispatch_pool] claim_batch failed for ride {ride_id}: {redacted}")
             raise
         finally:
             _metric_observe("spinr_db_direct_query_duration_ms", (_time.monotonic() - _t0) * 1000.0)

@@ -28,6 +28,15 @@ except ImportError:  # pragma: no cover - dual-import pattern
         resolve_dispatch_area_scope,
     )
 
+# C50 Phase 2 (T13) — the direct-pool claim path. Imported unconditionally
+# (cheap, no connections opened at import time — see dispatch_pool.py's own
+# docstring: init_pool() is a no-op until the flag is on) so the flag check
+# at call time is the only branch point, not an import-time one.
+try:
+    from ...repositories import dispatch_pool as _dispatch_pool
+except ImportError:  # pragma: no cover - dual-import pattern
+    from repositories import dispatch_pool as _dispatch_pool  # type: ignore
+
 # Bucket boundaries for spinr_dispatch_attempt_db_calls: a small-integer count
 # metric (typically single digits to low tens of DB calls per attempt), not a
 # millisecond latency, so DEFAULT_MS_BUCKETS' boundaries (5..10000) would put
@@ -853,29 +862,125 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             else:
                 ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
 
+        # C50 Phase 2 (T13): dispatch_direct_pool_enabled gates the claim +
+        # ride_offers-insert + insurance-write block onto the direct-Postgres
+        # pool (T12's dispatch_claim_batch RPC) instead of PostgREST. Default
+        # False (migration 401) — when False, every line below in the
+        # `else` branches runs EXACTLY as it did before this change: same
+        # function calls, same order, same queries. Only the new metric
+        # increment (`spinr_dispatch_claim_path_total`, required by T13 so
+        # Phase 3 can see live traffic split by path) is additive on the
+        # flag-off path — see test_dispatch_claim_parity.py's
+        # flag-off-byte-identical assertion.
+        _direct_pool_enabled = bool(app_settings.get("dispatch_direct_pool_enabled", False))
+
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "claim"}):
             # ── Batch claim ───────────────────────────────────────────────
             claimed_drivers: list[tuple[dict, int]] = []
-            for driver, eta_sec, _ in ranked:
-                if len(claimed_drivers) >= max_offers:
-                    break
-                fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
-                if fresh:
-                    # The claim's own UPDATE returns the post-claim row, so no follow-up
-                    # get_driver_by_id is needed — and that read was guaranteed uncached
-                    # anyway, because claim_driver_atomic invalidates the cache entry on
-                    # both sides of the update. Up to max_offers of those per attempt.
-                    #
-                    # Revalidate the FULL eligibility set on the freshly-read row, not
-                    # just is_online. claim_driver_atomic only guards id + is_available,
-                    # so an admin who suspended the driver or flipped them back to
-                    # needs_review between the candidate read and the claim would
-                    # otherwise still get offered — the exact stale-status case the
-                    # candidate filter (is_verified + status='active') is meant to stop.
-                    if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
-                        claimed_drivers.append((fresh, eta_sec))
-                    else:
-                        await _deps.db_supabase.set_driver_available(driver["id"], True)
+
+            if _direct_pool_enabled:
+                _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "direct"})
+
+                _pool_driver_ids = [d["id"] for d, _eta, _dist in ranked]
+                _pool_eta_by_id = {d["id"]: eta for d, eta, _dist in ranked}
+                _pool_eta_seconds = [eta for _d, eta, _dist in ranked]
+
+                # invalidate_driver_cache for every driver about to be attempted —
+                # kept on the Python side per T13 (Redis side effect; the SQL RPC
+                # must not own it — see dispatch_pool.py's transaction-mode
+                # discipline docstring: no waiting on anything but Postgres while
+                # holding a pooled connection). Mirrors claim_driver_atomic's own
+                # unconditional pre-claim invalidate (driver_repo.py:269).
+                for _did in _pool_driver_ids:
+                    await _deps.db_supabase.invalidate_driver_cache(driver_id=_did)
+
+                # Offer timestamps must exist BEFORE the claim call on this path —
+                # T12's RPC claims, inserts ride_offers, AND writes the insurance
+                # transition in one transaction, so offered_at/expires_at have to
+                # be known at claim time, not after (unlike the PostgREST path,
+                # which computes `now` only once claiming is done). This is the
+                # one deliberate ordering difference from the PostgREST branch,
+                # confined entirely to the flag-on path.
+                #
+                # FIX (Tara, C50 Phase 2 T15 adversarial review, 2026-09-02):
+                # computed HERE — immediately before the claim_batch() call —
+                # rather than before the invalidate_driver_cache loop above.
+                # `now` becomes the ride_offers.offered_at persisted by the RPC
+                # and the WS/FCM offer_expires_at the driver-app's countdown is
+                # keyed to (driver-app index.tsx: remaining = offer_expires_at -
+                # Date.now()); computing it before N Redis round-trips would have
+                # baked that latency into the advertised offer, silently
+                # shortening the real response window and skewing the
+                # offered_at audit value away from when the offer actually went
+                # live. Does not eliminate all skew (the RPC's own network +
+                # transaction time still elapses after this point, exactly as it
+                # does for the PostgREST path's `now = datetime.now(...)` call
+                # at the top of the offer_insert phase further below), but
+                # removes the one avoidable, measured chunk of it.
+                now = datetime.now(timezone.utc)
+                _offer_expires_at_dt = now + timedelta(seconds=offer_timeout)
+                _offer_expires_at = _offer_expires_at_dt.isoformat()
+
+                try:
+                    _pool_results = await _dispatch_pool.claim_batch(
+                        ride_id,
+                        _pool_driver_ids,
+                        _pool_eta_seconds,
+                        max_offers,
+                        now,
+                        _offer_expires_at_dt,
+                    )
+                except Exception:
+                    # Fail loud, no silent fallback to PostgREST (D2 in the plan
+                    # doc). The RPC is one transaction covering claim + offer
+                    # insert + insurance write, so a mid-call failure means
+                    # Postgres already rolled back the WHOLE thing — no driver
+                    # is left claimed, so there is nothing to release here
+                    # (unlike the PostgREST path's two-phase claim-then-insert,
+                    # which DOES need an explicit release-on-failure loop below).
+                    logger.error(
+                        f"[DISPATCH] direct-pool claim_batch failed for ride {ride_id}",
+                        exc_info=True,
+                    )
+                    raise
+
+                # invalidate_driver_cache again for every driver the RPC actually
+                # attempted (claimed or not) — its is_available /
+                # availability_claimed_at changed either way (claimed: set false
+                # then possibly reverted true on failed revalidation; the RPC does
+                # both writes itself). Mirrors claim_driver_atomic's post-claim
+                # invalidate (driver_repo.py:297) and set_driver_available's own
+                # invalidate on release (driver_repo.py:149), both of which
+                # normally run on the Python side but happened inside the RPC
+                # transaction here.
+                for _row in _pool_results:
+                    await _deps.db_supabase.invalidate_driver_cache(driver_id=_row["driver_id"])
+
+                for _row in _pool_results:
+                    if _row.get("claimed"):
+                        claimed_drivers.append((_row["driver_row"], _pool_eta_by_id.get(_row["driver_id"])))
+            else:
+                _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest"})
+                for driver, eta_sec, _ in ranked:
+                    if len(claimed_drivers) >= max_offers:
+                        break
+                    fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+                    if fresh:
+                        # The claim's own UPDATE returns the post-claim row, so no follow-up
+                        # get_driver_by_id is needed — and that read was guaranteed uncached
+                        # anyway, because claim_driver_atomic invalidates the cache entry on
+                        # both sides of the update. Up to max_offers of those per attempt.
+                        #
+                        # Revalidate the FULL eligibility set on the freshly-read row, not
+                        # just is_online. claim_driver_atomic only guards id + is_available,
+                        # so an admin who suspended the driver or flipped them back to
+                        # needs_review between the candidate read and the claim would
+                        # otherwise still get offered — the exact stale-status case the
+                        # candidate filter (is_verified + status='active') is meant to stop.
+                        if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
+                            claimed_drivers.append((fresh, eta_sec))
+                        else:
+                            await _deps.db_supabase.set_driver_available(driver["id"], True)
 
             if not claimed_drivers:
                 logger.info(f"[DISPATCH] no drivers could be claimed for ride {ride_id}")
@@ -887,43 +992,61 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             )
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "offer_insert"}):
-            # ── Insert ride_offers rows ───────────────────────────────────
-            now = datetime.now(timezone.utc)
-            # Compute the offer deadline once and reuse it for both the persisted
-            # ride_offers rows (so the durable reaper can find them after a restart) and
-            # the WS/FCM countdown payload below.
-            _offer_expires_at = (now + timedelta(seconds=offer_timeout)).isoformat()
-            offer_rows = _build_offer_rows(claimed_drivers, ride_id, now.isoformat(), _offer_expires_at)
-            try:
-                await _deps.db_supabase.run_sync(
-                    lambda: _deps.db_supabase.supabase.table("ride_offers").insert(offer_rows).execute()
-                )
-            except Exception as e:
-                logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
-                for d, _ in claimed_drivers:
-                    await _deps.db_supabase.set_driver_available(d["id"], True)
-                # Re-raise after releasing the claims: no offers exist, so the
-                # recovery shell re-arms the retry chain instead of stranding the
-                # ride in `searching` (the old `return` armed nothing).
-                raise
+            if _direct_pool_enabled:
+                # ride_offers rows were already inserted by dispatch_claim_batch,
+                # in the same transaction as the claim (T12) — nothing to do here.
+                # Still a real (near-zero) timed block so the per-phase histogram
+                # gets an observation on every attempt, both paths, per T3.
+                pass
+            else:
+                # ── Insert ride_offers rows ───────────────────────────────────
+                now = datetime.now(timezone.utc)
+                # Compute the offer deadline once and reuse it for both the persisted
+                # ride_offers rows (so the durable reaper can find them after a restart) and
+                # the WS/FCM countdown payload below.
+                _offer_expires_at = (now + timedelta(seconds=offer_timeout)).isoformat()
+                offer_rows = _build_offer_rows(claimed_drivers, ride_id, now.isoformat(), _offer_expires_at)
+                try:
+                    await _deps.db_supabase.run_sync(
+                        lambda: _deps.db_supabase.supabase.table("ride_offers").insert(offer_rows).execute()
+                    )
+                except Exception as e:
+                    logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
+                    for d, _ in claimed_drivers:
+                        await _deps.db_supabase.set_driver_available(d["id"], True)
+                    # Re-raise after releasing the claims: no offers exist, so the
+                    # recovery shell re-arms the retry chain instead of stranding the
+                    # ride in `searching` (the old `return` armed nothing).
+                    raise
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "insurance"}):
-            # Insurance Period 2 (en route to pickup — TNC primary commercial coverage)
-            # opens HERE, at claim/offer time, not at acceptance. The batch-offer model
-            # already makes each claimed driver unavailable for any other ride the
-            # instant claim_driver_atomic succeeds — they're obligated to this ride the
-            # moment the offer is live, exactly as CLAUDE.md's "Period 2 starts on
-            # driver_assigned... because the driver is already obligated" rule requires
-            # for a batch-offer dispatch model with no separate driver_assigned DB write.
-            # If the driver declines/times out, the decline/expiry paths revert them to
-            # Period 1 (or 0). If they accept, ride_flow.py's accept_ride calls this
-            # again with the same period+ride_id as a no-op safety net. record_period_
-            # transition is compliance-grade — logs at ERROR and swallows on failure so
-            # it never blocks dispatch.
-            for d, _ in claimed_drivers:
-                await _deps.record_period_transition(d["id"], 2, ride_id=ride_id)
+            if _direct_pool_enabled:
+                # Insurance Period 2 transitions were already written by
+                # dispatch_claim_batch, in the same transaction as the claim and
+                # the ride_offers insert (T12) — nothing to do here. See
+                # migration 402's OPEN QUESTION note: batching all claims for
+                # this attempt into one transaction means every driver claimed
+                # here shares an IDENTICAL started_at (Postgres now() is
+                # transaction-start time), a real granularity change from the
+                # PostgREST path's per-driver separate-transaction timestamps.
+                pass
+            else:
+                # Insurance Period 2 (en route to pickup — TNC primary commercial coverage)
+                # opens HERE, at claim/offer time, not at acceptance. The batch-offer model
+                # already makes each claimed driver unavailable for any other ride the
+                # instant claim_driver_atomic succeeds — they're obligated to this ride the
+                # moment the offer is live, exactly as CLAUDE.md's "Period 2 starts on
+                # driver_assigned... because the driver is already obligated" rule requires
+                # for a batch-offer dispatch model with no separate driver_assigned DB write.
+                # If the driver declines/times out, the decline/expiry paths revert them to
+                # Period 1 (or 0). If they accept, ride_flow.py's accept_ride calls this
+                # again with the same period+ride_id as a no-op safety net. record_period_
+                # transition is compliance-grade — logs at ERROR and swallows on failure so
+                # it never blocks dispatch.
+                for d, _ in claimed_drivers:
+                    await _deps.record_period_transition(d["id"], 2, ride_id=ride_id)
 
-        _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
+        _metric_inc("spinr_dispatch_offer_sent_total", by=len(claimed_drivers))
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "notify"}):
             # ── Parallel enrichment (shared across all drivers) ───────────

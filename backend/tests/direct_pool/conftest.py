@@ -157,6 +157,16 @@ def pytest_collection_modifyitems(config, items):
 
 # Migrations applied, in dependency order. See the module docstring for why
 # 77/80 are excluded and why 100/64 were added beyond the plan doc's list.
+# 401 added for C50 Phase 2 (T14) -- the dispatch_claim_batch RPC itself,
+# the actual object under test in test_claim_batch.py. 12 and 157 added
+# alongside it: dispatch_claim_batch's SQL body references drivers.status
+# and drivers.availability_claimed_at, and NEITHER column exists in the
+# base CREATE TABLE this fixture extracts from supabase_schema.sql -- they
+# are both later ALTER TABLE ADD COLUMN migrations (12_driver_lifecycle_
+# status.sql for `status`, 157_driver_availability_claimed_at.sql for
+# `availability_claimed_at`). Without them, every dispatch_claim_batch call
+# below would fail with "column drivers.status does not exist" rather than
+# testing the RPC at all.
 _MIGRATION_FILES = (
     "100_batch_dispatch.sql",  # ride_offers table + drivers.acceptance_rate
     "131_ride_offers_preempted_status.sql",
@@ -166,6 +176,9 @@ _MIGRATION_FILES = (
     "64_driver_insurance_periods.sql",
     "253_insurance_period_transition_rpc.sql",
     "354_revoke_public_execute_on_security_definer_fns.sql",
+    "12_driver_lifecycle_status.sql",
+    "157_driver_availability_claimed_at.sql",
+    "402_dispatch_claim_batch.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS

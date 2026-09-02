@@ -1,0 +1,106 @@
+# TYPE spinr_cache_hit_total counter
+spinr_cache_hit_total{kind="negative",prefix="driver_by_user"} 50
+spinr_cache_hit_total{kind="positive",prefix="driver"} 12
+spinr_cache_hit_total{kind="positive",prefix="driver_by_user"} 5
+spinr_cache_hit_total{kind="positive",prefix="user"} 83
+# TYPE spinr_cache_miss_total counter
+spinr_cache_miss_total{prefix="driver"} 8
+spinr_cache_miss_total{prefix="driver_by_user"} 16
+spinr_cache_miss_total{prefix="user"} 13
+# TYPE spinr_db_calls_total counter
+spinr_db_calls_total{policy="read"} 21292
+spinr_db_calls_total{policy="write"} 615
+# TYPE spinr_db_ping_total counter
+spinr_db_ping_total{outcome="success"} 1220
+# TYPE spinr_dispatch_offer_accepted_total counter
+spinr_dispatch_offer_accepted_total 1
+# TYPE spinr_dispatch_offer_sent_total counter
+spinr_dispatch_offer_sent_total 1
+# TYPE spinr_drivers_daily_rollup_days_total counter
+spinr_drivers_daily_rollup_days_total{outcome="ok"} 47
+# TYPE spinr_drivers_go_online_total counter
+spinr_drivers_go_online_total{is_legacy_import="false"} 2
+# TYPE spinr_drivers_location_write_total counter
+spinr_drivers_location_write_total{outcome="throttled",path="ws_single"} 27
+spinr_drivers_location_write_total{outcome="written",path="rest_v1"} 2
+spinr_drivers_location_write_total{outcome="written",path="ws_single"} 20
+# TYPE spinr_fare_distance_basis_total counter
+spinr_fare_distance_basis_total{basis="haversine_fallback"} 9
+# TYPE spinr_insurance_period_noop_total counter
+spinr_insurance_period_noop_total{period="2"} 1
+# TYPE spinr_insurance_period_recorded_total counter
+spinr_insurance_period_recorded_total{period="0"} 1
+spinr_insurance_period_recorded_total{period="1"} 2
+spinr_insurance_period_recorded_total{period="2"} 1
+# TYPE spinr_logging_pii_redacted_total counter
+spinr_logging_pii_redacted_total{carrier="extra"} 9
+# TYPE spinr_rides_booked_distance_suspect_total counter
+spinr_rides_booked_distance_suspect_total{reason="below_floor"} 1
+spinr_rides_booked_distance_suspect_total{reason="road_route_unavailable"} 2
+# TYPE spinr_bgloop_duration_ms gauge
+spinr_bgloop_duration_ms{loop="allowance_reset"} 41.21925199433463
+spinr_bgloop_duration_ms{loop="corporate_autotopup"} 0.09601999772712588
+spinr_bgloop_duration_ms{loop="corporate_low_balance"} 30.33605399832595
+spinr_bgloop_duration_ms{loop="document_expiry"} 280.65253699999994
+spinr_bgloop_duration_ms{loop="kyb_reverification"} 596.8472699999996
+# TYPE spinr_corporate_kyb_reverification_pending gauge
+spinr_corporate_kyb_reverification_pending 0
+# TYPE spinr_db_circuit_state gauge
+spinr_db_circuit_state{state="closed"} 0
+# TYPE spinr_db_ping_duration_ms gauge
+spinr_db_ping_duration_ms 24.57985900400672
+# TYPE spinr_db_thread_pool_max_workers gauge
+spinr_db_thread_pool_max_workers 64
+# TYPE spinr_db_thread_pool_queue_depth gauge
+spinr_db_thread_pool_queue_depth 0
+# TYPE spinr_db_thread_pool_threads gauge
+spinr_db_thread_pool_threads 40
+# TYPE spinr_redis_connected gauge
+spinr_redis_connected 0
+# TYPE spinr_rides_gps_gap_open gauge
+spinr_rides_gps_gap_open 0
+# TYPE spinr_dispatch_offer_to_accept_duration_ms histogram
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="5"} 0
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="10"} 0
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="25"} 0
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="50"} 0
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="100"} 0
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="250"} 0
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="500"} 0
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="1000"} 1
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="2500"} 1
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="5000"} 1
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="10000"} 1
+spinr_dispatch_offer_to_accept_duration_ms_bucket{le="+Inf"} 1
+spinr_dispatch_offer_to_accept_duration_ms_sum 559.352
+spinr_dispatch_offer_to_accept_duration_ms_count 1
+# TYPE spinr_fare_calc_duration_ms histogram
+spinr_fare_calc_duration_ms_bucket{le="5"} 0
+spinr_fare_calc_duration_ms_bucket{le="10"} 0
+spinr_fare_calc_duration_ms_bucket{le="25"} 0
+spinr_fare_calc_duration_ms_bucket{le="50"} 0
+spinr_fare_calc_duration_ms_bucket{le="100"} 1
+spinr_fare_calc_duration_ms_bucket{le="250"} 4
+spinr_fare_calc_duration_ms_bucket{le="500"} 11
+spinr_fare_calc_duration_ms_bucket{le="1000"} 11
+spinr_fare_calc_duration_ms_bucket{le="2500"} 11
+spinr_fare_calc_duration_ms_bucket{le="5000"} 11
+spinr_fare_calc_duration_ms_bucket{le="10000"} 11
+spinr_fare_calc_duration_ms_bucket{le="+Inf"} 11
+spinr_fare_calc_duration_ms_sum 2520.1712639900506
+spinr_fare_calc_duration_ms_count 11
+# TYPE spinr_ws_fanout_duration_ms histogram
+spinr_ws_fanout_duration_ms_bucket{le="5",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="10",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="25",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="50",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="100",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="250",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="500",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="1000",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="2500",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="5000",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="10000",path="local"} 31
+spinr_ws_fanout_duration_ms_bucket{le="+Inf",path="local"} 31
+spinr_ws_fanout_duration_ms_sum{path="local"} 0.4998419899493456
+spinr_ws_fanout_duration_ms_count{path="local"} 31

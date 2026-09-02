@@ -28,6 +28,15 @@ export interface PaymentAttemptResult {
   ok: boolean;
   charged?: number;
   alert?: PaymentAlert;
+  /**
+   * True when the backend's pre-charge GPS-spoof gate held this ride
+   * instead of charging it (backend/routes/rides/payments.py::process_payment,
+   * response shape { success: false, held_for_review: true }). Nothing was
+   * charged and nothing the rider does here (retry, change card) can resolve
+   * it — an admin reviews and releases or waives the hold. The caller should
+   * show the alert and leave this screen rather than let the rider retry.
+   */
+  heldForReview?: boolean;
 }
 
 export interface ApiLike {
@@ -121,10 +130,11 @@ const INVOICE_ISSUED_ALERT: PaymentAlert = {
  * Attempt to charge the rider's card for a completed ride. Wraps the
  * POST /rides/{id}/process-payment call with 3DS + decline handling.
  *
- * Contract with backend (backend/routes/rides.py::process_payment):
+ * Contract with backend (backend/routes/rides/payments.py::process_payment):
  *   - 200 { success: true, charged_amount }
  *   - 200 { already_paid: true, charged_amount }
  *   - 200 { success: false, status: "requires_action", client_secret, payment_intent_id }
+ *   - 200 { success: false, held_for_review: true, message } — pre-charge GPS-spoof gate
  *   - 402 { detail: { code: "card_declined", decline_code, message, suggested_action } }
  *   - 502 { detail: { code: "payment_processor_error", message } }
  */
@@ -134,6 +144,15 @@ const FINALIZING_ALERT: PaymentAlert = {
   variant: 'info',
   buttons: [{ text: 'Retry', kind: 'retry' }],
 };
+
+// Not an error, and not something a retry or a different card can fix — the
+// trip's GPS trace is being reviewed before we charge. No Change Card/Retry
+// buttons (they'd just re-trip the same hold); a single OK dismisses.
+export const HELD_FOR_REVIEW_ALERT = (message: string): PaymentAlert => ({
+  title: 'Receipt pending verification',
+  message: message || "We're verifying your trip before finalizing your receipt. We'll notify you once it's ready.",
+  variant: 'info',
+});
 
 const RETRY_BACKOFF_MS = [1500, 2500, 3500];
 const MAX_409_RETRIES = RETRY_BACKOFF_MS.length;
@@ -154,6 +173,14 @@ export async function attemptRidePayment(
     // Case 1 — straight success or already-paid idempotent return
     if (data.success === true || data.already_paid === true) {
       return { ok: true, charged: data.charged_amount };
+    }
+
+    // Case 1.5 — pre-charge GPS-spoof gate held this ride. Not a failure to
+    // retry: nothing was charged, and no rider action (retry, different
+    // card) changes the outcome, so this returns its own alert shape rather
+    // than falling into the generic "unexpected response" case below.
+    if (data.held_for_review === true) {
+      return { ok: false, heldForReview: true, alert: HELD_FOR_REVIEW_ALERT(data.message || '') };
     }
 
     // Case 2 — 3DS / SCA challenge

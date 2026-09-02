@@ -67,6 +67,13 @@ async def init_database():
     # See backend/repositories/dispatch_pool.py's module docstring for the
     # Supavisor transaction-mode discipline this pool must follow.
     #
+    # This is the ONLY place dispatch_direct_pool_enabled is read, so it is
+    # sampled once per process: flipping the flag on against a running backend
+    # opens no pool (enabling is a restart), and flipping it off closes none.
+    # Rollback stays a ≤60s no-redeploy operation only because Phase 2's call
+    # sites are required to re-read the flag per dispatch attempt — see the
+    # field comment in schemas.AppSettings for the full contract.
+    #
     # DISPATCH_POOL_DSN is checked FIRST and is empty by default (T8) — every
     # environment until a human sets the Fly secret. That means this whole
     # block short-circuits before ever touching app_settings, so startup with

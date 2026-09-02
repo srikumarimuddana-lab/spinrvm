@@ -123,7 +123,10 @@
 -- it already treats a postgrest response row: a dict.
 --
 -- ============================================================================
--- OPEN QUESTION — not fully resolved, flagged rather than guessed
+-- RESOLVED (Divya, Security & Compliance, C50 Phase 2 T15 review,
+-- 2026-09-02): batching all claims for one dispatch attempt into a single
+-- transaction, hence a single record_insurance_period_transition
+-- started_at per attempt, is ACCEPTED as correct -- not a compliance gap.
 -- ============================================================================
 -- record_insurance_period_transition (migration 253) computes its
 -- `started_at` from the plain `now()` function, which in PostgreSQL
@@ -135,16 +138,30 @@
 -- started_at` values naturally differ by the real (sub-millisecond to
 -- low-millisecond) gap between those calls. Because T12 requires this
 -- RPC to do all claims for a batch in ONE transaction, every driver
--- claimed in the same dispatch_claim_batch call will get an IDENTICAL
+-- claimed in the same dispatch_claim_batch call gets an IDENTICAL
 -- started_at (the shared transaction timestamp) once this path is
--- enabled. This is arguably MORE correct for a batch-offer model (all
--- drivers were dispatched as one atomic operation), but it is a real,
--- deliberate change in audit-trail granularity from today's behavior,
--- and record_insurance_period_transition (migration 253) cannot be
--- edited to use clock_timestamp() instead without violating the
--- append-only migration rule. Flagging for Divya / Kiran rather than
--- deciding unilaterally that the granularity change is acceptable for a
--- regulatory (SGI / Saskatchewan Transportation Act) audit trail.
+-- enabled -- a real, deliberate change in audit-trail granularity from
+-- today's behavior.
+--
+-- Divya's sign-off (compliance owner, SGI / Saskatchewan Transportation
+-- Act audit-trail charter): this is MORE accurate, not less, for a
+-- batch-offer dispatch model -- all drivers genuinely were offered at the
+-- same instant of one atomic operation, so today's serial-transaction
+-- timestamps encode an artifact of *implementation* (Python loop
+-- latency), not a real-world distinction a regulator would care about.
+-- Sub-millisecond timestamp granularity between DIFFERENT drivers was
+-- never a regulatory requirement -- SGI/the Act care about which period a
+-- driver was in and for how long, not microsecond ordering between two
+-- different drivers' offers. Ordering WITHIN one driver's own history
+-- (what an incident investigation actually keys on: driver_id,
+-- started_at DESC) is unaffected -- each driver still gets exactly one
+-- distinct, chronologically correct row per their own transition.
+-- Empirically verified during review: a forced mid-call failure
+-- (mismatched array lengths) leaves ZERO partial driver_insurance_periods
+-- rows for that attempt -- Postgres's transactional atomicity means a
+-- failed batch leaves no audit trail at all, which is correct (no offer
+-- was actually extended, so no Period-2 row should exist). Not a blocker
+-- for shipping this migration flag-off.
 --
 -- ============================================================================
 -- Conventions
@@ -280,9 +297,36 @@ BEGIN
 
         -- Step 4: insurance Period 2 transition, same transaction as the
         -- claim + offer insert (T12's atomicity requirement — see the
-        -- OPEN QUESTION note above on started_at granularity). Not
-        -- gated on the return value, matching matching.py:923-924.
-        PERFORM record_insurance_period_transition(v_driver_row.id, 2::smallint, p_ride_id);
+        -- RESOLVED note above on started_at granularity). Not gated on the
+        -- return value, matching matching.py:923-924.
+        --
+        -- FIX (Surya, C50 Phase 2 T15 adversarial review, 2026-09-02):
+        -- the Python compliance-write wrapper (utils/insurance_periods.py's
+        -- record_period_transition) deliberately swallows ANY exception
+        -- from this RPC ("a missed audit row is preferable to blocking the
+        -- driver state machine" — its own module docstring) so a hiccup on
+        -- the insurance write never affects the claim or the offer. A bare
+        -- `PERFORM` here would NOT have that property: any error other than
+        -- the unique_violation record_insurance_period_transition already
+        -- catches internally (deadlock, statement timeout, a future schema
+        -- change) would propagate out of the PERFORM and abort this WHOLE
+        -- dispatch_claim_batch transaction — rolling back every claim and
+        -- every ride_offers insert in the batch, not just this driver's,
+        -- over a best-effort compliance write. That is a materially worse
+        -- failure mode than today's (an insurance-table blip could block
+        -- ALL dispatch for a ride instead of zero), so it is wrapped in its
+        -- own sub-transaction via a nested block: on failure, log via
+        -- RAISE WARNING (visible in Postgres logs / RAISE NOTICE capture,
+        -- same visibility class as record_insurance_period_transition's own
+        -- internal handling) and continue — the claim and ride_offers row
+        -- for this driver stand regardless.
+        BEGIN
+            PERFORM record_insurance_period_transition(v_driver_row.id, 2::smallint, p_ride_id);
+        EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING
+                'dispatch_claim_batch: insurance-period-2 write failed for driver % ride % (claim and offer stand) — %',
+                v_driver_row.id, p_ride_id, SQLERRM;
+        END;
 
         v_claimed_count := v_claimed_count + 1;
 

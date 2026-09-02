@@ -881,17 +881,6 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             if _direct_pool_enabled:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "direct"})
 
-                # Offer timestamps must exist BEFORE the claim call on this path —
-                # T12's RPC claims, inserts ride_offers, AND writes the insurance
-                # transition in one transaction, so offered_at/expires_at have to
-                # be known at claim time, not after (unlike the PostgREST path,
-                # which computes `now` only once claiming is done). This is the
-                # one deliberate ordering difference from the PostgREST branch,
-                # confined entirely to the flag-on path.
-                now = datetime.now(timezone.utc)
-                _offer_expires_at_dt = now + timedelta(seconds=offer_timeout)
-                _offer_expires_at = _offer_expires_at_dt.isoformat()
-
                 _pool_driver_ids = [d["id"] for d, _eta, _dist in ranked]
                 _pool_eta_by_id = {d["id"]: eta for d, eta, _dist in ranked}
                 _pool_eta_seconds = [eta for _d, eta, _dist in ranked]
@@ -904,6 +893,33 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 # unconditional pre-claim invalidate (driver_repo.py:269).
                 for _did in _pool_driver_ids:
                     await _deps.db_supabase.invalidate_driver_cache(driver_id=_did)
+
+                # Offer timestamps must exist BEFORE the claim call on this path —
+                # T12's RPC claims, inserts ride_offers, AND writes the insurance
+                # transition in one transaction, so offered_at/expires_at have to
+                # be known at claim time, not after (unlike the PostgREST path,
+                # which computes `now` only once claiming is done). This is the
+                # one deliberate ordering difference from the PostgREST branch,
+                # confined entirely to the flag-on path.
+                #
+                # FIX (Tara, C50 Phase 2 T15 adversarial review, 2026-09-02):
+                # computed HERE — immediately before the claim_batch() call —
+                # rather than before the invalidate_driver_cache loop above.
+                # `now` becomes the ride_offers.offered_at persisted by the RPC
+                # and the WS/FCM offer_expires_at the driver-app's countdown is
+                # keyed to (driver-app index.tsx: remaining = offer_expires_at -
+                # Date.now()); computing it before N Redis round-trips would have
+                # baked that latency into the advertised offer, silently
+                # shortening the real response window and skewing the
+                # offered_at audit value away from when the offer actually went
+                # live. Does not eliminate all skew (the RPC's own network +
+                # transaction time still elapses after this point, exactly as it
+                # does for the PostgREST path's `now = datetime.now(...)` call
+                # at the top of the offer_insert phase further below), but
+                # removes the one avoidable, measured chunk of it.
+                now = datetime.now(timezone.utc)
+                _offer_expires_at_dt = now + timedelta(seconds=offer_timeout)
+                _offer_expires_at = _offer_expires_at_dt.isoformat()
 
                 try:
                     _pool_results = await _dispatch_pool.claim_batch(

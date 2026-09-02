@@ -250,6 +250,7 @@ try:
     from .repositories.driver_repo import (  # noqa: F401 — re-exported
         claim_driver_atomic,
         claim_ride_atomic,
+        dispatch_candidate_drivers,
         find_nearby_drivers,
         get_driver_by_id,
         get_driver_by_user_id_cached,
@@ -263,6 +264,7 @@ except ImportError:
     from repositories.driver_repo import (  # type: ignore  # noqa: F401
         claim_driver_atomic,
         claim_ride_atomic,
+        dispatch_candidate_drivers,
         find_nearby_drivers,
         get_driver_by_id,
         get_driver_by_user_id_cached,

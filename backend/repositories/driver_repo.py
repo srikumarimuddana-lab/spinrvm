@@ -119,6 +119,64 @@ async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> L
     return await run_sync(_fn)
 
 
+async def dispatch_candidate_drivers(
+    lat: float,
+    lng: float,
+    radius_m: float,
+    vehicle_type_ids: List[str],
+    *,
+    requires_wav: bool = False,
+    area_ids: Optional[List[str]] = None,
+    allow_unassigned_area: bool = True,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """Candidate drivers for dispatch, via the PostGIS GiST index (migration 395).
+
+    The indexed replacement for the bounding-box + Python-haversine candidate
+    fetch in ``routes/rides/matching.py``. Two behavioural notes that matter to
+    callers:
+
+    - ``radius_m`` must ALREADY carry the padding ``dispatch_geo_bounds`` applies
+      (``radius_km * 1.10 + 1.0``). The RPC returns a superset of the true
+      circle on purpose, exactly as the box did, because
+      ``filter_and_rank_drivers`` is and remains the exact distance gate. Passing
+      an unpadded radius would silently tighten dispatch.
+    - Rows come back distance-ordered, so ``limit`` truncates the FARTHEST
+      candidates rather than an arbitrary set — which is the row-501 bug in the
+      box path.
+
+    Raises rather than returning ``[]`` on a DB error. "No drivers nearby" and
+    "the database did not answer" must not look alike to dispatch: the caller
+    re-arms its retry chain on an exception, but would strand the ride until the
+    sweeper cancels it if a failure were reported as an empty pool.
+    """
+    if not supabase:
+        return []
+
+    params: Dict[str, Any] = {
+        "p_lat": float(lat),
+        "p_lng": float(lng),
+        "p_radius_m": float(radius_m),
+        # A LIST, not a scalar: the cascade path in matching.py widens to a set
+        # of upgrade vehicle types (`$in`), and a scalar RPC could not serve it.
+        # drivers.vehicle_type_id is TEXT, so coerce — a UUID object or int id
+        # from a caller would silently match no rows.
+        "p_vehicle_type_ids": [str(v) for v in vehicle_type_ids],
+        "p_requires_wav": bool(requires_wav),
+        # NULL (not an empty array) means "no area restriction" — an empty array
+        # would match nothing and blank the candidate pool.
+        "p_area_ids": [str(a) for a in area_ids] if area_ids else None,
+        "p_allow_unassigned_area": bool(allow_unassigned_area),
+        "p_limit": int(limit),
+    }
+
+    def _fn():
+        res = supabase.rpc("dispatch_candidate_drivers", params).execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn, retry_policy="read")
+
+
 async def update_driver_location(driver_id: str, lat: float, lng: float, heading=None):
     if not supabase:
         _write_skipped("update_driver_location", "drivers")

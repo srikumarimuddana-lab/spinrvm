@@ -491,9 +491,15 @@ async def persist_idle_location_batch(
 
     ride_window_start = None
     if isinstance(active_ride, dict):
+        # Period 2 starts on assignment, not acceptance (CLAUDE.md) — same
+        # precedence as ride_settlement.py / ride_complete.py /
+        # backfill_period_distances.py. assigned_at must be checked before
+        # driver_accepted_at, or a driver's ride window is misdetected as
+        # starting late, letting Period-2 idle points slip past this guard
+        # and get double-counted as deadhead.
         ride_window_start = (
-            parse_iso_utc(active_ride.get("driver_accepted_at"))
-            or parse_iso_utc(active_ride.get("assigned_at"))
+            parse_iso_utc(active_ride.get("assigned_at"))
+            or parse_iso_utc(active_ride.get("driver_accepted_at"))
             or parse_iso_utc(active_ride.get("created_at"))
         )
 

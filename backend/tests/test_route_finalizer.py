@@ -52,6 +52,24 @@ def _route_row(**overrides) -> dict:
     return route
 
 
+def test_route_window_prefers_assigned_at_over_driver_accepted_at_for_pickup_leg():
+    # Period 2 starts on assignment, not acceptance (CLAUDE.md). With
+    # include_pickup_leg widening the window, a point captured between
+    # assigned_at and driver_accepted_at must still be selected as P2
+    # evidence, not dropped as "before the window".
+    ride = {
+        "assigned_at": "2026-07-17T20:58:00Z",
+        "driver_accepted_at": "2026-07-17T20:59:00Z",
+        "ride_started_at": "2026-07-17T21:00:00Z",
+        "ride_completed_at": "2026-07-17T21:10:00Z",
+    }
+    between_point = {"captured_at": "2026-07-17T20:58:30Z", "sequence_number": 0}
+
+    selected = route_finalizer._route_window_points([between_point], ride, include_pickup_leg=True)
+
+    assert selected == [between_point]
+
+
 def test_mark_route_pending_upserts_versioned_completion_metadata(monkeypatch):
     update = AsyncMock()
     monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)

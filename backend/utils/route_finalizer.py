@@ -96,8 +96,13 @@ def _route_window_points(points: list[Any], ride: Dict[str, Any], *, include_pic
     """
     window_start = parse_iso_utc(ride.get("ride_started_at") or ride.get("started_at"))
     if include_pickup_leg:
+        # Period 2 starts on assignment, not acceptance (CLAUDE.md) — same
+        # precedence as ride_settlement.py / ride_complete.py /
+        # backfill_period_distances.py. assigned_at must be checked first,
+        # or the widened P2 window starts late and drops early pickup-leg
+        # route points that should have finalized as Period-2 geometry.
         window_start = (
-            parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("assigned_at")) or window_start
+            parse_iso_utc(ride.get("assigned_at")) or parse_iso_utc(ride.get("driver_accepted_at")) or window_start
         )
     completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("completed_at"))
     if window_start is None or completed_at is None or completed_at < window_start:

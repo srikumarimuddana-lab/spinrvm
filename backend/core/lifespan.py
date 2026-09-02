@@ -192,10 +192,26 @@ async def lifespan(app: FastAPI):
     # actually ran them.
     _spawned_loop_names: list[str] = []
 
+    # WS-A: loops that measure or diagnose THIS process rather than doing batch
+    # work on shared state. They must run in every role — a web machine with no
+    # capacity watchdog is a web machine whose thread-pool saturation is
+    # invisible, which is the opposite of what the split is for.
+    _ALWAYS_ON_LOOPS = frozenset({"capacity_watchdog (60s)"})
+
+    _process_role = settings.PROCESS_ROLE.lower()
+    _skip_for_role = _process_role == "web"
+
     def _spawn(name: str, coro_factory):
+        # Recorded BEFORE any skip branch. The watchdog-coverage check below
+        # asserts every loop is registered, and that assertion has to hold
+        # identically whether or not this particular process runs the loop —
+        # otherwise a `web` machine would "pass" coverage by never spawning.
         _spawned_loop_names.append(name)
         if _skip_background_loops:
             logger.info(f"Skipped background task in ENV=test: {name}")
+            return
+        if _skip_for_role and name not in _ALWAYS_ON_LOOPS:
+            logger.info(f"Skipped background task: {name} (role=web)")
             return
         try:
             task = asyncio.create_task(_restartable(name, coro_factory), name=name)
@@ -826,8 +842,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to start MCP session manager: {e}")
 
-    # Perform startup checks
-    logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")
+    # Perform startup checks. The role and the registered/running split are on
+    # this line because it is the one an operator greps to confirm a web/worker
+    # deploy actually took effect: role=web must show 1 running (the capacity
+    # watchdog) against the full registered count, role=worker/all shows both
+    # numbers equal.
+    logger.info(
+        f"Spinr API startup complete (role={_process_role}, "
+        f"{len(background_tasks)} of {len(_spawned_loop_names)} background loops running)"
+    )
 
     yield
 

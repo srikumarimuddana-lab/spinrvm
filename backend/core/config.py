@@ -179,6 +179,22 @@ class Settings(BaseSettings):
     # Environment
     ENV: str = "development"
 
+    # Which half of the app this process is. WS-A / audit C2: today every
+    # replica runs the HTTP service AND all 40 background loops, so an eight-
+    # machine scale-out means eight copies of every batch loop contending on
+    # best-effort Redis leader locks that fail OPEN.
+    #
+    #   all    — HTTP + every loop. The default, and exactly today's behaviour.
+    #            Local dev, tests, and the Railway standby stay on this.
+    #   web    — HTTP only. Spawns no batch loops (bar the two that measure or
+    #            diagnose *this* process: capacity_watchdog, redis_startup_diagnosis).
+    #   worker — the loops. Still serves HTTP so the platform has a health-check
+    #            target, but is not in the load balancer's pool.
+    #
+    # Set per-process, not app-wide: on Fly, `[env]` applies to every machine in
+    # the app, so the role has to ride in each process group's command string.
+    PROCESS_ROLE: str = "all"
+
     # App Store / Google Play reviewer login accounts. Comma-separated
     # "phone:otp" pairs — E.164 phone and a 4-digit numeric OTP (must match
     # OTP_LENGTH). For these numbers, /auth/send-otp stores the fixed code and
@@ -349,6 +365,45 @@ class Settings(BaseSettings):
                     "(ca-central-1 or equivalent). Do not relax this without "
                     "legal sign-off."
                 )
+
+            # WS-A: a split deployment is only correct if the leader locks that
+            # decide which machine runs a loop actually work. utils/redis_client
+            # falls back to an in-process dict when REDIS_URL is empty, so every
+            # replica would win its own local lock and run every loop — the exact
+            # failure the split exists to prevent, but now silent and spread over
+            # two process groups.
+            #
+            # Scoped to the split roles on purpose. Extending this to role "all"
+            # is a one-line change and the audit recommends it (an empty
+            # REDIS_URL also makes OTP lockout and rate-limit state per-replica
+            # and restart-volatile, which is a real auth-bypass surface), but it
+            # would turn today's silent degradation into a refused boot for the
+            # DEFAULT role — a deployment-behaviour change that needs an explicit
+            # decision, not a side effect of this workstream.
+            if self.PROCESS_ROLE.lower() != "all" and not (self.REDIS_URL or "").strip():
+                raise ValueError(
+                    f"PROCESS_ROLE={self.PROCESS_ROLE!r} requires REDIS_URL in production. "
+                    "Without it the leader locks fall back to a per-process dict, so every "
+                    "replica runs every loop and the web/worker split silently does nothing."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_process_role(self) -> "Settings":
+        """Reject an unrecognised role instead of silently treating it as one.
+
+        A typo (`PROCESS_ROLE=wroker`) must not fall through to a default that
+        happens to run every loop on a machine meant to run none — the failure
+        would be invisible until two replicas double-charged something.
+        """
+        allowed = {"all", "web", "worker"}
+        role = (self.PROCESS_ROLE or "").strip().lower()
+        if role not in allowed:
+            raise ValueError(
+                f"PROCESS_ROLE={self.PROCESS_ROLE!r} is not valid. Expected one of: {', '.join(sorted(allowed))}."
+            )
+        # Normalise so every reader can compare without re-lowering.
+        object.__setattr__(self, "PROCESS_ROLE", role)
         return self
 
     @property

@@ -108,13 +108,52 @@ jobs:
       - name: Run backend tests
         working-directory: backend
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
+          DATABASE_URL: postgresql://postgres:***@localhost:5432/spinr_test
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SECRET_KEY: test-secret-key-for-ci
           ENV: test
         run: |
-          pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 -v
+          # C50 Phase 1 (T11) follow-up: tests/direct_pool and tests/rls each
+          # self-skip via their own conftest.py's DB pre-flight check when no
+          # real Postgres is reachable -- but that check is `_DSN = TEST_DATABASE_URL
+          # or DATABASE_URL` truthiness, and THIS step sets DATABASE_URL to the
+          # fake `postgres:***@localhost...` placeholder above (never meant to be
+          # dialled -- this step's own tests never open a real DB connection).
+          # A truthy fake DSN defeats both self-skips: verified empirically with
+          # `pytest --collect-only` using this exact invocation's env -- both
+          # directories are collected here (no testpaths/ini exclusion covers
+          # them), and tests/direct_pool's conftest.py additionally confirmed via
+          # direct repro that a bare conftest-level `pytestmark` does NOT
+          # propagate to sibling test modules, so the skip silently never fires
+          # for either directory. Left unfixed, this step would try a real
+          # psycopg2.connect() against the fake DSN and fail the job for real
+          # instead of skipping cleanly. Both suites have their own dedicated,
+          # real-Postgres-backed CI steps (this one below for tests/direct_pool;
+          # tests/rls is pre-existing and out of scope here) -- excluded from
+          # collection in this mocked-DB step, not from CI as a whole.
+          pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
+            --ignore=tests/direct_pool --ignore=tests/rls -v
+
+      # C50 Phase 1 (T11, docs/audit/2026-09-02-pgbouncer-direct-pool-
+      # migration-plan.md): real-Postgres tests for the (currently unused --
+      # Phase 2/T12-T13 not yet built) direct dispatch pool module, against
+      # the postgres:15 service already provisioned above for `DATABASE_URL`
+      # -- until this step, nothing in CI ran a real-PG suite against it.
+      # Real credentials (not the `***` placeholder DATABASE_URL the mocked
+      # suite above uses): TEST_DATABASE_URL must carry the actual
+      # `postgres:postgres` service credentials so this job can CREATE
+      # DATABASE for its own throwaway scratch database (see
+      # tests/direct_pool/conftest.py). -c + --confcutdir isolate this run
+      # from backend/tests/conftest.py's coverage gate and mocked-Supabase
+      # stack, same as the pre-existing tests/rls suite (never wired into
+      # CI before this -- confirmed by reading this file end to end).
+      - name: Run direct-pool real-Postgres tests (C50 Phase 1, T11)
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
+        run: |
+          pytest tests/direct_pool -c /dev/null --confcutdir=tests/direct_pool -v
 
       # Codecov upload removed 2026-08-16 (ACTION_ITEMS.md C12 resolved, not
       # deferred): no CODECOV_TOKEN repo secret exists and no one currently

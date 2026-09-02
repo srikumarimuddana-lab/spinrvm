@@ -662,6 +662,19 @@ class AppSettings(BaseModel):
     heatmap_cell_lng_deg: float = 0.006
     heatmap_decay_half_life_days: float = 3.0
     heatmap_refresh_seconds: int = 90
+    # ── C50 Phase 1: direct-pool dispatch rollback switch ────────────────
+    # THIS IS THE ROLLBACK SWITCH for the PostgREST -> direct-pool
+    # (Supavisor/pgbouncer) dispatch migration, ACTION_ITEMS.md C50 —
+    # docs/audit/2026-09-02-pgbouncer-direct-pool-migration-plan.md (T10).
+    # Default False = current PostgREST dispatch claim path, unchanged.
+    # True (Phase 2 only, T12/T13 — not yet built) would route the dispatch
+    # claim/offer/insurance-period write batch through
+    # backend/repositories/dispatch_pool.py's direct AsyncConnectionPool
+    # instead of supabase-py. Flipping this off is the entire rollback
+    # procedure once Phase 2 ships: no redeploy, ≤60s propagation via this
+    # model's settings_loader cache. Also requires DISPATCH_POOL_DSN
+    # (backend/core/config.py) to be set — see that field's comment.
+    dispatch_direct_pool_enabled: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

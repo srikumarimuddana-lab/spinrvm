@@ -167,6 +167,59 @@ def test_insurance_period_2_written_in_same_call(pg_cur):
     assert ended_at is None  # open row -- append-only, never mutated except ended_at
 
 
+def test_insurance_write_failure_does_not_roll_back_claim_or_offer(pg_cur):
+    """Fix from Surya's C50 Phase 2 T15 adversarial review: a failure inside
+    record_insurance_period_transition (anything other than the
+    unique_violation it already handles internally) must NOT abort the
+    whole dispatch_claim_batch transaction -- the claim and the ride_offers
+    row must stand, matching the Python wrapper's existing "compliance
+    write is best-effort" contract (utils/insurance_periods.py).
+
+    Forces a real failure inside record_insurance_period_transition by
+    temporarily renaming it (dispatch_claim_batch's own connection is the
+    container's owner/superuser role, so a plain REVOKE has no effect on a
+    SECURITY DEFINER function's *internal* PERFORM -- it runs as the
+    function's owner, not the invoking role, which is exactly the point of
+    SECURITY DEFINER). Restores the name in a finally block so later tests
+    in this session aren't affected.
+    """
+    _insert_user(pg_cur, "u1")
+    _insert_driver(pg_cur, "d1", "u1")
+    _insert_user(pg_cur, "rider1")
+    _insert_ride(pg_cur, "r1", "rider1")
+
+    pg_cur.execute(
+        "ALTER FUNCTION record_insurance_period_transition(text, smallint, text) "
+        "RENAME TO record_insurance_period_transition_renamed_for_test"
+    )
+    try:
+        rows = _call_claim_batch(pg_cur, "r1", ["d1"], [123], max_offers=1)
+    finally:
+        pg_cur.execute(
+            "ALTER FUNCTION record_insurance_period_transition_renamed_for_test(text, smallint, text) "
+            "RENAME TO record_insurance_period_transition"
+        )
+
+    # The claim + ride_offers insert must have gone through despite the
+    # insurance write failing (undefined_function error) -- this is the
+    # whole point of the fix.
+    assert len(rows) == 1
+    driver_id, claimed, driver_row, ride_offer_id = rows[0]
+    assert claimed is True
+    assert ride_offer_id is not None
+
+    pg_cur.execute("SELECT count(*) FROM ride_offers WHERE driver_id = 'd1'")
+    assert pg_cur.fetchone()[0] == 1
+
+    pg_cur.execute("SELECT is_available FROM drivers WHERE id = 'd1'")
+    assert pg_cur.fetchone()[0] is False  # claim stands
+
+    # And, correctly, NO insurance-period row exists -- the write genuinely
+    # failed and was not silently faked.
+    pg_cur.execute("SELECT count(*) FROM driver_insurance_periods WHERE driver_id = 'd1'")
+    assert pg_cur.fetchone()[0] == 0
+
+
 def test_unavailable_driver_is_skipped_not_offered(pg_cur):
     """A driver with is_available=false at claim time (already claimed by
     something else, or offline) gets a claimed=False row and no

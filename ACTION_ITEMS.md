@@ -19543,6 +19543,102 @@ how much they de-risk a public launch._
   standby still running loops against prod — the plan's §3a), the untracked
   `_DEFAULT_ROW_LIMIT` 200-call-site sweep noted in the P0 change-log (§3b).
 
+### C51. `backend-test` fails at pytest collection — `h3` package used but never pinned in requirements
+- [x] **Status:** the `h3` pin itself is fixed (2026-09-02) — `h3>=4,<5` added to
+  `requirements.in`/`requirements.txt`, `requirements-locked.txt` regenerated
+  (h3==4.5.0 + hashes only, additive — see Files below). Verified locally:
+  `pip install "h3>=4,<5"` then `pytest tests/test_h3_cells.py
+  tests/test_h3_heatmap.py` → 22/22 pass. **But 2 of the original 4 broken
+  test files still fail, from a different, newly-exposed cause — see C52.**
+  Fixing the pin let Python get past the `ModuleNotFoundError` and hit the
+  next import in the same chain, which is a real, separate, pre-existing bug
+  this item did not anticipate. Leaving this item's own scope (the pin) done
+  and tracking the new finding separately rather than folding it in here.
+- **Issue/gap:** `backend/utils/h3_cells.py:19` does `import h3` (Uber's H3
+  geospatial-indexing library, PyPI package `h3`/`h3-py`) — used for
+  dispatch-radius lookup (res 8) and heatmap aggregation (res 9), per its own
+  docstring. `backend/utils/h3_location_index.py` imports from it too. Neither
+  `backend/requirements.txt` nor `backend/requirements-locked.txt` pins `h3`
+  anywhere — grepped both files directly, no entry. The only geospatial-hash
+  package present is `mmh3==5.2.1` (MurmurHash, pulled in transitively via
+  `pyiceberg`) — an unrelated, coincidentally-similar name, not a substitute.
+- **Impact:** `pytest` fails at collection (not at runtime) with
+  `ModuleNotFoundError: No module named 'h3'`, taking down 4 test files —
+  `tests/test_dispatch_candidates.py`, `tests/test_h3_cells.py`,
+  `tests/test_h3_heatmap.py`, `tests/test_h3_location_index.py` — and the
+  whole `backend-test` CI job with them. `backend-test` also uploads the
+  `shared-coverage` artifact that `Money-path coverage floor check` and
+  `Admin/utils coverage floor check` both depend on, so both of those gates
+  cascade-fail too even though neither touches H3 code.
+- **Action:** add `h3` to `backend/requirements.txt` (and regenerate
+  `backend/requirements-locked.txt` via the repo's normal lock step). The
+  actual calls in `h3_cells.py` (`h3.latlng_to_cell`, `h3.grid_disk`,
+  `h3.cell_to_latlng`, `h3.cell_to_boundary`, `h3.is_valid_cell`) are all v4
+  API names, so the pin must be `h3>=4,<5` — not v3 (`h3.geo_to_h3`/
+  `h3.k_ring`/... — different function names entirely, would still crash).
+  After adding it, `pytest tests/test_h3_cells.py tests/test_h3_location_index.py
+  tests/test_h3_heatmap.py tests/test_dispatch_candidates.py` should collect
+  and run cleanly — verify locally before pushing, this hasn't been run
+  against a real `h3` install in this session.
+- **Files:** `backend/requirements.txt`, `backend/requirements-locked.txt`.
+  No application code needs to change — `h3_cells.py`/`h3_location_index.py`
+  are already written correctly against v4, they just have no installable
+  dependency backing them in CI.
+- **Acceptance:** `backend-test` collects without error on `main`; the two
+  cascade coverage-floor checks stop failing as a side effect. **Not yet
+  met** — collection still fails for `test_h3_location_index.py`/
+  `test_dispatch_candidates.py` per C52 below.
+
+### C52. `utils/h3_location_index.py` imports 6 Redis helpers that don't exist in `utils/redis_client.py` — module cannot import at all
+- [ ] **Status:** open — discovered 2026-09-02 while verifying the C51 fix.
+  Masked by C51 until now: Python's import chain failed at the first error
+  (`h3` missing), so this second import error one line later
+  (`utils/h3_location_index.py:43`) was never actually reached until the
+  `h3` pin was fixed.
+- **Issue/gap:** `h3_location_index.py` does
+  `from .redis_client import (get_redis_stats, redis_delete, redis_eval,
+  redis_get, redis_hgetall, redis_hset, redis_set, redis_set_nx,
+  redis_zadd, redis_zrangebyscore_many, redis_zrem)`. Checked each name
+  against `utils/redis_client.py` directly (grep for each `def`): only
+  `get_redis_stats`, `redis_get`, `redis_delete`, `redis_set`, and
+  `redis_set_nx` exist. **Six do not**: `redis_eval`, `redis_hgetall`,
+  `redis_hset`, `redis_zadd`, `redis_zrangebyscore_many`, `redis_zrem`.
+  The module cannot import at all, in production or tests — this isn't a
+  test-only gap like C51 was.
+- **Impact:** `pytest tests/test_h3_location_index.py
+  tests/test_dispatch_candidates.py` fails at collection with
+  `ImportError: cannot import name 'redis_eval' from 'utils.redis_client'`.
+  Checked whether this reaches production: grepped `routes/`, `services/`,
+  `core/` for `h3_location_index`/`dispatch_candidates` — the only
+  importers are `services/dispatch_candidates.py` (which itself is never
+  imported by any router or service outside its own file/tests). **Not
+  currently wired into the live dispatch path** — `fetch_dispatch_candidates`
+  has no caller yet — so this is dead code today, not a live incident. It
+  does mean the H3 dispatch-geo-indexing work (commit `fc6f922`, "add
+  dispatch geo indexing and transactional outbox") shipped a module that
+  has never successfully imported, in any environment, since it landed.
+- **Action:** either (a) implement the 6 missing helpers in
+  `utils/redis_client.py` — `redis_eval` (EVAL/EVALSHA for whatever atomic
+  Lua script the geo-index claim path needs), `redis_hgetall`/`redis_hset`
+  (hash ops), `redis_zadd`/`redis_zrem`/`redis_zrangebyscore_many` (sorted-set
+  ops, the last one presumably batching `ZRANGEBYSCORE` across multiple H3
+  cell keys) — matching the existing helpers' pattern (in-process-dict
+  fallback when `REDIS_URL` unset, per `redis_client.py`'s documented
+  transparency contract), or (b) if `h3_location_index.py`/
+  `dispatch_candidates.py` were superseded by a different implementation
+  before being wired in, confirm that and delete the dead module instead of
+  completing it. Whoever picks this up should check with C50 (PostgREST →
+  direct pool dispatch plan) and the `fc6f922` PR history first — this may
+  already be a known, deliberately-paused piece of that larger effort rather
+  than an oversight.
+- **Files:** `backend/utils/redis_client.py` (add helpers) or
+  `backend/utils/h3_location_index.py` + `backend/services/dispatch_candidates.py`
+  + their test files (delete, if superseded). Not touched by this session —
+  flagged only, not fixed; implementing 6 new Redis primitives correctly
+  (atomicity, fallback behavior, tests) is well beyond a scoped follow-up.
+- **Acceptance:** `pytest tests/test_h3_location_index.py
+  tests/test_dispatch_candidates.py` collects and passes.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

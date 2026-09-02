@@ -59,6 +59,14 @@ google-cloud-firestore>=2.27.0
 
 
 # Utilities
+# H3 geospatial indexing (Uber's H3, https://h3geo.org) — dispatch-radius
+# lookup and heatmap aggregation (backend/utils/h3_cells.py,
+# h3_location_index.py). Was imported in code but never pinned here, so
+# `pytest` failed at collection with ModuleNotFoundError (ACTION_ITEMS.md
+# C51). Pin to the 4.x line — h3_cells.py calls v4 API names
+# (latlng_to_cell/grid_disk/cell_to_latlng/cell_to_boundary/is_valid_cell),
+# not v3 (geo_to_h3/k_ring/...).
+h3>=4,<5
 python-dateutil>=2.9.0
 pytz>=2026.2
 tenacity>=9.1.4

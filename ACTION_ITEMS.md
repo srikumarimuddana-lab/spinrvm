@@ -19738,6 +19738,136 @@ how much they de-risk a public launch._
   tests/test_h3_index_reconciler.py tests/test_outbox_worker.py` all
   collect and pass (currently 5 failures across the three files).
 
+### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle
+- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+  pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
+- **Issue/gap:** `_match_driver_to_ride_attempt`'s batch-claim loop
+  (`backend/routes/rides/matching.py:822-842`) calls
+  `claim_driver_atomic(driver["id"])` once per ranked candidate, appending
+  each successfully-claimed-and-revalidated driver to `claimed_drivers`. If
+  `claim_driver_atomic` **raises** (not just returns `None`) on a later
+  iteration — e.g. a `DatabaseError` from `run_sync` on a transient Supabase
+  blip, per the same failure class already regression-tested for the sibling
+  `match_and_claim_driver` helper in `test_dispatch_db_errors.py` — the
+  exception propagates straight out of the `for` loop. Every driver claimed
+  in *earlier* iterations of that same loop is left `is_available=false`
+  with `availability_claimed_at` set, but never released, because there is
+  no `try/except` around the loop body. This is asymmetric with the
+  `ride_offers` insert failure a few lines below (matching.py:860-871),
+  which *does* release every claimed driver via `set_driver_available`
+  before re-raising, and is covered by
+  `test_ride_offers_insert_failure_releases_claims_and_reraises`.
+- **Why it matters:** the outer `match_driver_to_ride` recovery shell
+  (matching.py:152-169) catches the re-raised exception and re-arms
+  `_dispatch_retry`, so the *ride* recovers. But the orphaned drivers stay
+  claimed-but-unoffered until `utils/driver_claim_reaper.py`'s 90s age
+  threshold plus its own ~60s tick interval elapse (worst case ~150s) —
+  during which those drivers are silently pulled out of the available pool
+  for every other ride's dispatch, directly hurting match rate (KPI target
+  ≥85%) for that window. The reaper's release-on-timeout is a real
+  mitigation, not a full substitute for the immediate release the
+  `ride_offers` failure path already gets.
+- **Action:** wrap the claim loop body (or at least the
+  `claim_driver_atomic` call) in a `try/except` that releases every driver
+  already appended to `claimed_drivers` via `set_driver_available(d["id"],
+  True)` before re-raising — mirroring the existing `ride_offers` insert
+  failure handler's pattern exactly. Add a regression test parallel to
+  `test_ride_offers_insert_failure_releases_claims_and_reraises` that raises
+  from `claim_driver_atomic` on the 2nd of 2 candidates and asserts the 1st
+  claimed driver is released.
+- **Files:** `backend/routes/rides/matching.py` (the claim loop),
+  `backend/tests/test_dispatch_match_attempt_branches.py` (new test).
+- **Acceptance:** a `claim_driver_atomic` exception on candidate N releases
+  every driver claimed at candidates 1..N-1 before the exception reaches the
+  `match_driver_to_ride` recovery shell; new regression test passes; no
+  behavior change to the successful-claim or `ride_offers`-failure paths.
+
+### C55. Insurance-period write-failure alerting: no confirmed live Grafana/Sentry rule; no Period-2 reconciler (only Period-3 has one)
+- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+  pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
+- **Issue/gap:** `record_period_transition` (`backend/utils/insurance_periods.py`)
+  is a deliberate, documented exception to AGENTS.md's no-silent-swallow
+  rule for compliance-grade audit writes — logs at `ERROR` with `exc_info`
+  and increments `spinr_insurance_period_write_failed_total` on failure
+  rather than raising, so a DB blip during dispatch's Period-2-open loop
+  (`matching.py:885-886`) never blocks offering the ride. That design is
+  sound (see the audit doc's §3 for the full justification) but its safety
+  net has two open threads:
+  1. `docs/runbooks/deploy-migration-64-65.md` documents
+     `spinr_insurance_period_write_failed_total` as "**Alert immediately if
+     non-zero**", but `metrics-agent/grafana/alert-rules.yaml` — the actual
+     shipped alert-rule file, which does contain a rule for the sibling
+     `spinr_dispatch_offer_to_accept_duration_ms` P95 metric — has no rule
+     referencing this metric. The runbook's alerting contract is unconfirmed
+     as live.
+  2. `docs/CRITICAL_BUGS_IMPLEMENTATION_PLAN.md`'s WS-12 (§3) specified a
+     `utils/insurance_period_reconciler.py` background loop that would
+     self-heal a missed period-open by deriving the expected period from
+     ride state every 10 minutes — this was never built. Only the
+     Period-3-specific `utils/stale_p3_closer.py` exists (alert-first,
+     closes stale open Period-3 spans), which has no Period-1/2 equivalent.
+     A dropped Period-2-open write (e.g. from the dispatch claim loop) has
+     no automated detection or correction path today beyond the raw
+     write-failed metric.
+- **Why it matters:** insurance-period misclassification is a regulatory/SGI
+  liability per AGENTS.md's own framing. The write path is correctly
+  fail-safe for the ride state machine, but "logged and forgotten" is only
+  as good as the alert that reads the log — and that alert's existence in
+  the live Grafana config could not be confirmed by this review.
+- **Action:** (a) confirm whether `spinr_insurance_period_write_failed_total`
+  has a live alert rule wired anywhere (Grafana, Sentry, PagerDuty) outside
+  this repo's tracked config, and if not, add one to
+  `metrics-agent/grafana/alert-rules.yaml` mirroring the existing P95
+  dispatch-latency rule's structure; (b) decide whether to build the WS-12
+  §3 reconciler loop as originally scoped, or explicitly close that part of
+  WS-12 as out of scope with a documented reason.
+- **Files:** `metrics-agent/grafana/alert-rules.yaml`;
+  `backend/utils/insurance_period_reconciler.py` (new, if built);
+  `docs/CRITICAL_BUGS_IMPLEMENTATION_PLAN.md` (mark WS-12 §3 done or
+  explicitly deferred).
+- **Acceptance:** either a confirmed live alert screenshot/config diff for
+  the write-failed metric, or a reconciler loop landed with tests per the
+  WS-12 §3 spec (kill the RPC mid-transition → reconciler restores the open
+  period on next tick) — whichever the team decides is the actual bar.
+
+### C56. `claim_driver_atomic`'s `run_sync` call uses the default read retry policy, not an explicit write policy
+- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+  pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
+- **Issue/gap:** `backend/repositories/_base.py`'s `run_sync(func,
+  retry_policy: RetryPolicy = "read")` gates retry behavior by policy:
+  `"read"` (3 attempts, 500ms→1500ms backoff), `"idempotent_write"` (2
+  attempts, 750ms), `"write"` (1 attempt, no retry) — a deliberate
+  convention this file uses elsewhere (e.g.
+  `insurance_periods.py`'s RPC call passes `retry_policy="write"`
+  explicitly). `claim_driver_atomic`'s own `run_sync(_claim)` call
+  (`backend/repositories/driver_repo.py:292`) passes no `retry_policy`
+  argument, so it silently falls back to `"read"` — 3 attempts with backoff
+  — despite the underlying operation being a conditional `UPDATE`.
+- **Why it matters:** this is *not* currently a correctness bug — the
+  `.eq("is_available", True)` guard means a retried call after a prior
+  attempt actually succeeded (e.g. the response was lost but the write
+  landed) simply finds 0 rows matching `is_available=true` and returns
+  `None`, which the caller already treats as "not claimed" and safely moves
+  to the next candidate; no double-claim is possible. But 3 retries at
+  500-1500ms backoff on a write sitting inside a P95 < 2s dispatch offer
+  path is a latency risk under real transient-failure conditions that the
+  file's own policy taxonomy exists to prevent, and the omission reads as
+  accidental rather than a considered choice (unlike the explicit
+  `retry_policy="write"` passed for the insurance RPC).
+- **Action:** decide and pass an explicit `retry_policy` for
+  `claim_driver_atomic`'s `run_sync` call — most likely `"idempotent_write"`
+  (the operation is safe to retry per the analysis above, so `"write"`'s
+  zero-retry may be overly conservative, but `"read"`'s 3-attempt budget is
+  likely too generous for a claim sitting inside the offer-latency SLA).
+  Add a comment explaining the choice, consistent with this file's existing
+  convention.
+- **Files:** `backend/repositories/driver_repo.py` (`claim_driver_atomic`).
+- **Acceptance:** an explicit `retry_policy` argument is passed with a
+  one-line rationale comment; existing `claim_driver_atomic` tests in
+  `test_driver_repo_coverage.py` still pass unmodified (the policy choice
+  must not change claim-won/claim-lost semantics, only retry count/timing
+  on a genuine transient failure).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

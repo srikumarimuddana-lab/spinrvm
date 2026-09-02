@@ -73,6 +73,25 @@ production (`settings.ENV == "production"`) and logs+continues everywhere
 else, same as `init_database`. Callers in `matching.py` do not exist yet
 (Phase 2), so nothing today depends on this pool being open — flag OFF means
 this module is inert.
+
+THE FLAG IS READ ONCE, AT STARTUP — WHAT THAT OBLIGATES PHASE 2 TO DO
+----------------------------------------------------------------------
+`init_pool()` is called only from `core/lifespan.init_database`, so the flag
+is sampled exactly once per process. Nothing re-reads it, and nothing closes
+the pool when it flips. Two consequences:
+
+  * Turning the flag ON against a running process does nothing — there is no
+    open pool for a call site to use. Enabling is a restart.
+  * Turning it OFF does NOT close the pool. Rollback works only because
+    Phase 2 (T12/T13) call sites MUST re-read the flag per dispatch attempt
+    (`settings_loader.get_app_settings`, ≤60s cache) and take the PostgREST
+    path when it is false. A leftover open pool serving nobody is harmless.
+
+That per-attempt re-read is the whole rollback story for C50. A Phase 2 that
+instead decides "direct pool or PostgREST" once at startup would silently
+turn the documented ≤60s no-redeploy rollback into a redeploy, so if that
+design changes, the rollback procedure in `schemas.AppSettings` and in the
+plan doc has to change with it.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
--- 400_settings_dispatch_direct_pool_enabled.sql
+-- 401_settings_dispatch_direct_pool_enabled.sql
 --
 -- Rollback:
 --   ALTER TABLE public.settings DROP COLUMN IF EXISTS dispatch_direct_pool_enabled;

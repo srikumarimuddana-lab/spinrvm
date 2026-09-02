@@ -89,6 +89,32 @@ def test_points_inside_active_ride_window_reject_as_ride_active(monkeypatch):
     assert [r["sequence_number"] for r in rows] == [0]
 
 
+def test_ride_window_prefers_assigned_at_over_driver_accepted_at(monkeypatch):
+    # Period 2 starts on assignment, not acceptance (CLAUDE.md) — a point
+    # captured between assigned_at and driver_accepted_at must still reject
+    # as ride_active, not be misdetected as pre-window idle.
+    monkeypatch.setattr(bc.db_supabase, "insert_many_ignore_conflicts", AsyncMock(side_effect=lambda _t, r, **_k: r))
+    assigned_at = datetime.now(timezone.utc) - timedelta(minutes=6)
+    accepted_at = datetime.now(timezone.utc) - timedelta(minutes=4)
+    active_ride = {
+        "id": "ride-9",
+        "assigned_at": assigned_at.isoformat(),
+        "driver_accepted_at": accepted_at.isoformat(),
+    }
+
+    result, rows = _run(
+        bc.persist_idle_location_batch(
+            "drv-1",
+            SESSION,
+            [_pt(0, minutes_ago=10), _pt(1, minutes_ago=5)],  # 1 is between assigned_at and accepted_at
+            active_ride=active_ride,
+        )
+    )
+
+    assert [r.reason for r in result.ack.rejected] == ["ride_active"]
+    assert [r["sequence_number"] for r in rows] == [0]
+
+
 def test_insert_conflict_fallback_plain_insert(monkeypatch):
     monkeypatch.setattr(bc.db_supabase, "insert_many_ignore_conflicts", AsyncMock(side_effect=RuntimeError("no index")))
     plain = AsyncMock(side_effect=lambda _t, rows: rows)

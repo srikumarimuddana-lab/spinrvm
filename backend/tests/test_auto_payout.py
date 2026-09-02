@@ -376,7 +376,12 @@ class TestRunWeeklyAutoPayout:
         assert result["drivers_eligible"] == 0
 
     @pytest.mark.anyio
-    async def test_over_cap_balance_skipped_for_review(self):
+    async def test_over_cap_balance_held_for_review(self):
+        """Over-cap is now a durable, ops-visible hold (like every other
+        skip reason) rather than a free-text error — status is 'completed'
+        because nothing actually failed; the hold itself is what carries
+        the signal (skipped_summary + a 'held_over_cap' payouts row +
+        driver push), asserted in TestOverCapHold below."""
         from backend.utils.auto_payout import run_weekly_auto_payout
 
         tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
@@ -387,7 +392,8 @@ class TestRunWeeklyAutoPayout:
             result = await run_weekly_auto_payout()
         transfer.assert_not_called()
         assert result["drivers_paid"] == 0
-        assert result["status"] in ("partial", "failed")  # surfaced, not silent
+        assert result["skipped"]["over_cap"] == 1
+        assert result["skipped_drivers"]["over_cap"] == [DRIVER_ID]
 
     @pytest.mark.anyio
     @pytest.mark.parametrize(
@@ -557,6 +563,52 @@ class TestRunWeeklyAutoPayout:
 # ── Blocked-driver notification + ops work-list ────────────────────────
 
 
+class TestFetchCandidateDrivers:
+    @pytest.mark.anyio
+    async def test_no_server_side_stripe_account_filter(self):
+        """Regression guard for the no_stripe_account visibility gap: the
+        weekly batch must see EVERY driver so _eligibility_skip_reason (not
+        the DB query) decides who lacks a Stripe account. Pre-filtering
+        server-side made those drivers invisible to the batch's own
+        skipped_summary and its driver-facing push notification."""
+        from backend.utils.auto_payout import _fetch_candidate_drivers
+
+        seen_filters = []
+
+        async def get_rows(table, filters=None, **kw):
+            seen_filters.append(filters)
+            return []
+
+        with patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows):
+            await _fetch_candidate_drivers()
+
+        assert seen_filters == [{}]
+
+    @pytest.mark.anyio
+    async def test_driver_without_stripe_account_is_skipped_and_notified(self):
+        """End-to-end: a driver with no stripe_account_id at all (not just a
+        disabled one) must still be classified, counted in skipped_summary,
+        and pushed the "connect your payout account" nudge — the same
+        treatment every other skip reason already gets."""
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {
+            "drivers": [_driver(stripe_account_id=None)],
+            "rides_completed": [_ride(driver_earnings="120.00", tax_amount="0.00")],
+        }
+        notify = AsyncMock()
+        with _apply([*_run_patches(tables), patch("backend.utils.auto_payout._notify_driver", notify)]):
+            result = await run_weekly_auto_payout()
+
+        assert result["skipped"]["no_stripe_account"] == 1
+        assert result["skipped_drivers"]["no_stripe_account"] == [DRIVER_ID]
+        notify.assert_awaited_once()
+        _, title, body, data = notify.await_args.args
+        assert "Connect" in title
+        assert "$120.00" in body
+        assert data["reason"] == "no_stripe_account"
+
+
 class TestBlockedDriverVisibility:
     @pytest.mark.anyio
     async def test_blocked_driver_with_balance_is_notified_and_recorded(self):
@@ -721,6 +773,150 @@ class TestBlockedDriverVisibility:
         assert blocked[0]["pending_amount"] == "75.00"
 
 
+class TestOverCapHold:
+    """Gap #1 remediation: an over-cap balance gets a durable
+    'held_over_cap' payouts row and a dedicated metric label, instead of
+    vanishing into the batch's free-text errors[]."""
+
+    @pytest.mark.anyio
+    async def test_writes_durable_held_row_and_metric(self):
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
+        inserts = []
+
+        async def track_insert(table, doc):
+            inserts.append((table, doc))
+
+        metric = MagicMock()
+        with _apply(
+            [
+                *_run_patches(tables, insert=AsyncMock(side_effect=track_insert)),
+                patch("backend.utils.auto_payout._metric_inc", metric),
+            ]
+        ):
+            result = await run_weekly_auto_payout()
+
+        held = next(doc for table, doc in inserts if table == "payouts" and doc["status"] == "held_over_cap")
+        assert held["id"] == f"held-{DRIVER_ID}-{WEEK_KEY}"
+        assert held["driver_id"] == DRIVER_ID
+        assert held["amount"] == Decimal("9000.00")
+        assert held["payout_type"] == "auto"
+        assert "exceeds cap" in held["failure_reason"]
+        metric.assert_any_call("spinr_bgloop_errors_total", {"loop": "auto_payout", "reason": "over_cap"})
+        assert result["skipped"]["over_cap"] == 1
+
+    @pytest.mark.anyio
+    async def test_driver_is_notified(self):
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
+        notify = AsyncMock()
+        with _apply([*_run_patches(tables), patch("backend.utils.auto_payout._notify_driver", notify)]):
+            await run_weekly_auto_payout()
+
+        notify.assert_awaited_once()
+        _, title, body, data = notify.await_args.args
+        assert "$9000.00" in body
+        assert data["reason"] == "over_cap"
+
+    @pytest.mark.anyio
+    async def test_duplicate_hold_insert_is_idempotent(self):
+        """A resumed batch pass reaching an already-held driver again must
+        not raise — the row from the earlier pass already covers it."""
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
+
+        async def insert_duplicate_held_only(table, doc):
+            if table == "payouts" and doc.get("status") == "held_over_cap":
+                raise DuplicateRecordError()
+
+        with _apply([*_run_patches(tables, insert=AsyncMock(side_effect=insert_duplicate_held_only))]):
+            result = await run_weekly_auto_payout()
+
+        assert result["skipped"]["over_cap"] == 1  # still recorded on the ops work-list
+
+    @pytest.mark.anyio
+    async def test_find_blocked_drivers_surfaces_this_weeks_hold(self):
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers" and "id" not in filters:
+                return []  # no gate-blocked drivers in the primary scan
+            if table == "payouts" and filters.get("status") == "held_over_cap":
+                return [
+                    {
+                        "id": f"held-{DRIVER_ID}-{WEEK_KEY}",
+                        "driver_id": DRIVER_ID,
+                        "amount": "9000.00",
+                        "status": "held_over_cap",
+                    }
+                ]
+            if table == "drivers" and "id" in filters:
+                return [_driver(service_area_id="sa_regina")]
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+        ):
+            blocked = await find_blocked_drivers(limit=50)
+
+        assert len(blocked) == 1
+        assert blocked[0] == {
+            "driver_id": DRIVER_ID,
+            "reason": "over_cap",
+            "pending_amount": "9000.00",
+            "service_area_id": "sa_regina",
+        }
+
+    @pytest.mark.anyio
+    async def test_find_blocked_drivers_excludes_prior_week_hold(self):
+        """A hold from a prior week is stale — this week's run either
+        re-held (a fresh row would exist) or paid the driver."""
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers" and "id" not in filters:
+                return []
+            if table == "payouts" and filters.get("status") == "held_over_cap":
+                return [{"id": f"held-{DRIVER_ID}-2026-W01", "driver_id": DRIVER_ID, "amount": "9000.00"}]
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+        ):
+            blocked = await find_blocked_drivers(limit=50)
+
+        assert blocked == []
+
+    @pytest.mark.anyio
+    async def test_find_blocked_drivers_respects_service_area_filter(self):
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers" and "id" not in filters:
+                return []
+            if table == "payouts" and filters.get("status") == "held_over_cap":
+                return [{"id": f"held-{DRIVER_ID}-{WEEK_KEY}", "driver_id": DRIVER_ID, "amount": "9000.00"}]
+            if table == "drivers" and "id" in filters:
+                return [_driver(service_area_id="sa_saskatoon")]
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+        ):
+            blocked = await find_blocked_drivers(limit=50, service_area_id="sa_regina")
+
+        assert blocked == []  # held driver is in a different market
+
+
 # ── Stale-reserved sweep ───────────────────────────────────────────────
 
 
@@ -872,6 +1068,84 @@ class TestAdminAutoPayoutViews:
         assert "migration" not in exc_info.value.detail
 
 
+class TestAdminRunNow:
+    """POST /admin/auto-payouts/run-now — the super_admin-gated manual
+    trigger. Depends() wiring (module mount + require_super_admin) is
+    exercised by calling the handler directly with a stand-in admin dict,
+    same pattern as the other admin-view tests above."""
+
+    class _FakeBackgroundTasks:
+        def __init__(self):
+            self.tasks = []
+
+        def add_task(self, fn, *args, **kwargs):
+            self.tasks.append((fn, args, kwargs))
+
+    @pytest.mark.anyio
+    async def test_audits_before_enqueueing_and_returns_triggered(self):
+        from backend.routes.admin.auto_payouts import run_auto_payout_now
+
+        audit_calls = []
+
+        async def fake_audit(admin, action, resource, resource_id, details):
+            audit_calls.append((action, resource, resource_id))
+
+        bg = self._FakeBackgroundTasks()
+        with (
+            patch("backend.routes.admin.auto_payouts.log_admin_action", fake_audit),
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+        ):
+            result = await run_auto_payout_now(background_tasks=bg, admin={"id": "admin_1"})
+
+        assert result == {
+            "status": "triggered",
+            "week_key": WEEK_KEY,
+            "batch_id": BATCH_ID,
+            "detail": "Running in the background. Poll GET /auto-payouts/batches?week_key= for status.",
+        }
+        assert audit_calls == [("auto_payout_run_now_triggered", "auto_payout_batch", BATCH_ID)]
+        assert len(bg.tasks) == 1  # exactly one background task enqueued, never run inline
+
+    @pytest.mark.anyio
+    async def test_background_task_calls_run_weekly_auto_payout(self):
+        """The enqueued callable must actually invoke the batch — a wiring
+        bug here would silently no-op every 'run now' click.
+
+        run_auto_payout_now imports run_weekly_auto_payout locally (dual-
+        import pattern), so the patch must be live for BOTH the handler
+        call (which binds the closure's reference) and the later fn() call."""
+        from backend.routes.admin.auto_payouts import run_auto_payout_now
+
+        bg = self._FakeBackgroundTasks()
+        run_mock = AsyncMock(return_value={"status": "completed"})
+        with (
+            patch("backend.routes.admin.auto_payouts.log_admin_action", AsyncMock()),
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.run_weekly_auto_payout", run_mock),
+        ):
+            await run_auto_payout_now(background_tasks=bg, admin={"id": "admin_1"})
+            fn, args, kwargs = bg.tasks[0]
+            await fn(*args, **kwargs)
+        run_mock.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_background_task_failure_is_swallowed_not_raised(self):
+        """A crash in the batch must not propagate out of the fire-and-forget
+        background task (FastAPI would otherwise log an unhandled exception
+        with no admin-facing signal beyond the logs)."""
+        from backend.routes.admin.auto_payouts import run_auto_payout_now
+
+        bg = self._FakeBackgroundTasks()
+        with (
+            patch("backend.routes.admin.auto_payouts.log_admin_action", AsyncMock()),
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.run_weekly_auto_payout", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            await run_auto_payout_now(background_tasks=bg, admin={"id": "admin_1"})
+            fn, args, kwargs = bg.tasks[0]
+            await fn(*args, **kwargs)  # must not raise
+
+
 # ── Instant payout kill switch ─────────────────────────────────────────
 
 
@@ -953,3 +1227,29 @@ class TestStandardCashoutDisabled:
             await request_payout(current_user={"id": "user_001"})
         assert exc_info.value.status_code == 410
         assert len(exc_info.value.detail) <= 140  # driver-app toast clamps at 140 chars
+
+
+# ── error_summary truncation marker ──────────────────────────────────
+
+
+class TestErrorSummaryText:
+    def test_empty_errors_is_none(self):
+        from backend.utils.auto_payout import _error_summary_text
+
+        assert _error_summary_text([]) is None
+
+    def test_under_cap_joins_without_marker(self):
+        from backend.utils.auto_payout import _error_summary_text
+
+        errors = [f"driver_{i}: reserve_error" for i in range(5)]
+        text = _error_summary_text(errors)
+        assert text == "; ".join(errors)
+        assert "more" not in text
+
+    def test_over_cap_states_hidden_count(self):
+        from backend.utils.auto_payout import _MAX_ERROR_SUMMARY_ENTRIES, _error_summary_text
+
+        errors = [f"driver_{i}: reserve_error" for i in range(_MAX_ERROR_SUMMARY_ENTRIES + 7)]
+        text = _error_summary_text(errors)
+        assert text.endswith("(+7 more)")
+        assert "; ".join(errors[:_MAX_ERROR_SUMMARY_ENTRIES]) in text

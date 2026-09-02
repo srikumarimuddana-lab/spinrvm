@@ -215,11 +215,38 @@ _SKIP_NOTIFICATIONS: dict[str, tuple[str, str]] = {
         "Add your SIN",
         "{amount} is waiting to be paid out. Your SIN is needed for your T4A — add it in Payouts.",
     ),
+    "over_cap": (
+        "Your payout needs a quick review",
+        "{amount} is waiting to be paid out. That's above our automatic payout limit, so our team "
+        "will review and send it manually.",
+    ),
 }
 
 # Bound on driver ids recorded per reason in the batch row. Ops needs a
 # work-list, not an unbounded blob; find_blocked_drivers() is the full view.
 _MAX_SKIP_IDS_PER_REASON = 100
+
+# Cap on how many per-driver error strings go into the batch row's free-text
+# error_summary. Past this, entries are dropped silently unless the count is
+# stated explicitly — see _error_summary_text.
+_MAX_ERROR_SUMMARY_ENTRIES = 50
+
+
+def _error_summary_text(errors: list[str]) -> str | None:
+    """Join errors[] for storage, stating the truncation instead of hiding it.
+
+    A bad week (e.g. a Stripe outage mid-run) can produce more entries than
+    the cap; silently dropping the rest would leave ops reading a summary
+    that looks complete when it isn't.
+    """
+    if not errors:
+        return None
+    shown = errors[:_MAX_ERROR_SUMMARY_ENTRIES]
+    text = "; ".join(shown)
+    hidden = len(errors) - len(shown)
+    if hidden > 0:
+        text += f" (+{hidden} more)"
+    return text
 
 
 def _eligibility_skip_reason(driver: dict) -> str | None:
@@ -258,22 +285,16 @@ async def _notify_driver(driver: dict, title: str, body: str, data: dict | None 
         logger.warning("[AUTO-PAYOUT] push notification failed for driver %s", driver.get("id"))
 
 
-async def _handle_skipped_driver(driver: dict, reason: str, skipped_drivers: dict[str, list[str]]) -> None:
-    """Record — and where actionable, notify — a driver the batch cannot pay.
+async def _record_and_notify_blocked(
+    driver: dict, reason: str, balance: Decimal, skipped_drivers: dict[str, list[str]]
+) -> None:
+    """Shared tail of the skip path: work-list entry + actionable push.
 
-    Only drivers with money actually waiting (>= the $10 threshold) are
-    recorded or notified. A driver who never drove has nothing blocked, and
-    telling them a payout was held would be both noise and untrue.
+    Callers already know balance >= MIN_PAYOUT_AMOUNT (or, for over_cap,
+    > MAX_PAYOUT_AMOUNT) — this only records and notifies, it never decides
+    whether a driver is blocked.
     """
     driver_id = driver.get("id")
-    try:
-        balance = await _compute_payable_balance(driver_id)
-    except Exception:
-        logger.exception("[AUTO-PAYOUT] balance check failed for skipped driver %s", driver_id)
-        return
-    if balance < MIN_PAYOUT_AMOUNT:
-        return
-
     ids = skipped_drivers.setdefault(reason, [])
     if len(ids) < _MAX_SKIP_IDS_PER_REASON:
         ids.append(driver_id)
@@ -291,6 +312,129 @@ async def _handle_skipped_driver(driver: dict, reason: str, skipped_drivers: dic
     )
 
 
+async def _handle_skipped_driver(driver: dict, reason: str, skipped_drivers: dict[str, list[str]]) -> None:
+    """Record — and where actionable, notify — a driver the batch cannot pay.
+
+    Only drivers with money actually waiting (>= the $10 threshold) are
+    recorded or notified. A driver who never drove has nothing blocked, and
+    telling them a payout was held would be both noise and untrue.
+    """
+    driver_id = driver.get("id")
+    try:
+        balance = await _compute_payable_balance(driver_id)
+    except Exception:
+        logger.exception("[AUTO-PAYOUT] balance check failed for skipped driver %s", driver_id)
+        return
+    if balance < MIN_PAYOUT_AMOUNT:
+        return
+    await _record_and_notify_blocked(driver, reason, balance, skipped_drivers)
+
+
+def _held_over_cap_id_for(driver_id: str, week_key: str) -> str:
+    return f"held-{driver_id}-{week_key}"
+
+
+_HELD_OVER_CAP_ID_RE = re.compile(r"^held-(?P<driver>.+)-(?P<week>\d{4}-W\d{2})$")
+
+
+async def _record_over_cap_hold(
+    driver: dict, balance: Decimal, week_key: str, skipped_drivers: dict[str, list[str]]
+) -> None:
+    """Durable, queryable state for a driver whose balance exceeds
+    MAX_PAYOUT_AMOUNT — previously this was a log line plus a free-text
+    errors[] entry with no per-driver state: no payout row, no push, and no
+    way for ops to ask "who is over cap right now" except grepping
+    error_summary text across weekly batch rows.
+
+    Reuses the same skip-reporting mechanism every other blocked reason
+    already gets (skipped_drivers work-list + driver push via
+    _record_and_notify_blocked) instead of a separate alert channel, plus a
+    'held_over_cap' payouts row so ``SELECT * FROM payouts WHERE status =
+    'held_over_cap'`` is a real answer, not just a log search. That status
+    is deliberately NOT in migration 250's idx_payouts_one_inflight_per_driver
+    set (reserved|pending|transfer_completed) — a held row must never block
+    a future in-flight payout for the same driver.
+
+    Idempotent on (driver_id, week_key): a resumed batch pass that reaches
+    an already-over-cap driver again just no-ops the insert.
+    """
+    driver_id = driver.get("id")
+    held_id = _held_over_cap_id_for(driver_id, week_key)
+    try:
+        await db_supabase.insert_one(
+            "payouts",
+            {
+                "id": held_id,
+                "driver_id": driver_id,
+                "amount": balance,  # Decimal — _serialize_for_api handles it
+                "status": "held_over_cap",
+                "payout_type": "auto",
+                "bank_name": "Auto Payout",
+                "failure_reason": (f"balance ${balance} exceeds cap ${MAX_PAYOUT_AMOUNT} — held for manual review"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except DuplicateRecordError:
+        pass  # already recorded this week — resumed pass, not a new event
+    except Exception:
+        logger.exception("[AUTO-PAYOUT] failed to record over-cap hold for driver %s", driver_id)
+
+    _metric_inc("spinr_bgloop_errors_total", {"loop": "auto_payout", "reason": "over_cap"})
+    await _record_and_notify_blocked(driver, "over_cap", balance, skipped_drivers)
+
+
+async def _current_week_over_cap_entries(
+    limit: int, service_area_id: str | None, seen_driver_ids: set[str]
+) -> list[dict]:
+    """This week's still-open 'held_over_cap' payout rows, in
+    find_blocked_drivers' output shape.
+
+    Reads the durable rows _record_over_cap_hold() already wrote instead of
+    recomputing a balance per driver — over-cap holds are created only
+    during a run, so the stored amount IS the live answer until next week's
+    run either re-holds (still over cap) or pays the driver (balance back
+    under cap). Keeps this preflight's cost bounded by the held set, not
+    the fleet, matching the gate-based scan above.
+    """
+    if limit <= 0:
+        return []
+    week_key = current_week_key()
+    rows = await db_supabase.get_rows("payouts", {"status": "held_over_cap"}, limit=200, order="created_at", desc=True)
+
+    by_driver: dict[str, dict] = {}
+    for row in rows:
+        m = _HELD_OVER_CAP_ID_RE.match(row.get("id") or "")
+        if not m or m.group("week") != week_key:
+            continue  # a prior week's hold; superseded by this week's run
+        driver_id = m.group("driver")
+        if driver_id in seen_driver_ids or driver_id in by_driver:
+            continue
+        by_driver[driver_id] = row
+    if not by_driver:
+        return []
+
+    driver_ids = list(by_driver.keys())
+    driver_rows = await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=len(driver_ids))
+    area_by_id = {d["id"]: d.get("service_area_id") for d in driver_rows}
+
+    out: list[dict] = []
+    for driver_id, row in by_driver.items():
+        area_id = area_by_id.get(driver_id)
+        if service_area_id and area_id != service_area_id:
+            continue
+        out.append(
+            {
+                "driver_id": driver_id,
+                "reason": "over_cap",
+                "pending_amount": str(_d(row.get("amount") or 0)),
+                "service_area_id": area_id,
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = None) -> list[dict]:
     """Drivers with money waiting that the batch cannot pay RIGHT NOW.
 
@@ -298,6 +442,11 @@ async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = No
     be chased before the run rather than read out of last week's summary.
     Balance is computed only for drivers that fail a gate, so the cost scales
     with the blocked set, not the fleet.
+
+    Also includes this week's 'over_cap' holds (see
+    _current_week_over_cap_entries) — a driver can be over-cap without
+    failing any eligibility gate, so those aren't found by the gate scan
+    above; they're read from the durable rows the weekly run already wrote.
 
     ``service_area_id`` scopes the scan to one market (filtered server-side).
     Note this filters the VIEW only; the batch itself always runs fleet-wide.
@@ -336,6 +485,13 @@ async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = No
         if len(page) < _PAGE_SIZE:
             break
         offset += _PAGE_SIZE
+
+    if len(out) < limit:
+        seen = {o["driver_id"] for o in out}
+        try:
+            out.extend(await _current_week_over_cap_entries(limit - len(out), service_area_id, seen))
+        except Exception:
+            logger.exception("[AUTO-PAYOUT] over-cap preflight lookup failed")
     return out
 
 
@@ -392,14 +548,27 @@ async def _compute_payable_balance(driver_id: str) -> Decimal:
     return total_earnings + total_bonuses - total_payouts
 
 
-async def _fetch_eligible_drivers() -> list[dict]:
-    """Drivers with a Stripe Connect account — filtered server-side."""
+async def _fetch_candidate_drivers() -> list[dict]:
+    """All drivers, unfiltered — eligibility (including having a Stripe
+    account at all) is decided per-driver by _eligibility_skip_reason().
+
+    Previously this pre-filtered to {"stripe_account_id": {"$notnull": True}}
+    server-side, which meant a driver with NO Stripe account never entered
+    the batch loop and so never hit _eligibility_skip_reason's
+    "no_stripe_account" branch — that reason only ever fired from the
+    separate, admin-pulled find_blocked_drivers() preflight. The weekly
+    batch's own skipped_summary silently under-reported the most likely
+    real-world blocker, and those drivers got no "connect your payout
+    account" push from the run itself. See docs/change-log for the fix
+    write-up. Cost: scans the full driver table (already paged at
+    _PAGE_SIZE) instead of just Stripe-connected drivers, weekly.
+    """
     rows: list[dict] = []
     offset = 0
     while True:
         page = await db_supabase.get_rows(
             "drivers",
-            {"stripe_account_id": {"$notnull": True}},
+            {},
             limit=_PAGE_SIZE,
             offset=offset,
             order="id",
@@ -685,7 +854,7 @@ async def run_weekly_auto_payout() -> dict:
             logger.info("[AUTO-PAYOUT] batch %s already claimed by a concurrent replica, skipping", batch_id)
             return {"status": "already_running", "week_key": week_key}
 
-    drivers = await _fetch_eligible_drivers()
+    drivers = await _fetch_candidate_drivers()
     drivers_eligible = 0
     drivers_paid = 0
     drivers_failed = 0
@@ -731,14 +900,11 @@ async def run_weekly_auto_payout() -> dict:
         if balance < MIN_PAYOUT_AMOUNT:
             continue
         if balance > MAX_PAYOUT_AMOUNT:
-            logger.error(
-                "[AUTO-PAYOUT] driver %s balance $%s exceeds cap $%s — skipped for manual review",
-                driver_id,
-                balance,
-                MAX_PAYOUT_AMOUNT,
-            )
-            errors.append(f"{driver_id}: over_cap_requires_review")
-            _metric_inc("spinr_bgloop_errors_total", {"loop": "auto_payout"})
+            # Durable hold + ops-visible skip reason, not just a log line —
+            # see _record_over_cap_hold's docstring for why.
+            skipped["over_cap"] = skipped.get("over_cap", 0) + 1
+            _bump_area(area_id, skipped_n=1)
+            await _record_over_cap_hold(driver, balance, week_key, skipped_drivers)
             continue
 
         drivers_eligible += 1
@@ -858,7 +1024,7 @@ async def run_weekly_auto_payout() -> dict:
                 "drivers_paid": drivers_paid,
                 "drivers_failed": drivers_failed,
                 "total_amount": total_amount,  # Decimal — serialized downstream
-                "error_summary": "; ".join(errors[:50]) if errors else None,
+                "error_summary": _error_summary_text(errors),
                 # counts = everyone skipped; drivers_with_balance = the ones
                 # with money actually held up, i.e. the ops follow-up list.
                 "skipped_summary": ({"counts": skipped, "drivers_with_balance": skipped_drivers} if skipped else None),

@@ -2052,6 +2052,33 @@ class TestPayoutsSummary:
         # 100 earned - 65 money-out = 35 owed — matches earnings.py exactly.
         assert summary["pending_balance"] == 35.0
 
+    def test_held_over_cap_counts_as_money_out_but_not_paid_out(self, test_client, super_admin_override):
+        """'held_over_cap' (utils/auto_payout.py's MAX_PAYOUT_AMOUNT circuit
+        breaker) is a durable row for a balance withheld for manual review —
+        it must reduce pending_balance (the driver can't also request that
+        money elsewhere) but must NOT read as total_paid_out, which would
+        tell an operator the money already reached the driver's bank."""
+
+        def rows(table, filters=None, **kwargs):
+            if table == "rides":
+                return [{"driver_earnings": "6000.00", "tip_amount": "0", "ride_completed_at": "2026-07-01T00:00:00Z"}]
+            if table == "payouts":
+                return [
+                    {"id": "p1", "amount": "6000.00", "status": "held_over_cap", "created_at": "2026-07-02T00:00:00Z"}
+                ]
+            return []
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+        ):
+            resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
+        assert resp.status_code == 200, resp.text
+        summary = resp.json()["summary"]
+        assert summary["pending_in_flight"] == 6000.0
+        assert summary["total_paid_out"] == 0.0  # must NOT read as already sent
+        assert summary["pending_balance"] == 0.0  # still deducted from what's owed
+
 
 # ---------------------------------------------------------------------------
 # admin_refresh_driver_stripe_payouts -- per-driver full Stripe financial sync

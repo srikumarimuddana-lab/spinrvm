@@ -19645,98 +19645,165 @@ how much they de-risk a public launch._
 - **Change log:** `docs/change-log/2026-09-02-c52-redis-helpers-for-h3-index.md`.
 
 ### C53. H3/outbox dark launch (`fc6f922`) has 4 more unwired/incomplete pieces, found while fixing C52
-- [ ] **Status:** open — discovered 2026-09-02, immediately after C52, once
-  `tests/test_h3_location_index.py`/`test_h3_index_reconciler.py`/
+- [ ] **Status:** partially resolved 2026-09-02 — findings 1–3 fixed, finding
+  4 remains open (see below, unchanged: it's the large one, needs a
+  go/no-go before starting). Originally discovered immediately after C52,
+  once `tests/test_h3_location_index.py`/`test_h3_index_reconciler.py`/
   `test_outbox_worker.py` could finally collect for the first time since
-  `fc6f922` landed. All 4 are pre-existing, none touched by the C51/C52 fixes,
-  and none reachable from live traffic today (`dispatch_geo_provider=legacy`
-  by default, `services/dispatch_candidates.py` has zero callers, per C52;
-  `outbox_worker.py`'s own loop is presumably equally unstarted — not
-  independently re-confirmed here). Grouped into one item since they share a
-  root cause (an unverified dark launch) — 1–3 are same-size/same-family and
-  fine to split off individually; #4 is materially larger (see below) and
-  should probably become its own item the moment anyone actually picks it up.
-  1. **`utils/redis_client.py` is missing a second, different set-based
-     trio** (`redis_sadd`, `redis_srem`, `redis_sunion`) that
-     `tests/test_h3_location_index.py::test_redis_set_helpers_union_members`
-     expects but nothing in `h3_location_index.py` actually imports or calls
-     today (it uses ZSETs via the C52 helpers, not SETs). Either a leftover
-     test from an earlier design iteration, or a planned-but-never-built
-     alternate/future path. `ImportError: cannot import name 'redis_sadd'`.
-  2. **`utils/driver_presence.py` never calls `h3_location_index.on_driver_offline`**
-     — `tests/test_h3_location_index.py::test_mark_present_does_not_refresh_h3_ttl`
-     asserts `"on_driver_offline" in <driver_presence.py source>`; grepped
-     `driver_presence.py` directly, zero references to `h3` or
-     `on_driver_offline` anywhere. The go-offline → H3-index-removal wiring
-     this test expects was never built.
-  3. **`routes/admin/monitoring.py`'s H3 rebuild endpoint never actually
-     forces a reconciler tick** —
-     `tests/test_h3_index_reconciler.py::test_admin_rebuild_endpoint_forces_tick`
-     asserts `"await _tick(force=True)" in <monitoring.py source>`; not
-     present.
-  4. **`utils/outbox_worker.py` (the "transactional outbox" half of the same
-     `fc6f922` commit) depends on a function that was never built** —
-     bigger than it first looked. `tests/test_outbox_worker.py` (2 tests)
-     fails at collection: `utils/outbox_worker.py`'s dual-import block
-     (correctly present, try/except both branches) fails its *fallback*
-     branch too, on `from utils.email_provider import EmailDeliveryStatus`
-     — that name doesn't exist in `utils/email_provider.py` (grepped: zero
-     classes defined there at all). Following the actual call site
-     (`_dispatch()` at `outbox_worker.py:167`) further, `payment_service`
-     has **no `send_ride_receipt_result` function either** — grepped
-     `services/payment_service.py` directly, no match. The existing
-     receipt-send path (`payment_service.send_ride_receipt(ride, rider_id,
-     tip_amount, ...)` → `utils/email_receipt.py::send_receipt_email`)
-     returns a plain `bool` (swallows all exceptions internally, logs and
-     returns `False`) with **no failure classification** — no way today to
-     tell "no such recipient, don't retry" (`terminal_skip`) apart from "SES
-     was down, retry" (`retryable_failure`), which `EmailDeliveryStatus`/
-     `EmailDeliveryResult` and the outbox dispatcher's branching logic both
-     assume exists. This is not a missing-import bug like 1–3 above — it's
-     a real, unbuilt piece of the feature: a new `EmailDeliveryStatus`
-     enum + `EmailDeliveryResult` dataclass in `email_provider.py`, a
-     failure-classification design for `email_receipt.py`'s send path
-     (what SES/provider errors count as terminal vs retryable), and a new
-     `payment_service.send_ride_receipt_result(ride_id)` wrapper that fetches
-     the ride and returns the new result type instead of a bare bool.
-- **Why not fixed in C52:** each of these is a distinct piece of actual
-  missing functionality (new Redis primitives with unclear real call sites,
-  a presence→dispatch-index wiring change, an admin-endpoint wiring change,
-  or — for #4 — a real unbuilt failure-classification feature on the
-  receipt-email send path) — none is "finish importing the module that
-  already has working callers," which is what C52 was. Bundling them into
-  C52 would have silently widened a dependency-pin-adjacent fix into
-  multiple unrelated behavior changes on a dispatch/payments-adjacent
-  surface. **#4 in particular is payments/receipts-domain** (CLAUDE.md:
-  "Bias toward caution... on anything touching rides, payments... a wrong
-  assumption there is a regression on a live-tested surface") and needs a
-  real design decision (what counts as a terminal vs retryable send
-  failure) that this session is not making unilaterally — flagged with
-  `AskUserQuestion`-worthy ambiguity, not built.
-- **Action:** for findings 1–3, read the relevant test's full expectations
-  first (closest thing to a spec this dark-shipped feature has), then decide
-  per-piece whether to build the missing wiring or fix/remove the test if
-  it's speculative/stale (finding 1 looks most likely to be the latter —
-  check `fc6f922`'s history / `2026-09-01-h3-dispatch-heatmap.md` for intent
-  before assuming either way). For finding 4, this is a build, not a wiring
-  fix: design and add `EmailDeliveryStatus`/`EmailDeliveryResult` to
-  `email_provider.py`, decide the terminal-vs-retryable classification for
-  `email_receipt.py`'s send failures (needs an actual look at what SES/the
-  email pipeline can report — bounce vs throttle vs auth error, etc. — not
-  a guess), then add `payment_service.send_ride_receipt_result(ride_id)`.
-  Given the payments/receipts domain, treat "what counts as terminal vs
-  retryable" as a real design call worth confirming with the team, not an
-  implementation detail to invent solo.
-- **Files:** `backend/utils/redis_client.py` and/or
-  `backend/tests/test_h3_location_index.py` (finding 1),
-  `backend/utils/driver_presence.py` and/or its test (finding 2),
-  `backend/routes/admin/monitoring.py` and/or its test (finding 3),
-  `backend/utils/email_provider.py` + `backend/utils/email_receipt.py` +
-  `backend/services/payment_service.py` + `backend/utils/outbox_worker.py`
-  (finding 4). Not touched by this session — flagged only.
-- **Acceptance:** `pytest tests/test_h3_location_index.py
-  tests/test_h3_index_reconciler.py tests/test_outbox_worker.py` all
-  collect and pass (currently 5 failures across the three files).
+  `fc6f922` landed.
+  1. **CLOSED.** `tests/test_h3_location_index.py::test_redis_set_helpers_union_members`
+     expected a second, SET-based Redis helper trio (`redis_sadd`/`redis_srem`/
+     `redis_sunion`) that nothing in `h3_location_index.py` ever imported or
+     called (it uses ZSETs via the C52 helpers). Confirmed via `git log
+     --follow` that the whole test file has exactly one commit (`fc6f922`) —
+     no "earlier SET design later replaced by ZSET" history exists, so this
+     was an inconsistency authored in the same commit, not evolution. Worse:
+     the test used the real `spinr:h3:cell:{res}:{cell}` key format, so a SET
+     write to the same key the real ZSET code uses would have been a Redis
+     `WRONGTYPE` collision if this test's functions had ever been built and
+     called for real. Removed the stale test rather than building dead,
+     conflicting functions (CLAUDE.md: simplicity first, no speculative
+     surface area).
+  2. **CLOSED.** Wired `utils/driver_presence.py::clear_presence()` — the
+     single choke point all 7 explicit sign-out/go-offline/force-offline
+     call sites already funnel through (`document_expiry.py`, `spinr_pass.py`,
+     `routes/drivers/status.py`, `routes/websocket.py` disconnect,
+     `routes/rides/matching.py` ×2) — to also call
+     `h3_location_index.on_driver_offline(driver_id)`, matching that
+     function's own docstring ("Always drop the driver — go-offline must not
+     leave a stale index hit"). Harmless no-op today (H3 writes are gated
+     dark, so there's nothing to purge yet) but keeps presence and the geo
+     index from silently diverging once/if the feature activates.
+  3. **CLOSED.** No H3 rebuild endpoint existed anywhere in `routes/admin/`
+     at all (confirmed via grep — `health_snapshot()` from
+     `h3_location_index.py`, purpose-built as "Admin-dashboard payload," had
+     zero callers either). Added `POST /admin/monitoring/dispatch-geo/rebuild`
+     to `routes/admin/monitoring.py` — force-runs
+     `h3_index_reconciler._tick(force=True)` (bypassing the reconciler's
+     leader lock, since an operator explicitly asked), audit-logs
+     success/failure via the existing `log_admin_action` convention, and
+     surfaces a reconciler error as a 503 rather than swallowing it
+     (CLAUDE.md: DB/dispatch errors surface loudly). No GET status/health
+     endpoint was added — `health_snapshot()` still has no admin-dashboard
+     caller; flagged as a natural follow-up, not built here (out of this
+     finding's stated scope).
+  4. **A whole separate, mostly-unbuilt "transactional outbox receipts +
+     dedicated worker process" feature — corrected/expanded 2026-09-02
+     after running the full backend suite (not just the scoped subset
+     used to find items 1–3).** Originally logged as "one missing
+     function"; it is not. Confirmed via full-suite run (13,744 tests,
+     60 failures total — most pre-existing and unrelated, see note below)
+     that the following are **all missing or untested**, each with an
+     existing, already-written test file describing its exact intended
+     contract (a real spec, not speculation — someone designed this
+     feature and wrote its tests before building it):
+     - `utils/email_provider.py`: `EmailDeliveryStatus` enum
+       (`accepted`/`terminal_skip`/`retryable_failure`) + `EmailDeliveryResult`
+       dataclass (`status`, `provider`, `message_id`, `error_code`) +
+       `send_transactional_email_result(...)` — none exist (0 classes
+       defined in the file today).
+     - `utils/email_receipt.py`: `send_receipt_email_result(...)` — doesn't
+       exist (only the existing bool-returning `send_receipt_email`).
+     - `services/payment_service.py`: `send_ride_receipt_result(ride_id)`
+       — doesn't exist. Full contract from
+       `tests/test_ride_receipt_delivery.py` (5 tests): hydrates ride/rider/
+       driver from `ride_id` via `db_supabase`, calls
+       `email_receipt.send_receipt_email_result`, returns its
+       `EmailDeliveryResult` (accepted/terminal_skip/retryable_failure)
+       instead of a bool; a missing ride → `retryable_failure` with
+       `error_code="ride_not_found"`; a missing/empty rider email →
+       `terminal_skip` with `error_code="no_recipient"`, without calling
+       the actual send.
+     - `services/outbox_receipts.py` — **the whole module doesn't exist**.
+       Full contract from `tests/test_outbox_receipts.py` (10 tests, plus
+       `test_manual_resend_is_not_outbox_gated_and_webhooks_use_the_gate`
+       asserting exact call-site wiring): `auto_receipt_is_queued(ride_id)`
+       (delegates to an `is_auto_receipt_queued` outbox-repo lookup) and
+       `maybe_send_auto_receipt(ride, rider_id, tip_amount, spawn=...)`
+       (skip the direct/legacy send when an outbox row is already queued;
+       otherwise fall back to `payment_service.send_ride_receipt`, spawned
+       if a `spawn` callable is given, awaited if not; a lookup failure
+       falls back to the direct/spawned send rather than silently dropping
+       the receipt). The tests expect this to be wired into **4 live
+       payment-settlement call sites**: `routes/rides/payments.py::process_payment`,
+       `routes/webhooks.py::_handle_ride_invoice_paid`,
+       `utils/preauth_capture.py::_capture_one`, and
+       `services/payment_service.py::auto_settle_guest_corporate` — none
+       of which reference `maybe_send_auto_receipt` today.
+     - `worker.py` (repo root, next to `server.py`) — **does not exist at
+       all**. `tests/test_worker_app.py` (10 tests + `worker_client`
+       fixture) describes an entirely separate, dedicated FastAPI process
+       (`/health` + `/metrics` only, explicitly asserted to carry **no**
+       product routers — `/api/v1`, `/rides`, `/admin` all asserted absent)
+       running `run_outbox_worker` plus a `WORKER_WAVE1_LOOP_NAMES` subset
+       of the existing 40 background loops (`push_retry`, `zoho_desk_sync`,
+       `driver_onboarding_reminders` named explicitly), with its own
+       `/health` liveness contract (unhealthy when a supervised task is
+       dead, or a loop hasn't ticked past its grace period) and a
+       Bearer-token-gated `/metrics`. This also implies a new
+       `core/background_loop_registry.py` module
+       (`WORKER_WAVE1_LOOP_NAMES`) that doesn't exist either.
+     - `routes/admin/monitoring.py::get_email_deliverability` — referenced
+       by `tests/test_email_deliverability.py` (aggregates send rows by
+       provider/status/email_type, PII-safe); not confirmed to exist
+       (not read in this pass — flagging as likely-related, not verified).
+     This is an entire planned product/infra feature — a receipts-delivery
+     status model, a new outbox-gated send path wired into 4 live payment
+     call sites, and a second deployable process for background loops —
+     not a bug. **Not started.** ~60 full-suite failures total; most are
+     unrelated pre-existing gaps (admin business-logic/drivers/promo-stats/
+     referral-analytics coverage tests, a loguru-convention check) not
+     re-triaged here — only the ones in this feature's own test files
+     (`test_outbox_worker.py`, `test_outbox_receipts.py`,
+     `test_ride_receipt_delivery.py`, `test_worker_app.py`,
+     `test_email_deliverability.py`) were traced to this cause.
+- **Why finding 4 alone stays open:** it turned out to be a full feature
+  build across 6+ new/changed files touching 4 live payment-settlement
+  paths plus a new deployable process — not "finish importing the module
+  that already has working callers" like 1–3 and C52 were. **Payments/
+  receipts-domain and confirmed large** (CLAUDE.md: "Bias toward caution...
+  on anything touching rides, payments... a wrong assumption there is a
+  regression on a live-tested surface") — this is exactly the "blast radius
+  unclear / touches payments and you're not confident of full impact" case
+  CLAUDE.md's pre-merge gate #9 says to `AskUserQuestion` on rather than
+  build solo, even with tests already written as a spec. Flagged for a real
+  go/no-go and staffing decision, not started unilaterally, despite the
+  tests making it a tractable one to *implement* — the risk here is in
+  wiring 4 live payment call sites and standing up a second deployable
+  process, not in writing the code. Reported to the user 2026-09-02 rather
+  than proceeding silently; user directed "start on findings 1-3 first"
+  same day — 1–3 done, 4 still awaiting a go-ahead.
+- **Action (findings 1–3 — DONE, see per-finding notes above):** removed
+  the stale SET-helper test (1); wired `driver_presence.py::clear_presence()`
+  → `h3_location_index.on_driver_offline` (2); added the admin force-rebuild
+  endpoint to `routes/admin/monitoring.py` (3).
+- **Action (finding 4 — still open):** the tests already fully spec the
+  types, functions, and wiring (see above) — implementation is mechanical
+  against them, but get an explicit go-ahead before starting, given it
+  wires 4 live payment-settlement call sites and stands up a new deployable
+  process (`worker.py`). If given the go-ahead, build in this order: (a)
+  `email_provider.py` types + `send_transactional_email_result`, (b)
+  `email_receipt.py::send_receipt_email_result`, (c)
+  `payment_service.py::send_ride_receipt_result`, (d) fix `outbox_worker.py`'s
+  now-resolvable import and verify `test_outbox_worker.py` passes, (e)
+  `services/outbox_receipts.py` + its 4 call-site wirings — each wiring
+  change is itself risk-bearing on a live payment path and worth its own
+  Change Impact Log entry, (f) `worker.py` + `core/background_loop_registry.py`
+  as a separate, later piece (infra/deploy decision, not just code — a new
+  process needs its own Fly.io/Railway service definition).
+- **Files (finding 4, remaining):** `backend/utils/email_provider.py`,
+  `backend/utils/email_receipt.py`, `backend/services/payment_service.py`,
+  `backend/services/outbox_receipts.py` (new), `backend/utils/outbox_worker.py`,
+  `backend/routes/rides/payments.py`, `backend/routes/webhooks.py`,
+  `backend/utils/preauth_capture.py`, `backend/worker.py` (new),
+  `backend/core/background_loop_registry.py` (new). Not touched by this
+  session — flagged only.
+- **Acceptance:** findings 1–3 met — `pytest tests/test_h3_location_index.py
+  tests/test_h3_index_reconciler.py` collect and pass in full (26/26).
+  Finding 4 still open: `pytest tests/test_outbox_worker.py
+  tests/test_outbox_receipts.py tests/test_ride_receipt_delivery.py
+  tests/test_worker_app.py tests/test_email_deliverability.py` should all
+  collect and pass once built.
 
 ## Recently completed (do not redo)
 

@@ -143,18 +143,6 @@ def test_mark_present_does_not_refresh_h3_ttl():
     assert "on_driver_offline" in src
 
 
-async def test_redis_set_helpers_union_members():
-    from utils.redis_client import redis_sadd, redis_srem, redis_sunion
-
-    await redis_sadd("spinr:h3:cell:8:a", "d1", "d2")
-    await redis_sadd("spinr:h3:cell:8:b", "d2", "d3")
-    union = await redis_sunion(["spinr:h3:cell:8:a", "spinr:h3:cell:8:b"])
-    assert union == {"d1", "d2", "d3"}
-    await redis_srem("spinr:h3:cell:8:a", "d1")
-    left = await redis_sunion(["spinr:h3:cell:8:a"])
-    assert left == {"d2"}
-
-
 async def test_stale_source_ts_does_not_overwrite_newer_fix():
     now = time.time()
     assert await upsert_driver("drv-1", SK_LAT, SK_LNG, source_ts=now)

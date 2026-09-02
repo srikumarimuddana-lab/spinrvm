@@ -344,6 +344,55 @@ async def test_flush_redis_prefix_audit_write_failure_does_not_block_response():
 
 
 # ---------------------------------------------------------------------------
+# Dispatch geo-index force rebuild (ACTION_ITEMS.md C53 finding 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_rebuild_dispatch_geo_index_forces_tick_and_audits_success():
+    tick_result = {"ok": True, "skipped": False, "incomplete": False, "generation": 4, "driver_count": 12, "failed": 0}
+    audit_mock = AsyncMock(return_value="audit-h3-1")
+    with (
+        patch("utils.h3_index_reconciler._tick", AsyncMock(return_value=tick_result)) as tick,
+        patch.object(monitoring, "log_admin_action", audit_mock),
+    ):
+        out = await monitoring.rebuild_dispatch_geo_index(current_admin={"id": "admin-9"})
+    tick.assert_awaited_once_with(force=True)
+    assert out == {"admin_id": "admin-9", **tick_result}
+    audit_mock.assert_awaited_once_with(
+        {"id": "admin-9"},
+        "dispatch_geo_rebuild",
+        "h3_index",
+        "rebuild",
+        {"outcome": "success", **tick_result},
+    )
+
+
+@pytest.mark.anyio
+async def test_rebuild_dispatch_geo_index_failure_is_audited_and_surfaced():
+    """A reconciler error must not be silently swallowed (CLAUDE.md:
+    DB/dispatch errors surface loudly) -- audited as a failure outcome and
+    re-raised as a 503, not masked as a partial success."""
+    from fastapi import HTTPException
+
+    audit_mock = AsyncMock(return_value="audit-h3-2")
+    with (
+        patch("utils.h3_index_reconciler._tick", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch.object(monitoring, "log_admin_action", audit_mock),
+    ):
+        with pytest.raises(HTTPException) as ei:
+            await monitoring.rebuild_dispatch_geo_index(current_admin={"id": "admin-9"})
+    assert ei.value.status_code == 503
+    audit_mock.assert_awaited_once_with(
+        {"id": "admin-9"},
+        "dispatch_geo_rebuild",
+        "h3_index",
+        "rebuild",
+        {"outcome": "failure", "error": "db down"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # WebSocket health
 # ---------------------------------------------------------------------------
 

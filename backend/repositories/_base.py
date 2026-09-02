@@ -16,6 +16,7 @@ import re as _re
 import time as _time
 import traceback
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from contextvars import ContextVar as _ContextVar
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum as _Enum
@@ -44,6 +45,7 @@ try:
     from ..utils.deadline import remaining_seconds as _remaining_seconds
     from ..utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from ..utils.metrics import inc as _metric_inc  # type: ignore
+    from ..utils.metrics import observe as _metric_observe
     from ..utils.metrics import set_gauge as _metric_gauge
     from ..utils.pii import geohash as _geohash  # type: ignore
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
@@ -52,6 +54,7 @@ except ImportError:
     from utils.deadline import remaining_seconds as _remaining_seconds
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe
     from utils.metrics import set_gauge as _metric_gauge
     from utils.pii import geohash as _geohash  # type: ignore
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
@@ -271,6 +274,37 @@ def _jittered(delay: float) -> float:
     return delay * (0.5 + _random.random())
 
 
+# ── Per-task DB call counter ────────────────────────────────────────
+# Tracks how many run_sync calls complete within the current asyncio task
+# (e.g. one dispatch attempt). A ContextVar rather than a module-level int
+# because asyncio tasks each get their own context, so concurrent dispatch
+# attempts on different tasks don't stomp on each other's counts. Counted
+# once per successful run_sync call (i.e. once the retry loop resolves,
+# not once per attempt inside it) — the goal is "how many logical DB
+# operations did this task perform", which the existing per-attempt
+# spinr_db_retry_total counter already tracks at finer granularity.
+_db_call_count: _ContextVar[int] = _ContextVar("_db_call_count", default=0)
+
+
+def reset_db_call_count() -> None:
+    """Reset the current task's DB-call counter to zero.
+
+    Call at the start of a logical unit of work (e.g. a dispatch attempt)
+    before issuing any run_sync calls, so get_db_call_count() reflects only
+    that unit of work.
+    """
+    _db_call_count.set(0)
+
+
+def get_db_call_count() -> int:
+    """Return the number of successful run_sync calls recorded in the current task since the last reset."""
+    return _db_call_count.get()
+
+
+def _incr_db_call_count() -> None:
+    _db_call_count.set(_db_call_count.get() + 1)
+
+
 async def run_sync(
     func: Callable[[], T],
     retry_policy: RetryPolicy = "read",
@@ -330,7 +364,23 @@ async def run_sync(
                 _breaker.release_probe()
                 raise ServiceUnavailableException("database")
 
-            future = loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
+            _submit_time = _time.monotonic()
+
+            def _timed_func(_func=func, _submit_time=_submit_time):
+                """Wraps func to record queue-wait + exec-time histograms.
+
+                Runs inside the executor thread; metrics.observe is documented
+                safe to call from any thread. Default-arg binding avoids the
+                classic late-binding closure bug across retry-loop iterations.
+                """
+                _thread_start = _time.monotonic()
+                _metric_observe("spinr_db_run_sync_queue_wait_ms", (_thread_start - _submit_time) * 1000.0)
+                try:
+                    return _func()
+                finally:
+                    _metric_observe("spinr_db_run_sync_exec_ms", (_time.monotonic() - _thread_start) * 1000.0)
+
+            future = loop.run_in_executor(_DB_EXECUTOR, _timed_func)  # type: ignore
             _record_db_queue_depth()
             try:
                 if remaining is None:
@@ -361,6 +411,7 @@ async def run_sync(
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
             _metric_gauge("spinr_db_thread_pool_threads", len(_DB_EXECUTOR._threads))
             _metric_gauge("spinr_db_thread_pool_max_workers", _DB_EXECUTOR._max_workers)
+            _incr_db_call_count()
             return result
         except ServiceUnavailableException:
             raise

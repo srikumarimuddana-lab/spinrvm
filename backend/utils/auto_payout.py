@@ -414,14 +414,27 @@ async def _compute_payable_balance(driver_id: str) -> Decimal:
     return total_earnings + total_bonuses - total_payouts
 
 
-async def _fetch_eligible_drivers() -> list[dict]:
-    """Drivers with a Stripe Connect account — filtered server-side."""
+async def _fetch_candidate_drivers() -> list[dict]:
+    """All drivers, unfiltered — eligibility (including having a Stripe
+    account at all) is decided per-driver by _eligibility_skip_reason().
+
+    Previously this pre-filtered to {"stripe_account_id": {"$notnull": True}}
+    server-side, which meant a driver with NO Stripe account never entered
+    the batch loop and so never hit _eligibility_skip_reason's
+    "no_stripe_account" branch — that reason only ever fired from the
+    separate, admin-pulled find_blocked_drivers() preflight. The weekly
+    batch's own skipped_summary silently under-reported the most likely
+    real-world blocker, and those drivers got no "connect your payout
+    account" push from the run itself. See docs/change-log for the fix
+    write-up. Cost: scans the full driver table (already paged at
+    _PAGE_SIZE) instead of just Stripe-connected drivers, weekly.
+    """
     rows: list[dict] = []
     offset = 0
     while True:
         page = await db_supabase.get_rows(
             "drivers",
-            {"stripe_account_id": {"$notnull": True}},
+            {},
             limit=_PAGE_SIZE,
             offset=offset,
             order="id",
@@ -707,7 +720,7 @@ async def run_weekly_auto_payout() -> dict:
             logger.info("[AUTO-PAYOUT] batch %s already claimed by a concurrent replica, skipping", batch_id)
             return {"status": "already_running", "week_key": week_key}
 
-    drivers = await _fetch_eligible_drivers()
+    drivers = await _fetch_candidate_drivers()
     drivers_eligible = 0
     drivers_paid = 0
     drivers_failed = 0

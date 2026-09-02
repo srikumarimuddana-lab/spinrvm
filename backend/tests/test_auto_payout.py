@@ -557,6 +557,52 @@ class TestRunWeeklyAutoPayout:
 # ── Blocked-driver notification + ops work-list ────────────────────────
 
 
+class TestFetchCandidateDrivers:
+    @pytest.mark.anyio
+    async def test_no_server_side_stripe_account_filter(self):
+        """Regression guard for the no_stripe_account visibility gap: the
+        weekly batch must see EVERY driver so _eligibility_skip_reason (not
+        the DB query) decides who lacks a Stripe account. Pre-filtering
+        server-side made those drivers invisible to the batch's own
+        skipped_summary and its driver-facing push notification."""
+        from backend.utils.auto_payout import _fetch_candidate_drivers
+
+        seen_filters = []
+
+        async def get_rows(table, filters=None, **kw):
+            seen_filters.append(filters)
+            return []
+
+        with patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows):
+            await _fetch_candidate_drivers()
+
+        assert seen_filters == [{}]
+
+    @pytest.mark.anyio
+    async def test_driver_without_stripe_account_is_skipped_and_notified(self):
+        """End-to-end: a driver with no stripe_account_id at all (not just a
+        disabled one) must still be classified, counted in skipped_summary,
+        and pushed the "connect your payout account" nudge — the same
+        treatment every other skip reason already gets."""
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {
+            "drivers": [_driver(stripe_account_id=None)],
+            "rides_completed": [_ride(driver_earnings="120.00", tax_amount="0.00")],
+        }
+        notify = AsyncMock()
+        with _apply([*_run_patches(tables), patch("backend.utils.auto_payout._notify_driver", notify)]):
+            result = await run_weekly_auto_payout()
+
+        assert result["skipped"]["no_stripe_account"] == 1
+        assert result["skipped_drivers"]["no_stripe_account"] == [DRIVER_ID]
+        notify.assert_awaited_once()
+        _, title, body, data = notify.await_args.args
+        assert "Connect" in title
+        assert "$120.00" in body
+        assert data["reason"] == "no_stripe_account"
+
+
 class TestBlockedDriverVisibility:
     @pytest.mark.anyio
     async def test_blocked_driver_with_balance_is_notified_and_recorded(self):

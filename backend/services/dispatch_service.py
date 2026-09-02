@@ -17,6 +17,7 @@ push / asyncio.create_task machinery in the tests.
 
 import logging
 import math
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -82,6 +83,38 @@ _KM_PER_DEG_LAT = 110.574
 _KM_PER_DEG_LNG_EQUATOR = 111.320
 
 
+# WS-C / audit C4: route the dispatch candidate fetch through the PostGIS GiST
+# index (migration 395) instead of a lat/lng bounding box plus a Python distance
+# loop. OFF by default and read once at import, mirroring SURGE_SPATIAL_COUNT in
+# utils/surge_engine.py — same shape, same fallback-safe contract: if the RPC
+# raises for any reason the caller drops back to the bounding-box query, which is
+# the code that runs today.
+DISPATCH_SPATIAL_CANDIDATES = os.environ.get("DISPATCH_SPATIAL_CANDIDATES", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+
+def _padded_radius_km(radius_km: float) -> float:
+    """Search radius plus the margin that makes the candidate fetch a SUPERSET.
+
+    10% + 1 km, absorbing the degree-conversion approximation in the bounding
+    box and the drift between the raw pin and the road-snapped ``pickup_nav_*``
+    point. Extracted so the bounding-box path and the PostGIS path (WS-C,
+    ``dispatch_candidate_drivers``) cannot drift apart: both must over-fetch by
+    the same amount, because ``filter_and_rank_drivers`` is the exact gate and
+    a tighter fetch would silently shrink the pool it ranks.
+    """
+    return radius_km * 1.10 + 1.0
+
+
+def dispatch_radius_m(radius_km: float) -> float:
+    """``_padded_radius_km`` in metres, for the PostGIS ``ST_DWithin`` call."""
+    return _padded_radius_km(radius_km) * 1000.0
+
+
 def dispatch_geo_bounds(pickup_lat: float, pickup_lng: float, radius_km: float) -> List[Dict[str, Any]]:
     """Lat/lng bounding-box clauses for the dispatch candidate query.
 
@@ -100,7 +133,7 @@ def dispatch_geo_bounds(pickup_lat: float, pickup_lng: float, radius_km: float) 
     matching ``_is_dispatchable_driver`` which already excludes them.
     Longitude wraparound at ±180° is ignored — out of scope for Canada.
     """
-    padded_km = radius_km * 1.10 + 1.0
+    padded_km = _padded_radius_km(radius_km)
     lat_delta = padded_km / _KM_PER_DEG_LAT
     # Clamp cos(lat) so a corrupt polar latitude can't divide by ~zero.
     lng_delta = padded_km / max(_KM_PER_DEG_LNG_EQUATOR * math.cos(math.radians(pickup_lat)), 1e-3)

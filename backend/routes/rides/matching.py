@@ -8,9 +8,14 @@ from datetime import timedelta
 from typing import Any, Dict
 
 try:
+    from ...services.dispatch_service import DISPATCH_SPATIAL_CANDIDATES, dispatch_radius_m
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
 except ImportError:  # pragma: no cover - dual-import pattern
+    from services.dispatch_service import (  # type: ignore
+        DISPATCH_SPATIAL_CANDIDATES,
+        dispatch_radius_m,
+    )
     from services.incentive_service import (  # type: ignore
         incentive_display_payload,
         match_ride_incentives,
@@ -38,6 +43,74 @@ from ._deps import (  # noqa: F401
     sign_offer_card_token,
     timezone,
 )
+
+#: Columns the ranking/filtering path reads. NOT "*": the full driver row carries
+#: encrypted PII (address, licence, vehicle details) that this hot path — up to
+#: 500 rows per dispatch and retry, on every replica — never needs. The offer
+#: payload is built from the post-claim get_driver_by_id re-read.
+_CANDIDATE_COLUMNS = (
+    "id,user_id,lat,lng,rating,is_wav,acceptance_rate,"
+    "destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id"
+)
+
+
+async def _fetch_candidate_drivers(
+    *,
+    box_filter: dict,
+    lat: float,
+    lng: float,
+    radius_km: float,
+    vehicle_type_ids: list,
+    requires_wav: bool,
+    area_ids,
+    allow_unassigned_area: bool,
+    limit: int = 500,
+) -> list:
+    """Candidate driver rows, from the PostGIS RPC when enabled, else the box.
+
+    WS-C / audit C4. ``box_filter`` is the exact dict the caller would have
+    passed to ``get_rows`` — it stays the single definition of the query, and is
+    what runs both when the flag is off and when the RPC fails.
+
+    Falling back is not error-swallowing: it routes to the *existing, proven*
+    code path rather than degrading the result, and it is loud — ``logger.error``
+    plus ``spinr_dispatch_spatial_fallback_total`` — so a persistently failing
+    RPC shows up on a dashboard instead of hiding behind identical behaviour.
+
+    A failure of the FALLBACK still raises. A transient Supabase error is not
+    "no drivers": it must reach match_driver_to_ride's recovery shell, which
+    re-arms the retry chain with backoff, rather than stranding the ride until
+    the sweeper cancels it.
+    """
+    if DISPATCH_SPATIAL_CANDIDATES:
+        try:
+            return await _deps.db_supabase.dispatch_candidate_drivers(
+                lat,
+                lng,
+                # Same 10% + 1 km padding the bounding box uses. The fetch must
+                # stay a SUPERSET of the true circle because
+                # filter_and_rank_drivers is the exact distance gate.
+                dispatch_radius_m(radius_km),
+                vehicle_type_ids,
+                requires_wav=requires_wav,
+                area_ids=sorted(area_ids) if area_ids else None,
+                allow_unassigned_area=allow_unassigned_area,
+                limit=limit,
+            )
+        except Exception as rpc_err:
+            logger.error(
+                "[DISPATCH] spatial candidate RPC failed (%s) — falling back to the bounding-box query",
+                rpc_err,
+                exc_info=True,
+            )
+            _metric_inc("spinr_dispatch_spatial_fallback_total")
+
+    return await _deps.db_supabase.get_rows(
+        "drivers",
+        box_filter,
+        columns=_CANDIDATE_COLUMNS,
+        limit=limit,
+    )
 
 
 async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
@@ -370,15 +443,15 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # A transient Supabase failure here is NOT "no drivers" — it raises to the
     # match_driver_to_ride recovery shell, which re-arms the retry chain with
     # backoff instead of letting the ride strand until the sweeper cancels it.
-    all_drivers = await _deps.db_supabase.get_rows(
-        "drivers",
-        _dispatch_filter,
-        # P1: project only what ranking/filtering reads — NOT "*". The full row
-        # carries encrypted PII (address, licence, vehicle details) that this hot
-        # path (up to 500 rows every dispatch + retry, every replica) never needs;
-        # the offer payload is built from the post-claim get_driver_by_id re-read.
-        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-        limit=500,
+    all_drivers = await _fetch_candidate_drivers(
+        box_filter=_dispatch_filter,
+        lat=_box_lat,
+        lng=_box_lng,
+        radius_km=search_radius,
+        vehicle_type_ids=[ride["vehicle_type_id"]],
+        requires_wav=bool(ride.get("requires_wav")),
+        area_ids=_area_ids,
+        allow_unassigned_area=_allow_unassigned_area,
     )
 
     logger.info(
@@ -388,9 +461,17 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     if len(all_drivers) >= 500:
         # Even inside the box the pool is truncated — the dropped rows are
         # in-radius candidates, so ranking quality degrades. Surface it.
+        #
+        # Severity differs by path, hence the distinction in the message. On the
+        # bounding-box path the 500 are an ARBITRARY slice, so the nearest driver
+        # can be among the dropped rows and dispatch reports a false "no drivers".
+        # On the spatial path the RPC orders by distance before the LIMIT, so the
+        # 500 kept are the 500 nearest and only far candidates are lost — worth
+        # knowing, not a correctness problem.
+        _cap_path = "spatial (distance-ordered)" if DISPATCH_SPATIAL_CANDIDATES else "bounding-box (arbitrary)"
         logger.warning(
-            f"[DISPATCH] candidate pool hit the 500-row cap inside the "
-            f"{search_radius}km box for ride {ride_id} — pool truncated"
+            f"[DISPATCH] candidate pool hit the 500-row cap within "
+            f"{search_radius}km for ride {ride_id} — pool truncated, path={_cap_path}"
         )
 
     # Presence filter: only dispatch to drivers whose WebSocket heartbeat is
@@ -675,11 +756,15 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     _casc_filter["is_wav"] = True
                 if _area_ids is not None:
                     _casc_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
-                _casc_pool = await _deps.db_supabase.get_rows(
-                    "drivers",
-                    _casc_filter,
-                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-                    limit=500,
+                _casc_pool = await _fetch_candidate_drivers(
+                    box_filter=_casc_filter,
+                    lat=_box_lat,
+                    lng=_box_lng,
+                    radius_km=search_radius,
+                    vehicle_type_ids=list(_casc_to),
+                    requires_wav=bool(ride.get("requires_wav")),
+                    area_ids=_area_ids,
+                    allow_unassigned_area=_allow_unassigned_area,
                 )
                 # Fix 4: Presence filter using _checked variant so a Redis outage
                 # (configured-but-unavailable) cannot silently empty the cascade pool.
@@ -901,9 +986,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # incentive_service.py). Still one query, so the offer→phone SLA is
         # unchanged.
         try:
-            return incentive_display_payload(
-                await match_ride_incentives(_deps.db_supabase, ride)
-            )
+            return incentive_display_payload(await match_ride_incentives(_deps.db_supabase, ride))
         except Exception as e:
             logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
             return [], 0.0

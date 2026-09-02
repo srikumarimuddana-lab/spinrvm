@@ -19589,12 +19589,31 @@ how much they de-risk a public launch._
   met** — collection still fails for `test_h3_location_index.py`/
   `test_dispatch_candidates.py` per C52 below.
 
-### C52. `utils/h3_location_index.py` imports 6 Redis helpers that don't exist in `utils/redis_client.py` — module cannot import at all
-- [ ] **Status:** open — discovered 2026-09-02 while verifying the C51 fix.
-  Masked by C51 until now: Python's import chain failed at the first error
-  (`h3` missing), so this second import error one line later
-  (`utils/h3_location_index.py:43`) was never actually reached until the
-  `h3` pin was fixed.
+### C52. `utils/h3_location_index.py` imports 6 Redis helpers that don't exist in `utils/redis_client.py` — module cannot import at all — CLOSED (2026-09-02)
+- [x] **Status:** fixed 2026-09-02. Checked C50's migration plan doc and the
+  `2026-09-01-h3-dispatch-heatmap.md` change-log first, per this item's own
+  note: confirmed H3/the outbox "landed dark on `main` in `fc6f922` behind
+  default-off flags" (`dispatch_geo_provider=legacy`) — this was option (a),
+  a genuine oversight in that dark launch's own verification (the change-log
+  never mentions running `test_h3_location_index.py`), not a deliberate
+  pause. Implemented the 6 missing helpers in `redis_client.py`, matching
+  every existing function's pattern exactly: real-Redis branch + in-process
+  fallback (two new local stores, `_local_hashes`/`_local_zsets`, mirroring
+  the existing `_local` dict's shape/expiry convention) + raise-loudly on a
+  configured-but-erroring Redis, never silent degradation. `redis_eval`
+  raises `RuntimeError` when unconfigured (no local Lua interpreter) — the
+  exact signal `h3_location_index.py`'s `upsert_driver()` already catches to
+  run its pure-Python fallback path, so no caller-side change was needed.
+  Stays flag-gated off (`dispatch_geo_provider=legacy` by default) — this
+  fix makes already-shipped dark code importable/functional again, it does
+  not activate anything.
+  30 new tests in `tests/test_redis_client_coverage.py` (real-client-delegates
+  + local-fallback + configured-but-erroring-raises for each of the 6, mirroring
+  every existing test in that file). Verified: `pytest
+  tests/test_h3_location_index.py tests/test_dispatch_candidates.py
+  tests/test_h3_cells.py tests/test_h3_heatmap.py` → 58/60 pass — the 2
+  remaining failures are a **different**, unrelated pre-existing gap, not
+  fixed here (see C53).
 - **Issue/gap:** `h3_location_index.py` does
   `from .redis_client import (get_redis_stats, redis_delete, redis_eval,
   redis_get, redis_hgetall, redis_hset, redis_set, redis_set_nx,
@@ -19617,27 +19636,107 @@ how much they de-risk a public launch._
   does mean the H3 dispatch-geo-indexing work (commit `fc6f922`, "add
   dispatch geo indexing and transactional outbox") shipped a module that
   has never successfully imported, in any environment, since it landed.
-- **Action:** either (a) implement the 6 missing helpers in
-  `utils/redis_client.py` — `redis_eval` (EVAL/EVALSHA for whatever atomic
-  Lua script the geo-index claim path needs), `redis_hgetall`/`redis_hset`
-  (hash ops), `redis_zadd`/`redis_zrem`/`redis_zrangebyscore_many` (sorted-set
-  ops, the last one presumably batching `ZRANGEBYSCORE` across multiple H3
-  cell keys) — matching the existing helpers' pattern (in-process-dict
-  fallback when `REDIS_URL` unset, per `redis_client.py`'s documented
-  transparency contract), or (b) if `h3_location_index.py`/
-  `dispatch_candidates.py` were superseded by a different implementation
-  before being wired in, confirm that and delete the dead module instead of
-  completing it. Whoever picks this up should check with C50 (PostgREST →
-  direct pool dispatch plan) and the `fc6f922` PR history first — this may
-  already be a known, deliberately-paused piece of that larger effort rather
-  than an oversight.
-- **Files:** `backend/utils/redis_client.py` (add helpers) or
-  `backend/utils/h3_location_index.py` + `backend/services/dispatch_candidates.py`
-  + their test files (delete, if superseded). Not touched by this session —
-  flagged only, not fixed; implementing 6 new Redis primitives correctly
-  (atomicity, fallback behavior, tests) is well beyond a scoped follow-up.
+- **Files:** `backend/utils/redis_client.py` (6 new functions + 2 new
+  in-process fallback stores), `backend/tests/test_redis_client_coverage.py`
+  (30 new tests).
+- **Acceptance:** met — `pytest tests/test_h3_location_index.py
+  tests/test_dispatch_candidates.py` collects and 58/60 pass (the 2 that
+  don't are C53, a different gap).
+- **Change log:** `docs/change-log/2026-09-02-c52-redis-helpers-for-h3-index.md`.
+
+### C53. H3/outbox dark launch (`fc6f922`) has 4 more unwired/incomplete pieces, found while fixing C52
+- [ ] **Status:** open — discovered 2026-09-02, immediately after C52, once
+  `tests/test_h3_location_index.py`/`test_h3_index_reconciler.py`/
+  `test_outbox_worker.py` could finally collect for the first time since
+  `fc6f922` landed. All 4 are pre-existing, none touched by the C51/C52 fixes,
+  and none reachable from live traffic today (`dispatch_geo_provider=legacy`
+  by default, `services/dispatch_candidates.py` has zero callers, per C52;
+  `outbox_worker.py`'s own loop is presumably equally unstarted — not
+  independently re-confirmed here). Grouped into one item since they share a
+  root cause (an unverified dark launch) — 1–3 are same-size/same-family and
+  fine to split off individually; #4 is materially larger (see below) and
+  should probably become its own item the moment anyone actually picks it up.
+  1. **`utils/redis_client.py` is missing a second, different set-based
+     trio** (`redis_sadd`, `redis_srem`, `redis_sunion`) that
+     `tests/test_h3_location_index.py::test_redis_set_helpers_union_members`
+     expects but nothing in `h3_location_index.py` actually imports or calls
+     today (it uses ZSETs via the C52 helpers, not SETs). Either a leftover
+     test from an earlier design iteration, or a planned-but-never-built
+     alternate/future path. `ImportError: cannot import name 'redis_sadd'`.
+  2. **`utils/driver_presence.py` never calls `h3_location_index.on_driver_offline`**
+     — `tests/test_h3_location_index.py::test_mark_present_does_not_refresh_h3_ttl`
+     asserts `"on_driver_offline" in <driver_presence.py source>`; grepped
+     `driver_presence.py` directly, zero references to `h3` or
+     `on_driver_offline` anywhere. The go-offline → H3-index-removal wiring
+     this test expects was never built.
+  3. **`routes/admin/monitoring.py`'s H3 rebuild endpoint never actually
+     forces a reconciler tick** —
+     `tests/test_h3_index_reconciler.py::test_admin_rebuild_endpoint_forces_tick`
+     asserts `"await _tick(force=True)" in <monitoring.py source>`; not
+     present.
+  4. **`utils/outbox_worker.py` (the "transactional outbox" half of the same
+     `fc6f922` commit) depends on a function that was never built** —
+     bigger than it first looked. `tests/test_outbox_worker.py` (2 tests)
+     fails at collection: `utils/outbox_worker.py`'s dual-import block
+     (correctly present, try/except both branches) fails its *fallback*
+     branch too, on `from utils.email_provider import EmailDeliveryStatus`
+     — that name doesn't exist in `utils/email_provider.py` (grepped: zero
+     classes defined there at all). Following the actual call site
+     (`_dispatch()` at `outbox_worker.py:167`) further, `payment_service`
+     has **no `send_ride_receipt_result` function either** — grepped
+     `services/payment_service.py` directly, no match. The existing
+     receipt-send path (`payment_service.send_ride_receipt(ride, rider_id,
+     tip_amount, ...)` → `utils/email_receipt.py::send_receipt_email`)
+     returns a plain `bool` (swallows all exceptions internally, logs and
+     returns `False`) with **no failure classification** — no way today to
+     tell "no such recipient, don't retry" (`terminal_skip`) apart from "SES
+     was down, retry" (`retryable_failure`), which `EmailDeliveryStatus`/
+     `EmailDeliveryResult` and the outbox dispatcher's branching logic both
+     assume exists. This is not a missing-import bug like 1–3 above — it's
+     a real, unbuilt piece of the feature: a new `EmailDeliveryStatus`
+     enum + `EmailDeliveryResult` dataclass in `email_provider.py`, a
+     failure-classification design for `email_receipt.py`'s send path
+     (what SES/provider errors count as terminal vs retryable), and a new
+     `payment_service.send_ride_receipt_result(ride_id)` wrapper that fetches
+     the ride and returns the new result type instead of a bare bool.
+- **Why not fixed in C52:** each of these is a distinct piece of actual
+  missing functionality (new Redis primitives with unclear real call sites,
+  a presence→dispatch-index wiring change, an admin-endpoint wiring change,
+  or — for #4 — a real unbuilt failure-classification feature on the
+  receipt-email send path) — none is "finish importing the module that
+  already has working callers," which is what C52 was. Bundling them into
+  C52 would have silently widened a dependency-pin-adjacent fix into
+  multiple unrelated behavior changes on a dispatch/payments-adjacent
+  surface. **#4 in particular is payments/receipts-domain** (CLAUDE.md:
+  "Bias toward caution... on anything touching rides, payments... a wrong
+  assumption there is a regression on a live-tested surface") and needs a
+  real design decision (what counts as a terminal vs retryable send
+  failure) that this session is not making unilaterally — flagged with
+  `AskUserQuestion`-worthy ambiguity, not built.
+- **Action:** for findings 1–3, read the relevant test's full expectations
+  first (closest thing to a spec this dark-shipped feature has), then decide
+  per-piece whether to build the missing wiring or fix/remove the test if
+  it's speculative/stale (finding 1 looks most likely to be the latter —
+  check `fc6f922`'s history / `2026-09-01-h3-dispatch-heatmap.md` for intent
+  before assuming either way). For finding 4, this is a build, not a wiring
+  fix: design and add `EmailDeliveryStatus`/`EmailDeliveryResult` to
+  `email_provider.py`, decide the terminal-vs-retryable classification for
+  `email_receipt.py`'s send failures (needs an actual look at what SES/the
+  email pipeline can report — bounce vs throttle vs auth error, etc. — not
+  a guess), then add `payment_service.send_ride_receipt_result(ride_id)`.
+  Given the payments/receipts domain, treat "what counts as terminal vs
+  retryable" as a real design call worth confirming with the team, not an
+  implementation detail to invent solo.
+- **Files:** `backend/utils/redis_client.py` and/or
+  `backend/tests/test_h3_location_index.py` (finding 1),
+  `backend/utils/driver_presence.py` and/or its test (finding 2),
+  `backend/routes/admin/monitoring.py` and/or its test (finding 3),
+  `backend/utils/email_provider.py` + `backend/utils/email_receipt.py` +
+  `backend/services/payment_service.py` + `backend/utils/outbox_worker.py`
+  (finding 4). Not touched by this session — flagged only.
 - **Acceptance:** `pytest tests/test_h3_location_index.py
-  tests/test_dispatch_candidates.py` collects and passes.
+  tests/test_h3_index_reconciler.py tests/test_outbox_worker.py` all
+  collect and pass (currently 5 failures across the three files).
 
 ## Recently completed (do not redo)
 

@@ -37,6 +37,8 @@ def _reset_redis_client_state(monkeypatch):
     from backend.utils import redis_client as rc
 
     monkeypatch.setattr(rc, "_local", {})
+    monkeypatch.setattr(rc, "_local_hashes", {})
+    monkeypatch.setattr(rc, "_local_zsets", {})
     monkeypatch.setattr(rc, "_redis", None)
     monkeypatch.setattr(rc, "_redis_url", None)
     yield
@@ -572,6 +574,295 @@ async def test_delete_pattern_raises_when_configured_but_erroring(monkeypatch):
     _patch_get_redis(monkeypatch, fake)
     with pytest.raises(ConnectionError):
         await rc.redis_delete_pattern("cache:user:*")
+
+
+# ── redis_hgetall / redis_hset ───────────────────────────────────────────────
+# ACTION_ITEMS.md C52: these 6 functions (through redis_eval below) were
+# imported by utils/h3_location_index.py but never implemented — the module
+# could not import at all until this coverage/implementation landed.
+
+
+@pytest.mark.anyio
+async def test_hgetall_missing_key_returns_empty_dict_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    assert await rc.redis_hgetall("nope") == {}
+
+
+@pytest.mark.anyio
+async def test_hset_then_hgetall_roundtrip_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    await rc.redis_hset("h1", {"ts": "1.0", "7": "abc"})
+    assert await rc.redis_hgetall("h1") == {"ts": "1.0", "7": "abc"}
+
+
+@pytest.mark.anyio
+async def test_hset_merges_fields_without_clobbering_others_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    await rc.redis_hset("h1", {"ts": "1.0", "7": "abc", "8": "def"})
+    await rc.redis_hset("h1", {"ts": "2.0"})  # touch_driver-style partial update
+    assert await rc.redis_hgetall("h1") == {"ts": "2.0", "7": "abc", "8": "def"}
+
+
+@pytest.mark.anyio
+async def test_hset_applies_ttl_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    await rc.redis_hset("h1", {"ts": "1.0"}, ttl=90)
+    assert rc._local_hashes["h1"]["expires_at"] is not None
+
+    with patch("time.monotonic", return_value=1e12):  # far future
+        assert await rc.redis_hgetall("h1") == {}
+
+
+@pytest.mark.anyio
+async def test_hgetall_delegates_to_real_client(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.hgetall = AsyncMock(return_value={"ts": "1.0"})
+    _patch_get_redis(monkeypatch, fake)
+    result = await rc.redis_hgetall("h1")
+    assert result == {"ts": "1.0"}
+    fake.hgetall.assert_awaited_once_with("h1")
+
+
+@pytest.mark.anyio
+async def test_hgetall_raises_when_configured_but_erroring(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.hgetall = AsyncMock(side_effect=ConnectionError("redis down"))
+    _patch_get_redis(monkeypatch, fake)
+    with pytest.raises(ConnectionError):
+        await rc.redis_hgetall("h1")
+
+
+@pytest.mark.anyio
+async def test_hset_delegates_to_real_client_with_ttl(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.hset = AsyncMock()
+    fake.expire = AsyncMock()
+    _patch_get_redis(monkeypatch, fake)
+    await rc.redis_hset("h1", {"ts": "1.0"}, ttl=90)
+    fake.hset.assert_awaited_once_with("h1", mapping={"ts": "1.0"})
+    fake.expire.assert_awaited_once_with("h1", 90)
+
+
+@pytest.mark.anyio
+async def test_hset_delegates_to_real_client_without_ttl_skips_expire(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.hset = AsyncMock()
+    fake.expire = AsyncMock()
+    _patch_get_redis(monkeypatch, fake)
+    await rc.redis_hset("h1", {"ts": "1.0"})
+    fake.expire.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_hset_raises_when_configured_but_erroring(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.hset = AsyncMock(side_effect=ConnectionError("redis down"))
+    _patch_get_redis(monkeypatch, fake)
+    with pytest.raises(ConnectionError):
+        await rc.redis_hset("h1", {"ts": "1.0"})
+
+
+# ── redis_zadd / redis_zrem / redis_zrangebyscore_many ──────────────────────
+
+
+@pytest.mark.anyio
+async def test_zadd_zrangebyscore_zrem_roundtrip_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    await rc.redis_zadd("z1", {"driver-a": 100.0, "driver-b": 200.0})
+    assert await rc.redis_zrangebyscore_many(["z1"], 150.0) == {"driver-b"}
+    assert await rc.redis_zrangebyscore_many(["z1"], 0.0) == {"driver-a", "driver-b"}
+
+    await rc.redis_zrem("z1", "driver-b")
+    assert await rc.redis_zrangebyscore_many(["z1"], 0.0) == {"driver-a"}
+
+
+@pytest.mark.anyio
+async def test_zrangebyscore_many_unions_across_keys_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    await rc.redis_zadd("z1", {"driver-a": 100.0})
+    await rc.redis_zadd("z2", {"driver-b": 100.0})
+    assert await rc.redis_zrangebyscore_many(["z1", "z2"], 0.0) == {"driver-a", "driver-b"}
+
+
+@pytest.mark.anyio
+async def test_zrangebyscore_many_empty_keys_short_circuits(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    assert await rc.redis_zrangebyscore_many([], 0.0) == set()
+
+
+@pytest.mark.anyio
+async def test_zadd_applies_ttl_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    await rc.redis_zadd("z1", {"driver-a": 100.0}, ttl=90)
+    assert rc._local_zsets["z1"]["expires_at"] is not None
+
+    with patch("time.monotonic", return_value=1e12):  # far future
+        assert await rc.redis_zrangebyscore_many(["z1"], 0.0) == set()
+
+
+@pytest.mark.anyio
+async def test_zrem_on_missing_key_is_a_noop_local(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    await rc.redis_zrem("never-set", "driver-a")  # must not raise
+
+
+@pytest.mark.anyio
+async def test_zadd_delegates_to_real_client_with_ttl(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.zadd = AsyncMock()
+    fake.expire = AsyncMock()
+    _patch_get_redis(monkeypatch, fake)
+    await rc.redis_zadd("z1", {"driver-a": 100.0}, ttl=90)
+    fake.zadd.assert_awaited_once_with("z1", {"driver-a": 100.0})
+    fake.expire.assert_awaited_once_with("z1", 90)
+
+
+@pytest.mark.anyio
+async def test_zadd_raises_when_configured_but_erroring(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.zadd = AsyncMock(side_effect=ConnectionError("redis down"))
+    _patch_get_redis(monkeypatch, fake)
+    with pytest.raises(ConnectionError):
+        await rc.redis_zadd("z1", {"driver-a": 100.0})
+
+
+@pytest.mark.anyio
+async def test_zrem_delegates_to_real_client(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.zrem = AsyncMock()
+    _patch_get_redis(monkeypatch, fake)
+    await rc.redis_zrem("z1", "driver-a")
+    fake.zrem.assert_awaited_once_with("z1", "driver-a")
+
+
+@pytest.mark.anyio
+async def test_zrem_raises_when_configured_but_erroring(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.zrem = AsyncMock(side_effect=ConnectionError("redis down"))
+    _patch_get_redis(monkeypatch, fake)
+    with pytest.raises(ConnectionError):
+        await rc.redis_zrem("z1", "driver-a")
+
+
+@pytest.mark.anyio
+async def test_zrangebyscore_many_delegates_to_real_pipeline(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake_pipe = MagicMock()
+    fake_pipe.zrangebyscore = MagicMock()
+    fake_pipe.execute = AsyncMock(return_value=[["driver-a"], ["driver-b", "driver-c"]])
+    fake.pipeline = MagicMock(return_value=fake_pipe)
+    _patch_get_redis(monkeypatch, fake)
+
+    result = await rc.redis_zrangebyscore_many(["z1", "z2"], 100.0)
+
+    assert result == {"driver-a", "driver-b", "driver-c"}
+    fake.pipeline.assert_called_once_with(transaction=False)
+    assert fake_pipe.zrangebyscore.call_count == 2
+    fake_pipe.zrangebyscore.assert_any_call("z1", 100.0, "+inf")
+    fake_pipe.zrangebyscore.assert_any_call("z2", 100.0, "+inf")
+
+
+@pytest.mark.anyio
+async def test_zrangebyscore_many_raises_when_configured_but_erroring(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake_pipe = MagicMock()
+    fake_pipe.zrangebyscore = MagicMock()
+    fake_pipe.execute = AsyncMock(side_effect=ConnectionError("redis down"))
+    fake.pipeline = MagicMock(return_value=fake_pipe)
+    _patch_get_redis(monkeypatch, fake)
+    with pytest.raises(ConnectionError):
+        await rc.redis_zrangebyscore_many(["z1"], 0.0)
+
+
+# ── redis_eval ────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_eval_raises_runtime_error_when_unconfigured(monkeypatch):
+    """No local Lua interpreter — this is the deliberate signal
+    utils/h3_location_index.py's upsert_driver() catches to run its
+    pure-Python fallback path instead."""
+    from backend.utils import redis_client as rc
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    with pytest.raises(RuntimeError):
+        await rc.redis_eval("return 1", 1, "key1", "arg1")
+
+
+@pytest.mark.anyio
+async def test_eval_delegates_to_real_client(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.eval = AsyncMock(return_value=1)
+    _patch_get_redis(monkeypatch, fake)
+    result = await rc.redis_eval("return 1", 1, "key1", "arg1", "arg2")
+    assert result == 1
+    fake.eval.assert_awaited_once_with("return 1", 1, "key1", "arg1", "arg2")
+
+
+@pytest.mark.anyio
+async def test_eval_raises_when_configured_but_erroring(monkeypatch):
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch)
+    fake = MagicMock()
+    fake.eval = AsyncMock(side_effect=ConnectionError("redis down"))
+    _patch_get_redis(monkeypatch, fake)
+    with pytest.raises(ConnectionError):
+        await rc.redis_eval("return 1", 1, "key1")
 
 
 # ── get_redis_stats ──────────────────────────────────────────────────────────

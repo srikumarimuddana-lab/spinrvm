@@ -1,16 +1,23 @@
 """Chronological completed-route reconstruction over durable GPS evidence.
 
-4-tier gap fill guarantees reconstruction always succeeds when GPS breadcrumbs
-exist.  The system never produces ``failed_gaps`` or unverified endpoints:
+4-tier gap fill closes any gap that is itself plausible:
 
   Tier 1 – OSRM /route  (road-following geometry, exact road distance)
   Tier 2 – Google Dirs   (road-following geometry, exact road distance)
   Tier 3/4 – Haversine   (straight-line geometry, haversine distance — pure
              math, cannot fail)
 
+A gap is left unbridged — recorded in ``failed_gaps`` instead of guessed at —
+when it is not plausible: farther than ``MAX_INFERRED_CONNECTOR_KM``
+regardless of reason, or (for an internal gap between two observed segments,
+where real device timestamps bound both sides) longer than
+``MAX_INFERRED_GAP_SECONDS``. This is deliberate: a straight line across an
+implausible distance, or a routed guess across an outage too long to trust,
+is worse for the insurance/regulatory audit trail than an honest gap.
+
 Endpoint anchors use an adaptive tolerance (30 m ideal → 200 m relaxed → raw
 coordinate last resort) so off-road pickups (parking lots, malls, airports)
-never cause reconstruction failure.
+never cause reconstruction failure by themselves.
 """
 
 from __future__ import annotations
@@ -50,6 +57,19 @@ CONTINUITY_TOLERANCE_M = 30.0
 # Tier 2: off-road relaxed tolerance (parking lots, malls, airports).
 CONTINUITY_TOLERANCE_RELAXED_M = 200.0
 MAX_INFERRED_CONNECTORS = 20
+# A single gap-fill connector (routed OR straight-line) beyond this distance is
+# not a believable substitute for missing GPS — same plausibility magnitude as
+# gps_filtering.py's MAX_UNTIMED_HOP_KM (its "max single hop without timing
+# info" cap). Applies to every connector reason (missing_start/internal_gap/
+# missing_tail) since an anchor-to-evidence connector has no upper bound today.
+MAX_INFERRED_CONNECTOR_KM = 10.0
+# An internal gap (GPS dropped mid-trip, both sides have real device
+# timestamps) longer than this is an outage too long to trust a routed or
+# straight-line guess across — same magnitude as route_finalizer.py's
+# BACKSTOP_GRACE_SECONDS. Only internal_gap connectors carry real timestamps
+# on both sides; missing_start/missing_tail anchors have none, so the time
+# gate does not apply to them (the distance cap above still does).
+MAX_INFERRED_GAP_SECONDS = 300
 
 
 def _straight_line_segment(
@@ -68,6 +88,18 @@ def _straight_line_segment(
         "distance_km": round(gap_distance_m / 1000.0, 3),
         "coordinates": [start, end],
     }
+
+
+_INTERNAL_PROJECTION_FIELDS = ("segment_start_captured_at", "segment_end_captured_at")
+
+
+def _strip_internal_projection_fields(section: dict) -> dict:
+    """Drop the whole-segment capture-timestamp fields project_observed_sections
+    attaches for this module's own time-gating — they're not part of the
+    public segment shape persisted/rendered downstream."""
+    if not any(key in section for key in _INTERNAL_PROJECTION_FIELDS):
+        return section
+    return {key: value for key, value in section.items() if key not in _INTERNAL_PROJECTION_FIELDS}
 
 
 def _resolve_anchor(
@@ -124,7 +156,12 @@ async def reconstruct_completed_route(
     end_anchor = _resolve_anchor(snapped_completion, completion, last_coordinate)
 
     output: list[dict] = []
-    failed_gaps: list[str] = []  # Always empty — kept for API compat.
+    # Populated when a connector is refused outright (implausible distance, or
+    # an internal gap too long to trust) rather than bridged with a guess —
+    # the finalizer already treats a non-empty failed_gaps as an honest
+    # "incomplete" route (see route_finalizer.py's _quality_projection /
+    # _final_status), so this reuses that existing, previously-dead path.
+    failed_gaps: list[str] = []
     # Split connector distance by trustworthiness: Tier 1/2 connectors follow
     # real roads (a believable substitute for the missing GPS), Tier 3/4 are
     # blind straight lines. inferred_distance_km stays the sum for API compat,
@@ -134,11 +171,41 @@ async def reconstruct_completed_route(
     straight_connector_km = 0.0
     connector_attempts = 0
 
-    async def append_connector(start: list[float], end: list[float], reason: str) -> None:
-        """4-tier gap fill: OSRM → Google → Haversine. Always succeeds."""
+    async def append_connector(
+        start: list[float], end: list[float], reason: str, elapsed_seconds: Optional[float] = None
+    ) -> None:
+        """4-tier gap fill: OSRM → Google → Haversine — unless the gap itself
+        is not believable, in which case it is left unbridged (see the
+        distance/time caps below) rather than guessed at."""
         nonlocal connector_attempts, routed_connector_km, straight_connector_km
         gap_distance = distance_m(start, end)
         if gap_distance <= CONTINUITY_TOLERANCE_M:
+            return
+
+        # Implausible-distance refusal — applies to every connector reason,
+        # checked before the routed/straight attempt so an oversized gap never
+        # gets a fabricated line at all, routed or straight.
+        if gap_distance / 1000.0 > MAX_INFERRED_CONNECTOR_KM:
+            logger.info(
+                "gap fill refused for %s: %.0f m exceeds the %.0f km plausibility cap",
+                reason,
+                gap_distance,
+                MAX_INFERRED_CONNECTOR_KM,
+            )
+            failed_gaps.append(f"{reason}_exceeds_distance_cap")
+            return
+
+        # Time-outage refusal — only meaningful when both sides of the gap
+        # carry a real device timestamp (internal_gap between two observed
+        # segments); missing_start/missing_tail anchors have none.
+        if elapsed_seconds is not None and elapsed_seconds > MAX_INFERRED_GAP_SECONDS:
+            logger.info(
+                "gap fill refused for %s: %.0fs outage exceeds the %ds plausibility cap",
+                reason,
+                elapsed_seconds,
+                MAX_INFERRED_GAP_SECONDS,
+            )
+            failed_gaps.append(f"{reason}_exceeds_time_cap")
             return
 
         connector_attempts += 1
@@ -194,8 +261,21 @@ async def reconstruct_completed_route(
         for index, section in enumerate(observed_sections):
             if index > 0:
                 previous = observed_sections[index - 1]
-                await append_connector(previous["coordinates"][-1], section["coordinates"][0], "internal_gap")
-            output.append(section)
+                elapsed_seconds = None
+                # Only a boundary between two DIFFERENT observed segments has
+                # real device timestamps on both sides — chunks split from the
+                # same segment by map-matching are already known-continuous
+                # (route_segments.py never splits within a segment without a
+                # time/distance/speed violation), so they're never time-gated.
+                if previous.get("source_segment_index") != section.get("source_segment_index"):
+                    gap_start = previous.get("segment_end_captured_at")
+                    gap_end = section.get("segment_start_captured_at")
+                    if gap_start is not None and gap_end is not None:
+                        elapsed_seconds = (gap_end - gap_start).total_seconds()
+                await append_connector(
+                    previous["coordinates"][-1], section["coordinates"][0], "internal_gap", elapsed_seconds
+                )
+            output.append(_strip_internal_projection_fields(section))
 
         if end_anchor is not None:
             await append_connector(observed_sections[-1]["coordinates"][-1], end_anchor, "missing_tail")

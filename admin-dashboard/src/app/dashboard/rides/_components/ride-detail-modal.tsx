@@ -638,7 +638,13 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     ? "bg-success/15 text-success"
                                                     : ride.payment_status === "failed"
                                                         ? "bg-destructive/15 text-destructive"
-                                                        : "bg-warning/15 text-warning"
+                                                        // held_for_review is a GPS-spoof pre-charge hold (see the
+                                                        // Rides -> Held for Review queue), not a normal in-flight
+                                                        // charge — give it its own color so it doesn't read as
+                                                        // "just pending" to an admin skimming this modal.
+                                                        : ride.payment_status === "held_for_review"
+                                                            ? "bg-accent/15 text-accent-foreground"
+                                                            : "bg-warning/15 text-warning"
                                             }`}>
                                                 {(ride.payment_status || "pending").replace(/_/g, " ").toUpperCase()}
                                             </span>

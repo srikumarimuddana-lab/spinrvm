@@ -656,10 +656,12 @@ async def update_location_batch(
             try:
                 from ...settings_loader import get_app_settings
                 from ...utils.breadcrumbs import resolve_active_ride
+                from ...utils.gps_filtering import point_epoch_seconds
                 from ...utils.period1_distance import batch_incremental_distance_km
             except ImportError:
                 from settings_loader import get_app_settings  # type: ignore
                 from utils.breadcrumbs import resolve_active_ride  # type: ignore
+                from utils.gps_filtering import point_epoch_seconds  # type: ignore
                 from utils.period1_distance import batch_incremental_distance_km  # type: ignore
             try:
                 _p1_on = bool((await get_app_settings() or {}).get("period1_distance_tracking_enabled"))
@@ -670,8 +672,37 @@ async def update_location_batch(
                     _p1_active = await resolve_active_ride(driver_id)
                 except Exception:
                     _p1_active = None
-                if _p1_active is None:
-                    _p1_delta = batch_incremental_distance_km(points)
+                # A queued batch (offline/backgrounded blip, then flushed on
+                # reconnect) can straddle the moment a ride got assigned. This
+                # is a REST fallback with no per-point outbox sequencing, so
+                # unlike the v2 idle path (utils/breadcrumbs.persist_idle_location_batch,
+                # which already rejects individual points at/after
+                # ride_window_start) an active-ride check here used to gate
+                # the WHOLE batch: any ride now active silently dropped every
+                # point, including the genuine pre-assignment deadhead driven
+                # before the blip — an insurance-audit undercount at exactly
+                # the Period 1/2 boundary. Split at the same boundary instead:
+                # only points captured before ride_window_start are Period 1.
+                _p1_points = points
+                if _p1_active is not None:
+                    # Period 2 starts on assignment, not acceptance (CLAUDE.md)
+                    # — same precedence as breadcrumbs.py/ride_complete.py.
+                    _ride_window_start = (
+                        parse_iso_utc(_p1_active.get("assigned_at"))
+                        or parse_iso_utc(_p1_active.get("driver_accepted_at"))
+                        or parse_iso_utc(_p1_active.get("created_at"))
+                    )
+                    if _ride_window_start is None:
+                        _p1_points = []
+                    else:
+                        _boundary_epoch = _ride_window_start.timestamp()
+                        _p1_points = []
+                        for p in points:
+                            _ts = point_epoch_seconds(p)
+                            if _ts is not None and _ts < _boundary_epoch:
+                                _p1_points.append(p)
+                if _p1_points:
+                    _p1_delta = batch_incremental_distance_km(_p1_points)
                     if _p1_delta > 0:
                         update_data["period1_accum_km"] = round(
                             float(driver_row.get("period1_accum_km") or 0) + _p1_delta, 3

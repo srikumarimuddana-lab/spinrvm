@@ -20,6 +20,42 @@ _Load when working on: driver matching, offer timeouts, ride search, location up
 6. Driver ignores/declines → release, loop step 3 with next driver
 7. No drivers after ~5 minutes → auto-cancel with `ride_cancelled` WS event
 
+## Candidate fetch (step 2) — two paths, one predicate
+
+`routes/rides/matching.py` fetches the candidate pool twice per dispatch attempt
+(the primary pool, and the vehicle-type cascade pool). Both go through
+`_fetch_candidate_drivers`, which picks a path from `DISPATCH_SPATIAL_CANDIDATES`:
+
+| Flag | Query | Behaviour at the 500 cap |
+|---|---|---|
+| unset (**default today**) | `get_rows("drivers", …)` with a lat/lng bounding box from `dispatch_geo_bounds` | Arbitrary slice — the nearest driver can be dropped, producing a false "no drivers" |
+| set | `dispatch_candidate_drivers` RPC (migration 395) over the `location_geog` GiST index, KNN-ordered | The 500 **nearest** are kept |
+
+Rules when touching either path:
+
+- **Both must over-fetch by the same margin.** `_padded_radius_km()` (10% + 1 km)
+  is shared for exactly this reason. `filter_and_rank_drivers` is the exact
+  distance gate; a tighter fetch silently shrinks the pool it ranks, with no
+  error anywhere.
+- **Nothing else moves into SQL.** Ranking, the presence filter, the subscription
+  gate and the service-area guard all stay in Python, after the fetch.
+- **The RPC's predicate and the filter dict are one predicate written twice.**
+  Edit one, edit the other, and update the parity test
+  (`tests/test_dispatch_spatial_candidates.py`), which compares them branch by
+  branch. Two traps it exists to catch: a WAV driver must still receive non-WAV
+  offers, and SQL `= ANY` never matches NULL, so a driver with no
+  `service_area_id` needs its own arm or vanishes from dispatch.
+- **The RPC's `RETURNS TABLE` types must match `drivers` exactly.**
+  `rating` is `FLOAT`, `destination_mode` is `BOOLEAN`. Casting the latter to
+  text hands Python the string `'false'`, which is truthy — every driver then
+  looks like they are in destination mode.
+- An RPC failure falls back to the box query and increments
+  `spinr_dispatch_spatial_fallback_total`. A fallback *failure* raises, so a DB
+  error reaches the retry shell instead of looking like an empty pool.
+
+Status: flag off everywhere. See `docs/change-log/2026-09-02-spatial-dispatch-candidates.md`
+§11 for the staging checks required before enabling it.
+
 ## Offer timeout
 
 - Timeout handler filters on `status='driver_assigned' AND driver_id=<current>` — atomic

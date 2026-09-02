@@ -74,7 +74,7 @@ RETURNS TABLE(
     lng               double precision,
     rating            double precision,
     is_wav            boolean,
-    acceptance_rate   numeric,
+    acceptance_rate   double precision,
     destination_mode  boolean,
     destination_lat   double precision,
     destination_lng   double precision,

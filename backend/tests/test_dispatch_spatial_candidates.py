@@ -284,7 +284,9 @@ class TestMigrationContract:
         # `if not driver.get("destination_mode")` would treat EVERY driver as
         # being in destination mode and silently collapse the pool.
         assert re.search(r"rating\s+double precision", sql)
+        assert re.search(r"acceptance_rate\s+double precision", sql)
         assert re.search(r"destination_mode\s+boolean", sql)
+        assert "numeric" not in sql
         assert "d.destination_mode::text" not in sql
 
     def test_accepts_a_list_of_vehicle_types(self):

@@ -189,8 +189,15 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         )
         # 'pending' = recorded but not yet transferred (shown as "Pending");
         # the rest of total_payouts is money already sent ("Paid Out").
+        # 'held_over_cap' (utils/auto_payout.py's MAX_PAYOUT_AMOUNT circuit
+        # breaker) belongs in this same not-yet-sent bucket -- it's held for
+        # manual review, not en route to the driver's bank, so it must not
+        # read as "Paid Out" here (still counted as money-out in
+        # total_payouts above, so payable_balance correctly excludes it from
+        # what's available to withdraw).
+        _not_yet_sent = {"pending", "held_over_cap"}
         pending_payouts = sum(
-            (_d(p.get("amount") or 0) for p in payout_rows if str(p.get("status") or "").lower() == "pending"),
+            (_d(p.get("amount") or 0) for p in payout_rows if str(p.get("status") or "").lower() in _not_yet_sent),
             Decimal("0"),
         )
     except Exception as e:

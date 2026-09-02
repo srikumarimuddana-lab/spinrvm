@@ -3154,7 +3154,10 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         Decimal("0"),
     )
     # stripe_sync rows are always 'completed', so they never land in flight.
-    pending_in_flight = _sum_by_status("pending", "processing")
+    # 'held_over_cap' (utils/auto_payout.py's MAX_PAYOUT_AMOUNT circuit
+    # breaker) belongs here too -- it's a durable row for a balance held for
+    # manual review, not a transfer that reached the driver's bank.
+    pending_in_flight = _sum_by_status("pending", "processing", "held_over_cap")
     # Everything actually sent — completed, transfer_completed, reserved, and
     # any future status — minus what is still only queued.
     total_paid_out = gross_money_out - pending_in_flight

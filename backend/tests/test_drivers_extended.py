@@ -573,6 +573,33 @@ class TestGetDriverBalance:
         assert result["pending_payouts"] == "5.00"
         assert result["total_paid_out"] == "40.00"  # 30 + 10 sent (not pending)
 
+    def test_over_cap_hold_deducts_from_balance_but_is_not_paid_out(self):
+        """A 'held_over_cap' row (utils/auto_payout.py's MAX_PAYOUT_AMOUNT
+        circuit breaker) must still deduct from payable_balance (the money
+        is earmarked, not available) but must NOT read as "Paid Out" —
+        it's held for manual review, not en route to the driver's bank."""
+        from backend.routes import drivers as drv
+
+        rides = [{"base_fare": 6000.0}]
+        payouts = [{"amount": 6000.0, "status": "held_over_cap"}]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                status = (filters or {}).get("status")
+                return rides if status == "completed" else []
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        assert result["payable_balance"] == "0.00"  # held amount still deducted
+        assert result["pending_payouts"] == "6000.00"  # shown as "Pending", not sent
+        assert result["total_paid_out"] == "0.00"  # must NOT read as already paid
+
     def test_balance_includes_incentives_cancel_fees_and_tax(self):
         """ACTION_ITEMS.md A28, '/balance vs /earnings composition can
         diverge' — decided 2026-08-12: payable_balance must include the

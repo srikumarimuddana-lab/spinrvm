@@ -312,7 +312,12 @@ async def _build(
         # 'completed' correction row is an actual settled Transfer. Counting
         # an unsettled one here would show a driver money before it moved.
         is_unsettled_correction = payout_type == "legacy_outstanding_correction" and status != "completed"
-        if status not in ("reversed", "failed") and not is_unsettled_correction:
+        # 'held_over_cap' (utils/auto_payout.py's MAX_PAYOUT_AMOUNT circuit
+        # breaker) is a durable row for money awaiting manual review -- not
+        # yet transferred. It still appears in payouts_out below (so the
+        # statement shows it), just excluded from the paid-out totals.
+        is_held_over_cap = status == "held_over_cap"
+        if status not in ("reversed", "failed") and not is_unsettled_correction and not is_held_over_cap:
             payouts_total += amount
             if payout_type in ("stripe_sync", "legacy_outstanding_correction"):
                 payouts_previous_app += amount

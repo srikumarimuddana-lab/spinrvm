@@ -1,18 +1,36 @@
-"""Admin read-only views for the weekly auto-payout batch.
+"""Admin views for the weekly auto-payout batch.
 
-Two surfaces, both read-only (no money moves through this router):
+Three surfaces:
 
 - ``GET /api/admin/auto-payouts/batches`` — the weekly batch ledger:
   what each Sunday run paid, skipped, and failed.
 - ``GET /api/admin/auto-payouts/blocked-drivers`` — live preflight: who
   the batch cannot pay right now and why, so ops can chase blockers
   BEFORE the run instead of reading last week's summary.
+- ``POST /api/admin/auto-payouts/run-now`` — manually trigger this
+  week's batch outside the Sunday 06:00 America/Regina window the
+  hourly loop normally gates on. THE ONLY WRITE SURFACE in this router.
 
-Gated by the ``earnings`` module (mounted in ``routes/admin/__init__``),
-matching the other driver-payout admin surfaces. Deliberately NOT
-super_admin: these are monitoring views finance/ops staff need weekly,
-and neither one writes. The batch itself is driven by
-``utils/auto_payout.py``; nothing here can trigger or alter a payout.
+The two GET views are gated by the ``earnings`` module (mounted in
+``routes/admin/__init__``), matching the other driver-payout admin
+surfaces — monitoring views finance/ops staff need weekly, and neither
+one writes.
+
+``run-now`` is additionally gated ``require_super_admin`` (money-moving,
+same posture as this repo's other Stripe-ledger-sensitive admin routes —
+stripe_payout_sync, stripe_connect_ledger, dispute evidence submission)
+and every call is audit-logged. It exists because the batch itself
+(``utils/auto_payout.py::run_weekly_auto_payout``) is otherwise reachable
+ONLY on Sundays: if ``auto_payout_enabled`` was off during that window
+for any reason, the earliest recovery without this endpoint is next
+Sunday. ``run_weekly_auto_payout`` already carries every safety property
+this needs — idempotent on ``week_key``, resumable, leader-locked at the
+scheduled-loop layer, and the ``auto_payout_batches`` unique-week-key
+insert + staleness-gated resume claim make a second concurrent call
+converge rather than double-run — so this endpoint adds nothing but "let
+a human invoke the function on demand" instead of a manual
+``app_settings`` flip-and-wait or hand-written SQL, either of which
+would bypass those guarantees.
 
 Reports carry ``driver_id`` only — never names, phones, or bank details,
 per the PIPEDA rules in CLAUDE.md.
@@ -20,14 +38,16 @@ per the PIPEDA rules in CLAUDE.md.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 try:
     from ... import db_supabase
-    from ...dependencies import get_admin_user
+    from ...dependencies import get_admin_user, require_super_admin
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase  # type: ignore
-    from dependencies import get_admin_user  # noqa: F401
+    from dependencies import get_admin_user, require_super_admin  # type: ignore
+    from utils.audit_logger import log_admin_action  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -120,3 +140,50 @@ async def list_blocked_drivers(
     for r in rows:
         by_reason[r["reason"]] = by_reason.get(r["reason"], 0) + 1
     return {"blocked": rows, "count": len(rows), "by_reason": by_reason}
+
+
+@router.post("/auto-payouts/run-now")
+async def run_auto_payout_now(
+    background_tasks: BackgroundTasks,
+    admin: dict = Depends(require_super_admin),
+):
+    """Manually trigger this week's auto-payout batch right now.
+
+    super_admin only (money-moving) — see module docstring for why this
+    endpoint exists and why it's safe to expose: ``run_weekly_auto_payout``
+    is idempotent on ``week_key`` and resumable, so a call here can never
+    double-run or double-pay a week the scheduled Sunday loop already
+    handled, or that another admin's ``run-now`` call is already mid-flight.
+
+    Runs in the background rather than inline (per CLAUDE.md's rule against
+    awaiting a long third-party call chain in a request handler — this walks
+    the full driver base and can make many Stripe Transfer calls). Poll
+    ``GET /auto-payouts/batches?week_key=...`` for the outcome.
+    """
+    try:
+        from ...utils.auto_payout import current_week_key, run_weekly_auto_payout
+    except ImportError:
+        from utils.auto_payout import current_week_key, run_weekly_auto_payout  # type: ignore
+
+    week_key = current_week_key()
+    batch_id = f"auto-batch-{week_key}"
+
+    # Audit BEFORE enqueueing: a security-relevant admin action per
+    # CLAUDE.md's observability conventions, recorded even if the run
+    # itself later no-ops (e.g. already completed, or disabled via flag).
+    await log_admin_action(admin, "auto_payout_run_now_triggered", "auto_payout_batch", batch_id, {})
+
+    async def _run() -> None:
+        try:
+            result = await run_weekly_auto_payout()
+            logger.info("[AUTO-PAYOUT] admin-triggered run for %s: %s", week_key, result)
+        except Exception:
+            logger.exception("[AUTO-PAYOUT] admin-triggered run failed for %s", week_key)
+
+    background_tasks.add_task(_run)
+    return {
+        "status": "triggered",
+        "week_key": week_key,
+        "batch_id": batch_id,
+        "detail": "Running in the background. Poll GET /auto-payouts/batches?week_key= for status.",
+    }

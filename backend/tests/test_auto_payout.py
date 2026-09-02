@@ -918,6 +918,84 @@ class TestAdminAutoPayoutViews:
         assert "migration" not in exc_info.value.detail
 
 
+class TestAdminRunNow:
+    """POST /admin/auto-payouts/run-now — the super_admin-gated manual
+    trigger. Depends() wiring (module mount + require_super_admin) is
+    exercised by calling the handler directly with a stand-in admin dict,
+    same pattern as the other admin-view tests above."""
+
+    class _FakeBackgroundTasks:
+        def __init__(self):
+            self.tasks = []
+
+        def add_task(self, fn, *args, **kwargs):
+            self.tasks.append((fn, args, kwargs))
+
+    @pytest.mark.anyio
+    async def test_audits_before_enqueueing_and_returns_triggered(self):
+        from backend.routes.admin.auto_payouts import run_auto_payout_now
+
+        audit_calls = []
+
+        async def fake_audit(admin, action, resource, resource_id, details):
+            audit_calls.append((action, resource, resource_id))
+
+        bg = self._FakeBackgroundTasks()
+        with (
+            patch("backend.routes.admin.auto_payouts.log_admin_action", fake_audit),
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+        ):
+            result = await run_auto_payout_now(background_tasks=bg, admin={"id": "admin_1"})
+
+        assert result == {
+            "status": "triggered",
+            "week_key": WEEK_KEY,
+            "batch_id": BATCH_ID,
+            "detail": "Running in the background. Poll GET /auto-payouts/batches?week_key= for status.",
+        }
+        assert audit_calls == [("auto_payout_run_now_triggered", "auto_payout_batch", BATCH_ID)]
+        assert len(bg.tasks) == 1  # exactly one background task enqueued, never run inline
+
+    @pytest.mark.anyio
+    async def test_background_task_calls_run_weekly_auto_payout(self):
+        """The enqueued callable must actually invoke the batch — a wiring
+        bug here would silently no-op every 'run now' click.
+
+        run_auto_payout_now imports run_weekly_auto_payout locally (dual-
+        import pattern), so the patch must be live for BOTH the handler
+        call (which binds the closure's reference) and the later fn() call."""
+        from backend.routes.admin.auto_payouts import run_auto_payout_now
+
+        bg = self._FakeBackgroundTasks()
+        run_mock = AsyncMock(return_value={"status": "completed"})
+        with (
+            patch("backend.routes.admin.auto_payouts.log_admin_action", AsyncMock()),
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.run_weekly_auto_payout", run_mock),
+        ):
+            await run_auto_payout_now(background_tasks=bg, admin={"id": "admin_1"})
+            fn, args, kwargs = bg.tasks[0]
+            await fn(*args, **kwargs)
+        run_mock.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_background_task_failure_is_swallowed_not_raised(self):
+        """A crash in the batch must not propagate out of the fire-and-forget
+        background task (FastAPI would otherwise log an unhandled exception
+        with no admin-facing signal beyond the logs)."""
+        from backend.routes.admin.auto_payouts import run_auto_payout_now
+
+        bg = self._FakeBackgroundTasks()
+        with (
+            patch("backend.routes.admin.auto_payouts.log_admin_action", AsyncMock()),
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.run_weekly_auto_payout", AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            await run_auto_payout_now(background_tasks=bg, admin={"id": "admin_1"})
+            fn, args, kwargs = bg.tasks[0]
+            await fn(*args, **kwargs)  # must not raise
+
+
 # ── Instant payout kill switch ─────────────────────────────────────────
 
 

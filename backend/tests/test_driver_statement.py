@@ -144,6 +144,32 @@ async def test_build_statement_aggregates_all_income_sources():
 
 
 @pytest.mark.asyncio
+async def test_build_statement_excludes_over_cap_hold_from_paid_totals():
+    """'held_over_cap' (utils/auto_payout.py's MAX_PAYOUT_AMOUNT circuit
+    breaker) is listed in the statement's payout list (transparency) but must
+    not count toward payouts_total/payouts_spinr_total — it's held for
+    manual review, not money that has actually reached the driver's bank."""
+    rides = [{"id": "r1", "driver_earnings": "6000.00", "tip_amount": 0, "tax_amount": 0}]
+    payouts = [
+        {
+            "created_at": "2026-07-21T10:00:00+00:00",
+            "amount": 6000.00,
+            "fee": 0,
+            "status": "held_over_cap",
+            "payout_type": "auto",
+        },
+    ]
+    with patch.object(stmt, "db_supabase") as db:
+        db.get_rows = _tables(rides=rides, payouts=payouts)
+        out = await stmt.build_statement({"id": "d1", "name": "Test Driver"}, "weekly", date(2026, 7, 20))
+
+    assert out["payouts_total"] == "0.00"
+    assert out["payouts_spinr_total"] == "0.00"
+    assert len(out["payouts"]) == 1  # still listed, just not counted
+    assert out["payouts"][0]["status"] == "held_over_cap"
+
+
+@pytest.mark.asyncio
 async def test_build_statement_tax_snapshot_fallback():
     rides = [
         {

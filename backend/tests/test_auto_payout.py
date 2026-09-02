@@ -376,7 +376,12 @@ class TestRunWeeklyAutoPayout:
         assert result["drivers_eligible"] == 0
 
     @pytest.mark.anyio
-    async def test_over_cap_balance_skipped_for_review(self):
+    async def test_over_cap_balance_held_for_review(self):
+        """Over-cap is now a durable, ops-visible hold (like every other
+        skip reason) rather than a free-text error — status is 'completed'
+        because nothing actually failed; the hold itself is what carries
+        the signal (skipped_summary + a 'held_over_cap' payouts row +
+        driver push), asserted in TestOverCapHold below."""
         from backend.utils.auto_payout import run_weekly_auto_payout
 
         tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
@@ -387,7 +392,8 @@ class TestRunWeeklyAutoPayout:
             result = await run_weekly_auto_payout()
         transfer.assert_not_called()
         assert result["drivers_paid"] == 0
-        assert result["status"] in ("partial", "failed")  # surfaced, not silent
+        assert result["skipped"]["over_cap"] == 1
+        assert result["skipped_drivers"]["over_cap"] == [DRIVER_ID]
 
     @pytest.mark.anyio
     @pytest.mark.parametrize(
@@ -765,6 +771,150 @@ class TestBlockedDriverVisibility:
         assert blocked[0]["driver_id"] == DRIVER_ID
         assert blocked[0]["reason"] == "stripe_payouts_disabled"
         assert blocked[0]["pending_amount"] == "75.00"
+
+
+class TestOverCapHold:
+    """Gap #1 remediation: an over-cap balance gets a durable
+    'held_over_cap' payouts row and a dedicated metric label, instead of
+    vanishing into the batch's free-text errors[]."""
+
+    @pytest.mark.anyio
+    async def test_writes_durable_held_row_and_metric(self):
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
+        inserts = []
+
+        async def track_insert(table, doc):
+            inserts.append((table, doc))
+
+        metric = MagicMock()
+        with _apply(
+            [
+                *_run_patches(tables, insert=AsyncMock(side_effect=track_insert)),
+                patch("backend.utils.auto_payout._metric_inc", metric),
+            ]
+        ):
+            result = await run_weekly_auto_payout()
+
+        held = next(doc for table, doc in inserts if table == "payouts" and doc["status"] == "held_over_cap")
+        assert held["id"] == f"held-{DRIVER_ID}-{WEEK_KEY}"
+        assert held["driver_id"] == DRIVER_ID
+        assert held["amount"] == Decimal("9000.00")
+        assert held["payout_type"] == "auto"
+        assert "exceeds cap" in held["failure_reason"]
+        metric.assert_any_call("spinr_bgloop_errors_total", {"loop": "auto_payout", "reason": "over_cap"})
+        assert result["skipped"]["over_cap"] == 1
+
+    @pytest.mark.anyio
+    async def test_driver_is_notified(self):
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
+        notify = AsyncMock()
+        with _apply([*_run_patches(tables), patch("backend.utils.auto_payout._notify_driver", notify)]):
+            await run_weekly_auto_payout()
+
+        notify.assert_awaited_once()
+        _, title, body, data = notify.await_args.args
+        assert "$9000.00" in body
+        assert data["reason"] == "over_cap"
+
+    @pytest.mark.anyio
+    async def test_duplicate_hold_insert_is_idempotent(self):
+        """A resumed batch pass reaching an already-held driver again must
+        not raise — the row from the earlier pass already covers it."""
+        from backend.utils.auto_payout import run_weekly_auto_payout
+
+        tables = {"drivers": [_driver()], "rides_completed": [_ride(driver_earnings="9000.00", tax_amount="0.00")]}
+
+        async def insert_duplicate_held_only(table, doc):
+            if table == "payouts" and doc.get("status") == "held_over_cap":
+                raise DuplicateRecordError()
+
+        with _apply([*_run_patches(tables, insert=AsyncMock(side_effect=insert_duplicate_held_only))]):
+            result = await run_weekly_auto_payout()
+
+        assert result["skipped"]["over_cap"] == 1  # still recorded on the ops work-list
+
+    @pytest.mark.anyio
+    async def test_find_blocked_drivers_surfaces_this_weeks_hold(self):
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers" and "id" not in filters:
+                return []  # no gate-blocked drivers in the primary scan
+            if table == "payouts" and filters.get("status") == "held_over_cap":
+                return [
+                    {
+                        "id": f"held-{DRIVER_ID}-{WEEK_KEY}",
+                        "driver_id": DRIVER_ID,
+                        "amount": "9000.00",
+                        "status": "held_over_cap",
+                    }
+                ]
+            if table == "drivers" and "id" in filters:
+                return [_driver(service_area_id="sa_regina")]
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+        ):
+            blocked = await find_blocked_drivers(limit=50)
+
+        assert len(blocked) == 1
+        assert blocked[0] == {
+            "driver_id": DRIVER_ID,
+            "reason": "over_cap",
+            "pending_amount": "9000.00",
+            "service_area_id": "sa_regina",
+        }
+
+    @pytest.mark.anyio
+    async def test_find_blocked_drivers_excludes_prior_week_hold(self):
+        """A hold from a prior week is stale — this week's run either
+        re-held (a fresh row would exist) or paid the driver."""
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers" and "id" not in filters:
+                return []
+            if table == "payouts" and filters.get("status") == "held_over_cap":
+                return [{"id": f"held-{DRIVER_ID}-2026-W01", "driver_id": DRIVER_ID, "amount": "9000.00"}]
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+        ):
+            blocked = await find_blocked_drivers(limit=50)
+
+        assert blocked == []
+
+    @pytest.mark.anyio
+    async def test_find_blocked_drivers_respects_service_area_filter(self):
+        from backend.utils.auto_payout import find_blocked_drivers
+
+        async def get_rows(table, filters=None, **kw):
+            filters = filters or {}
+            if table == "drivers" and "id" not in filters:
+                return []
+            if table == "payouts" and filters.get("status") == "held_over_cap":
+                return [{"id": f"held-{DRIVER_ID}-{WEEK_KEY}", "driver_id": DRIVER_ID, "amount": "9000.00"}]
+            if table == "drivers" and "id" in filters:
+                return [_driver(service_area_id="sa_saskatoon")]
+            return []
+
+        with (
+            patch("backend.utils.auto_payout.current_week_key", return_value=WEEK_KEY),
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+        ):
+            blocked = await find_blocked_drivers(limit=50, service_area_id="sa_regina")
+
+        assert blocked == []  # held driver is in a different market
 
 
 # ── Stale-reserved sweep ───────────────────────────────────────────────

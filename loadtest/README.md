@@ -22,19 +22,42 @@ doubles as a safety interlock — production targets will fail login.
      vehicle type and non-expired documents, or `go_online` will refuse.
    - a service area polygon covering Saskatoon downtown
      (52.1332, -106.6700) — or set `LOADTEST_CENTER_LAT/LNG`.
-3. `pip install -r requirements.txt` (locust + websocket-client).
+3. `pip install -r requirements.txt` (locust + websocket-client + requests).
 
 ## Running
+
+**T16 round 2 harness fix — pre-authenticate bots before the timed run.**
+Round 1 found that logging every bot in via OTP at spawn time (`on_start`)
+drove the whole 60-bot pool — sharing one egress IP — straight through the
+per-IP 6/minute send-otp and 5/minute verify-otp rate limits
+(`backend/routes/auth.py`), producing an 82% failure rate that was a
+harness artifact, not a platform finding (see
+`docs/audit/2026-09-02-t16-staging-load-test-results.md`). Fix: run
+`preauth_bots.py` once, ahead of the timed scenario, which logs each bot
+in exactly once at a pace safely under 5/minute and caches the resulting
+tokens; `locustfile.py`'s `on_start` then reuses a cached token for the
+whole run (with a proactive `/auth/refresh` — 20/minute limit, much
+looser — partway through long runs) instead of touching the OTP endpoints
+again. The old per-spawn OTP login only remains as a fallback for small
+ad-hoc smoke tests when no cache exists.
 
 ```bash
 export LOADTEST_BASE_URL=https://staging-api.spinr.ca
 mkdir -p results
+
+# One-time pre-auth pass (paced at 4 logins/min, ~15 min for 60 bots).
+# Re-run whenever the bot roster size changes (--riders/--drivers) or the
+# cache is stale; safe to re-run any time (dev OTP bypass allows re-login).
+python preauth_bots.py --riders 45 --drivers 15
 
 # Scenario A — steady state (sanity): 45 riders / 15 drivers, 10 min
 locust -f locustfile.py --headless -u 60 -r 2 -t 10m \
   --host "$LOADTEST_BASE_URL" --csv results/steady
 
 # Scenario B — ramp to breaking point: add 4 users/s until SLAs break
+# NOTE: pre-auth the full 600+80 roster first (raise --riders/--drivers
+# accordingly) — the point of the fix is exactly to avoid re-deriving the
+# rate-limit ceiling here.
 locust -f locustfile.py --headless -u 600 -r 4 -t 30m \
   --host "$LOADTEST_BASE_URL" --csv results/ramp
 ```
@@ -86,6 +109,7 @@ A-grade platforms know their number. After each ramp run, append a row:
 | Date | Commit | Env | Riders/Drivers at breach | First symptom | Bottleneck | Notes |
 |------|--------|-----|--------------------------|---------------|------------|-------|
 | _example_ 2026-06-14 | abc1234 | staging-fly-1x-shared | 240/80 | estimate P95 612ms | DB thread pool saturated (queued_calls>50) | retest after DB_THREAD_POOL_SIZE=96 |
+| 2026-09-02 | ~2026-08-29 build (v1, only release ever — see full report for how this was inferred; no literal git SHA is embedded in the Fly image) — PRE-C50, no dispatch_direct_pool code present | spinr-backend-staging (Fly shared-cpu-1x, 512MB, 1 machine) | 45/15 (Scenario A steady-state, not a ramp-to-breach) | estimate P95 910ms (SLA gate breach, no ramp needed) | Unclear — DB thread pool queue depth was 0 throughout; likely cold single small machine + Directions API round-trip, not DB. auth:send-otp/verify-otp saw 98%+ failures but that is a harness rate-limit artifact (60 bots sharing one egress IP against a 6/min-per-IP OTP limiter), not a platform bottleneck — see full report | Full results + root-cause analysis: docs/audit/2026-09-02-t16-staging-load-test-results.md |
 | | | | | | | |
 
 ### Expected breaking point after the 2026-08-07 burst-capacity change
@@ -115,11 +139,18 @@ authenticated user before concluding the limits are too tight.
 breach during the ramp. Locust's `results/ramp_stats_history.csv` gives
 the user count at that timestamp; correlate with `/metrics` scrapes.
 
-## Status (2026-06-10)
+## Status (2026-09-02)
 
-Harness written against the live API contract (`/api/v1` paths, OTP auth,
-WS auth-first message, `new_ride_assignment` offers, pickup-OTP verify).
-**Not yet executed** — blocked on E1 (no staging environment), and this
-authoring environment has no egress to a deployable target. First run
-owner should expect to tweak: the estimate-response field names
-(`estimates`/`fares`), `drivers:me` response nesting, and seeding quirks.
+Harness executed for real for the first time (C50 Phase 3 T16) against
+`spinr-backend-staging.fly.dev`. Several bugs found on first run were
+fixed in commit `9d2bfc77b` — see
+`docs/audit/2026-09-02-t16-staging-load-test-results.md` for the full
+report: field-name mismatches (`otp`→`code`, `access_token`→`token`),
+an invalid default phone prefix, a nested-field lookup bug in
+`RiderBot.ride_lifecycle`, and a discovery that staging's
+`service_areas`/`vehicle_types` tables were empty (no seed data existed
+at all, not just missing a polygon). Scenario A (steady-state) has now
+run once; Scenario B (600-user ramp) has not — it is expected to hit the
+same per-IP OTP rate-limit ceiling as Scenario A did unless the harness
+is first run with `--processes` across multiple egress IPs (see the
+report's Recommendation #1).

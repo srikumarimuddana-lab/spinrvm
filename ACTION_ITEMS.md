@@ -12591,6 +12591,14 @@ record of what was assumed vs. what was actually true</summary>
   end, not just that it deploys.
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
+- **Update (2026-09-02):** reviewed with the user as part of a broader latency/
+  architecture audit session. **Consciously deferred, not forgotten** — the
+  team is focused on go-live prep and device testing; this is a backup-path
+  risk (only matters if Fly has an outage before it's fixed), not a
+  go-live blocker, so it's explicitly being carried forward rather than
+  actioned now. Recorded here specifically so this doesn't repeat the same
+  "temporary, no owner, no expiry" pattern that caused the original drift —
+  re-surface this item once device testing / go-live work winds down.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here

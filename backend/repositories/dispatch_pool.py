@@ -73,6 +73,25 @@ production (`settings.ENV == "production"`) and logs+continues everywhere
 else, same as `init_database`. Callers in `matching.py` do not exist yet
 (Phase 2), so nothing today depends on this pool being open — flag OFF means
 this module is inert.
+
+THE FLAG IS READ ONCE, AT STARTUP — WHAT THAT OBLIGATES PHASE 2 TO DO
+----------------------------------------------------------------------
+`init_pool()` is called only from `core/lifespan.init_database`, so the flag
+is sampled exactly once per process. Nothing re-reads it, and nothing closes
+the pool when it flips. Two consequences:
+
+  * Turning the flag ON against a running process does nothing — there is no
+    open pool for a call site to use. Enabling is a restart.
+  * Turning it OFF does NOT close the pool. Rollback works only because
+    Phase 2 (T12/T13) call sites MUST re-read the flag per dispatch attempt
+    (`settings_loader.get_app_settings`, ≤60s cache) and take the PostgREST
+    path when it is false. A leftover open pool serving nobody is harmless.
+
+That per-attempt re-read is the whole rollback story for C50. A Phase 2 that
+instead decides "direct pool or PostgREST" once at startup would silently
+turn the documented ≤60s no-redeploy rollback into a redeploy, so if that
+design changes, the rollback procedure in `schemas.AppSettings` and in the
+plan doc has to change with it.
 """
 
 from __future__ import annotations
@@ -117,6 +136,31 @@ _pool: Optional["AsyncConnectionPool"] = None
 def is_open() -> bool:
     """True once `init_pool()` has successfully opened the pool."""
     return _pool is not None
+
+
+def _in_use(pool: Optional["AsyncConnectionPool"]) -> float:
+    """Connections currently checked out of `pool`.
+
+    psycopg_pool reports `pool_size` (every connection the pool manages —
+    idle ones included) and `pool_available` (the idle subset). In-use is the
+    difference. Reading `pool_size` alone counts idle connections as busy, so
+    a freshly-opened pool sitting at DISPATCH_POOL_MIN_SIZE=1 with nothing in
+    flight would report 1 connection in use forever, and the gauge could
+    never fall to 0 — which is exactly the signal Phase 2 needs it for
+    (saturation against DISPATCH_POOL_MAX_SIZE).
+
+    Falls back to `pool_size` if `pool_available` is absent so a stats-key
+    change degrades to the previous behaviour rather than raising on the
+    dispatch path, and clamps at 0 because the two keys are sampled under
+    separate locks and can momentarily disagree under concurrency.
+    """
+    if pool is None:
+        return 0.0
+    stats = pool.get_stats() or {}
+    size = float(stats.get("pool_size", 0) or 0)
+    if "pool_available" not in stats:
+        return size
+    return max(size - float(stats.get("pool_available", 0) or 0), 0.0)
 
 
 async def init_pool(dispatch_direct_pool_enabled: bool) -> Optional["AsyncConnectionPool"]:
@@ -238,10 +282,10 @@ async def acquire() -> AsyncIterator["psycopg.AsyncConnection"]:
     try:
         async with _pool.connection(timeout=remaining if remaining is not None else None) as conn:
             _metric_observe("spinr_db_direct_pool_wait_ms", (_time.monotonic() - _wait_start) * 1000.0)
-            _metric_gauge("spinr_db_direct_pool_in_use", float(_pool.get_stats().get("pool_size", 0)))
+            _metric_gauge("spinr_db_direct_pool_in_use", _in_use(_pool))
             yield conn
     finally:
-        _metric_gauge("spinr_db_direct_pool_in_use", float(_pool.get_stats().get("pool_size", 0)) if _pool else 0.0)
+        _metric_gauge("spinr_db_direct_pool_in_use", _in_use(_pool))
 
 
 async def run_query(sql: str, params: tuple = (), *, fetch: str = "all") -> Any:

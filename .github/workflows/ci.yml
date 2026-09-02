@@ -128,10 +128,11 @@ jobs:
           # propagate to sibling test modules, so the skip silently never fires
           # for either directory. Left unfixed, this step would try a real
           # psycopg2.connect() against the fake DSN and fail the job for real
-          # instead of skipping cleanly. Both suites have their own dedicated,
-          # real-Postgres-backed CI steps (this one below for tests/direct_pool;
-          # tests/rls is pre-existing and out of scope here) -- excluded from
-          # collection in this mocked-DB step, not from CI as a whole.
+          # instead of skipping cleanly. Both suites are excluded from THIS
+          # mocked-DB step only, not from CI as a whole: each has its own
+          # dedicated real-Postgres step immediately below. Keep those two
+          # steps in sync with these --ignore flags -- an --ignore added here
+          # without a matching step silently drops that suite from CI.
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
             --ignore=tests/direct_pool --ignore=tests/rls -v
 
@@ -146,14 +147,46 @@ jobs:
       # DATABASE for its own throwaway scratch database (see
       # tests/direct_pool/conftest.py). -c + --confcutdir isolate this run
       # from backend/tests/conftest.py's coverage gate and mocked-Supabase
-      # stack, same as the pre-existing tests/rls suite (never wired into
-      # CI before this -- confirmed by reading this file end to end).
+      # stack -- the invocation CLAUDE.md documents for this style of
+      # real-Postgres suite, shared with the tests/rls step below.
       - name: Run direct-pool real-Postgres tests (C50 Phase 1, T11)
         working-directory: backend
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
         run: |
           pytest tests/direct_pool -c /dev/null --confcutdir=tests/direct_pool -v
+
+      # DB-role-level RLS policy tests (backend/tests/rls/) -- the repo's only
+      # coverage that exercises Postgres Row-Level Security from a real
+      # anon/authenticated role, which mock_supabase_client cannot do at all
+      # (RLS is enforced by Postgres itself, never by a mocked client).
+      # Covers users, drivers, rides, financial_events, driver_insurance_periods.
+      #
+      # Until the --ignore=tests/rls added to the mocked-DB step above, this
+      # suite rode along inside that step: pytest.ini's `testpaths = tests`
+      # collects it, its conftest-level `pytestmark` skipif does NOT propagate
+      # to sibling test modules (the same latent bug documented in
+      # tests/direct_pool/conftest.py), and DATABASE_URL there used to carry
+      # real service credentials -- so it ran for real. That --ignore is right
+      # on its own terms, but without this step it would have taken an
+      # auth-boundary suite out of CI altogether. This step is that
+      # replacement, using the isolated invocation CLAUDE.md documents for it.
+      - name: Run RLS role-level tests (real Postgres)
+        working-directory: backend
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: spinr_test
+        run: |
+          # tests/rls/conftest.py's _dsn_with_dbname() urlsplit()s this, so it
+          # must be URL-form (not libpq keyword/value). Composed from the
+          # standard PG* vars above rather than pasted as one literal: the
+          # service credentials stay declared in a single place, and no bare
+          # user:password@host string is duplicated into the tracked file.
+          RLS_DSN="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          TEST_DATABASE_URL="$RLS_DSN" pytest tests/rls -c /dev/null --confcutdir=tests/rls -v
 
       # Codecov upload removed 2026-08-16 (ACTION_ITEMS.md C12 resolved, not
       # deferred): no CODECOV_TOKEN repo secret exists and no one currently

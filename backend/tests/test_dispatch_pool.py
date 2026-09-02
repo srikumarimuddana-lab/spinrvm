@@ -484,7 +484,8 @@ class TestAcquireSuccessPath:
         fake_conn = MagicMock(name="fake_psycopg_async_connection")
         fake_pool = MagicMock()
         fake_pool.connection = MagicMock(return_value=_FakeAsyncCM(fake_conn))
-        fake_pool.get_stats = MagicMock(return_value={"pool_size": 3})
+        # 3 managed, 1 idle -> 2 actually checked out.
+        fake_pool.get_stats = MagicMock(return_value={"pool_size": 3, "pool_available": 1})
         monkeypatch.setattr(dispatch_pool, "_pool", fake_pool)
         monkeypatch.setattr(dispatch_pool, "_deadline_exhausted", lambda: False)
         monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: 5.0)
@@ -502,7 +503,9 @@ class TestAcquireSuccessPath:
         # in-use gauge updated on entry AND again in the finally block
         gauge_calls = [c for c in mock_gauge.call_args_list if c.args[0] == "spinr_db_direct_pool_in_use"]
         assert len(gauge_calls) == 2
-        assert all(c.args[1] == 3.0 for c in gauge_calls)  # from fake pool_size=3
+        # in-use is pool_size - pool_available (3 - 1), NOT pool_size: reading
+        # pool_size alone would report idle connections as busy.
+        assert all(c.args[1] == 2.0 for c in gauge_calls)
         fake_pool.connection.assert_called_once_with(timeout=5.0)
 
     @pytest.mark.anyio
@@ -514,7 +517,7 @@ class TestAcquireSuccessPath:
         fake_conn = MagicMock(name="fake_psycopg_async_connection")
         fake_pool = MagicMock()
         fake_pool.connection = MagicMock(return_value=_FakeAsyncCM(fake_conn))
-        fake_pool.get_stats = MagicMock(return_value={"pool_size": 1})
+        fake_pool.get_stats = MagicMock(return_value={"pool_size": 1, "pool_available": 0})
         monkeypatch.setattr(dispatch_pool, "_pool", fake_pool)
         monkeypatch.setattr(dispatch_pool, "_deadline_exhausted", lambda: False)
         monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: None)
@@ -527,6 +530,57 @@ class TestAcquireSuccessPath:
         gauge_calls = [c for c in mock_gauge.call_args_list if c.args[0] == "spinr_db_direct_pool_in_use"]
         assert len(gauge_calls) == 2
         fake_pool.connection.assert_called_once_with(timeout=None)
+
+
+class TestInUseGauge:
+    """_in_use() must report connections actually checked out.
+
+    Regression: the gauge previously read psycopg_pool's `pool_size`, which
+    counts every connection the pool manages including idle ones. With
+    DISPATCH_POOL_MIN_SIZE=1 that made an idle pool report 1 connection in
+    use permanently, so spinr_db_direct_pool_in_use could never reach 0 and
+    was useless for the saturation signal Phase 2 needs it for.
+    """
+
+    def _pool(self, stats):
+        fake_pool = MagicMock()
+        fake_pool.get_stats = MagicMock(return_value=stats)
+        return fake_pool
+
+    def test_subtracts_idle_connections(self):
+        from backend.repositories import dispatch_pool
+
+        assert dispatch_pool._in_use(self._pool({"pool_size": 8, "pool_available": 3})) == 5.0
+
+    def test_idle_pool_reports_zero_not_min_size(self):
+        """The exact bug: a pool at min_size with nothing checked out."""
+        from backend.repositories import dispatch_pool
+
+        assert dispatch_pool._in_use(self._pool({"pool_size": 1, "pool_available": 1})) == 0.0
+
+    def test_fully_saturated_pool_reports_max(self):
+        from backend.repositories import dispatch_pool
+
+        assert dispatch_pool._in_use(self._pool({"pool_size": 8, "pool_available": 0})) == 8.0
+
+    def test_falls_back_to_pool_size_when_available_key_absent(self):
+        """A stats-key change must degrade to the old behaviour, not raise on
+        the dispatch path."""
+        from backend.repositories import dispatch_pool
+
+        assert dispatch_pool._in_use(self._pool({"pool_size": 4})) == 4.0
+
+    def test_clamps_at_zero_when_keys_disagree(self):
+        """pool_size and pool_available are sampled separately and can
+        momentarily disagree under concurrency -- never emit a negative."""
+        from backend.repositories import dispatch_pool
+
+        assert dispatch_pool._in_use(self._pool({"pool_size": 2, "pool_available": 5})) == 0.0
+
+    def test_none_pool_reports_zero(self):
+        from backend.repositories import dispatch_pool
+
+        assert dispatch_pool._in_use(None) == 0.0
 
 
 class TestRunQuery:
@@ -548,7 +602,7 @@ class TestRunQuery:
 
         fake_pool = MagicMock()
         fake_pool.connection = MagicMock(return_value=_FakeAsyncCM(fake_conn))
-        fake_pool.get_stats = MagicMock(return_value={"pool_size": 1})
+        fake_pool.get_stats = MagicMock(return_value={"pool_size": 1, "pool_available": 0})
         monkeypatch.setattr(dispatch_pool, "_pool", fake_pool)
         monkeypatch.setattr(dispatch_pool, "_deadline_exhausted", lambda: False)
         monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: None)

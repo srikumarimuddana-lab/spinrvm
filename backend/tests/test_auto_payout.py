@@ -84,6 +84,29 @@ def _mock_db(tables: dict):
     return side_effect
 
 
+def _mock_batched(tables: dict):
+    """get_rows_batched_in side_effect for the same `tables` fixture shape
+    _mock_db uses — find_blocked_drivers' balance lookup goes through the
+    batched $in helper (_compute_payable_balances_batch), not plain
+    get_rows, so tests exercising it need this in addition to _mock_db.
+    Filters fixture rows to those whose `column` is in `values`, matching
+    what a real $in query would return.
+    """
+
+    async def side_effect(table, column, values, extra_filters=None, *, columns="*", limit=None, **kw):
+        extra_filters = extra_filters or {}
+        wanted = set(values)
+        if table == "rides":
+            status = extra_filters.get("status")
+            status = getattr(status, "value", status)
+            rows = tables.get(f"rides_{status}", [])
+        else:
+            rows = tables.get(table, [])
+        return [r for r in rows if r.get(column) in wanted]
+
+    return side_effect
+
+
 def _sb_claims(claims=None):
     mock_sb = MagicMock()
     mock_sb.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(data=claims or [])
@@ -196,6 +219,106 @@ class TestComputePayableBalance:
             endpoint = await get_driver_balance(current_user={"id": "user_auto_001"})
             batch = await _compute_payable_balance(DRIVER_ID)
         assert str(batch) == endpoint["payable_balance"]
+
+
+class TestComputePayableBalancesBatch:
+    """_compute_payable_balances_batch is the batched (get_rows_batched_in)
+    counterpart to _compute_payable_balance — same formula via the shared
+    _balance_from_rows, but for many drivers in one round-trip set instead
+    of one round-trip set per driver. Correctness (not just call-count) must
+    match the single-driver function exactly."""
+
+    @pytest.mark.anyio
+    async def test_matches_single_driver_function_for_multiple_drivers(self):
+        """The batch must split correctly per driver (get_rows_batched_in
+        filters by id), matching what _compute_payable_balance would return
+        for each driver in isolation — the shared _balance_from_rows formula
+        guarantees the math itself can't drift between the two paths.
+
+        Isolated per-driver `tables` dicts for the single-driver calls: the
+        older _mock_db helper never filtered by driver_id (every existing
+        single-driver test only ever has one driver's rows in its fixture),
+        so reusing one shared two-driver `tables` dict for _compute_payable_balance
+        would silently leak driver_b's rows into driver_a's result and vice
+        versa — not a bug in the production code, a limitation of that mock.
+        """
+        from backend.utils.auto_payout import _compute_payable_balance, _compute_payable_balances_batch
+
+        driver_a, driver_b = "drv_a", "drv_b"
+        rows_a = {
+            "rides_completed": [_ride(id="ride_a1", driver_id=driver_a, driver_earnings="80.00", tax_amount="4.00")],
+            "rides_cancelled": [{"driver_id": driver_a, "cancellation_fee_driver": "5.00"}],
+            "payouts": [{"driver_id": driver_a, "amount": "30.00", "status": "completed", "payout_type": "auto"}],
+        }
+        rows_b = {
+            "rides_completed": [_ride(id="ride_b1", driver_id=driver_b, driver_earnings="20.00", tax_amount="1.00")],
+            "driver_bonuses": [{"driver_id": driver_b, "amount": "10.00", "kind": "quest"}],
+        }
+        combined = {
+            "rides_completed": rows_a["rides_completed"] + rows_b["rides_completed"],
+            "rides_cancelled": rows_a["rides_cancelled"],
+            "driver_bonuses": rows_b["driver_bonuses"],
+            "payouts": rows_a["payouts"],
+        }
+
+        with patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in", side_effect=_mock_batched(combined)):
+            batch_result = await _compute_payable_balances_batch([driver_a, driver_b])
+        with (
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=_mock_db(rows_a)),
+            patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
+        ):
+            single_a = await _compute_payable_balance(driver_a)
+        with (
+            patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=_mock_db(rows_b)),
+            patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
+        ):
+            single_b = await _compute_payable_balance(driver_b)
+
+        assert batch_result[driver_a] == single_a == Decimal("59.00")  # 80 + 4 + 5 - 30
+        assert batch_result[driver_b] == single_b == Decimal("31.00")  # 20 + 1 + 10
+
+    @pytest.mark.anyio
+    async def test_driver_with_no_activity_gets_zero_not_missing(self):
+        from backend.utils.auto_payout import _compute_payable_balances_batch
+
+        tables: dict = {}
+        with (
+            patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in", side_effect=_mock_batched(tables)),
+        ):
+            result = await _compute_payable_balances_batch(["drv_never_active"])
+
+        assert result == {"drv_never_active": Decimal("0")}
+
+    @pytest.mark.anyio
+    async def test_empty_input_short_circuits_without_querying(self):
+        from backend.utils.auto_payout import _compute_payable_balances_batch
+
+        with patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in") as batched:
+            result = await _compute_payable_balances_batch([])
+
+        assert result == {}
+        batched.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_incentive_claims_attributed_to_the_right_driver(self):
+        """Claims are keyed by ride_id, not driver_id — the batch path must
+        map ride -> driver correctly rather than crediting every claim to
+        every driver in the batch."""
+        from backend.utils.auto_payout import _compute_payable_balances_batch
+
+        driver_a, driver_b = "drv_a", "drv_b"
+        tables = {
+            "rides_completed": [
+                _ride(id="ride_a1", driver_id=driver_a, driver_earnings="0", tax_amount="0"),
+                _ride(id="ride_b1", driver_id=driver_b, driver_earnings="0", tax_amount="0"),
+            ],
+            "ride_incentive_claims": [{"ride_id": "ride_a1", "bonus_amount": "15.00"}],
+        }
+        with patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in", side_effect=_mock_batched(tables)):
+            result = await _compute_payable_balances_batch([driver_a, driver_b])
+
+        assert result[driver_a] == Decimal("15.00")
+        assert result[driver_b] == Decimal("0")
 
 
 # ── Batch run ──────────────────────────────────────────────────────────
@@ -738,14 +861,17 @@ class TestBlockedDriverVisibility:
             if table == "drivers":
                 seen_filters.append(filters)
                 return [_driver(gst_bn=None, service_area_id="sa_regina")]
-            if table == "rides":
-                status = filters.get("status")
-                status = getattr(status, "value", status)
-                return [_ride(driver_earnings="75.00", tax_amount="0.00")] if status == "completed" else []
+            return []
+
+        async def get_rows_batched_in(table, column, values, extra_filters=None, **kw):
+            extra_filters = extra_filters or {}
+            if table == "rides" and extra_filters.get("status") == "completed":
+                return [_ride(driver_earnings="75.00", tax_amount="0.00")]
             return []
 
         with (
             patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+            patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in", side_effect=get_rows_batched_in),
             patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
         ):
             blocked = await find_blocked_drivers(limit=50, service_area_id="sa_regina")
@@ -763,6 +889,7 @@ class TestBlockedDriverVisibility:
         }
         with (
             patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=_mock_db(tables)),
+            patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in", side_effect=_mock_batched(tables)),
             patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
         ):
             blocked = await find_blocked_drivers(limit=50)
@@ -782,36 +909,45 @@ class TestFindBlockedDriversBalanceCheckCap:
 
     @pytest.mark.anyio
     async def test_stops_after_max_balance_checks_and_logs(self, caplog):
+        """The candidate set handed to the batched balance lookup must be
+        capped at _MAX_BALANCE_CHECKS, not the full fleet — proven by
+        inspecting the size of the id list get_rows_batched_in receives, and
+        by the call count staying small and FIXED (batched, not one call per
+        driver) regardless of a 320-driver fleet."""
         from backend.utils.auto_payout import _MAX_BALANCE_CHECKS, find_blocked_drivers
 
         # More gate-failing, zero-balance drivers than the cap allows — none
-        # of them ever contribute a result, so without the cap this loop
-        # would balance-check every single one before exhausting the page.
+        # of them ever contribute a result, so without the cap the candidate
+        # list would include every one of them instead of stopping at the cap.
         many_drivers = [
             _driver(id=f"drv_{i}", user_id=f"u{i}", stripe_account_id=None) for i in range(_MAX_BALANCE_CHECKS + 20)
         ]
-        checks = {"n": 0}
+        batched_calls: list[int] = []
 
         async def get_rows(table, filters=None, **kw):
-            filters = filters or {}
             if table == "drivers":
                 return many_drivers
-            if table == "rides":
-                checks["n"] += 1
-                return []  # $0 balance -> never appended to results
             return []
+
+        async def get_rows_batched_in(table, column, values, extra_filters=None, **kw):
+            batched_calls.append(len(list(values)))
+            return []  # $0 balance for every candidate -> never appended to results
 
         with (
             patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=get_rows),
+            patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in", side_effect=get_rows_batched_in),
             patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
             caplog.at_level("WARNING"),
         ):
             blocked = await find_blocked_drivers(limit=50)
 
         assert blocked == []
-        # Two "rides" queries per balance check (completed + cancelled, run
-        # concurrently) -> checks["n"] counts balance-check attempts * 2.
-        assert checks["n"] <= _MAX_BALANCE_CHECKS * 2
+        assert batched_calls, "the batched balance lookup must still run for the capped candidate set"
+        assert all(n <= _MAX_BALANCE_CHECKS for n in batched_calls)
+        # A small, FIXED number of batched calls regardless of fleet size —
+        # the whole point of the fix (was up to 300 individual per-driver
+        # round-trip-sets before).
+        assert len(batched_calls) <= 5
         assert any("balance-check cap" in r.message for r in caplog.records)
 
     @pytest.mark.anyio
@@ -826,6 +962,7 @@ class TestFindBlockedDriversBalanceCheckCap:
         }
         with (
             patch("backend.utils.auto_payout.db_supabase.get_rows", side_effect=_mock_db(tables)),
+            patch("backend.utils.auto_payout.db_supabase.get_rows_batched_in", side_effect=_mock_batched(tables)),
             patch("backend.utils.auto_payout.db_supabase.supabase", _sb_claims()),
         ):
             blocked = await find_blocked_drivers(limit=50)

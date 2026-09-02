@@ -453,10 +453,14 @@ async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = No
 
     Live preflight for ops — same gates the Sunday run uses, so blockers can
     be chased before the run rather than read out of last week's summary.
-    Balance is computed only for drivers that fail a gate, capped at
-    _MAX_BALANCE_CHECKS total attempts — see that constant's comment for why
-    the cost otherwise scales with the FLEET, not the blocked set, on a
-    fleet with many never-active driver signups.
+
+    Two phases: (1) page the drivers table (cheap, in-memory gate check) to
+    collect up to _MAX_BALANCE_CHECKS gate-failing candidates; (2) compute
+    ALL of their balances in one batched call
+    (_compute_payable_balances_batch) instead of one round-trip-set per
+    driver. See that function's docstring for why — this used to be a
+    per-driver loop and was the N+1 pattern that made this endpoint hang on
+    a fleet with many never-active driver signups.
 
     Also includes this week's 'over_cap' holds (see
     _current_week_over_cap_entries) — a driver can be over-cap without
@@ -470,11 +474,10 @@ async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = No
     never names, phones, or bank details (PIPEDA rules in CLAUDE.md).
     """
     base_filter: dict = {"service_area_id": service_area_id} if service_area_id else {}
-    out: list[dict] = []
-    checked = 0
+    candidates: list[dict] = []
     offset = 0
     capped = False
-    while len(out) < limit and not capped:
+    while len(candidates) < _MAX_BALANCE_CHECKS and not capped:
         page = await db_supabase.get_rows("drivers", base_filter, limit=_PAGE_SIZE, offset=offset, order="id")
         if not page:
             break
@@ -482,7 +485,8 @@ async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = No
             reason = _eligibility_skip_reason(d)
             if not reason:
                 continue
-            if checked >= _MAX_BALANCE_CHECKS:
+            candidates.append({"driver": d, "reason": reason})
+            if len(candidates) >= _MAX_BALANCE_CHECKS:
                 capped = True
                 logger.warning(
                     "[AUTO-PAYOUT] find_blocked_drivers hit the %d-driver balance-check cap "
@@ -491,27 +495,32 @@ async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = No
                     service_area_id,
                 )
                 break
-            checked += 1
-            try:
-                balance = await _compute_payable_balance(d["id"])
-            except Exception:
-                logger.exception("[AUTO-PAYOUT] preflight balance failed for driver %s", d.get("id"))
-                continue
+        if len(page) < _PAGE_SIZE:
+            break
+        offset += _PAGE_SIZE
+
+    out: list[dict] = []
+    if candidates:
+        try:
+            balances = await _compute_payable_balances_batch([c["driver"]["id"] for c in candidates])
+        except Exception:
+            logger.exception("[AUTO-PAYOUT] batched preflight balance lookup failed")
+            balances = {}
+        for c in candidates:
+            d = c["driver"]
+            balance = balances.get(d["id"], Decimal("0"))
             if balance < MIN_PAYOUT_AMOUNT:
                 continue
             out.append(
                 {
                     "driver_id": d["id"],
-                    "reason": reason,
+                    "reason": c["reason"],
                     "pending_amount": str(balance),
                     "service_area_id": d.get("service_area_id"),
                 }
             )
             if len(out) >= limit:
                 break
-        if len(page) < _PAGE_SIZE:
-            break
-        offset += _PAGE_SIZE
 
     if len(out) < limit:
         seen = {o["driver_id"] for o in out}
@@ -522,55 +531,27 @@ async def find_blocked_drivers(limit: int = 50, service_area_id: str | None = No
     return out
 
 
-async def _compute_payable_balance(driver_id: str) -> Decimal:
-    """Same formula as routes/drivers/earnings.get_driver_balance — see the
-    module docstring's parity note and the parity test.
-
-    The rides/cancelled-rides/bonuses/payouts queries below are independent
-    of each other and run concurrently (asyncio.gather) rather than
-    sequentially. Fleet-wide callers (find_blocked_drivers, the weekly
-    batch's skip-notification path) call this once per driver that fails an
-    eligibility gate — four sequential round trips per driver is exactly
-    what turned the admin "Weekly Payouts" preflight into an effectively
-    unbounded-latency endpoint on a fleet with many never-active driver
-    signups (each fails a gate immediately, so each got the full sequential
-    treatment). Only the ride_incentive_claims lookup is a genuine second
-    stage — it needs ride_ids from the rides query.
+def _balance_from_rows(
+    rides: list[dict],
+    cancelled_rides: list[dict],
+    bonus_rows: list[dict],
+    raw_payout_rows: list[dict],
+    incentive_claims: list[dict],
+) -> Decimal:
+    """Pure balance computation — the ONE formula, shared by
+    _compute_payable_balance (single driver, one round trip set) and
+    _compute_payable_balances_batch (many drivers, one round trip set
+    total). Keeping this as a single pure function is what guarantees the
+    batched path can never drift from the single-driver path's math — see
+    the module docstring's parity note and the parity test, both of which
+    exercise this indirectly through _compute_payable_balance.
     """
     ZERO = Decimal("0")
 
-    rides, cancelled_rides, bonus_rows, raw_payout_rows = await asyncio.gather(
-        db_supabase.get_rows(
-            "rides",
-            {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
-            limit=10000,
-        ),
-        db_supabase.get_rows("rides", {"driver_id": driver_id, "status": "cancelled"}, limit=10000),
-        db_supabase.get_rows("driver_bonuses", {"driver_id": driver_id}, limit=10000),
-        db_supabase.get_rows("payouts", {"driver_id": driver_id}, limit=5000),
-    )
-
     ride_earnings = sum((_ride_income(r) for r in rides), ZERO)
     total_tax = sum((_ride_tax(r) for r in rides), ZERO)
-
-    total_incentives = ZERO
-    ride_ids = [r["id"] for r in rides if r.get("id")]
-    if ride_ids:
-        # Sync supabase client call — keep it off the event loop (every other
-        # DB call here goes through run_sync's thread pool already).
-        claims_result = await asyncio.to_thread(
-            lambda: (
-                db_supabase.supabase.table("ride_incentive_claims")
-                .select("bonus_amount")
-                .in_("ride_id", ride_ids)
-                .execute()
-            )
-        )
-        claims = claims_result.data or []
-        total_incentives = sum((_d(c.get("bonus_amount") or 0) for c in claims), ZERO)
-
+    total_incentives = sum((_d(c.get("bonus_amount") or 0) for c in incentive_claims), ZERO)
     total_cancel_fees = sum((_d(r.get("cancellation_fee_driver") or 0) for r in cancelled_rides), ZERO)
-
     total_earnings = ride_earnings + total_tax + total_incentives + total_cancel_fees
 
     total_bonuses = sum((_d(b.get("amount") or 0) for b in bonus_rows), ZERO)
@@ -587,6 +568,121 @@ async def _compute_payable_balance(driver_id: str) -> Decimal:
     )
 
     return total_earnings + total_bonuses - total_payouts
+
+
+async def _compute_payable_balance(driver_id: str) -> Decimal:
+    """Same formula as routes/drivers/earnings.get_driver_balance — see the
+    module docstring's parity note and the parity test.
+
+    Single-driver path: the four independent queries run concurrently
+    (asyncio.gather). For a FLEET-WIDE scan across many drivers, use
+    _compute_payable_balances_batch instead — see its docstring for why
+    calling this function once per driver is the N+1 pattern that made the
+    admin "Weekly Payouts" preflight an effectively unbounded-latency
+    endpoint.
+    """
+    rides, cancelled_rides, bonus_rows, raw_payout_rows = await asyncio.gather(
+        db_supabase.get_rows(
+            "rides",
+            {"driver_id": driver_id, "status": "completed", **EXCLUDE_LEGACY_RIDES},
+            limit=10000,
+        ),
+        db_supabase.get_rows("rides", {"driver_id": driver_id, "status": "cancelled"}, limit=10000),
+        db_supabase.get_rows("driver_bonuses", {"driver_id": driver_id}, limit=10000),
+        db_supabase.get_rows("payouts", {"driver_id": driver_id}, limit=5000),
+    )
+
+    incentive_claims: list[dict] = []
+    ride_ids = [r["id"] for r in rides if r.get("id")]
+    if ride_ids:
+        # Sync supabase client call — keep it off the event loop (every other
+        # DB call here goes through run_sync's thread pool already).
+        claims_result = await asyncio.to_thread(
+            lambda: (
+                db_supabase.supabase.table("ride_incentive_claims")
+                .select("bonus_amount")
+                .in_("ride_id", ride_ids)
+                .execute()
+            )
+        )
+        incentive_claims = claims_result.data or []
+
+    return _balance_from_rows(rides, cancelled_rides, bonus_rows, raw_payout_rows, incentive_claims)
+
+
+def _group_by(rows: list[dict], key: str) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        k = row.get(key)
+        if k:
+            grouped.setdefault(k, []).append(row)
+    return grouped
+
+
+async def _compute_payable_balances_batch(driver_ids: list[str]) -> dict[str, Decimal]:
+    """Same formula as _compute_payable_balance (via the shared
+    _balance_from_rows), but for MANY drivers in a small constant number of
+    round trips instead of one round-trip-set per driver.
+
+    This is the fix for the "Weekly Payouts" admin tab hanging: calling
+    _compute_payable_balance once per gate-failing driver in a loop is the
+    textbook N+1 pattern CLAUDE.md's Performance SLA section names
+    explicitly ("N+1 Supabase reads in a loop — batch via .in_() instead").
+    A fleet with hundreds of never-active driver signups turned that loop
+    into hundreds of sequential round-trip-sets; at realistic hosted-
+    PostgREST latency (~65-70ms/call) even the capped version
+    (_MAX_BALANCE_CHECKS = 300) still took ~20 seconds. Batching via
+    get_rows_batched_in (already the established pattern in this codebase —
+    see routes/admin/rides.py's admin_export_drivers for the template) cuts
+    this to ~5-10 round trips total regardless of how many candidate
+    drivers are being checked, matching the correctly-batched pattern used
+    elsewhere in this repo rather than inventing a new one.
+
+    Returns a dict of every id in driver_ids -> its balance (0 for a driver
+    with no activity in any table).
+    """
+    if not driver_ids:
+        return {}
+
+    rides, cancelled_rides, bonus_rows, raw_payout_rows = await asyncio.gather(
+        db_supabase.get_rows_batched_in(
+            "rides", "driver_id", driver_ids, {"status": "completed", **EXCLUDE_LEGACY_RIDES}
+        ),
+        db_supabase.get_rows_batched_in("rides", "driver_id", driver_ids, {"status": "cancelled"}),
+        db_supabase.get_rows_batched_in("driver_bonuses", "driver_id", driver_ids),
+        db_supabase.get_rows_batched_in("payouts", "driver_id", driver_ids),
+    )
+
+    ride_ids = [r["id"] for r in rides if r.get("id")]
+    incentive_claims: list[dict] = (
+        await db_supabase.get_rows_batched_in(
+            "ride_incentive_claims", "ride_id", ride_ids, columns="ride_id,bonus_amount"
+        )
+        if ride_ids
+        else []
+    )
+    ride_to_driver = {r["id"]: r.get("driver_id") for r in rides if r.get("id")}
+    claims_by_driver: dict[str, list[dict]] = {}
+    for c in incentive_claims:
+        did = ride_to_driver.get(c.get("ride_id"))
+        if did:
+            claims_by_driver.setdefault(did, []).append(c)
+
+    rides_by_driver = _group_by(rides, "driver_id")
+    cancelled_by_driver = _group_by(cancelled_rides, "driver_id")
+    bonuses_by_driver = _group_by(bonus_rows, "driver_id")
+    payouts_by_driver = _group_by(raw_payout_rows, "driver_id")
+
+    return {
+        did: _balance_from_rows(
+            rides_by_driver.get(did, []),
+            cancelled_by_driver.get(did, []),
+            bonuses_by_driver.get(did, []),
+            payouts_by_driver.get(did, []),
+            claims_by_driver.get(did, []),
+        )
+        for did in driver_ids
+    }
 
 
 async def _fetch_candidate_drivers() -> list[dict]:

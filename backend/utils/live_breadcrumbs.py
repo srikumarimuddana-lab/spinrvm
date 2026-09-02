@@ -48,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 # Performance bounds
 MAX_BREADCRUMB_POINTS = 200
-MAX_BREADCRUMB_AGE_SECONDS = 30 * 60  # 30 minutes
 
 
 def _haversine_m(a: List[float], b: List[float]) -> float:

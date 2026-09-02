@@ -12535,6 +12535,45 @@ record of what was assumed vs. what was actually true</summary>
   table already uses; verify `routes/addresses.py`'s existing service-role
   reads/writes are unaffected (they bypass RLS regardless).
 
+### B41. `ci.yml`'s `mobile-build` job never pins `--profile` on its `eas build` calls — decision held for discussion, not yet made
+
+- [ ] **Status:** open. Found 2026-09-02 while reviewing `ci.yml`'s
+  `mobile-build` job (rider+driver-app native builds gated on `[build]` in
+  a `main`-branch commit message, per PR #4871). A related gap in the same
+  job (driver-app missing entirely despite `needs: [rider-app-test,
+  driver-app-test]` already gating on it) was fixed in that PR; this one
+  was deliberately held back for a decision rather than shipped alongside
+  it.
+- **What's wrong:** every `eas build` call in this job (`Build iOS
+  (Rider)`, `Build Android (Rider)`, and the newly-added `Build iOS/Android
+  (Driver)`) omits `--profile` entirely — `eas build --platform ios
+  --non-interactive`, no profile flag. `eas.json` for both apps defines
+  `development`/`test`/`preview`/`production` profiles; without an explicit
+  flag, whatever EAS CLI resolves as its own default under
+  `--non-interactive` is what actually ships. Every other EAS-build
+  workflow in this repo (`eas-native-build.yml`,
+  `deploy-driver-play-testing.yml`) pins an explicit profile — this job is
+  the one inconsistent case.
+- **Why it's not fixed yet:** an initial fix pinned `--profile production`
+  (the only `eas.json` profile with `distribution: "store"`, and the
+  apparent match for what a `main`-branch `[build]` trigger should
+  produce) but this was explicitly held back pending discussion rather
+  than merged — no access from any session so far to `eas build:list`
+  history to confirm what profile has actually been resolving on past
+  `[build]`-triggered runs, so "production" is a reasoned guess, not a
+  verified fact about current behavior.
+- **Action:** before pinning a profile, confirm via EAS dashboard/`eas
+  build:list` what has actually been shipping from this job historically.
+  If it already resolves to `production`, pinning is a no-op clarity fix.
+  If it resolves to something else (e.g. `development`), decide
+  deliberately whether `[build]` on `main` should switch to `production`
+  (a real behavior change, needs sign-off given this is a live-tested
+  deploy path) or the job's intended profile should be documented as
+  something else entirely.
+- **What was NOT verified:** pre-change default profile resolution under
+  `--non-interactive` with no `--profile` flag — this needs EAS
+  dashboard/build-history access no session here has had yet.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

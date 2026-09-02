@@ -19543,6 +19543,44 @@ how much they de-risk a public launch._
   standby still running loops against prod — the plan's §3a), the untracked
   `_DEFAULT_ROW_LIMIT` 200-call-site sweep noted in the P0 change-log (§3b).
 
+### C51. `backend-test` fails at pytest collection — `h3` package used but never pinned in requirements
+- [ ] **Status:** open — base-branch-red on `main`, confirmed identically failing
+  there (not introduced by any specific PR). First surfaced and documented
+  while babysitting PR #4876 (2026-09-02); flagged there rather than fixed
+  inline since resolving it is an unrelated dependency change.
+- **Issue/gap:** `backend/utils/h3_cells.py:19` does `import h3` (Uber's H3
+  geospatial-indexing library, PyPI package `h3`/`h3-py`) — used for
+  dispatch-radius lookup (res 8) and heatmap aggregation (res 9), per its own
+  docstring. `backend/utils/h3_location_index.py` imports from it too. Neither
+  `backend/requirements.txt` nor `backend/requirements-locked.txt` pins `h3`
+  anywhere — grepped both files directly, no entry. The only geospatial-hash
+  package present is `mmh3==5.2.1` (MurmurHash, pulled in transitively via
+  `pyiceberg`) — an unrelated, coincidentally-similar name, not a substitute.
+- **Impact:** `pytest` fails at collection (not at runtime) with
+  `ModuleNotFoundError: No module named 'h3'`, taking down 4 test files —
+  `tests/test_dispatch_candidates.py`, `tests/test_h3_cells.py`,
+  `tests/test_h3_heatmap.py`, `tests/test_h3_location_index.py` — and the
+  whole `backend-test` CI job with them. `backend-test` also uploads the
+  `shared-coverage` artifact that `Money-path coverage floor check` and
+  `Admin/utils coverage floor check` both depend on, so both of those gates
+  cascade-fail too even though neither touches H3 code.
+- **Action:** add `h3` to `backend/requirements.txt` (and regenerate
+  `backend/requirements-locked.txt` via the repo's normal lock step). The
+  actual calls in `h3_cells.py` (`h3.latlng_to_cell`, `h3.grid_disk`,
+  `h3.cell_to_latlng`, `h3.cell_to_boundary`, `h3.is_valid_cell`) are all v4
+  API names, so the pin must be `h3>=4,<5` — not v3 (`h3.geo_to_h3`/
+  `h3.k_ring`/... — different function names entirely, would still crash).
+  After adding it, `pytest tests/test_h3_cells.py tests/test_h3_location_index.py
+  tests/test_h3_heatmap.py tests/test_dispatch_candidates.py` should collect
+  and run cleanly — verify locally before pushing, this hasn't been run
+  against a real `h3` install in this session.
+- **Files:** `backend/requirements.txt`, `backend/requirements-locked.txt`.
+  No application code needs to change — `h3_cells.py`/`h3_location_index.py`
+  are already written correctly against v4, they just have no installable
+  dependency backing them in CI.
+- **Acceptance:** `backend-test` collects without error on `main`; the two
+  cascade coverage-floor checks stop failing as a side effect.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

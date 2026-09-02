@@ -19458,6 +19458,44 @@ how much they de-risk a public launch._
   whichever the team decides is the actual bar. Do not mark #29 closed
   off this item alone.
 
+### C50. PostgREST → direct pool (Supavisor) for the dispatch claim path — gated; Phase 0 evidence work open
+- [ ] **Status:** open — plan at `docs/audit/2026-09-02-pgbouncer-direct-pool-migration-plan.md`
+  (rev 2, 2026-09-02, reviewed against the code). Phases 1–3 of that plan are
+  **blocked on its gate G6** (a recorded Go/No-Go, ADR-011). Only Phase 0
+  (evidence gathering) is actionable now.
+- **Issue/gap:** the question "should dispatch bypass PostgREST and talk to the
+  Supabase pooler directly?" has come up repeatedly and was never tracked. Rev 1
+  of the plan said it descended from the Aug 26 audit's P3 — it did not (that
+  audit has no such item; its only pooling item is P2 #21, the httpx pool,
+  shipped). Rev 1's gate was also unexecutable: it needed a 500-driver load
+  test (harness exists at `loadtest/`, never run — blocked on E2 → E1) and a
+  per-phase latency breakdown that no instrumentation produces.
+- **Why it matters:** this is the highest-blast-radius change available in the
+  backend (every dispatch claim, insurance-period write, and `ride_offers`
+  insert). It must not be greenlit on suspicion. The plan's own likely outcome
+  is **No-Go** — the P0–P2 query-optimization work (≈80% shipped, see the plan's
+  §3) may already meet the < 2 s offer→accept and < 300 ms fare-estimate SLAs at
+  500 drivers, and gate G3 exists to find out.
+- **Action (Phase 0, in order):** T2 retro `spinr-dispatch-reviewer` pass on
+  `backend/routes/rides/matching.py:821-886` (self-disclosed as never run in
+  `docs/change-log/2026-08-27-p2-dispatch-loop-optimization.md`) → T3 additive
+  per-phase timing metrics in `repositories/_base.py` `run_sync` and the dispatch
+  attempt → T4 staging (E1 — three human actions) → T5 run
+  `loadtest/locustfile.py` at 600 users against staging and record the numbers
+  → T6 confirm pooler mode/port/pool-size/IPv4 reachability on the real project
+  → T7 write ADR-011 (Accepted or Rejected) and add it to `docs/adr/README.md`.
+  Decisions D1–D6 in the plan's §8 need Kiran.
+- **Files:** none changed yet. Phase 0 targets: `backend/repositories/_base.py`,
+  `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_metrics.py`,
+  `loadtest/README.md`. Phase 1+ files are enumerated per task in the plan.
+- **Acceptance:** ADR-011 exists in `docs/adr/` with a recorded decision. If
+  Rejected, close this item. If Accepted, this item stays open through the
+  plan's Phase 3 (flag `dispatch_direct_pool_enabled` on in production for a
+  7-day validation window with no regression) and closes at its T18.
+- **Related:** E1/E2 (staging + load test, P4 section above), C5 (stale Railway
+  standby still running loops against prod — the plan's §3a), the untracked
+  `_DEFAULT_ROW_LIMIT` 200-call-site sweep noted in the P0 change-log (§3b).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

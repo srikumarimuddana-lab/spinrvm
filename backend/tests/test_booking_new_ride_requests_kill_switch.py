@@ -3,10 +3,15 @@
 new_ride_requests_enabled is checked at the very top of POST /rides
 (create_ride), before validate_ride_location or any DB write — distinct
 from the E5 flags (test_kill_switch_flags.py), none of which stop new
-bookings generally. Follows the same fail-open-on-settings-error
-convention as every other kill switch in this codebase (e.g.
+bookings generally. Deliberately fails OPEN on a settings-read error: this
+flag would otherwise block ALL new bookings platform-wide, a far wider
+blast radius than a narrowly-scoped money kill switch, so a degraded
+app_settings read must not itself take booking down. Contrast
 services/payment_service.py::settle_corporate's corporate_billing_enabled
-check).
+check, which fails CLOSED on the same kind of read error (WS-1,
+plans/2026-09-03-path-to-a-implementation-plan.md) because its whole job is
+to stop corporate money movement during an incident — the two flags have
+different risk profiles by design, not an accidental inconsistency.
 """
 
 from __future__ import annotations
@@ -127,9 +132,10 @@ async def test_flag_omitted_defaults_to_enabled():
 
 
 async def test_settings_lookup_failure_fails_open():
-    """A degraded app_settings read must not itself block booking -- same
-    fail-open convention as settle_corporate's corporate_billing_enabled
-    check."""
+    """A degraded app_settings read must not itself block booking -- this
+    demand-side switch is deliberately fail-open (unlike settle_corporate's
+    corporate_billing_enabled, which fails closed; see the module
+    docstring)."""
     from backend.routes.rides import create_ride
 
     with (

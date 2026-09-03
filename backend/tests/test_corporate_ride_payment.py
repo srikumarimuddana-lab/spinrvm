@@ -855,11 +855,35 @@ async def test_settle_flag_missing_key_defaults_to_enabled():
 
 
 @pytest.mark.anyio
-async def test_settle_fails_open_on_settings_lookup_error():
-    """A settings-read error must never itself block corporate settlement."""
+async def test_settle_fails_closed_on_settings_lookup_error():
+    """A settings-read error must fail CLOSED.
+
+    This assertion is deliberately inverted from what it was. The test used to
+    read "a settings-read error must never itself block corporate settlement"
+    and assert `success is True`. That is the right instinct for a
+    platform-availability kill switch, but the wrong one for
+    corporate_billing_enabled: this switch exists to STOP corporate money
+    movement during an incident, so a read it cannot resolve has to behave
+    exactly like the flag being off. Failing open meant the switch silently
+    reopened during precisely the DB degradation it guards against.
+
+    Changed in WS-1 subtask 1; the per-flag rationale — including why
+    new_ride_requests_enabled and the other platform-availability switches
+    stay fail-open — is recorded in
+    docs/adr/011-flag-read-failure-semantics.md.
+    """
     allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 0}
     deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[_rider_membership()])
     deps["backend.settings_loader.get_app_settings"] = AsyncMock(side_effect=RuntimeError("settings down"))
-    result, _mocks = await _call_settle(_fake_corporate_ride(), deps)
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
 
-    assert result.success is True
+    assert result.success is False
+    assert result.status_code == 503
+    # No money moved — the allowance debit is never reached.
+    mocks["backend.services.payment_service.corporate_allowance_service.apply_ride_debit"].assert_not_called()
+    # ...and the settlement claim auto_settle_guest_corporate takes before
+    # calling us is released, or the ride sticks at payment_status
+    # ='processing' forever (its retry sweep polls only 'pending').
+    mocks["backend.services.payment_service.db_supabase.update_ride"].assert_any_call(
+        _RIDE_ID, {"payment_status": "pending"}
+    )

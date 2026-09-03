@@ -80,7 +80,7 @@ class TestAdminCancelRideAllowedStates:
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
-            patch("features.send_push_notification", AsyncMock(), create=True),
+            patch("routes.admin.rides.send_push_notification", AsyncMock()),
         ):
             resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
         assert resp.status_code == 200, f"status={status} should be cancellable"
@@ -145,7 +145,7 @@ class TestAdminCancelRideRaceGuard:
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
-            patch("features.send_push_notification", AsyncMock(), create=True),
+            patch("routes.admin.rides.send_push_notification", AsyncMock()),
         ):
             resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
         assert resp.status_code == 200
@@ -171,7 +171,7 @@ class TestAdminCancelRideInsurancePeriod:
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
-            patch("features.send_push_notification", AsyncMock(), create=True),
+            patch("routes.admin.rides.send_push_notification", AsyncMock()),
         ):
             resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
         assert resp.status_code == 200
@@ -195,7 +195,7 @@ class TestAdminCancelRideInsurancePeriod:
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
-            patch("features.send_push_notification", AsyncMock(), create=True),
+            patch("routes.admin.rides.send_push_notification", AsyncMock()),
         ):
             resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
         assert resp.status_code == 200
@@ -222,7 +222,7 @@ class TestAdminCancelRideInsurancePeriod:
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
-            patch("features.send_push_notification", AsyncMock(), create=True),
+            patch("routes.admin.rides.send_push_notification", AsyncMock()),
         ):
             resp = client.post("/api/admin/rides/ride-1/cancel", json={"reason": "test"})
         assert resp.status_code == 200

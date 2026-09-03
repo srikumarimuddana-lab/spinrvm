@@ -117,15 +117,17 @@ class TestOfferTimeoutHandler:
                 AsyncMock(),
             ) as mock_set_available,
             patch("backend.routes.rides._deps.record_period_transition", AsyncMock()) as mock_period,
-            # NOTE the `backend.` prefix: matching.py imports this lazily as
-            # `from ...utils.driver_presence import increment_miss_streak`,
-            # which resolves to `backend.utils.driver_presence` because the
-            # module is loaded as backend.routes.rides.matching. conftest.py
-            # documents that the bare and prefixed spellings are *different*
-            # module objects, so patching bare `utils.driver_presence` here
-            # would never intercept the call and the assertion below would
-            # pass vacuously.
+            # Both spellings are patched deliberately. conftest.py documents
+            # that the bare and `backend.`-qualified module paths are "often
+            # different module objects", and matching.py reaches this function
+            # through a lazy relative import whose resolution depends on how
+            # the module itself was loaded — so which spelling actually
+            # intercepts is not statically obvious here. Patching both is the
+            # belt-and-suspenders pattern test_scheduled_rides_coverage.py
+            # already uses for the same hazard; picking one and being wrong
+            # would make the assertion below pass vacuously.
             patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss_streak,
+            patch("utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss_streak_bare,
         ):
             mock_db.find_one = AsyncMock(return_value=ride_still_assigned)
             # None == the conditional update matched 0 rows (lost the race).
@@ -144,6 +146,7 @@ class TestOfferTimeoutHandler:
 
             # ...but nothing downstream of it ran.
             mock_miss_streak.assert_not_awaited()
+            mock_miss_streak_bare.assert_not_awaited()
             mock_set_available.assert_not_awaited()
             mock_period.assert_not_awaited()
             mock_manager.send_personal_message.assert_not_called()

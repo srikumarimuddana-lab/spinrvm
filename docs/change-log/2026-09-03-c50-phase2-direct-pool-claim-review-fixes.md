@@ -8,7 +8,7 @@
 | Author | Claude Code review pass on PR #4873 (with PR #4881's six fix commits folded in) |
 | Surface(s) | backend, migrations, CI, loadtest, docs |
 | Domain | dispatch (safety-adjacent: insurance periods) |
-| PR / commit link | #4873 (`feat/c50-phase0-dispatch-metrics`); supersedes #4881 |
+| PR / commit link | #4883 (`fix/c50-phase2-direct-pool-review-fixes`), off `main` after #4873 and #4881 merged |
 | Related issue or gap ID | `ACTION_ITEMS.md` C50; C54–C56 (renumbered from the branch's C51–C53) |
 
 ## 1. Issue / gap identified
@@ -49,13 +49,12 @@ Phase 2 commits never received the fixes the review had already made.
 
 ## 3. Fix / remediation
 
-Commits on `feat/c50-phase0-dispatch-metrics` (each one logical change):
+#4873 and #4881 both merged while the review was in progress (`main` therefore already
+carries #4881's six fixes and the 401/402 migration renumber), so the fixes below are a
+fresh series on `fix/c50-phase2-direct-pool-review-fixes` (#4883), each one logical change:
 
 | Commit | Change |
 |---|---|
-| merge of `origin/main` | conflicts resolved: backlog C51–C53 → C54–C56, `requirements.txt` in main's style with the psycopg pins |
-| cherry-picks of `59ba299 1b67917 d205b22 4586307 c29488f ef38425` | #4881's fixes: gather-safe DB-call counter, dedicated RLS CI step, `_in_use()` gauge, rollback-contract docs, cost numbers |
-| `fix(migrations): renumber …` | `400/401` → `401_settings_dispatch_direct_pool_enabled.sql` / `402_dispatch_claim_batch.sql` |
 | `fix(migrations): harden dispatch_claim_batch …` | `FOR UPDATE SKIP LOCKED` claim; 399-style argument validation; `SECURITY INVOKER` + `pg_catalog, public`; `ON CONFLICT (ride_id, driver_id) DO NOTHING` with release; `insurance_written` return column; release clamped to `is_online`; `NOTIFY pgrst` |
 | `fix(dispatch): guard the direct-pool claim path …` | `is_open()` guard → loud PostgREST fallback + `spinr_dispatch_claim_path_total{path=postgrest_pool_unavailable}`; `insurance_written=false` → ERROR log + `spinr_insurance_period_write_failed_total{reason=direct_pool}`; redacted error log; bounded, concurrent cache invalidation carrying `user_id` |
 | `fix(dispatch-pool): bound query execution …` | transaction-local `statement_timeout` (remaining deadline capped at 10 s) + `asyncio.wait_for` backstop; `check=check_connection`; wait histogram observed on timeout; `_redact_dsn`; pool closed on failed open; `::text[]`/`::int[]` casts and empty-list early return; corrected lock-count docstring; sub-ms queue-wait buckets |

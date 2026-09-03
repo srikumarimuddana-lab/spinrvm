@@ -19539,8 +19539,9 @@ how much they de-risk a public launch._
   Rejected, close this item. If Accepted, this item stays open through the
   plan's Phase 3 (flag `dispatch_direct_pool_enabled` on in production for a
   7-day validation window with no regression) and closes at its T18.
-- **2026-09-03 review (PR #4873, folds in PR #4881):** full Codex-style pass over Phases 0–2
-  found 10 High / 14 Medium findings, all fixed on `feat/c50-phase0-dispatch-metrics` —
+- **2026-09-03 review (PR #4873; #4881's fixes already on main):** full Codex-style pass
+  over Phases 0–2 found 10 High / 14 Medium findings; both PRs merged mid-review, so the
+  remaining fixes are their own PR, #4883 —
   see `docs/change-log/2026-09-03-c50-phase2-direct-pool-claim-review-fixes.md`. Migrations
   renumbered 400/401 → 401/402 (main took 400). Still open after that pass: pooler facts
   on the real project (gate G5), and the unattributed `DISPATCH_POOL_DSN` Fly secret the

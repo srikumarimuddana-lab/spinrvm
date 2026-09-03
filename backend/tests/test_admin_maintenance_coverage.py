@@ -232,8 +232,14 @@ class TestAuditLogs:
     async def test_get_audit_logs_no_filters(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[{"id": "log1"}])):
             result = await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search=None,
-                start_date=None, end_date=None, _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search=None,
+                start_date=None,
+                end_date=None,
+                _admin=ADMIN,
             )
         assert result == [{"id": "log1", "actor_email": ""}]
 
@@ -241,8 +247,14 @@ class TestAuditLogs:
     async def test_get_audit_logs_applies_action_and_entity_filters(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action="staff_created", entity_type="staff", search=None,
-                start_date=None, end_date=None, _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action="staff_created",
+                entity_type="staff",
+                search=None,
+                start_date=None,
+                end_date=None,
+                _admin=ADMIN,
             )
         first_call_filters = mock.call_args_list[0].args[1]
         assert first_call_filters == {"action": "staff_created", "entity_type": "staff"}
@@ -251,8 +263,14 @@ class TestAuditLogs:
     async def test_get_audit_logs_search_builds_or_regex(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search="abc",
-                start_date=None, end_date=None, _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search="abc",
+                start_date=None,
+                end_date=None,
+                _admin=ADMIN,
             )
         audit_call = next(c for c in mock.call_args_list if c.args[0] == "audit_logs")
         audit_filters = audit_call.args[1]
@@ -268,8 +286,14 @@ class TestAuditLogs:
         lock in entity_id so this doesn't regress."""
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search="abc",
-                start_date=None, end_date=None, _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search="abc",
+                start_date=None,
+                end_date=None,
+                _admin=ADMIN,
             )
         audit_call = next(c for c in mock.call_args_list if c.args[0] == "audit_logs")
         audit_filters = audit_call.args[1]
@@ -281,8 +305,14 @@ class TestAuditLogs:
     async def test_get_audit_logs_blank_search_after_strip_ignored(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search="   ",
-                start_date=None, end_date=None, _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search="   ",
+                start_date=None,
+                end_date=None,
+                _admin=ADMIN,
             )
         first_call_filters = mock.call_args_list[0].args[1]
         assert "$or" not in first_call_filters
@@ -291,16 +321,24 @@ class TestAuditLogs:
     async def test_get_audit_logs_resolves_actor_email(self):
         logs = [{"id": "log1", "actor_id": "staff-1"}]
         staff = [{"id": "staff-1", "email": "alice@spinr.ca"}]
+
         async def side_effect(table, *args, **kwargs):
             if table == "audit_logs":
                 return logs
             if table == "admin_staff":
                 return staff
             return []
+
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
             result = await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search=None,
-                start_date=None, end_date=None, _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search=None,
+                start_date=None,
+                end_date=None,
+                _admin=ADMIN,
             )
         assert result[0]["actor_email"] == "alice@spinr.ca"
 
@@ -308,8 +346,14 @@ class TestAuditLogs:
     async def test_get_audit_logs_date_range_filter(self):
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(return_value=[])) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search=None,
-                start_date="2026-08-01", end_date="2026-08-15T23:59:59Z", _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search=None,
+                start_date="2026-08-01",
+                end_date="2026-08-15T23:59:59Z",
+                _admin=ADMIN,
             )
         first_call_filters = mock.call_args_list[0].args[1]
         assert first_call_filters["created_at"] == {"$gte": "2026-08-01", "$lte": "2026-08-15T23:59:59Z"}
@@ -319,14 +363,22 @@ class TestAuditLogs:
         """Searching 'alice' should find audit rows by alice even though
         the DB stores only actor_id (UUID), not email."""
         matching_staff = [{"id": "staff-1", "email": "alice@spinr.ca"}]
+
         async def side_effect(table, *args, **kwargs):
             if table == "admin_staff":
                 return matching_staff
             return []
+
         with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)) as mock:
             await maint.get_audit_logs(
-                limit=10, offset=0, action=None, entity_type=None, search="alice",
-                start_date=None, end_date=None, _admin=ADMIN,
+                limit=10,
+                offset=0,
+                action=None,
+                entity_type=None,
+                search="alice",
+                start_date=None,
+                end_date=None,
+                _admin=ADMIN,
             )
         first_call = mock.call_args_list[0]
         if first_call.args[0] == "admin_staff":
@@ -334,7 +386,11 @@ class TestAuditLogs:
         else:
             audit_call = mock.call_args_list[0]
         or_clauses = audit_call.args[1].get("$or", [])
-        has_in_clause = any("$in" in list(c.values())[0] for c in or_clauses if isinstance(list(c.values())[0], dict) and "$in" in list(c.values())[0])
+        has_in_clause = any(
+            "$in" in list(c.values())[0]
+            for c in or_clauses
+            if isinstance(list(c.values())[0], dict) and "$in" in list(c.values())[0]
+        )
         assert has_in_clause, "Search should include $in clause for email-matched actor IDs"
 
 
@@ -345,21 +401,32 @@ class TestAuditLogs:
 
 class TestAuditLogTopActors:
     """Corporate + admin portal review, round 2: "no 'who touched the most'
-    rollup views — every threat hunt needs raw SQL." """
+    rollup views — every threat hunt needs raw SQL."
+
+    get_audit_log_top_actors now aggregates server-side via the
+    admin_audit_actor_stats RPC (migration 394) instead of fetching up to
+    5k audit_logs rows and running a Python Counter() -- see the route's
+    docstring. These tests mock db_supabase.rpc with a return shaped per
+    that migration's `jsonb_build_object` keys instead of get_rows.
+    """
 
     @pytest.mark.asyncio
     async def test_aggregates_by_actor_sorted_descending(self):
-        rows = [
-            {"actor_id": "admin-a", "action": "staff_updated"},
-            {"actor_id": "admin-a", "action": "staff_updated"},
-            {"actor_id": "admin-a", "action": "settings_updated"},
-            {"actor_id": "admin-b", "action": "staff_updated"},
-        ]
-        async def side_effect(table, *args, **kwargs):
-            if table == "audit_logs":
-                return rows
-            return []
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
+        stats = {
+            "rows_scanned": 4,
+            "actors": [
+                {
+                    "actor_id": "admin-a",
+                    "action_count": 3,
+                    "top_actions": [
+                        {"action": "staff_updated", "count": 2},
+                        {"action": "settings_updated", "count": 1},
+                    ],
+                },
+                {"actor_id": "admin-b", "action_count": 1, "top_actions": [{"action": "staff_updated", "count": 1}]},
+            ],
+        }
+        with patch.object(maint.db_supabase, "rpc", AsyncMock(return_value=stats)):
             result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
         assert result["actors"][0]["actor_id"] == "admin-a"
         assert result["actors"][0]["action_count"] == 3
@@ -370,16 +437,20 @@ class TestAuditLogTopActors:
 
     @pytest.mark.asyncio
     async def test_top_actions_breakdown_per_actor(self):
-        rows = [
-            {"actor_id": "admin-a", "action": "staff_updated"},
-            {"actor_id": "admin-a", "action": "staff_updated"},
-            {"actor_id": "admin-a", "action": "settings_updated"},
-        ]
-        async def side_effect(table, *args, **kwargs):
-            if table == "audit_logs":
-                return rows
-            return []
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
+        stats = {
+            "rows_scanned": 3,
+            "actors": [
+                {
+                    "actor_id": "admin-a",
+                    "action_count": 3,
+                    "top_actions": [
+                        {"action": "staff_updated", "count": 2},
+                        {"action": "settings_updated", "count": 1},
+                    ],
+                },
+            ],
+        }
+        with patch.object(maint.db_supabase, "rpc", AsyncMock(return_value=stats)):
             result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
         top_actions = result["actors"][0]["top_actions"]
         assert top_actions[0] == {"action": "staff_updated", "count": 2}
@@ -387,38 +458,50 @@ class TestAuditLogTopActors:
 
     @pytest.mark.asyncio
     async def test_missing_actor_or_action_falls_back_to_unknown(self):
-        async def side_effect(table, *args, **kwargs):
-            if table == "audit_logs":
-                return [{}]
-            return []
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
+        stats = {
+            "rows_scanned": 1,
+            "actors": [{"actor_id": "unknown", "action_count": 1, "top_actions": [{"action": "unknown", "count": 1}]}],
+        }
+        with patch.object(maint.db_supabase, "rpc", AsyncMock(return_value=stats)):
             result = await maint.get_audit_log_top_actors(days=7, limit=20, _admin=ADMIN)
         assert result["actors"][0]["actor_id"] == "unknown"
         assert result["actors"][0]["top_actions"] == [{"action": "unknown", "count": 1}]
 
     @pytest.mark.asyncio
     async def test_respects_limit_and_flags_row_cap(self):
-        rows = [{"actor_id": f"admin-{i}", "action": "x"} for i in range(5000)]
-        async def side_effect(table, *args, **kwargs):
-            if table == "audit_logs":
-                return rows
-            return []
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)):
+        # Regression-turned-behavior-change: the old Python path fetched at
+        # most 5000 audit_logs rows and set rows_scanned_capped whenever it
+        # hit that ceiling. The RPC aggregates server-side with no such
+        # fetch cap (LIMIT only bounds the *returned* top-N actors, not the
+        # underlying scan), so the route now hardcodes rows_scanned_capped
+        # to False unconditionally -- see routes/admin/maintenance.py. This
+        # test used to assert True for a 5000-row scan; that assumption no
+        # longer holds and is corrected here rather than mocked around.
+        stats = {
+            "rows_scanned": 5000,
+            "actors": [
+                {"actor_id": f"admin-{i}", "action_count": 1, "top_actions": [{"action": "x", "count": 1}]}
+                for i in range(3)
+            ],
+        }
+        with patch.object(maint.db_supabase, "rpc", AsyncMock(return_value=stats)):
             result = await maint.get_audit_log_top_actors(days=7, limit=3, _admin=ADMIN)
         assert len(result["actors"]) == 3
-        assert result["rows_scanned_capped"] is True
+        assert result["rows_scanned_capped"] is False
 
     @pytest.mark.asyncio
     async def test_days_window_passed_to_query(self):
-        async def side_effect(table, *args, **kwargs):
-            return []
-        with patch.object(maint.db_supabase, "get_rows", AsyncMock(side_effect=side_effect)) as mock:
+        # The `days` window is now passed as p_since to the RPC (no more
+        # get_rows("audit_logs", {"created_at": {"$gte": ...}}) call to
+        # inspect) -- assert on the RPC call args instead.
+        with patch.object(maint.db_supabase, "rpc", AsyncMock(return_value={"rows_scanned": 0, "actors": []})) as mock:
             result = await maint.get_audit_log_top_actors(days=30, limit=20, _admin=ADMIN)
         assert result["days"] == 30
-        audit_call = next(c for c in mock.call_args_list if c.args[0] == "audit_logs")
-        _, filters = audit_call.args
-        assert "created_at" in filters
-        assert "$gte" in filters["created_at"]
+        mock.assert_awaited_once()
+        rpc_name, rpc_params = mock.call_args.args
+        assert rpc_name == "admin_audit_actor_stats"
+        assert "p_since" in rpc_params
+        assert rpc_params["p_limit"] == 20
 
 
 # ---------------------------------------------------------------------------

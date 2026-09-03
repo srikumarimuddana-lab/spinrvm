@@ -655,9 +655,12 @@ class TestAdminClosePayoutPeriod:
         assert resp.status_code == 403
 
     def test_close_period_happy_path(self, client, as_finance_admin):
-        rows = [{"id": "payout-1", "amount": "100.00"}, {"id": "payout-2", "amount": "50.50"}]
+        # admin_close_payout_period now aggregates server-side via the
+        # admin_payout_period_snapshot RPC (migration 391) instead of
+        # fetching completed payouts and summing in Python.
+        snapshot = {"payout_count": 2, "total_amount": "150.50", "payout_ids": ["payout-1", "payout-2"]}
         with (
-            patch("db_supabase.get_rows", AsyncMock(return_value=rows)),
+            patch("db_supabase.rpc", AsyncMock(return_value=snapshot)),
             patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-99")),
         ):
             resp = client.post("/api/admin/payouts/close-period", json={"year": 2026, "month": 5})

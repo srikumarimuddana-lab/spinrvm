@@ -497,12 +497,12 @@ async def test_get_cloud_messages_table_missing_returns_empty_list():
 
 @pytest.mark.anyio
 async def test_get_cloud_message_stats_computes_success_rate():
-    all_messages = [
-        {"status": "sent", "successful": 8, "total_recipients": 10},
-        {"status": "scheduled", "successful": 0, "total_recipients": 0},
-        {"status": "failed", "successful": 0, "total_recipients": 5},
-    ]
-    with patch.object(messaging.db_supabase, "get_rows", AsyncMock(return_value=all_messages)):
+    # admin_get_cloud_message_stats now aggregates server-side via the
+    # admin_cloud_message_stats_rollup RPC (migration 381) instead of
+    # fetching all cloud_messages rows and looping in Python -- mock
+    # db_supabase.rpc with the migration's jsonb_build_object shape.
+    rollup = {"total": 3, "sent": 1, "scheduled": 1, "failed": 1, "total_reached": 8, "total_recipients": 15}
+    with patch.object(messaging.db_supabase, "rpc", AsyncMock(return_value=rollup)):
         out = await messaging.admin_get_cloud_message_stats()
     assert out["total_messages"] == 3
     assert out["total_sent"] == 1
@@ -514,7 +514,8 @@ async def test_get_cloud_message_stats_computes_success_rate():
 
 @pytest.mark.anyio
 async def test_get_cloud_message_stats_no_recipients_zero_rate():
-    with patch.object(messaging.db_supabase, "get_rows", AsyncMock(return_value=[])):
+    rollup = {"total": 0, "sent": 0, "scheduled": 0, "failed": 0, "total_reached": 0, "total_recipients": 0}
+    with patch.object(messaging.db_supabase, "rpc", AsyncMock(return_value=rollup)):
         out = await messaging.admin_get_cloud_message_stats()
     assert out["success_rate"] == 0
 

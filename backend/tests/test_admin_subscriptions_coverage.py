@@ -243,8 +243,36 @@ class TestSubscriptionStats:
                 return service_areas
             return []
 
+        # The stats dict (total_subscribers/active/expired/cancelled/
+        # total_revenue/plan_breakdown/...) is now computed server-side by
+        # the admin_subscription_stats_rollup RPC (migration 385) rather
+        # than aggregated in Python from the driver_subscriptions/
+        # subscription_payments rows above -- get_rows is still used for
+        # the transaction list, plan-name lookups, and service_areas.
+        # Mirrors the `subs`/`payments` fixtures: 3 real subs (pending
+        # excluded), 1 active/1 expired/1 cancelled, 2 distinct plans.
+        async def _rpc(name, params):
+            assert name == "admin_subscription_stats_rollup"
+            return {
+                "total_real": 3,
+                "active": 1,
+                "expired": 1,
+                "cancelled": 1,
+                "active_mrr": "19.99",
+                "total_revenue": "19.99",
+                "range_revenue": "19.99",
+                "range_count": 1,
+                "plan_breakdown": [
+                    {"plan_id": "p1", "name": "Basic", "count": 2, "active": 1, "revenue": "19.99"},
+                    {"plan_id": "p2", "name": "Pro", "count": 1, "active": 0, "revenue": "0"},
+                ],
+                "daily_revenue": [],
+                "daily_subscribers": [],
+            }
+
         with (
             patch.object(subs_mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+            patch.object(subs_mod.db_supabase, "rpc", AsyncMock(side_effect=_rpc)),
             patch.object(subs_mod, "_batch_fetch_drivers_and_users", AsyncMock(return_value=({}, {}))),
         ):
             resp = admin_client.get("/api/admin/subscription-stats")
@@ -294,8 +322,29 @@ class TestSubscriptionStats:
                 return []
             return []
 
+        # d1's service_area_id ("area-1") is in the requested filter
+        # ("area-1,area-2") -- see admin_subscription_stats_rollup's
+        # `driver_id IN (SELECT id FROM drivers WHERE service_area_id =
+        # ANY(p_area_ids))` scoping (migration 385).
+        async def _rpc(name, params):
+            assert set(params["p_area_ids"]) == {"area-1", "area-2"}
+            return {
+                "total_real": 1,
+                "active": 1,
+                "expired": 0,
+                "cancelled": 0,
+                "active_mrr": "19.99",
+                "total_revenue": "19.99",
+                "range_revenue": "19.99",
+                "range_count": 1,
+                "plan_breakdown": [{"plan_id": "p1", "name": "Basic", "count": 1, "active": 1, "revenue": "19.99"}],
+                "daily_revenue": [],
+                "daily_subscribers": [],
+            }
+
         with (
             patch.object(subs_mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+            patch.object(subs_mod.db_supabase, "rpc", AsyncMock(side_effect=_rpc)),
             patch.object(
                 subs_mod,
                 "_batch_fetch_drivers_and_users",
@@ -337,8 +386,29 @@ class TestSubscriptionStats:
                 return []
             return []
 
+        # d1's area ("area-999") does not match the requested filter
+        # ("area-1"), so the RPC's own scoping subquery would exclude it --
+        # this mock mirrors that rather than relying on an unmocked
+        # db_supabase.rpc happening to default to an empty/zero result.
+        async def _rpc(name, params):
+            assert params["p_area_ids"] == ["area-1"]
+            return {
+                "total_real": 0,
+                "active": 0,
+                "expired": 0,
+                "cancelled": 0,
+                "active_mrr": 0,
+                "total_revenue": 0,
+                "range_revenue": 0,
+                "range_count": 0,
+                "plan_breakdown": [],
+                "daily_revenue": [],
+                "daily_subscribers": [],
+            }
+
         with (
             patch.object(subs_mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+            patch.object(subs_mod.db_supabase, "rpc", AsyncMock(side_effect=_rpc)),
             patch.object(
                 subs_mod,
                 "_batch_fetch_drivers_and_users",

@@ -65,7 +65,39 @@ def test_daily_usage_splits_public_and_private(admin_client):
             return list(usage)
         return []
 
-    with patch("backend.db_supabase.get_rows", new=AsyncMock(side_effect=fake_get_rows)):
+    # admin_get_promo_stats now aggregates (including the public/private
+    # daily split) server-side via the admin_promo_stats RPC (migration
+    # 393) instead of fetching all promotions/promo_applications rows and
+    # bucketing in Python -- get_rows is unused by this endpoint now, but
+    # left mocked above for parity with the fixture data the RPC mock below
+    # mirrors.
+    async def fake_rpc(name, params):
+        assert name == "admin_promo_stats"
+        return {
+            "total_codes": 1,
+            "active_codes": 1,
+            "expired_codes": 0,
+            "total_private": 1,
+            "active_private": 1,
+            "total_redemptions": 3,
+            "total_discount": 10.0,
+            "daily_usage": [
+                {
+                    "date": today,
+                    "count": 3,
+                    "amount": 10.0,
+                    "public_count": 1,
+                    "public_amount": 5.0,
+                    "private_count": 2,
+                    "private_amount": 5.0,
+                }
+            ],
+        }
+
+    with (
+        patch("backend.db_supabase.get_rows", new=AsyncMock(side_effect=fake_get_rows)),
+        patch("backend.db_supabase.rpc", new=AsyncMock(side_effect=fake_rpc)),
+    ):
         resp = admin_client.get("/api/admin/promotions/stats")
 
     assert resp.status_code == 200
@@ -100,7 +132,36 @@ def test_daily_usage_unknown_promo_id_counts_as_public(admin_client):
             return list(usage)
         return []
 
-    with patch("backend.db_supabase.get_rows", new=AsyncMock(side_effect=fake_get_rows)):
+    # See test_daily_usage_splits_public_and_private above: the daily-usage
+    # split (including the LEFT JOIN promo_id-not-found -> 'public' fallback,
+    # `COALESCE(p.promo_type, 'public')` in migration 393) is now computed
+    # server-side by the admin_promo_stats RPC.
+    async def fake_rpc(name, params):
+        return {
+            "total_codes": 1,
+            "active_codes": 1,
+            "expired_codes": 0,
+            "total_private": 1,
+            "active_private": 1,
+            "total_redemptions": 1,
+            "total_discount": 4.0,
+            "daily_usage": [
+                {
+                    "date": today,
+                    "count": 1,
+                    "amount": 4.0,
+                    "public_count": 1,
+                    "public_amount": 4.0,
+                    "private_count": 0,
+                    "private_amount": 0.0,
+                }
+            ],
+        }
+
+    with (
+        patch("backend.db_supabase.get_rows", new=AsyncMock(side_effect=fake_get_rows)),
+        patch("backend.db_supabase.rpc", new=AsyncMock(side_effect=fake_rpc)),
+    ):
         resp = admin_client.get("/api/admin/promotions/stats")
 
     assert resp.status_code == 200

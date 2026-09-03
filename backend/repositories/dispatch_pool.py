@@ -289,7 +289,7 @@ async def init_pool(dispatch_direct_pool_enabled: bool) -> Optional["AsyncConnec
             try:
                 await pool.close()
             except Exception:  # pragma: no cover - best-effort cleanup
-                logger.debug("[dispatch_pool] close after failed open raised", exc_info=True)
+                logger.opt(exception=True).debug("[dispatch_pool] close after failed open raised")
         if settings.ENV.lower() == "production":
             raise RuntimeError("dispatch direct pool failed to open") from exc
         return None

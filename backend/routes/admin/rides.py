@@ -471,7 +471,11 @@ async def admin_get_held_for_review_rides(
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
 
     ride_ids = [r["id"] for r in rides]
-    route_rows = await db.get_rows("ride_routes", {"ride_id": {"$in": ride_ids}}, columns="ride_id,route_quality") if ride_ids else []
+    route_rows = (
+        await db.get_rows("ride_routes", {"ride_id": {"$in": ride_ids}}, columns="ride_id,route_quality")
+        if ride_ids
+        else []
+    )
     validation_by_ride = {
         row["ride_id"]: (row.get("route_quality") or {}).get("gps_route_validation")
         for row in route_rows
@@ -704,6 +708,13 @@ async def admin_cancel_ride(
                 "ride_id": ride_id,
                 "reason": reason,
                 "source": "admin",
+                # Same "flag scheduled cancellations for follow-up" signal the
+                # driver-cancel path already sends (routes/drivers/ride_cancel.py)
+                # and the rider-cancel path now sends too — was missing here,
+                # so an admin cancelling a scheduled ride from the dashboard
+                # showed the generic "Ride cancelled" alert with no follow-up
+                # flag on their own action.
+                "is_scheduled": bool((ride or {}).get("is_scheduled")),
             }
         )
     except Exception as e:  # pragma: no cover - best effort

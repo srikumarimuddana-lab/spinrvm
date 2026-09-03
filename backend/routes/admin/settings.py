@@ -772,7 +772,14 @@ _HEATMAP_SETTINGS_ID = "heatmap_settings"
 
 _DEFAULT_HEATMAP_SETTINGS = {
     "heat_map_enabled": True,
-    "heat_map_default_range": "month",
+    # Must match the enum the frontend actually offers (today/7d/30d/90d/1y —
+    # see admin-dashboard/src/app/dashboard/settings/page.tsx and
+    # dashboard/heatmap/page.tsx) and the DB column's own SQL DEFAULT
+    # ('30d', migration 03_corporate_accounts_heatmap.sql). This dict is a
+    # separate, in-Python fallback used only when no heatmap_settings row
+    # exists yet — "month" was never a valid option anywhere and left the
+    # Select showing nothing selected on a fresh install.
+    "heat_map_default_range": "30d",
     "heat_map_intensity": "medium",
     "heat_map_radius": 25,
     "heat_map_blur": 15,

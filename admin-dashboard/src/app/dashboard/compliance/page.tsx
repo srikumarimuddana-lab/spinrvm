@@ -24,6 +24,7 @@ import {
     downloadGstPstRemittance,
     downloadInsuranceBillingKnightArcher,
     downloadInsuranceBillingSgi,
+    downloadSaskatoonCityTripLog,
     downloadT4aFilerHandoff,
     type ComplianceReportFormat,
 } from "@/lib/api";
@@ -132,6 +133,11 @@ export default function CompliancePage() {
     const [airportTo, setAirportTo] = useState(monthDefaults.to);
     const [airportFormat, setAirportFormat] = useState<ComplianceReportFormat>("pdf");
     const [airportLoading, setAirportLoading] = useState(false);
+
+    const [saskatoonFrom, setSaskatoonFrom] = useState(monthDefaults.from);
+    const [saskatoonTo, setSaskatoonTo] = useState(monthDefaults.to);
+    const [saskatoonFormat, setSaskatoonFormat] = useState<ComplianceReportFormat>("csv");
+    const [saskatoonLoading, setSaskatoonLoading] = useState(false);
 
     // Page-level service-area scope, applied to every report below except
     // T4A. Empty = every area, which is the pre-existing behaviour of all
@@ -286,6 +292,18 @@ export default function CompliancePage() {
         }
     };
 
+    const onDownloadSaskatoon = async () => {
+        setSaskatoonLoading(true);
+        try {
+            const { blob, filename } = await downloadSaskatoonCityTripLog(saskatoonFormat, saskatoonFrom, saskatoonTo);
+            triggerBrowserDownload(blob, filename);
+        } catch (e: any) {
+            onError(e);
+        } finally {
+            setSaskatoonLoading(false);
+        }
+    };
+
     return (
         <div className="p-6 space-y-6">
             <PageHeader
@@ -294,11 +312,11 @@ export default function CompliancePage() {
             />
 
             {/* Page-level scope, not per-tab: it applies to every report on
-                this page except T4A, and one control makes it obvious that
-                changing it changes all of them. The selected areas are
-                printed onto each generated report's subtitle server-side, so
-                a filtered export can never be mistaken for a complete one
-                once it has left the dashboard. */}
+                this page except T4A and Saskatoon City, and one control
+                makes it obvious that changing it changes all of them. The
+                selected areas are printed onto each generated report's
+                subtitle server-side, so a filtered export can never be
+                mistaken for a complete one once it has left the dashboard. */}
             <Card>
                 <CardContent className="flex flex-wrap items-end gap-4 py-4">
                     <div className="space-y-1.5">
@@ -324,11 +342,12 @@ export default function CompliancePage() {
                             </span>
                         ) : (
                             <>
-                                Applies to every report on this page except T4A Filer Handoff, which is
-                                per-driver and Canada-wide. Currently exporting: <strong>{areaScopeLabel}</strong>.
-                                Ride-based reports (GST/PST, Airport Trips) scope by the ride&apos;s own service
-                                area; driver-based reports (Driver Roster, both insurance billings) scope by the
-                                driver&apos;s home area.
+                                Applies to every report on this page except T4A Filer Handoff (per-driver,
+                                Canada-wide) and Saskatoon City (always scoped to the Saskatoon service area).
+                                Currently exporting: <strong>{areaScopeLabel}</strong>. Ride-based reports
+                                (GST/PST, Airport Trips) scope by the ride&apos;s own service area; driver-based
+                                reports (Driver Roster, both insurance billings) scope by the driver&apos;s home
+                                area.
                             </>
                         )}
                     </p>
@@ -343,6 +362,7 @@ export default function CompliancePage() {
                     <TabsTrigger value="driver-roster">Driver Roster</TabsTrigger>
                     {isSuperAdmin && <TabsTrigger value="t4a-filer">T4A Filer Handoff</TabsTrigger>}
                     <TabsTrigger value="airport-trips">Airport Trips</TabsTrigger>
+                    <TabsTrigger value="saskatoon-city">Saskatoon City</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="gst-pst">
@@ -669,6 +689,62 @@ export default function CompliancePage() {
                                 </div>
                                 <Button onClick={onDownloadAirport} disabled={airportLoading}>
                                     {airportLoading ? (
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : (
+                                        <Download className="h-4 w-4 mr-2" />
+                                    )}
+                                    Download
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                <TabsContent value="saskatoon-city">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <FileText className="h-5 w-5" />
+                                Saskatoon City Trip Log
+                            </CardTitle>
+                            <CardDescription className="flex items-start gap-1.5">
+                                <span>
+                                    Every Saskatoon ride requested in the selected window that completed, or was
+                                    cancelled by the rider or driver after a driver had already accepted it —
+                                    Request/Accept/Begin/End timestamps, passenger wait time, and trip status,
+                                    for the City of Saskatoon&apos;s monthly report. Always scoped to the
+                                    Saskatoon service area, independent of the Service Area filter above.
+                                </span>
+                                <Hint text="Dated by when the ride was requested (not completed/cancelled), so one date filter covers both completed and cancelled rows. Passenger wait time is trip-start minus request time. Begin/End timestamps and wait time are left blank for a cancelled trip since it never started. Rides cancelled before a driver accepted, and cancellations by the system or an admin, are excluded — confirm these definitions against the City's own reporting spec before submitting." />
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex flex-wrap items-end gap-4">
+                                <DateRangeFields
+                                    idPrefix="saskatoon"
+                                    from={saskatoonFrom}
+                                    to={saskatoonTo}
+                                    onFromChange={setSaskatoonFrom}
+                                    onToChange={setSaskatoonTo}
+                                />
+                                <div className="space-y-1.5">
+                                    <Label htmlFor="saskatoon-format">Format</Label>
+                                    <Select
+                                        value={saskatoonFormat}
+                                        onValueChange={(v) => setSaskatoonFormat(v as ComplianceReportFormat)}
+                                    >
+                                        <SelectTrigger id="saskatoon-format" className="w-32" aria-label="Format">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {FORMATS.map((f) => (
+                                                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <Button onClick={onDownloadSaskatoon} disabled={saskatoonLoading}>
+                                    {saskatoonLoading ? (
                                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                     ) : (
                                         <Download className="h-4 w-4 mr-2" />

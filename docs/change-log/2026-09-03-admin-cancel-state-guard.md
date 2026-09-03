@@ -48,10 +48,18 @@ conditional-update optimistic-lock pattern for the equivalent problem.
 - Replaced the unconditional `update_ride` + re-read-to-verify with a
   conditional `update_one("rides", {"id": ride_id, "status": status_from},
   with_38_or_37_payload)` — the same optimistic-lock pattern
-  `routes/drivers/ride_flow.py:331` uses for driver-side accept. `None`
-  (0 rows matched) now means the ride's state changed underneath the
-  request → 409, logged as `ride_state_changed`, instead of either a false
-  200 or an unrelated 500.
+  `routes/drivers/ride_flow.py:331` uses for driver-side accept.
+- `None` (0 rows matched) is disambiguated by a single re-read **on the
+  failure path only** (not on every cancel, as the old verify-by-re-read
+  did): if the ride has moved on, it was a genuine race → 409 +
+  `info` log; if the ride still holds the status we filtered on, the write
+  silently did nothing (RLS / service-role misconfiguration) → the
+  original loud 500 + `error`-level "silent no-op" log is preserved.
+  Collapsing both into a 409 would have misreported a broken deployment as
+  routine contention and downgraded an `error` diagnostic to `info` — a
+  diagnosability regression against the very failure this endpoint was
+  hardened for. (Caught in adversarial self-review of this PR, fixed
+  before merge.)
 - Added `record_period_transition(driver_id, 1)` on driver release,
   matching `admin_complete_ride`'s identical call — the freed driver's
   insurance period audit trail was previously missing this row on the

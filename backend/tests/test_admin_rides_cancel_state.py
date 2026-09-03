@@ -107,14 +107,30 @@ class TestAdminCancelRideRaceGuard:
         """Another request (a driver accepting, another admin action) changes
         the ride's status between our read and the conditional write. The
         update_one() filter {"id": ..., "status": <status just read>} then
-        matches 0 rows and returns None -- must 409, not silently 200."""
+        matches 0 rows and returns None -- must 409, not silently 200. The
+        failure-path re-read confirms the ride really did move on."""
         ride = _ride("driver_assigned")
+        raced = {**ride, "status": "driver_accepted"}
         with (
-            patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[ride, raced])),
             patch("db_supabase.update_one", AsyncMock(return_value=None)),
         ):
             resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
         assert resp.status_code == 409
+
+    def test_zero_rows_with_unchanged_status_is_a_500_not_a_409(self, client, as_super_admin):
+        """0 rows while the ride still holds the filtered status is a silently
+        blocked write (RLS / service-role misconfiguration), not concurrency.
+        Reporting it as 409 would make a broken deployment look like normal
+        contention, so it stays a loud 500 -- the same signal this endpoint
+        gave before the conditional update replaced the verify-by-re-read."""
+        ride = _ride("driver_assigned")
+        with (
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[ride, ride])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+        ):
+            resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
+        assert resp.status_code == 500
 
     def test_race_guard_filter_carries_status_just_read(self, client, as_super_admin):
         """The optimistic-lock filter must be scoped to the exact status this
@@ -143,7 +159,9 @@ class TestAdminCancelRideInsurancePeriod:
         ride = _ride("driver_arrived", driver_id="drv-1")
         cancelled = {**ride, "status": "cancelled"}
         record_period_mock = AsyncMock()
-        set_avail_mock = AsyncMock()
+        # set_driver_available returns the post-write driver row; is_available
+        # True is what authorises the Period-1 (online, no ride) write.
+        set_avail_mock = AsyncMock(return_value={"id": "drv-1", "is_available": True})
         with (
             patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch("db_supabase.update_one", AsyncMock(return_value=cancelled)),
@@ -159,3 +177,54 @@ class TestAdminCancelRideInsurancePeriod:
         assert resp.status_code == 200
         set_avail_mock.assert_awaited_once_with("drv-1", True)
         record_period_mock.assert_awaited_once_with("drv-1", 1)
+
+    def test_no_period_1_when_release_clamped_offline(self, client, as_super_admin):
+        """set_driver_available clamps is_available to False for a driver who
+        went offline (or was suspended) while assigned. Their go-offline
+        already logged Period 0, so opening Period 1 here would falsely reopen
+        a commercial-insurance window for a driver on personal auto only."""
+        ride = _ride("driver_assigned", driver_id="drv-1")
+        cancelled = {**ride, "status": "cancelled"}
+        record_period_mock = AsyncMock()
+        with (
+            patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("db_supabase.update_one", AsyncMock(return_value=cancelled)),
+            patch("db_supabase.set_driver_available", AsyncMock(return_value={"id": "drv-1", "is_available": False})),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("routes.admin.rides.record_period_transition", record_period_mock),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock(), create=True),
+        ):
+            resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
+        assert resp.status_code == 200
+        record_period_mock.assert_not_awaited()
+
+    def test_driver_freed_is_the_one_the_write_saw_not_the_stale_read(self, client, as_super_admin):
+        """cancel_filter pins the status but not the driver, so a concurrent
+        offer-timeout revert + re-claim on another replica can hand the ride to
+        a different driver between our read and our write. The driver we free
+        (and open Period 1 for) must be the one on the row the conditional
+        update actually returned, not the stale one from the initial read --
+        otherwise the real holder stays stuck is_available=False until the
+        orphan-claim reaper, and a bogus Period 1 opens for someone else."""
+        stale_ride = _ride("driver_assigned", driver_id="drv-STALE")
+        written_ride = {**stale_ride, "status": "cancelled", "driver_id": "drv-REAL"}
+        set_avail_mock = AsyncMock(return_value={"id": "drv-REAL", "is_available": True})
+        record_period_mock = AsyncMock()
+        with (
+            patch("db_supabase.get_ride", AsyncMock(return_value=stale_ride)),
+            patch("db_supabase.update_one", AsyncMock(return_value=written_ride)),
+            patch("db_supabase.set_driver_available", set_avail_mock),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("routes.admin.rides.record_period_transition", record_period_mock),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
+            patch("features.send_push_notification", AsyncMock(), create=True),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/cancel", json={"reason": "test"})
+        assert resp.status_code == 200
+        set_avail_mock.assert_awaited_once_with("drv-REAL", True)
+        record_period_mock.assert_awaited_once_with("drv-REAL", 1)

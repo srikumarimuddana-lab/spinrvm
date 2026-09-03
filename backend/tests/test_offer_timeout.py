@@ -117,7 +117,15 @@ class TestOfferTimeoutHandler:
                 AsyncMock(),
             ) as mock_set_available,
             patch("backend.routes.rides._deps.record_period_transition", AsyncMock()) as mock_period,
-            patch("utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss_streak,
+            # NOTE the `backend.` prefix: matching.py imports this lazily as
+            # `from ...utils.driver_presence import increment_miss_streak`,
+            # which resolves to `backend.utils.driver_presence` because the
+            # module is loaded as backend.routes.rides.matching. conftest.py
+            # documents that the bare and prefixed spellings are *different*
+            # module objects, so patching bare `utils.driver_presence` here
+            # would never intercept the call and the assertion below would
+            # pass vacuously.
+            patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss_streak,
         ):
             mock_db.find_one = AsyncMock(return_value=ride_still_assigned)
             # None == the conditional update matched 0 rows (lost the race).

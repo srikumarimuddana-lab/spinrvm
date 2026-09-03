@@ -1057,12 +1057,34 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     # with no ride_offers row and no re-dispatch, invisible to
                     # both the driver and dispatch (ACTION_ITEMS.md C54,
                     # plans/2026-09-03-path-to-a-implementation-plan.md WS-1).
-                    logger.error(
-                        f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}",
-                        exc_info=True,
-                    )
+                    # logger.opt(exception=True), not exc_info=True: `logger`
+                    # here is loguru (re-exported via _deps), and loguru
+                    # swallows exc_info as a str.format keyword, capturing no
+                    # traceback and reaching Sentry as a bare capture_message
+                    # with no stack (ACTION_ITEMS.md C60). Note this module is
+                    # NOT scanned by tests/test_loguru_call_conventions.py:
+                    # that gate selects files by searching for loguru's direct
+                    # import line, which this file does not have (it takes
+                    # `logger` from _deps). See ACTION_ITEMS.md C63 for that
+                    # blind spot and the pre-existing sites it hides, the
+                    # sibling ride_offers handler below among them.
+                    logger.opt(exception=True).error(f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}")
+                    # Each release is individually guarded: the most likely
+                    # trigger for the claim failing at all is a DB blip, which
+                    # makes set_driver_available just as likely to fail — an
+                    # unguarded loop would abort at the first failed release
+                    # (stranding the rest) AND replace the original exception,
+                    # losing the root cause the recovery shell logs. The
+                    # orphan-claim reaper remains the backstop for any release
+                    # that genuinely cannot be written here.
                     for d, _ in claimed_drivers:
-                        await _deps.db_supabase.set_driver_available(d["id"], True)
+                        try:
+                            await _deps.db_supabase.set_driver_available(d["id"], True)
+                        except Exception:
+                            logger.opt(exception=True).error(
+                                f"[DISPATCH] failed to release driver {d['id']} after claim-loop error "
+                                f"for ride {ride_id} — orphan-claim reaper will recover it"
+                            )
                     raise
 
             if not claimed_drivers:

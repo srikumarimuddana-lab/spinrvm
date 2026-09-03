@@ -923,8 +923,13 @@ async def settle_corporate(
     # movement for an incident. Does NOT gate corporate_wallet_service.py's
     # low-level apply_topup/apply_adjustment/apply_refund directly -- those
     # are also how an admin manually corrects/refunds during the very
-    # incident that caused this switch to be flipped off. Fail-open on a
-    # settings-read error, same convention as every other kill switch here.
+    # incident that caused this switch to be flipped off.
+    #
+    # Fails CLOSED on a settings-read error — deliberately NOT the fail-open
+    # convention the platform-availability kill switches use. A switch whose
+    # whole job is to stop corporate money movement during an incident cannot
+    # be trusted if a degraded settings read silently reopens it. See
+    # docs/adr/011-flag-read-failure-semantics.md.
     # Lazy dual import: the module-level except-branch import list is
     # managed by a formatter hook that strips additions -- see
     # _atomic_settle_enabled's identical pattern above.
@@ -950,15 +955,38 @@ async def settle_corporate(
         # (log a warning, then proceed as if the flag were enabled) defeated
         # the entire purpose of an incident kill switch — see ACTION_ITEMS.md
         # C54 and plans/2026-09-03-path-to-a-implementation-plan.md WS-1.
-        logger.error(
+        # logger.opt(exception=True), not exc_info=True: this module logs via
+        # loguru, which has no exc_info parameter — it is swallowed as a
+        # str.format keyword and no traceback is ever captured (ACTION_ITEMS.md
+        # C60; gated by tests/test_loguru_call_conventions.py).
+        logger.opt(exception=True).error(
             "[PAYMENT] app_settings lookup failed ({}), failing closed on corporate_billing_enabled",
             settings_err,
-            exc_info=True,
         )
         _metric_inc(
             "spinr_payment_settings_read_failed_total",
             {"flag": "corporate_billing_enabled"},
         )
+        # Release the settlement claim, exactly as every other failure branch
+        # in this function does. auto_settle_guest_corporate (:1376) claims the
+        # ride pending/failed → 'processing' BEFORE calling us and, per its own
+        # comment, relies on settle_corporate resetting payment_status on its
+        # known failure paths — its except-branch only fires on a raise, and
+        # this branch returns. Without this reset the ride sticks at
+        # 'processing' forever: the guest-corporate retry sweep only polls
+        # 'pending' (utils/payment_retry.py), and stripe_reconcile's healer
+        # bails on a ride with no payment_intent_id, which a company_allowance
+        # ride never has. Guarded because the very failure that got us here is
+        # a degraded settings/DB read, which can take this write down too — a
+        # failed release must not mask the 503.
+        try:
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+        except Exception:
+            logger.opt(exception=True).error(
+                "[PAYMENT] could not release settlement claim for ride {} after failing closed "
+                "— ride may be left in payment_status='processing' for the reconciler",
+                ride_id,
+            )
         return PaymentResult(
             success=False,
             error="Corporate billing is temporarily unavailable",
@@ -1513,7 +1541,7 @@ async def _atomic_settle_enabled() -> bool:
     vs. legacy), so a read failure falling back to the legacy path keeps a
     settle from failing outright — unlike corporate_billing_enabled, whose
     whole purpose is to stop money movement during an incident. See
-    docs/adr/ (flag read failure semantics on money paths) and
+    docs/adr/011-flag-read-failure-semantics.md and
     plans/2026-09-03-path-to-a-implementation-plan.md WS-1 subtask 2.
     """
     # Lazy dual import: the module-level except-branch import list is managed
@@ -1531,10 +1559,11 @@ async def _atomic_settle_enabled() -> bool:
         cfg = await get_app_settings()
         return bool(cfg.get("ledger_atomic_settle_enabled", False))
     except Exception as err:
-        logger.error(
+        # loguru: logger.opt(exception=True), never exc_info=True — see the
+        # settle_corporate call site above and ACTION_ITEMS.md C60.
+        logger.opt(exception=True).error(
             "[PAYMENT] could not read ledger_atomic_settle_enabled, assuming off: {}",
             err,
-            exc_info=True,
         )
         _metric_inc(
             "spinr_payment_settings_read_failed_total",

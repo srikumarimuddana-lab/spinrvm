@@ -184,8 +184,24 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
             // Backend uses two error shapes:
             //   • FastAPI HTTPException  → { detail: "..." }
             //   • Custom error handler  → { error: { detail: "...", message: "..." } }
+            // A 422 from backend/utils/error_handling.py's validation_exception_handler
+            // additionally carries error.details.errors: [{field, message, type}, ...]
+            // — the actual per-field reason. Without reading it, every validation
+            // failure (e.g. an out-of-range/mistyped value anywhere in a save
+            // payload) surfaced only as the generic error.message "Validation
+            // error", with no way to tell which field was rejected or why.
+            // Found 2026-09-03: an admin saw exactly that on every attempted
+            // Settings save, with no way to diagnose which field was invalid.
+            const fieldErrors = body.error?.details?.errors;
+            const fieldErrorMsg =
+                Array.isArray(fieldErrors) && fieldErrors.length > 0
+                    ? fieldErrors
+                          .map((e: any) => `${e.field || "field"}: ${e.message || "invalid value"}`)
+                          .join("; ")
+                    : null;
             const msg =
                 body.detail ||
+                fieldErrorMsg ||
                 body.error?.detail ||
                 body.error?.message ||
                 body.message ||

@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/page-header";
 
 import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes, getSurgeStatus } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
@@ -612,20 +613,23 @@ export default function MonitoringPage() {
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
       {/* Page header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        {/* eslint-disable no-restricted-syntax -- standard "live broadcast" red-dot
-            convention (Radio icon + pulsing dot), not a success/warning/destructive
-            signal (#2816) */}
-        <h1 className="flex items-center gap-2 text-xl font-bold">
-          <Radio className="h-5 w-5 text-red-500" />
-          Live Ride Monitoring
-          <span className="relative ml-1 flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+      <PageHeader
+        className="flex items-center justify-between border-b border-border px-4 py-3"
+        title={
+          <span className="inline-flex items-center gap-2">
+            {/* eslint-disable no-restricted-syntax -- standard "live broadcast" red-dot
+                convention (Radio icon + pulsing dot), not a success/warning/destructive
+                signal (#2816) */}
+            <Radio className="h-5 w-5 text-red-500" />
+            Live Ride Monitoring
+            <span className="relative ml-1 flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
+            </span>
+            {/* eslint-enable no-restricted-syntax */}
           </span>
-        </h1>
-        {/* eslint-enable no-restricted-syntax */}
-      </div>
+        }
+      />
 
       {/* Toolbar */}
       <MonitoringToolbar

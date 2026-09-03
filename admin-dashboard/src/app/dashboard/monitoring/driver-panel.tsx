@@ -11,6 +11,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ExternalLink, Flag, Phone, Star } from "lucide-react";
 import Link from "next/link";
 import { getDriverRides, getDriverDocuments } from "@/lib/api";
+import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 interface DriverPanelProps {
     driver: MonitoringDriver;
@@ -19,6 +20,7 @@ interface DriverPanelProps {
 
 export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
     const { toast } = useToast();
+    const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const [rides, setRides] = useState<any[]>([]);
     const [docs, setDocs] = useState<any[]>([]);
     const [tabLoading, setTabLoading] = useState(false);
@@ -187,7 +189,16 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                                 <div key={r.id} className="rounded-lg border border-border px-3 py-2 text-xs">
                                     <div className="flex items-center justify-between">
                                         <span className="font-medium">{r.pickup_address?.split(',')[0] ?? 'Pickup'} → {r.dropoff_address?.split(',')[0] ?? 'Dropoff'}</span>
-                                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${r.status === 'completed' ? 'bg-success/15 text-success' : r.status === 'cancelled' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{r.status}</span>
+                                        {themeV2Enabled ? (
+                                            <Badge
+                                                variant={r.status === 'completed' ? 'outline-success' : r.status === 'cancelled' ? 'outline-destructive' : 'outline-warning'}
+                                                className="text-[10px]"
+                                            >
+                                                {r.status}
+                                            </Badge>
+                                        ) : (
+                                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${r.status === 'completed' ? 'bg-success/15 text-success' : r.status === 'cancelled' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{r.status}</span>
+                                        )}
                                     </div>
                                     <div className="mt-0.5 flex items-center justify-between text-muted-foreground">
                                         <span>{r.created_at ? new Date(r.created_at).toLocaleDateString('en-CA') : '—'}</span>
@@ -210,7 +221,16 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             {docs.map((doc: any) => (
                                 <div key={doc.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-xs">
                                     <span className="font-medium capitalize">{(doc.document_type ?? 'Document').replace(/_/g, ' ')}</span>
-                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${doc.status === 'verified' ? 'bg-success/15 text-success' : doc.status === 'expired' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{doc.status ?? 'pending'}</span>
+                                    {themeV2Enabled ? (
+                                        <Badge
+                                            variant={doc.status === 'verified' ? 'outline-success' : doc.status === 'expired' ? 'outline-destructive' : 'outline-warning'}
+                                            className="text-[10px]"
+                                        >
+                                            {doc.status ?? 'pending'}
+                                        </Badge>
+                                    ) : (
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${doc.status === 'verified' ? 'bg-success/15 text-success' : doc.status === 'expired' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{doc.status ?? 'pending'}</span>
+                                    )}
                                 </div>
                             ))}
                         </div>

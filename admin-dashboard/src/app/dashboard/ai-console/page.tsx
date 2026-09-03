@@ -18,6 +18,7 @@ import {
     getUsers,
 } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -416,13 +417,15 @@ export default function AiConsolePage() {
 
     return (
         <div className="space-y-4">
-            <div>
-                <h1 className="text-xl font-semibold">AI Console</h1>
-                <p className="text-sm text-muted-foreground">
-                    Test the assistant as a rider or driver. Conversations are real — they appear in
-                    the user&apos;s app and are stamped + audited as admin-initiated.
-                </p>
-            </div>
+            <PageHeader
+                title="AI Console"
+                description={
+                    <>
+                        Test the assistant as a rider or driver. Conversations are real — they appear in
+                        the user&apos;s app and are stamped + audited as admin-initiated.
+                    </>
+                }
+            />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 {/* Target picker + their threads */}

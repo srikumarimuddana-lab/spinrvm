@@ -55,9 +55,23 @@ _SUPP_ROWS = [
 
 @pytest.mark.anyio
 async def test_deliverability_aggregates_and_omits_pii():
+    # get_email_deliverability now aggregates total/by_status/by_provider/
+    # by_type server-side via the admin_email_log_stats RPC (migration
+    # 392); get_rows is still used, but only for the two *recent* row lists
+    # (failed sends, suppressions) -- no longer for the full send-log fetch
+    # this fixture used to represent. Mock the RPC for the aggregate counts
+    # and narrow the get_rows side_effect to just those two recent lists.
+    _failed_rows = [r for r in _SEND_ROWS if r["status"] == "failed"]
+    rollup = {
+        "total": 4,
+        "by_status": {"sent": 2, "failed": 1, "suppressed": 1},
+        "by_provider": {"ses": 1, "resend": 1, "none": 2},
+        "by_type": {"receipt": 2, "dsar": 1},
+    }
     with (
-        patch("routes.admin.monitoring.get_rows", AsyncMock(side_effect=[_SEND_ROWS, _SUPP_ROWS])),
+        patch("routes.admin.monitoring.get_rows", AsyncMock(side_effect=[_failed_rows, _SUPP_ROWS])),
         patch("routes.admin.monitoring.count_documents", AsyncMock(return_value=1)),
+        patch("routes.admin.monitoring.db_supabase.rpc", AsyncMock(return_value=rollup)),
     ):
         out = await get_email_deliverability(days=7, current_admin={"id": "admin"})
 

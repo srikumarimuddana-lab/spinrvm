@@ -178,6 +178,11 @@ export default function SafetyPage() {
     const [page, setPage] = useState(0);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    // Distinct from "items.length === 0" — an empty queue is good news, a
+    // failed fetch is not. Conflating the two used to leave the safety queue
+    // (a SOS-critical surface) silently showing "no incidents match" on a
+    // network/API failure with no way to tell or retry.
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     const [statusFilter, setStatusFilter] = useState<SafetyStatus | "all">("all");
     const [severityFilter, setSeverityFilter] = useState<SafetySeverity | "all">("all");
@@ -187,6 +192,10 @@ export default function SafetyPage() {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [detail, setDetail] = useState<SafetyIncidentDetail | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
+    // Same silent-failure gap as loadError, but for the triage drawer: without
+    // this, a failed detail fetch left the drawer spinning on "Loading
+    // incident…" forever, with no retry and no indication anything went wrong.
+    const [detailError, setDetailError] = useState<string | null>(null);
 
     // Corporate + admin portal review, round 2: "safety incidents can't be
     // created ... from the admin side" — e.g. a phone-in report that never
@@ -212,15 +221,21 @@ export default function SafetyPage() {
             setItems(res.items || []);
             setTotal(res.total ?? 0);
             setOpenCount(res.open_count ?? null);
+            setLoadError(null);
         } catch (e: any) {
+            if (id !== reqIdRef.current) return;
+            const message = e?.message || "Unknown error";
+            setLoadError(message);
             toast({
                 title: "Could not load safety queue",
-                description: e?.message || "Unknown error",
+                description: message,
                 variant: "destructive",
             });
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (id === reqIdRef.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     }, [statusFilter, severityFilter, roleFilter, search, page, toast]);
 
@@ -258,12 +273,15 @@ export default function SafetyPage() {
     const openSelected = useCallback(async (id: string) => {
         setSelectedId(id);
         setDetail(null);
+        setDetailError(null);
         setDetailLoading(true);
         try {
             const res = await getSafetyIncident(id);
             setDetail(res);
         } catch (e: any) {
-            toast({ title: "Could not load incident", description: e?.message || "Unknown error", variant: "destructive" });
+            const message = e?.message || "Unknown error";
+            setDetailError(message);
+            toast({ title: "Could not load incident", description: message, variant: "destructive" });
         } finally {
             setDetailLoading(false);
         }
@@ -369,6 +387,16 @@ export default function SafetyPage() {
                         <Loader2 className="h-6 w-6 mx-auto mb-3 animate-spin opacity-60" />
                         Loading queue…
                     </div>
+                ) : loadError ? (
+                    <div className="px-6 py-16 text-center" role="alert">
+                        <AlertTriangle className="h-10 w-10 mx-auto mb-3 text-destructive opacity-70" />
+                        <p className="text-sm font-medium text-foreground">Couldn&apos;t load the safety queue</p>
+                        <p className="text-xs mt-1 text-muted-foreground">{loadError}</p>
+                        <Button variant="outline" size="sm" className="mt-4" onClick={load}>
+                            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                            Retry
+                        </Button>
+                    </div>
                 ) : items.length === 0 ? (
                     <div className="px-6 py-16 text-center text-muted-foreground">
                         <CheckCircle className="h-10 w-10 mx-auto mb-3 opacity-30" />
@@ -395,8 +423,17 @@ export default function SafetyPage() {
                                 return (
                                     <TableRow
                                         key={it.id}
-                                        className="cursor-pointer hover:bg-muted/20"
+                                        className="cursor-pointer hover:bg-muted/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Open incident ${it.category}, reported ${relativeTime(it.reported_at)}`}
                                         onClick={() => openSelected(it.id)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                openSelected(it.id);
+                                            }
+                                        }}
                                     >
                                         <TableCell className="text-xs whitespace-nowrap">
                                             <div className="font-medium">{relativeTime(it.reported_at)}</div>
@@ -478,24 +515,38 @@ export default function SafetyPage() {
             )}
 
             {/* Detail / triage drawer */}
-            <Sheet open={!!selectedId} onOpenChange={(open) => { if (!open) { setSelectedId(null); setDetail(null); } }}>
+            <Sheet open={!!selectedId} onOpenChange={(open) => { if (!open) { setSelectedId(null); setDetail(null); setDetailError(null); } }}>
                 <SheetContent
                     side="right"
                     showCloseButton={false}
                     className="w-full sm:max-w-none sm:w-[640px] p-0 overflow-y-auto"
-                    aria-describedby={undefined}
                 >
                     <SheetTitle className="sr-only">Safety incident</SheetTitle>
                     <SheetDescription className="sr-only">Triage a safety incident</SheetDescription>
-                    {detailLoading || !detail ? (
+                    {detailLoading ? (
                         <div className="p-12 text-center text-muted-foreground">
                             <Loader2 className="h-6 w-6 mx-auto mb-3 animate-spin opacity-60" />
                             Loading incident…
                         </div>
+                    ) : detailError || !detail ? (
+                        <div className="p-12 text-center" role="alert">
+                            <AlertTriangle className="h-10 w-10 mx-auto mb-3 text-destructive opacity-70" />
+                            <p className="text-sm font-medium text-foreground">Couldn&apos;t load this incident</p>
+                            {detailError && <p className="text-xs mt-1 text-muted-foreground">{detailError}</p>}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="mt-4"
+                                onClick={() => { if (selectedId) openSelected(selectedId); }}
+                            >
+                                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                                Retry
+                            </Button>
+                        </div>
                     ) : (
                         <IncidentDetailDrawer
                             detail={detail}
-                            onClose={() => { setSelectedId(null); setDetail(null); }}
+                            onClose={() => { setSelectedId(null); setDetail(null); setDetailError(null); }}
                             onPatched={onPatched}
                         />
                     )}
@@ -578,18 +629,18 @@ function CreateIncidentDialog({
                         For a report that came in by phone or in person and never went through the app&apos;s own SOS flow.
                     </p>
                     <div>
-                        <Label className="text-xs mb-1 block">Category</Label>
-                        <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. unsafe_driving" />
+                        <Label htmlFor="incident-category" className="text-xs mb-1 block">Category</Label>
+                        <Input id="incident-category" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. unsafe_driving" />
                     </div>
                     <div>
-                        <Label className="text-xs mb-1 block">Description</Label>
-                        <Textarea value={description} onChange={(e) => setDescription(e.target.value)} className="min-h-[90px]" />
+                        <Label htmlFor="incident-description" className="text-xs mb-1 block">Description</Label>
+                        <Textarea id="incident-description" value={description} onChange={(e) => setDescription(e.target.value)} className="min-h-[90px]" />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <Label className="text-xs mb-1 block">Reported by</Label>
+                            <Label htmlFor="incident-role" className="text-xs mb-1 block">Reported by</Label>
                             <Select value={role} onValueChange={(v) => setRole(v as SafetyRole)}>
-                                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                <SelectTrigger id="incident-role" className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="rider" className="text-sm">Rider</SelectItem>
                                     <SelectItem value="driver" className="text-sm">Driver</SelectItem>
@@ -598,9 +649,9 @@ function CreateIncidentDialog({
                             </Select>
                         </div>
                         <div>
-                            <Label className="text-xs mb-1 block">Severity (optional)</Label>
+                            <Label htmlFor="incident-severity" className="text-xs mb-1 block">Severity (optional)</Label>
                             <Select value={severity} onValueChange={(v) => setSeverity(v as SafetySeverity | "unset")}>
-                                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                <SelectTrigger id="incident-severity" className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="unset" className="text-sm">Unset</SelectItem>
                                     <SelectItem value="sev1" className="text-sm">Sev 1 · immediate</SelectItem>
@@ -612,12 +663,12 @@ function CreateIncidentDialog({
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <Label className="text-xs mb-1 block">Reporter user ID (optional)</Label>
-                            <Input value={reportedByUserId} onChange={(e) => setReportedByUserId(e.target.value)} className="font-mono text-xs" />
+                            <Label htmlFor="incident-reporter-id" className="text-xs mb-1 block">Reporter user ID (optional)</Label>
+                            <Input id="incident-reporter-id" value={reportedByUserId} onChange={(e) => setReportedByUserId(e.target.value)} className="font-mono text-xs" />
                         </div>
                         <div>
-                            <Label className="text-xs mb-1 block">Ride ID (optional)</Label>
-                            <Input value={rideId} onChange={(e) => setRideId(e.target.value)} className="font-mono text-xs" />
+                            <Label htmlFor="incident-ride-id" className="text-xs mb-1 block">Ride ID (optional)</Label>
+                            <Input id="incident-ride-id" value={rideId} onChange={(e) => setRideId(e.target.value)} className="font-mono text-xs" />
                         </div>
                     </div>
                 </div>
@@ -810,13 +861,17 @@ function IncidentDetailDrawer({
                             <div className="text-xs space-y-1 pt-1">
                                 <div className="flex items-start gap-2">
                                     {/* eslint-disable-next-line no-restricted-syntax -- pickup/dropoff marker convention, not a status signal (#2816) */}
-                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
-                                    <span className="text-foreground truncate" title={ride.pickup_address || undefined}>{ride.pickup_address || "—"}</span>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" aria-hidden="true" />
+                                    <span className="text-foreground truncate" title={ride.pickup_address || undefined}>
+                                        <span className="sr-only">Pickup: </span>{ride.pickup_address || "—"}
+                                    </span>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     {/* eslint-disable-next-line no-restricted-syntax -- pickup/dropoff marker convention, not a status signal (#2816) */}
-                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 shrink-0" />
-                                    <span className="text-muted-foreground truncate" title={ride.dropoff_address || undefined}>{ride.dropoff_address || "—"}</span>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 shrink-0" aria-hidden="true" />
+                                    <span className="text-muted-foreground truncate" title={ride.dropoff_address || undefined}>
+                                        <span className="sr-only">Dropoff: </span>{ride.dropoff_address || "—"}
+                                    </span>
                                 </div>
                             </div>
                         </div>
@@ -885,9 +940,9 @@ function IncidentDetailDrawer({
                     <CardContent className="space-y-3">
                         <div className="grid grid-cols-2 gap-3">
                             <div>
-                                <Label className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Status</Label>
+                                <Label htmlFor="triage-status" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Status</Label>
                                 <Select value={status} onValueChange={(v) => setStatus(v as SafetyStatus)}>
-                                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="triage-status" className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         {STATUS_OPTIONS.filter((o) => o.value !== "all").map((o) => (
                                             <SelectItem key={o.value} value={o.value} className="text-sm">{o.label}</SelectItem>
@@ -896,9 +951,9 @@ function IncidentDetailDrawer({
                                 </Select>
                             </div>
                             <div>
-                                <Label className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Severity</Label>
+                                <Label htmlFor="triage-severity" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Severity</Label>
                                 <Select value={severity} onValueChange={(v) => setSeverity(v as SafetySeverity | "unset")}>
-                                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="triage-severity" className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="unset" className="text-sm">Unset</SelectItem>
                                         <SelectItem value="sev1" className="text-sm">Sev 1 · immediate</SelectItem>
@@ -909,10 +964,11 @@ function IncidentDetailDrawer({
                             </div>
                         </div>
                         <div>
-                            <Label className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">
+                            <Label htmlFor="triage-resolution-notes" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">
                                 Resolution notes
                             </Label>
                             <Textarea
+                                id="triage-resolution-notes"
                                 value={resolutionNotes}
                                 onChange={(e) => setResolutionNotes(e.target.value)}
                                 placeholder="What did you do? Visible to other admins and to the audit trail."
@@ -930,11 +986,12 @@ function IncidentDetailDrawer({
                             </div>
                         ) : (
                             <div>
-                                <Label className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">
+                                <Label htmlFor="triage-merge-target" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">
                                     Duplicate of (merge)
                                 </Label>
                                 <div className="flex items-center gap-2">
                                     <Input
+                                        id="triage-merge-target"
                                         value={mergeTargetId}
                                         onChange={(e) => setMergeTargetId(e.target.value)}
                                         placeholder="Canonical incident ID"

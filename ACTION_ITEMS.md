@@ -19652,9 +19652,11 @@ how much they de-risk a public launch._
 - **Change log:** `docs/change-log/2026-09-02-c52-redis-helpers-for-h3-index.md`.
 
 ### C53. H3/outbox dark launch (`fc6f922`) has 4 more unwired/incomplete pieces, found while fixing C52
-- [ ] **Status:** partially resolved 2026-09-02 — findings 1–3 fixed, finding
-  4 remains open (see below, unchanged: it's the large one, needs a
-  go/no-go before starting). Originally discovered immediately after C52,
+- [x] **Status:** resolved 2026-09-02 — findings 1–4 all fixed. User gave the
+  go-ahead for finding 4 ("start on finding 4") after 1–3 shipped; see the
+  finding-4 action note below for what was built and what was found
+  already-present from the original dark launch. Originally discovered
+  immediately after C52,
   once `tests/test_h3_location_index.py`/`test_h3_index_reconciler.py`/
   `test_outbox_worker.py` could finally collect for the first time since
   `fc6f922` landed.
@@ -19764,7 +19766,7 @@ how much they de-risk a public launch._
      (`test_outbox_worker.py`, `test_outbox_receipts.py`,
      `test_ride_receipt_delivery.py`, `test_worker_app.py`,
      `test_email_deliverability.py`) were traced to this cause.
-- **Why finding 4 alone stays open:** it turned out to be a full feature
+- **Why finding 4 took a separate go-ahead (historical — now resolved):** it turned out to be a full feature
   build across 6+ new/changed files touching 4 live payment-settlement
   paths plus a new deployable process — not "finish importing the module
   that already has working callers" like 1–3 and C52 were. **Payments/
@@ -19784,33 +19786,87 @@ how much they de-risk a public launch._
   the stale SET-helper test (1); wired `driver_presence.py::clear_presence()`
   → `h3_location_index.on_driver_offline` (2); added the admin force-rebuild
   endpoint to `routes/admin/monitoring.py` (3).
-- **Action (finding 4 — still open):** the tests already fully spec the
-  types, functions, and wiring (see above) — implementation is mechanical
-  against them, but get an explicit go-ahead before starting, given it
-  wires 4 live payment-settlement call sites and stands up a new deployable
-  process (`worker.py`). If given the go-ahead, build in this order: (a)
-  `email_provider.py` types + `send_transactional_email_result`, (b)
-  `email_receipt.py::send_receipt_email_result`, (c)
-  `payment_service.py::send_ride_receipt_result`, (d) fix `outbox_worker.py`'s
-  now-resolvable import and verify `test_outbox_worker.py` passes, (e)
-  `services/outbox_receipts.py` + its 4 call-site wirings — each wiring
-  change is itself risk-bearing on a live payment path and worth its own
-  Change Impact Log entry, (f) `worker.py` + `core/background_loop_registry.py`
-  as a separate, later piece (infra/deploy decision, not just code — a new
-  process needs its own Fly.io/Railway service definition).
-- **Files (finding 4, remaining):** `backend/utils/email_provider.py`,
+- **Action (finding 4 — DONE 2026-09-02):** built (a)–(e) from the planned
+  order below; (f) (`worker.py` + `core/background_loop_registry.py`) turned
+  out to **already exist**, fully built, from the original `fc6f922` dark
+  launch — a fact `test_worker_app.py` collecting-but-mostly-passing (10/11)
+  before this session's changes should have surfaced sooner; only its
+  registry cross-check (below) was actually broken.
+  1. `email_provider.py`: added `EmailDeliveryStatus` enum
+     (`accepted`/`terminal_skip`/`retryable_failure`), `EmailDeliveryResult`
+     dataclass, and `send_transactional_email_result(...)`. The existing
+     bool-returning `send_transactional_email` (12 call sites) now delegates
+     to it — pure internal refactor, same bool contract preserved for every
+     existing caller.
+  2. `email_receipt.py`: added `send_receipt_email_result(...)`; the existing
+     bool `send_receipt_email` now delegates to it the same way.
+  3. `payment_service.py`: added `send_ride_receipt_result(ride_id)` —
+     hydrates ride/rider/driver from `ride_id` (mirrors `send_ride_receipt`'s
+     existing hydration), calls `email_receipt.send_receipt_email_result`.
+     A missing ride is treated as `retryable_failure` (not a terminal skip —
+     safer to retry through the outbox's bounded attempts than to discard a
+     real ride's receipt on what could be a replication-lag race).
+  4. `outbox_worker.py`'s import of `EmailDeliveryStatus` now resolves;
+     `test_outbox_worker.py` collects and passes in full.
+  5. `services/outbox_receipts.py` — **found already fully built** (module,
+     `auto_receipt_is_queued`, `maybe_send_auto_receipt`, and
+     `services/outbox.py`'s RPC boundary + `is_auto_receipt_queued`), also
+     from the dark launch. Only the 4 call-site wirings were actually
+     missing; wired all 4, each as its own reviewed diff:
+     `routes/rides/payments.py::process_payment` (awaited, `spawn=_deps.spawn`
+     — same effective behavior as before, just outbox-gated first),
+     `routes/webhooks.py::_handle_ride_invoice_paid` and its second
+     `payment_intent.succeeded` receipt site (both awaited, no spawn —
+     already off the request path), `utils/preauth_capture.py::_capture_one`
+     and `services/payment_service.py::auto_settle_guest_corporate` (both
+     awaited, `send=send_ride_receipt` pinned to each module's own binding so
+     existing test doubles patched on that module still take effect).
+  6. `worker.py` / `core/background_loop_registry.py` — already existed
+     and passed 10/11 `test_worker_app.py` tests; the 1 failure
+     (`test_worker_loop_names_match_registry`) was a real gap: none of the
+     4 worker-owned loop names (`outbox_poller (1-10s)`, `push_retry (30s)`,
+     `zoho_desk_sync (10min)`, `driver_onboarding_reminders (15min)`) were in
+     `utils/loop_monitor.py`'s `LOOP_THRESHOLDS`, so they silently fell back
+     to the 2h default staleness threshold instead of a threshold sized to
+     their actual tick interval. Added all 4. No deploy/process-topology
+     decision was needed here — the process itself was already built and
+     merged dark; this was a monitoring-config gap in already-shipped code,
+     not standing up new infra.
+  7. `routes/admin/monitoring.py::get_email_deliverability` — confirmed to
+     already exist (line 356); its test failure
+     (`test_email_deliverability.py::test_deliverability_aggregates_and_omits_pii`,
+     `total == 0` instead of `4`) is **unrelated to this feature** — confirmed
+     via `git stash` that it fails identically on the pre-finding-4 tree.
+     Left unfixed as out of scope; not re-triaged here beyond confirming it
+     predates this change.
+  8. Two collateral test breaks from step 1–2's refactor, both fixed: (a)
+     `test_all_emails_are_branded.py`'s brand-consistency detector regex
+     widened to also match a `_result`-suffixed send call, and
+     `utils/email_provider.py` added to its `_UNBRANDED_BY_DESIGN` allowlist
+     (the bool wrapper's own internal delegation to
+     `send_transactional_email_result` now self-matches the detector; it
+     renders no body, callers do); (b) `test_admin_send_receipt_email.py`
+     and `test_receipt_route_snapshot.py` re-pointed their provider mock from
+     `send_transactional_email` to `send_transactional_email_result` to match
+     where `email_receipt.py` now actually calls out.
+- **Files (finding 4):** `backend/utils/email_provider.py`,
   `backend/utils/email_receipt.py`, `backend/services/payment_service.py`,
-  `backend/services/outbox_receipts.py` (new), `backend/utils/outbox_worker.py`,
   `backend/routes/rides/payments.py`, `backend/routes/webhooks.py`,
-  `backend/utils/preauth_capture.py`, `backend/worker.py` (new),
-  `backend/core/background_loop_registry.py` (new). Not touched by this
-  session — flagged only.
-- **Acceptance:** findings 1–3 met — `pytest tests/test_h3_location_index.py
-  tests/test_h3_index_reconciler.py` collect and pass in full (26/26).
-  Finding 4 still open: `pytest tests/test_outbox_worker.py
+  `backend/utils/preauth_capture.py`, `backend/utils/loop_monitor.py`,
+  `backend/tests/test_all_emails_are_branded.py`,
+  `backend/tests/test_admin_send_receipt_email.py`,
+  `backend/tests/test_receipt_route_snapshot.py`. `services/outbox_receipts.py`,
+  `worker.py`, `core/background_loop_registry.py` were already present —
+  read and verified, not modified.
+- **Acceptance:** `pytest tests/test_h3_location_index.py
+  tests/test_h3_index_reconciler.py tests/test_outbox_worker.py
   tests/test_outbox_receipts.py tests/test_ride_receipt_delivery.py
-  tests/test_worker_app.py tests/test_email_deliverability.py` should all
-  collect and pass once built.
+  tests/test_worker_app.py tests/test_admin_send_receipt_email.py
+  tests/test_all_emails_are_branded.py tests/test_receipt_route_snapshot.py`
+  all collect and pass in full. Broader regression sweep (`-k "payment or
+  webhook or preauth or receipt or email or outbox or worker"`, 1,456 tests)
+  green except the one pre-existing, confirmed-unrelated
+  `test_email_deliverability.py` failure (item 7 above).
 
 ### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle
 - [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
@@ -19941,6 +19997,79 @@ how much they de-risk a public launch._
   `test_driver_repo_coverage.py` still pass unmodified (the policy choice
   must not change claim-won/claim-lost semantics, only retry count/timing
   on a genuine transient failure).
+
+### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip
+- [ ] **Status:** open — found 2026-09-03 while babysitting PR #4887 (C53
+  finding 4). Confirmed via GitHub Actions run 33711534411 that
+  `backend-test` fails identically on `main`'s own latest commit
+  (`e71760e`), not just on the PR branch — this is base-branch-red, not
+  introduced by #4887's diff.
+- **Issue/gap:** `backend/tests/rls/conftest.py` builds its Postgres RLS
+  test schema from `backend/supabase_schema.sql` plus a hand-picked
+  allowlist of specific migration files applied verbatim (58, 64, 70, 290,
+  378 — for `financial_events`, `driver_insurance_periods`,
+  `saved_addresses`). It was never updated to also apply
+  `backend/migrations/399_transactional_outbox.sql` (merged as part of the
+  `fc6f922` dark launch, well before this gap was found), so every test
+  touching `settings.outbox_receipts_enabled`, `outbox_messages`, or the
+  `outbox_*` RPCs fails with `UndefinedColumn`/`UndefinedTable`/`does not
+  exist`. 19 of 24 current RLS-suite failures are this one root cause
+  (`backend/tests/rls/test_transactional_outbox.py`, almost entirely). The
+  remaining ~5 (`test_core_tables_rls.py::test_service_role_bypasses_rls_on_users`,
+  two `test_money_and_safety_rls.py` cases, and
+  `test_saved_addresses_rls.py::test_service_role_bypasses_rls_on_saved_addresses`)
+  are a **separate, unrelated** pre-existing gap in the same harness —
+  assertion/permission mismatches with nothing to do with the outbox
+  migration; flagged here for visibility, not diagnosed further.
+- **Action:** update `tests/rls/conftest.py`'s schema-setup fixture to also
+  execute `backend/migrations/399_transactional_outbox.sql` verbatim, same
+  pattern as the existing 58/64/70/290/378 calls (`cur.execute((migrations_dir
+  / "NN_....sql").read_text())`, including the existing handling of the
+  trailing `NOTIFY pgrst, 'reload schema';` line those migrations already
+  strip).
+- **Files:** `backend/tests/rls/conftest.py`.
+- **Acceptance:** `TEST_DATABASE_URL=<local pg> pytest tests/rls -c
+  /dev/null --confcutdir=tests/rls -v` — `test_transactional_outbox.py`
+  passes in full; no other RLS file regresses.
+
+### C58. `test_email_deliverability.py` never updated for migration 392's server-side aggregation — CLOSED (2026-09-03)
+- [x] **Status:** resolved 2026-09-03. Flagged as C53 finding 4 item 7
+  ("unrelated to this feature... not fixed, out of scope"); a follow-up
+  task was queued and then actioned the same session.
+- **Issue/gap:** `test_deliverability_aggregates_and_omits_pii` asserted
+  `out["total"] == 4` but got `0` — not caused by C53 finding 4's outbox
+  work (confirmed via `git stash` before that work even started).
+- **Root cause:** `routes/admin/monitoring.py::get_email_deliverability`
+  was refactored under `migrations/392_admin_email_log_stats_fn.sql`
+  ("Replace Python-side fetch of 5k email_send_log rows + three Counter()
+  aggregations... with server-side GROUP BY") to compute
+  `total`/`by_status`/`by_provider`/`by_type` via a single
+  `db_supabase.rpc("admin_email_log_stats", {"p_since": since})` call,
+  with `get_rows` now used only for the two *list* payloads the RPC
+  doesn't return (the 25 most-recent already-failed rows, and the 25
+  most-recent suppression rows). The test was never updated for that
+  refactor: it still fed a 4-row fixture through `get_rows`'s first
+  call expecting the endpoint to Counter() it in Python. The test never
+  mocked `db_supabase.rpc` at all, so the real (unconfigured-in-tests)
+  client's `rpc()` silently returned `None` (`repositories/_base.py::rpc`'s
+  documented no-op-when-unconfigured behavior) — `st = {}`, so
+  `total`/`by_status`/`by_provider` all read empty. The endpoint was
+  correct and current; the test was stale. (The other two tests in the
+  file, `test_deliverability_empty_window`/`test_deliverability_days_clamped`,
+  happened to still pass — they only assert the all-zero/empty case,
+  which is exactly what `rpc()`'s silent-`None` fallback produces by
+  accident, not because they were correctly mocking it.)
+- **Fix:** patched `routes.admin.monitoring.db_supabase.rpc` in all 3
+  tests to return the RPC's actual jsonb shape (a dict, matching what
+  `admin_email_log_stats` returns for the fixture data); re-scoped the
+  `get_rows` first-call fixture from the full unfiltered send-log to just
+  the failed subset (matching `recent_fail_rows`'s real
+  `{"status": "failed"}` filter). Left `get_email_deliverability` itself
+  untouched — it needed no fix, only its test did.
+- **Files:** `backend/tests/test_email_deliverability.py`.
+- **Acceptance:** `pytest tests/test_email_deliverability.py` — 5/5 pass.
+  Broader sweep (`-k "monitoring or deliverability"`, 37 tests) green, no
+  regressions.
 
 ## Recently completed (do not redo)
 

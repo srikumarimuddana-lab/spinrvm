@@ -312,9 +312,11 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
     tip_amount = Decimal(str(ride.get("tip_amount") or 0))
 
     try:
-        from ..services.payment_service import _tip_ride_update, record_payment_event, send_ride_receipt
+        from ..services import outbox_receipts
+        from ..services.payment_service import _tip_ride_update, record_payment_event
     except ImportError:
-        from services.payment_service import _tip_ride_update, record_payment_event, send_ride_receipt  # type: ignore
+        from services import outbox_receipts  # type: ignore
+        from services.payment_service import _tip_ride_update, record_payment_event  # type: ignore
 
     # Ledger first (recovery record exists even if the ride update fails).
     await record_payment_event(
@@ -367,7 +369,12 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
         # a broken email pipeline), not swallowed at warning.
         updated_ride = await db_supabase.get_ride(ride_id) or ride
         try:
-            await send_ride_receipt(updated_ride, rider_id, tip_amount)
+            # Outbox-gated: skip the direct send when the Postgres trigger
+            # already queued ride_receipt.v1 for this ride
+            # (migrations/399_transactional_outbox.sql); otherwise falls back
+            # to the historical direct send, awaited here (no spawn — this
+            # handler already runs off the request path).
+            await outbox_receipts.maybe_send_auto_receipt(updated_ride, rider_id, tip_amount)
         except Exception:
             logger.error("invoice.paid: receipt email failed for ride %s", ride_id, exc_info=True)
 
@@ -830,16 +837,16 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
             _already_settled = ride.get("payment_status") in ("paid", "waived_admin", "processing")
             _tip = Decimal(str(ride.get("tip_amount") or 0))
             try:
+                from ..services import outbox_receipts
                 from ..services.payment_service import (
                     _tip_ride_update,
                     record_payment_event,
-                    send_ride_receipt,
                 )
             except ImportError:
+                from services import outbox_receipts  # type: ignore
                 from services.payment_service import (  # type: ignore
                     _tip_ride_update,
                     record_payment_event,
-                    send_ride_receipt,
                 )
 
             _paid_fields: dict = {
@@ -879,7 +886,9 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 _rcpt_rider = ride.get("rider_id")
                 if _rcpt_rider:
                     try:
-                        await send_ride_receipt(
+                        # Outbox-gated — see the matching comment in
+                        # _handle_ride_invoice_paid above.
+                        await outbox_receipts.maybe_send_auto_receipt(
                             dict(updated) if isinstance(updated, dict) else dict(ride),
                             _rcpt_rider,
                             _tip,

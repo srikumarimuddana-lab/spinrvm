@@ -35,7 +35,7 @@ _SUPER_ADMIN = {
         "settings",
         "corporate_accounts",
         "documents",
-            "staff",
+        "staff",
     ],
 }
 
@@ -425,11 +425,14 @@ class TestAdminSubscriptionStats:
     def test_subscription_stats_money_rounding(self, client):
         # A paid subscription + a ledger payment must round to 2dp and surface
         # in the totals (exercises _money on real amounts, not just zero).
+        #
+        # routes/admin/subscriptions.py now computes stats server-side via the
+        # admin_subscription_stats_rollup RPC (migration 385) instead of
+        # aggregating raw driver_subscriptions/subscription_payments rows in
+        # Python -- get_rows is still used for the transactions list and plan
+        # names, but the money totals below come from the RPC mock, shaped
+        # per the migration's `jsonb_build_object` keys.
         async def _rows(table, *args, **kwargs):
-            if table == "driver_subscriptions":
-                return [
-                    {"driver_id": "d1", "plan_id": "p1", "status": "active", "price": "19.99", "payment_status": "paid"}
-                ]
             if table == "subscription_payments":
                 return [
                     {
@@ -442,7 +445,26 @@ class TestAdminSubscriptionStats:
                 ]
             return []
 
-        with patch("db_supabase.get_rows", new_callable=AsyncMock, side_effect=_rows):
+        async def _rpc(name, params):
+            assert name == "admin_subscription_stats_rollup"
+            return {
+                "total_real": 1,
+                "active": 1,
+                "expired": 0,
+                "cancelled": 0,
+                "active_mrr": "19.99",
+                "total_revenue": "19.999",
+                "range_revenue": "19.999",
+                "range_count": 1,
+                "plan_breakdown": [],
+                "daily_revenue": [],
+                "daily_subscribers": [],
+            }
+
+        with (
+            patch("db_supabase.get_rows", new_callable=AsyncMock, side_effect=_rows),
+            patch("db_supabase.rpc", new_callable=AsyncMock, side_effect=_rpc),
+        ):
             resp = client.get("/api/admin/subscription-stats")
         assert resp.status_code == 200
         body = resp.json()
@@ -465,7 +487,27 @@ class TestAdminSubscriptionStats:
                 return [{"id": "pay1", "driver_id": "d1", "plan_id": "p1", "amount": "12.50", "created_at": in_window}]
             return []
 
-        with patch("db_supabase.get_rows", new_callable=AsyncMock, side_effect=_rows):
+        # range_revenue is computed server-side by the admin_subscription_stats_rollup
+        # RPC now (migration 385) -- see test_subscription_stats_money_rounding above.
+        async def _rpc(name, params):
+            return {
+                "total_real": 0,
+                "active": 0,
+                "expired": 0,
+                "cancelled": 0,
+                "active_mrr": 0,
+                "total_revenue": "12.50",
+                "range_revenue": "12.50",
+                "range_count": 1,
+                "plan_breakdown": [],
+                "daily_revenue": [],
+                "daily_subscribers": [],
+            }
+
+        with (
+            patch("db_supabase.get_rows", new_callable=AsyncMock, side_effect=_rows),
+            patch("db_supabase.rpc", new_callable=AsyncMock, side_effect=_rpc),
+        ):
             resp = client.get("/api/admin/subscription-stats")
         assert resp.status_code == 200
         assert resp.json()["stats"]["range_revenue"] == 12.5

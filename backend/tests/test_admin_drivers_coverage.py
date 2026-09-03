@@ -649,18 +649,23 @@ class TestLiveStatsLicenseMask:
         there would silently change the acceptance-rate denominator, which
         this fix doesn't touch)."""
         driver = {"id": "drv-1", "user_id": None, "license_number": None}
-        rides = [
-            {"driver_id": "drv-1", "status": "completed", "driver_earnings": "10.00", "rider_rating": 5},
-            {
-                "driver_id": "drv-1",
-                "status": "completed",
-                "driver_earnings": "400.00",
-                "legacy_import_metadata": {"source": "legacy_mongo_booking_import"},
-            },
-            {"driver_id": "drv-1", "status": "cancelled", "cancellation_reason": "driver_no_show"},
-        ]
+        # admin_get_driver_live_stats now computes these figures server-side
+        # via the admin_driver_ride_summary RPC (migration 389) instead of
+        # fetching this driver's rides and iterating in Python -- see the
+        # route's docstring. The raw `rides` fixture above is no longer
+        # consulted for this math; mock db_supabase.rpc with the same
+        # legacy-exclusion result it documents (10.00, not 410.00).
+        rpc_result = {
+            "total_assigned": 3,
+            "completed_count": 2,
+            "lifetime_earnings": "10.00",
+            "lifetime_tips": "0",
+            "avg_rider_rating": 5,
+            "cancelled_by_driver": 0,
+        }
         with (
-            patch("db_supabase.get_rows", AsyncMock(return_value=rides)),
+            patch("db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("db_supabase.rpc", AsyncMock(return_value=rpc_result)),
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("db_supabase.get_user_by_id", AsyncMock(return_value=None)),
         ):
@@ -1306,11 +1311,17 @@ class TestDriverStats:
             return []
 
         async def rpc(func_name, params=None):
-            # Mirrors migration 370: {by_driver: {driver_id: numeric}, total}.
-            # The same 42.00 + 8.00 the old row fetch returned, now summed in SQL.
-            assert func_name == "admin_driver_earnings_rollup"
-            assert params["p_driver_ids"] == ["drv-1"]
-            return [{"by_driver": {"drv-1": "50.00"}, "total": "50.00"}]
+            if func_name == "admin_driver_earnings_rollup":
+                # Mirrors migration 370: {by_driver: {driver_id: numeric}, total}.
+                # The same 42.00 + 8.00 the old row fetch returned, now summed in SQL.
+                assert params["p_driver_ids"] == ["drv-1"]
+                return [{"by_driver": {"drv-1": "50.00"}, "total": "50.00"}]
+            if func_name == "admin_daily_ride_stats":
+                # The daily rides/earnings chart (migration 388) -- not
+                # exercised by this test's assertions, so an empty chart
+                # is sufficient.
+                return []
+            raise AssertionError(f"unexpected rpc call: {func_name}")
 
         async def batched_in(table, column, values, extra_filters=None, **kw):
             return []
@@ -1613,18 +1624,30 @@ class TestDriverTraining:
 class TestReferralLeaderboard:
     def _rows(self, table, filters=None, **kwargs):
         filters = filters or {}
-        if table == "referral_payouts":
-            return [
-                {"referrer_user_id": "usr-1", "referrer_reward": "10", "status": "paid"},
-                {"referrer_user_id": "usr-1", "referrer_reward": "10", "status": "pending"},
-            ]
         if table == "drivers":
-            return [{"id": "drv-1", "driver_code": "ABC123", "name": "Amy Lee"}]
+            # Keyed by user_id -- admin_get_referral_leaderboard resolves
+            # driver rows for the RPC's referrer_user_id leaders via
+            # {"user_id": {"$in": ref_user_ids}}.
+            return [{"id": "drv-1", "user_id": "usr-1", "driver_code": "ABC123", "name": "Amy Lee"}]
         return []
+
+    def _rpc(self, name, params):
+        # admin_get_referral_leaderboard now aggregates server-side via the
+        # admin_driver_referral_board RPC (migration 386) instead of
+        # fetching all referral_payouts rows and looping in Python -- one
+        # referrer (usr-1) with 2 claims (paid + pending), 1 qualified
+        # (paid), $10 paid out.
+        assert name == "admin_driver_referral_board"
+        return {
+            "fleet_total_referrals": 2,
+            "fleet_total_referrers": 1,
+            "leaders": [{"referrer_user_id": "usr-1", "total": 2, "qualified": 1, "earnings": "10.00"}],
+        }
 
     def test_leaderboard_aggregates_by_referrer(self, test_client, super_admin_override):
         with (
             patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+            patch("db_supabase.rpc", AsyncMock(side_effect=self._rpc)),
             patch("db_supabase.get_user_by_id", AsyncMock(return_value={"first_name": "Amy", "last_name": "Lee"})),
         ):
             resp = test_client.get("/api/admin/referrals/leaderboard")
@@ -1651,6 +1674,16 @@ class TestRiderReferralLeaderboard:
                 # Not a rider-referral code -> excluded from the board.
                 {"id": "u2", "referral_code_used": "DRIVERXYZ", "referred_by": "ref-2"},
             ]
+        if table == "rides":
+            # admin_get_rider_referral_leaderboard batch-fetches each
+            # referee's completed-ride count in one query (PR #4875's N+1
+            # fix, https://github.com/srikumarimuddana-lab/spinrvm/pull/4875)
+            # instead of one count_documents call per referee -- this is
+            # NOT the RPC-rollup pattern the rest of this cluster is, just a
+            # get_rows shape this fixture never covered. RIDER_REFERRAL_
+            # RIDES_REQUIRED is 1, so a single completed ride for u1
+            # qualifies it.
+            return [{"rider_id": "u1"}]
         return []
 
     def test_only_ride_prefixed_codes_count(self, test_client, super_admin_override):
@@ -1697,7 +1730,15 @@ class TestReferralAnalytics:
         return []
 
     def test_driver_source_computes_funnel_and_trend(self, test_client, super_admin_override):
-        with patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)):
+        # total_referred ("top of funnel" signup count) is now computed
+        # server-side via the admin_referred_user_count RPC (migration
+        # 387) instead of fetching all users and counting in Python --
+        # the RPC returns a bare scalar (bigint), not a dict/list of rows.
+        # Only the DRV-coded signup counts for the driver funnel.
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+            patch("db_supabase.rpc", AsyncMock(return_value=1)),
+        ):
             resp = test_client.get("/api/admin/referrals/analytics", params={"source": "driver"})
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -1706,7 +1747,6 @@ class TestReferralAnalytics:
         assert funnel["redeemed"] == 1
         assert funnel["processing"] == 1
         assert funnel["failed"] == 1
-        # Only the DRV-coded signup counts for the driver funnel.
         assert funnel["total_referred"] == 1
         assert funnel["total_paid"] == "15.00"
         assert len(body["trend"]) == 1
@@ -1858,6 +1898,29 @@ class TestPayoutsSummary:
             return [{"bank_name": "Bank of X", "account_last4": "1234", "is_verified": True}]
         return []
 
+    @staticmethod
+    def _rpc_for(lifetime_earnings="0", lifetime_tips="0", total_bonuses="0"):
+        # admin_get_driver_payouts_summary now computes ride-earnings/tips
+        # via the admin_driver_ride_summary RPC (migration 389) and bonus
+        # totals via admin_driver_bonus_summary (migration 390), instead of
+        # fetching this driver's rides/driver_bonuses rows and summing in
+        # Python -- get_rows("driver_bonuses", ...) is still used, but only
+        # for the small bounded *display* list, not these totals.
+        async def _rpc(name, params):
+            if name == "admin_driver_ride_summary":
+                return {
+                    "lifetime_earnings": lifetime_earnings,
+                    "lifetime_tips": lifetime_tips,
+                    "ytd_earnings": lifetime_earnings,
+                    "ytd_tips": lifetime_tips,
+                    "active_days_recent": 0,
+                }
+            if name == "admin_driver_bonus_summary":
+                return {"total_bonuses": total_bonuses, "ytd_bonuses": total_bonuses}
+            raise AssertionError(f"unexpected rpc call: {name}")
+
+        return _rpc
+
     def test_driver_not_found_404(self, test_client, super_admin_override):
         with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
             resp = test_client.get("/api/admin/drivers/nope/payouts-summary")
@@ -1868,6 +1931,9 @@ class TestPayoutsSummary:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=self._rows)),
+            patch(
+                "db_supabase.rpc", AsyncMock(side_effect=self._rpc_for(lifetime_earnings="50.00", lifetime_tips="5.00"))
+            ),
         ):
             resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
         assert resp.status_code == 200, resp.text
@@ -1911,6 +1977,10 @@ class TestPayoutsSummary:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch(
+                "db_supabase.rpc",
+                AsyncMock(side_effect=self._rpc_for(lifetime_earnings="50.00", total_bonuses="200.00")),
+            ),
         ):
             resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
         assert resp.status_code == 200, resp.text
@@ -1952,6 +2022,7 @@ class TestPayoutsSummary:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.rpc", AsyncMock(side_effect=self._rpc_for(lifetime_earnings="50.00"))),
         ):
             resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
         assert resp.status_code == 200, resp.text
@@ -2000,6 +2071,7 @@ class TestPayoutsSummary:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.rpc", AsyncMock(side_effect=self._rpc_for(lifetime_earnings="50.00"))),
         ):
             resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
         assert resp.status_code == 200, resp.text
@@ -2081,6 +2153,7 @@ class TestPayoutsSummary:
         with (
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)),
             patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("db_supabase.rpc", AsyncMock(side_effect=self._rpc_for(lifetime_earnings="100.00"))),
         ):
             resp = test_client.get("/api/admin/drivers/drv-1/payouts-summary")
         assert resp.status_code == 200, resp.text

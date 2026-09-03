@@ -6,9 +6,11 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 
 try:
     from ...services.fare_service import driver_earnings_with_tip
+    from ...services.outbox_receipts import maybe_send_auto_receipt
     from ...utils.redis_client import redis_expire, redis_incrby
 except ImportError:
     from services.fare_service import driver_earnings_with_tip  # type: ignore
+    from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
     from utils.redis_client import redis_expire, redis_incrby  # type: ignore
 
 from . import _deps
@@ -32,11 +34,11 @@ from ._deps import (  # noqa: F401
     charge_late_wallet_tip,
     datetime,
     first_name_only,
+    get_app_settings,
     get_current_user,
     idempotent_endpoint,
     logger,
     payment_action_limit,
-    send_ride_receipt,
     settle_card,
     settle_corporate,
     settle_wallet,
@@ -403,6 +405,16 @@ async def process_payment(
         logger.info(f"[PAYMENT] Ride {ride_id} already paid — skipping duplicate charge")
         return {"success": True, "charged_amount": _charged(ride), "already_paid": True}
 
+    if _pstatus == "held_for_review":
+        # A prior call already found this ride's GPS trace suspicious enough
+        # to hold (see the gate below) — repeat exactly that response rather
+        # than re-evaluating (the hold is released/rejected admin-side only).
+        return {
+            "success": False,
+            "held_for_review": True,
+            "message": "Your receipt is pending verification. We'll notify you once it's ready.",
+        }
+
     # 'processing' for a CARD/corporate ride may mean the charge was CAPTURED
     # with the DB write lost (settle_card's captured-but-unconfirmed path), so
     # reporting already-paid avoids a double charge; the reconcile/retry loop
@@ -435,6 +447,55 @@ async def process_payment(
                 "message": "An invoice has been emailed for this ride. Please pay using the link in your email.",
             },
         )
+
+    # Pre-charge GPS-spoof gate (item #4 of the 2026-09-02 GPS-to-billing
+    # audit). Flag-gated, dark by default. Mirrors how a card network scores
+    # a transaction instantly and only holds the ones that trip a risk
+    # threshold — not "hold every trip" and not "hold none". Below the
+    # threshold, flag off, or the verdict hasn't landed yet (route_finalizer.py
+    # runs on a ~15s cadence and may not have reached this ride yet) -> fail
+    # open and charge exactly as today; only a ride actually flagged
+    # 'likely_spoofed' past the threshold is held instead of charged.
+    try:
+        _app_settings = await get_app_settings() or {}
+    except Exception:
+        logger.error(f"[PAYMENT] app_settings read failed for ride {ride_id}; spoof gate treated as off", exc_info=True)
+        _app_settings = {}
+    if _app_settings.get("gps_spoof_charge_gate_enabled", False):
+        _gps_validation: Optional[dict] = None
+        try:
+            _route_rows = await _deps.db_supabase.get_rows(
+                "ride_routes", {"ride_id": ride_id}, limit=1, columns="route_quality"
+            )
+            _gps_validation = ((_route_rows[0] if _route_rows else {}) or {}).get("route_quality") or {}
+            _gps_validation = _gps_validation.get("gps_route_validation")
+        except Exception:
+            logger.error(f"[PAYMENT] gps_route_validation read failed for ride {ride_id}", exc_info=True)
+            _gps_validation = None
+        if _gps_validation:
+            # GPS route-deviation percentage, not money -- see spinr-no-float-in-money's
+            # own message; same false-positive class already suppressed in email_receipt.py.
+            _deviation_threshold = float(_app_settings.get("gps_spoof_deviation_hold_threshold_pct", 40.0))  # nosemgrep: spinr-no-float-in-money
+            _deviation_pct = float(_gps_validation.get("deviation_pct") or 0)  # nosemgrep: spinr-no-float-in-money
+            if _gps_validation.get("verdict") == "likely_spoofed" and _deviation_pct > _deviation_threshold:
+                # Optimistic guard on the status we just read: if a concurrent
+                # call already moved payment_status away from _pstatus (e.g.
+                # it already charged, or another call already held it), this
+                # is a no-op and the retry path above handles the outcome.
+                await _deps.db_supabase.update_one(
+                    "rides",
+                    {"id": ride_id, "payment_status": _pstatus},
+                    {"payment_status": "held_for_review"},
+                )
+                logger.warning(
+                    f"[PAYMENT] ride {ride_id} held for review — "
+                    f"deviation={_deviation_pct:.1f}% threshold={_deviation_threshold:.1f}%"
+                )
+                return {
+                    "success": False,
+                    "held_for_review": True,
+                    "message": "Your receipt is pending verification. We'll notify you once it's ready.",
+                }
 
     # Validate the tip BEFORE the atomic claim — raising after the claim would
     # leave payment_status stuck at 'processing' with no charge ever attempted.
@@ -625,12 +686,15 @@ async def process_payment(
                     _snap_err,
                 )
         # Receipt email backgrounded off the payment path (<1s settlement
-        # SLA): send_ride_receipt logs and swallows its own failures, and no
-        # client surface reads the delivery outcome. email_sent now means
-        # "queued" (field kept for API-shape compatibility; the explicit
-        # resend endpoint still awaits delivery and reports it honestly).
-        _deps.spawn(send_ride_receipt(ride, current_user["id"], tip_rounded))
-        email_sent = True
+        # SLA): maybe_send_auto_receipt skips the direct send entirely when
+        # the Postgres outbox trigger already queued ride_receipt.v1 for this
+        # ride (migrations/399_transactional_outbox.sql), and otherwise falls
+        # back to spawning send_ride_receipt exactly as before. Either path
+        # logs and swallows its own failures, and no client surface reads the
+        # delivery outcome. email_sent now means "queued" (field kept for
+        # API-shape compatibility; the explicit resend endpoint still awaits
+        # delivery and reports it honestly).
+        email_sent = await maybe_send_auto_receipt(ride, current_user["id"], tip_rounded, spawn=_deps.spawn)
 
         # Meta Purchase (+ FirstRide on the rider's first). Fired here rather
         # than at ride completion because this is the point money actually

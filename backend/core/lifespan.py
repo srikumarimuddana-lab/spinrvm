@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -63,6 +64,60 @@ async def init_database():
             raise
         logger.warning(f"Continuing in {settings.ENV} mode despite health-check failure")
 
+    # C50 Phase 1 (T9) — direct-pool dispatch, flag-gated, unused until T12/T13.
+    # See backend/repositories/dispatch_pool.py's module docstring for the
+    # Supavisor transaction-mode discipline this pool must follow.
+    #
+    # This is the ONLY place dispatch_direct_pool_enabled is read, so it is
+    # sampled once per process: flipping the flag on against a running backend
+    # opens no pool (enabling is a restart), and flipping it off closes none.
+    # Rollback stays a ≤60s no-redeploy operation only because Phase 2's call
+    # sites are required to re-read the flag per dispatch attempt — see the
+    # field comment in schemas.AppSettings for the full contract.
+    #
+    # DISPATCH_POOL_DSN is checked FIRST and is empty by default (T8) — every
+    # environment until a human sets the Fly secret. That means this whole
+    # block short-circuits before ever touching app_settings, so startup with
+    # the flag/DSN unset (the default, current state everywhere) makes zero
+    # additional DB calls and emits zero additional log lines versus before
+    # this code existed — the critical acceptance property for this task
+    # (see backend/tests/test_dispatch_pool.py's byte-identical-startup test).
+    if settings.DISPATCH_POOL_DSN:
+        try:
+            from ..repositories.dispatch_pool import init_pool as _init_dispatch_pool
+            from ..settings_loader import get_app_settings as _get_app_settings_for_pool
+        except ImportError:
+            from repositories.dispatch_pool import init_pool as _init_dispatch_pool  # type: ignore
+            from settings_loader import get_app_settings as _get_app_settings_for_pool  # type: ignore
+
+        try:
+            # Review fix (2026-09-03): bounded. No deadline middleware has run
+            # at boot, so run_sync's own deadline propagation is inactive and
+            # a PostgREST that accepts the TCP connection but never answers
+            # would hang init_database forever — Fly's health checks would
+            # then kill and restart the machine in a loop, and the except
+            # below (written to keep boot alive) would never fire because
+            # nothing raised. asyncio.TimeoutError lands in that same except
+            # and fails closed (flag treated as off).
+            _app_settings = await asyncio.wait_for(_get_app_settings_for_pool(), timeout=10.0)
+            _dispatch_direct_pool_enabled = bool(_app_settings.get("dispatch_direct_pool_enabled", False))
+        except Exception as e:
+            # app_settings unreadable at boot must not crash the API (every
+            # other reader of this flag tolerates the same failure mode), but
+            # it must not be silent either — surfaced at ERROR so it's
+            # investigated, and the pool conservatively stays closed (the
+            # rollback-switch default is "off", so an unreadable flag should
+            # behave as if it were off, not on).
+            logger.error(f"[dispatch_pool] failed to read dispatch_direct_pool_enabled from app_settings: {e}")
+            _dispatch_direct_pool_enabled = False
+
+        if _dispatch_direct_pool_enabled:
+            # init_pool() itself raises in production on open failure (same
+            # settings.ENV == "production" gate as this function's own
+            # health check above) and propagates up through this try/except
+            # to the caller below, which already re-raises and fails boot.
+            await _init_dispatch_pool(_dispatch_direct_pool_enabled)
+
     return supabase
 
 
@@ -73,6 +128,17 @@ async def cleanup_database(db):
         logger.info("Database cleanup completed")
     except Exception as e:
         logger.error(f"Database cleanup error: {e}")
+
+    # C50 Phase 1 (T9) — close the direct dispatch pool if it was ever opened.
+    # Safe no-op when the flag/DSN were off/unset (init_pool never opened it).
+    try:
+        try:
+            from ..repositories.dispatch_pool import close_pool as _close_dispatch_pool
+        except ImportError:
+            from repositories.dispatch_pool import close_pool as _close_dispatch_pool  # type: ignore
+        await _close_dispatch_pool()
+    except Exception as e:
+        logger.error(f"[dispatch_pool] error during shutdown close: {e}")
 
 
 @asynccontextmanager

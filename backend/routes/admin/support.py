@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -176,7 +176,9 @@ async def admin_get_dispute_stats():
         "under_review": int(row.get("under_review") or 0),
         "resolved": int(row.get("resolved") or 0),
         "rejected": int(row.get("rejected") or 0),
-        "total_refunded": float(Decimal(str(row.get("total_refunded") or 0))),
+        "total_refunded": float(
+            Decimal(str(row.get("total_refunded") or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ),
     }
 
 

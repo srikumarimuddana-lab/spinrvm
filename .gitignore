@@ -101,3 +101,8 @@ admin-dashboard/playwright.audit.config.ts
 # Yarn drops install metadata into shared/ when resolving the file:../shared
 # dependency from rider-app/driver-app — a local install byproduct, never source.
 shared/.yarn-metadata.json
+
+# loadtest/preauth_bots.py writes live staging bearer + refresh tokens for
+# every bot account to loadtest/results/bot_tokens.json. The committed
+# Prometheus dumps in that directory are fine; the JSON caches never are.
+loadtest/results/*.json

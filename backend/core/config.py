@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 import bcrypt
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,43 @@ class Settings(BaseSettings):
     USE_SUPABASE: bool = True  # Supabase is now the default database
     # PIPEDA 22-2: must be "ca-central-1" in production; checked at startup.
     SUPABASE_REGION: str = ""
+
+    # ── Direct-pool dispatch (C50 Phase 1, docs/audit/2026-09-02-pgbouncer-
+    # direct-pool-migration-plan.md) ─────────────────────────────────────
+    # DSN for a direct-Postgres AsyncConnectionPool (psycopg v3) talking to
+    # Supabase's Supavisor pooler in TRANSACTION mode, bypassing PostgREST.
+    # Deliberately NOT named DATABASE_URL — backend/scripts/verify_restore.py
+    # treats that exact env var name as "the production database" and
+    # refuses to run against it; a same-named dispatch DSN would either
+    # collide with that guard or silently defeat it. Store as a Fly secret
+    # (a credential), never in app_settings (admin-dashboard-visible).
+    #
+    # Unused until T9 (backend/repositories/dispatch_pool.py) opens the pool
+    # in lifespan.init_database, and only then when BOTH this is set AND the
+    # app_settings.dispatch_direct_pool_enabled flag (T10) is on. Empty by
+    # default: the pool is never opened, matching pre-T9 startup exactly.
+    DISPATCH_POOL_DSN: str = ""
+    # Pool size bounds passed to psycopg_pool.AsyncConnectionPool(min_size=,
+    # max_size=). Plain env config (not a secret) — these are safe to see in
+    # a process listing / deploy manifest, unlike the DSN above. Future
+    # Phase-2 wiring point (T12/T13); has no effect while DISPATCH_POOL_DSN
+    # is unset or the flag is off. Bounds are validated at config load
+    # (review fix, 2026-09-03): psycopg_pool rejects min > max with a
+    # ValueError at open time, which in non-production is caught, logged
+    # once, and leaves the process running with no pool — so a
+    # misconfiguration would only surface in production. Fail at startup in
+    # every environment instead, with a message naming the setting.
+    DISPATCH_POOL_MIN_SIZE: int = Field(default=1, ge=0)
+    DISPATCH_POOL_MAX_SIZE: int = Field(default=8, ge=1)
+
+    @model_validator(mode="after")
+    def _validate_dispatch_pool_sizes(self) -> "Settings":
+        if self.DISPATCH_POOL_MIN_SIZE > self.DISPATCH_POOL_MAX_SIZE:
+            raise ValueError(
+                "DISPATCH_POOL_MIN_SIZE must be <= DISPATCH_POOL_MAX_SIZE "
+                f"(got {self.DISPATCH_POOL_MIN_SIZE} > {self.DISPATCH_POOL_MAX_SIZE})"
+            )
+        return self
 
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None

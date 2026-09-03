@@ -65,6 +65,40 @@ describe('attemptRidePayment', () => {
     });
   });
 
+  describe('held_for_review branch (pre-charge GPS-spoof gate)', () => {
+    it('returns not-ok, heldForReview=true, and an info alert — not the generic error', async () => {
+      const api = makeApi(async () => ({
+        data: { success: false, held_for_review: true, message: 'Custom hold message.' },
+      }));
+      const result = await attemptRidePayment({
+        api,
+        stripe: makeStripe(),
+        rideId: 'r1',
+        tipAmount: 0,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.heldForReview).toBe(true);
+      expect(result.charged).toBeUndefined();
+      expect(result.alert?.variant).toBe('info');
+      expect(result.alert?.message).toBe('Custom hold message.');
+      // No Change Card / Retry buttons — neither can resolve a hold.
+      expect(result.alert?.buttons ?? []).toHaveLength(0);
+    });
+
+    it('falls back to the default message when the backend omits one', async () => {
+      const api = makeApi(async () => ({
+        data: { success: false, held_for_review: true },
+      }));
+      const result = await attemptRidePayment({
+        api,
+        stripe: makeStripe(),
+        rideId: 'r1',
+        tipAmount: 0,
+      });
+      expect(result.alert?.message).toMatch(/verifying your trip/i);
+    });
+  });
+
   describe('3DS / requires_action branch', () => {
     it('runs confirmPayment and re-POSTs on Succeeded', async () => {
       const apiImpl = jest

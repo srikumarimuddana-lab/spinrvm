@@ -384,6 +384,22 @@ export default function SettingsPage() {
                                                 onCheckedChange={(v) => update("ai_assistant_enabled", v)}
                                             />
                                         </div>
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <Label>Enable public chat (website)</Label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Allows the Spinr website chat widget to use this assistant
+                                                    via <code>/ai/public-chat</code>. Requires the main AI
+                                                    assistant toggle above to also be on.
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                aria-label="Enable public chat (website)"
+                                                checked={!!settings.ai_public_chat_enabled}
+                                                onCheckedChange={(v) => update("ai_public_chat_enabled", v)}
+                                                disabled={!settings.ai_assistant_enabled}
+                                            />
+                                        </div>
                                         {!settings.ai_assistant_enabled && (
                                             <div className="flex items-center justify-between rounded-lg border border-dashed p-3">
                                                 <div>
@@ -1092,9 +1108,14 @@ export default function SettingsPage() {
                     </Card>
 
                     {/* admin-dashboard visual-refresh epic (#2785 Phase 3+) —
-                        canary flag for the shared shell/typography/radius
-                        restyle. Off by default; effective within 60s via the
-                        existing settings cache, no redeploy needed. */}
+                        a single global on/off flag for the shared shell/
+                        typography/radius restyle: no per-user or per-role
+                        targeting exists, so flipping this affects every
+                        admin/staff account at once, not a subset (confirmed
+                        2026-09-03 — earlier "canary" wording here described
+                        what was planned, not what shipped). Off by default;
+                        effective within 60s via the existing settings
+                        cache, no redeploy needed. */}
                     <Card className="border-border/50 lg:col-span-2">
                         <CardHeader>
                             <CardTitle className="text-base">Admin Dashboard Appearance (Beta)</CardTitle>
@@ -1105,8 +1126,10 @@ export default function SettingsPage() {
                                 <div className="space-y-0.5">
                                     <Label htmlFor="admin_theme_v2_enabled">Enable refreshed admin theme</Label>
                                     <p className="text-xs text-muted-foreground">
-                                        Canary flag for the in-progress visual refresh (shared nav/shell, typography, spacing).
-                                        Off by default — takes effect for all staff within about a minute of toggling, no redeploy.
+                                        Turns on the in-progress visual refresh (shared nav/shell, typography, spacing)
+                                        for every admin and staff account at once — this switch is global, not a
+                                        per-person rollout. Off by default; takes effect within about a minute of
+                                        toggling, no redeploy.
                                     </p>
                                 </div>
                                 <Switch

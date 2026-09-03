@@ -439,6 +439,137 @@ async def admin_get_unpaid_rides(
     return {"rides": result, "count": len(result)}
 
 
+@router.get("/rides/held-for-review")
+async def admin_get_held_for_review_rides(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: dict = Depends(get_admin_user),
+):
+    """Rides held pre-charge by the GPS-spoof gate (process_payment).
+
+    See docs/change-log/2026-09-02-gps-spoof-precharge-gate.md. Never
+    charged and never refunded — nothing has moved yet, so the only admin
+    actions are POST .../release (let the rider's next payment attempt
+    charge normally) or POST .../waive (comp the rider, no charge at all).
+    """
+    rides = await db.get_rows(
+        "rides",
+        {"status": "completed", "payment_status": "held_for_review"},
+        limit=limit,
+        offset=offset,
+        order="created_at",
+        desc=True,
+        columns=(
+            "id,status,payment_status,total_fare,tip_amount,"
+            "pickup_address,dropoff_address,rider_id,driver_id,"
+            "created_at,ride_completed_at"
+        ),
+    )
+
+    rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
+    driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
+    drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
+
+    ride_ids = [r["id"] for r in rides]
+    route_rows = await db.get_rows("ride_routes", {"ride_id": {"$in": ride_ids}}, columns="ride_id,route_quality") if ride_ids else []
+    validation_by_ride = {
+        row["ride_id"]: (row.get("route_quality") or {}).get("gps_route_validation")
+        for row in route_rows
+        if row.get("ride_id")
+    }
+
+    result = []
+    for r in rides:
+        rider = users_map.get(r.get("rider_id"))
+        driver = drivers_map.get(r.get("driver_id"))
+        driver_user = users_map.get(driver.get("user_id")) if driver else None
+        result.append(
+            {
+                "id": r["id"],
+                "status": r.get("status"),
+                "payment_status": r.get("payment_status"),
+                "total_fare": r.get("total_fare"),
+                "tip_amount": r.get("tip_amount"),
+                "pickup_address": r.get("pickup_address"),
+                "dropoff_address": r.get("dropoff_address"),
+                "rider_id": r.get("rider_id"),
+                "rider_name": _user_display_name(rider),
+                "rider_phone": (rider or {}).get("phone"),
+                "driver_name": (
+                    _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None)
+                ),
+                "created_at": r.get("created_at"),
+                "ride_completed_at": r.get("ride_completed_at"),
+                "gps_route_validation": validation_by_ride.get(r["id"]),
+            }
+        )
+
+    return {"rides": result, "count": len(result)}
+
+
+@router.post("/rides/{ride_id}/held-for-review/release")
+async def admin_release_held_ride(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Clear a GPS-spoof hold so the rider's next payment attempt charges normally.
+
+    Never charges here directly — that stays the rider app's job via
+    POST /rides/{id}/pay (process_payment), which will now pass the gate
+    because the verdict below is no longer 'likely_spoofed'.
+    """
+    ride = await db.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("payment_status") != "held_for_review":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ride is not held for review (payment_status='{ride.get('payment_status')}')",
+        )
+
+    route_rows = await db.get_rows("ride_routes", {"ride_id": ride_id}, limit=1, columns="route_quality")
+    quality = dict((route_rows[0] if route_rows else {}).get("route_quality") or {})
+    validation = dict(quality.get("gps_route_validation") or {})
+    validation["verdict"] = "admin_cleared"
+    validation["admin_cleared_by"] = admin_user.get("id")
+    validation["admin_cleared_at"] = datetime.now(timezone.utc).isoformat()
+    quality["gps_route_validation"] = validation
+    await db.update_one("ride_routes", {"ride_id": ride_id}, {"route_quality": quality}, upsert=False)
+
+    await db.update_one(
+        "rides",
+        {"id": ride_id, "payment_status": "held_for_review"},
+        {"payment_status": "pending", "updated_at": datetime.now(timezone.utc)},
+    )
+
+    await log_admin_action(admin_user, "release_gps_spoof_hold", "rides", ride_id, {})
+    return {"success": True, "payment_status": "pending"}
+
+
+@router.post("/rides/{ride_id}/held-for-review/waive")
+async def admin_waive_held_ride(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Comp a held ride — no charge at all, same terminal state as force-complete's waive."""
+    ride = await db.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("payment_status") != "held_for_review":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ride is not held for review (payment_status='{ride.get('payment_status')}')",
+        )
+
+    await db.update_one(
+        "rides",
+        {"id": ride_id, "payment_status": "held_for_review"},
+        {"payment_status": "waived_admin", "updated_at": datetime.now(timezone.utc)},
+    )
+    await log_admin_action(admin_user, "waive_gps_spoof_hold", "rides", ride_id, {})
+    return {"success": True, "payment_status": "waived_admin"}
+
+
 # ---------- Admin Ride Actions ----------
 
 

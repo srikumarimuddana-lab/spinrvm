@@ -367,9 +367,12 @@ class SettingsUpdateRequest(BaseModel):
     meta_driver_dataset_id: Optional[str] = Field(default=None, max_length=64)
     meta_capi_access_token: Optional[str] = None
     meta_test_event_code: Optional[str] = Field(default=None, max_length=64)
-    # admin-dashboard visual refresh (epic #2785 Phase 3+) — canary flag for
-    # the shared shell/typography/radius restyle. Not a credential, no
-    # special masking/super-admin gate needed.
+    # admin-dashboard visual refresh (epic #2785 Phase 3+) — single global
+    # on/off flag for the shared shell/typography/radius restyle. No
+    # per-user or per-role targeting exists (see useFeatureFlag.tsx):
+    # flipping this turns it on for every admin/staff account at once, not
+    # a subset. Not a credential, no special masking/super-admin gate
+    # needed.
     admin_theme_v2_enabled: Optional[bool] = None
     # Admin command palette (Cmd+K/Ctrl+K route jumper) — same shape as
     # admin_theme_v2_enabled above. Not a credential, no masking/
@@ -488,6 +491,12 @@ class SettingsUpdateRequest(BaseModel):
     # finalizer's late-tail revisions still need. 90 days (2160h) default per
     # the owner's retention decision, ceiling matches the blanket GPS purge.
     idle_breadcrumb_retention_hours: Optional[int] = Field(default=None, ge=24, le=2160)
+    # C50 Phase 1 rollback switch (schemas.AppSettings.dispatch_direct_pool_enabled
+    # is the source of truth for the comment/rationale). Not a credential, no
+    # masking/super-admin gate needed — same posture as the other kill switches
+    # above (scheduled_dispatch_enabled etc.). Default False; Phase 2 (T12/T13,
+    # not yet built) is the only thing that reads this as True having any effect.
+    dispatch_direct_pool_enabled: Optional[bool] = None
 
     @field_validator("lms_api_base_url")
     @classmethod

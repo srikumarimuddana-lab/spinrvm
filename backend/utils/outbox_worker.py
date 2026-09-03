@@ -75,7 +75,7 @@ def _capture_dead_letter(topic: str, payload: Any, *, msg_id: str = "") -> None:
                 level="error",
             )
     except Exception:
-        logger.error("outbox dead-letter Sentry capture failed topic={}", topic, exc_info=True)
+        logger.opt(exception=True).error("outbox dead-letter Sentry capture failed topic={}", topic)
     inc("spinr_outbox_dead_lettered_total", {"topic": topic})
 
 
@@ -100,7 +100,7 @@ async def _refresh_gauges() -> None:
     try:
         rows = await outbox_repo.stats()
     except Exception:
-        logger.error("outbox_stats failed", exc_info=True)
+        logger.opt(exception=True).error("outbox_stats failed")
         return
     pending = 0
     oldest = None
@@ -140,7 +140,7 @@ async def _maybe_cleanup() -> None:
     try:
         await outbox_repo.cleanup()
     except Exception:
-        logger.error("outbox_cleanup failed", exc_info=True)
+        logger.opt(exception=True).error("outbox_cleanup failed")
 
 
 async def _dispatch(msg: Dict[str, Any]) -> None:
@@ -166,7 +166,7 @@ async def _dispatch(msg: Dict[str, Any]) -> None:
     try:
         result = await payment_service.send_ride_receipt_result(payload["ride_id"])
     except Exception:
-        logger.error("outbox ride_receipt handler raised id={}", msg_id, exc_info=True)
+        logger.opt(exception=True).error("outbox ride_receipt handler raised id={}", msg_id)
         await _fail_and_maybe_dead_letter(msg_id, token, topic, payload, attempt, max_attempts, "provider_unavailable")
         return
 
@@ -196,7 +196,7 @@ async def outbox_tick(worker_id: str) -> int:
     try:
         rows = await outbox_repo.claim_batch(worker_id)
     except Exception:
-        logger.error("outbox_claim_batch failed", exc_info=True)
+        logger.opt(exception=True).error("outbox_claim_batch failed")
         return 0
     expired = [msg for msg in rows if msg.get("status") == "dead_lettered"]
     claimed = [msg for msg in rows if msg.get("status") != "dead_lettered"]
@@ -210,7 +210,7 @@ async def outbox_tick(worker_id: str) -> int:
         try:
             await _dispatch(msg)
         except Exception:
-            logger.error("outbox dispatch failed id={}", msg.get("id"), exc_info=True)
+            logger.opt(exception=True).error("outbox dispatch failed id={}", msg.get("id"))
     await _refresh_gauges()
     if not claimed:
         await _maybe_cleanup()
@@ -226,7 +226,7 @@ async def run_outbox_worker(stop_event: asyncio.Event, worker_id: Optional[str] 
         try:
             n = await outbox_tick(worker_id)
         except Exception:
-            logger.error("outbox_tick failed", exc_info=True)
+            logger.opt(exception=True).error("outbox_tick failed")
             n = 0
         timeout = BUSY_POLL_S if n else IDLE_POLL_S
         try:

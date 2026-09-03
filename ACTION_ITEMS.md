@@ -20190,9 +20190,13 @@ how much they de-risk a public launch._
   /dev/null --confcutdir=tests/direct_pool -q` — 30/30 pass on `main`'s
   current `test_claim_batch.py`, run twice for stability.
 
-### C60. Transactional-outbox loguru calls pass `exc_info=True`, which loguru doesn't support — `test_no_exc_info_kwarg_in_loguru_calls` red on `main`'s own tip
+### C60. Transactional-outbox loguru calls pass `exc_info=True`, which loguru doesn't support — `test_no_exc_info_kwarg_in_loguru_calls` red on `main`'s own tip — CLOSED (2026-09-03)
 
-- [ ] **Status:** open. Found 2026-09-03 while babysitting PR #4896 (C57):
+- [x] **Status:** fixed. All 9 sites converted to
+  `logger.opt(exception=True).error(...)`, matching this repo's existing
+  loguru convention elsewhere. `pytest tests/test_loguru_call_conventions.py
+  -q` → 5/5 passed. `ruff check` clean on all 3 touched files.
+- [x] Found 2026-09-03 while babysitting PR #4896 (C57):
   `backend-test`'s "Run backend tests" step fails
   `tests/test_loguru_call_conventions.py::test_no_exc_info_kwarg_in_loguru_calls`
   on `main`'s own tip (confirmed on this PR's exact base commit `92fa5f9`,
@@ -20225,29 +20229,39 @@ how much they de-risk a public launch._
 - **Acceptance:** `pytest tests/test_loguru_call_conventions.py -q` passes
   once all 9 sites use `logger.opt(exception=True).error(...)`.
 
-### C61. `test_referral_analytics.py::test_funnel_counts_and_amounts` red on `main`'s own tip — `assert 0 == 2`
+### C61. `test_referral_analytics.py::test_funnel_counts_and_amounts` red on `main`'s own tip — `assert 0 == 2` — CLOSED (2026-09-03)
 
-- [ ] **Status:** open. Found 2026-09-03 alongside C60, same PR #4896
-  babysitting session; confirmed pre-existing on `main`'s tip (`92fa5f9`),
-  unrelated to PR #4896's diff.
-- **Issue/gap:** `TestReferralAnalytics::test_funnel_counts_and_amounts`
-  (driver-source referral funnel) asserts `f["redeemed"] == 2` but the
-  admin referral-analytics endpoint under test
-  (`routes/admin/drivers.py`) now returns 0. Likely the same class of
-  stale-mock-after-RPC-refactor issue documented for C58 and referenced in
-  `92fa5f9`'s own commit message ("TestRiderReferralLeaderboard and the
-  driver-source referral-analytics funnel test needed a 'rides' get_rows
-  branch added") — not yet fully root-caused; needs a look at whether the
-  underlying endpoint moved to a `db_supabase.rpc(...)` aggregation (per
-  the C58/migration-392 pattern) that the test's `get_rows` mock doesn't
-  cover, or whether the `92fa5f9` fix's added "rides" branch is itself
-  incomplete for this specific assertion.
-- **Files:** `backend/tests/test_referral_analytics.py`,
-  `backend/routes/admin/drivers.py` (referral analytics endpoint — exact
-  function not yet confirmed).
-- **Not fixed in PR #4896** (out of scope — that PR is RLS-conftest only);
-  tracked here for a follow-up fix.
-- **Acceptance:** `pytest tests/test_referral_analytics.py -q` passes.
+- [x] **Status:** fixed and root-caused. Found 2026-09-03 alongside C60,
+  same PR #4896 babysitting session; confirmed pre-existing on `main`'s tip
+  (`92fa5f9`), unrelated to PR #4896's diff.
+- **Root cause (confirmed):** exactly the C58 class of bug —
+  `admin_get_referral_analytics`'s top-of-funnel `total_referred` count was
+  refactored under migration 387 (`admin_referred_user_count_fn.sql`) from
+  a Python-side fetch-all-10k-`users`-rows-and-count to a single
+  `db_supabase.rpc("admin_referred_user_count", {"p_kind", "p_start",
+  "p_end"})` call. The test never mocked `db_supabase.rpc`, so the real
+  (unconfigured-in-tests) client's call returned `None`, which
+  `admin_get_referral_analytics` treats as `total_referred = 0` (its `else`
+  branch) — the actual failing assertion is `f["total_referred"] == 2`
+  (`assert 0 == 2`, matching the CI summary line), not `redeemed` as
+  initially guessed.
+- **Fix:** mocked `admin_drivers.db_supabase.rpc` with
+  `AsyncMock(return_value=2)` (a bare scalar, matching what
+  `repositories._base.rpc()`/PostgREST actually returns for this
+  `RETURNS bigint` function) and added an `assert_awaited_once_with(...)`
+  check pinning the RPC's call args (`p_kind="driver"`, `p_start=None`,
+  `p_end=None`) as real regression coverage of the new contract. The
+  now-dead `users` list (kept only for the scenario doc since `get_rows`
+  is never called with `table="users"` in this code path any more) is left
+  in place with an explanatory comment rather than removed, per the
+  surgical-changes rule.
+- **Verified:** `pytest tests/test_referral_analytics.py -q` → 5/5 passed;
+  `pytest tests/ -k "outbox or referral" -q` → 189 passed, 21 skipped (no
+  regressions in adjacent referral/outbox suites); `ruff check` clean.
+- **Files:** `backend/tests/test_referral_analytics.py` only — the
+  endpoint itself (`backend/routes/admin/drivers.py`) is correct and
+  unchanged, same as C58.
+- **Acceptance:** `pytest tests/test_referral_analytics.py -q` passes. ✅
 
 ### C62. Repo-wide sweep for other squash-merge "fix never shipped" incidents (per C57/C52 precedent) — CLOSED, clean result (2026-09-03)
 

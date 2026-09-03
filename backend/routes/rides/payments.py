@@ -6,9 +6,11 @@ motion — no behaviour changes. See docs/refactors/god-file-split.md.
 
 try:
     from ...services.fare_service import driver_earnings_with_tip
+    from ...services.outbox_receipts import maybe_send_auto_receipt
     from ...utils.redis_client import redis_expire, redis_incrby
 except ImportError:
     from services.fare_service import driver_earnings_with_tip  # type: ignore
+    from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
     from utils.redis_client import redis_expire, redis_incrby  # type: ignore
 
 from . import _deps
@@ -37,7 +39,6 @@ from ._deps import (  # noqa: F401
     idempotent_endpoint,
     logger,
     payment_action_limit,
-    send_ride_receipt,
     settle_card,
     settle_corporate,
     settle_wallet,
@@ -685,12 +686,15 @@ async def process_payment(
                     _snap_err,
                 )
         # Receipt email backgrounded off the payment path (<1s settlement
-        # SLA): send_ride_receipt logs and swallows its own failures, and no
-        # client surface reads the delivery outcome. email_sent now means
-        # "queued" (field kept for API-shape compatibility; the explicit
-        # resend endpoint still awaits delivery and reports it honestly).
-        _deps.spawn(send_ride_receipt(ride, current_user["id"], tip_rounded))
-        email_sent = True
+        # SLA): maybe_send_auto_receipt skips the direct send entirely when
+        # the Postgres outbox trigger already queued ride_receipt.v1 for this
+        # ride (migrations/399_transactional_outbox.sql), and otherwise falls
+        # back to spawning send_ride_receipt exactly as before. Either path
+        # logs and swallows its own failures, and no client surface reads the
+        # delivery outcome. email_sent now means "queued" (field kept for
+        # API-shape compatibility; the explicit resend endpoint still awaits
+        # delivery and reports it honestly).
+        email_sent = await maybe_send_auto_receipt(ride, current_user["id"], tip_rounded, spawn=_deps.spawn)
 
         # Meta Purchase (+ FirstRide on the rider's first). Fired here rather
         # than at ride completion because this is the point money actually

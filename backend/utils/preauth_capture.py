@@ -36,11 +36,13 @@ from decimal import ROUND_HALF_UP, Decimal
 
 try:
     from ..db import db
+    from ..services.outbox_receipts import maybe_send_auto_receipt
     from ..services.payment_service import send_ride_receipt, settle_card
     from .datetime_utils import parse_iso_utc
     from .redis_client import redis_set_nx
 except ImportError:
     from db import db  # type: ignore
+    from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
     from services.payment_service import send_ride_receipt, settle_card  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
@@ -104,7 +106,12 @@ async def _capture_one(ride: dict) -> None:
 
     if result.success:
         try:
-            await send_ride_receipt(ride, rider_id, tip)
+            # Outbox-gated: skip the direct send when the Postgres trigger
+            # already queued ride_receipt.v1 for this ride
+            # (migrations/399_transactional_outbox.sql). ``send`` pins the
+            # fallback to this module's own send_ride_receipt binding so a
+            # test double patched here still takes effect.
+            await maybe_send_auto_receipt(ride, rider_id, tip, send=send_ride_receipt)
         except Exception as exc:
             logger.error("[preauth-capture] receipt send failed for ride %s: %s", ride_id, exc)
         # Meta Purchase/FirstRide. This path settles a card ride WITHOUT going

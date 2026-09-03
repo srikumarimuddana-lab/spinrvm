@@ -20,7 +20,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Analytics } from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
-import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
+import { attemptRidePayment, HELD_FOR_REVIEW_ALERT, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
@@ -210,24 +210,10 @@ function RideCompletedScreenContent() {
     }
   }, [currentRide?.payment_status]);
 
-  // Auto-dismiss: if the rider lands on this screen and the ride is already
-  // fully paid (stale routing from store race or navigation stack), clear
-  // state and go home so they're not trapped in a loop. Only fires once,
-  // on the first time ride data loads — so it won't interfere with the
-  // normal pay-then-navigate flow in handleSubmit.
+  // initialPaymentChecked's effect needs showPaymentAlert for the
+  // held_for_review case, so it's declared further down, right after
+  // showPaymentAlert itself — see below.
   const initialPaymentChecked = useRef(false);
-  useEffect(() => {
-    if (initialPaymentChecked.current || !currentRide?.payment_status) return;
-    initialPaymentChecked.current = true;
-    const ps = currentRide.payment_status;
-    if (ps === 'paid' || ps === 'waived_admin') {
-      clearRide();
-      router.replace('/(tabs)');
-    }
-    // clearRide is a zustand action (stable); router is expo-router's
-    // stable singleton. initialPaymentChecked ref already guards this to
-    // fire at most once, so adding these doesn't change that.
-  }, [currentRide?.payment_status, clearRide, router]);
 
   // Block back navigation — must complete rating & payment
   useEffect(() => {
@@ -329,6 +315,33 @@ function RideCompletedScreenContent() {
     });
   };
 
+  // Auto-dismiss: if the rider lands on this screen and the ride is already
+  // fully paid (stale routing from store race or navigation stack), clear
+  // state and go home so they're not trapped in a loop. Only fires once,
+  // on the first time ride data loads — so it won't interfere with the
+  // normal pay-then-navigate flow in handleSubmit.
+  useEffect(() => {
+    if (initialPaymentChecked.current || !currentRide?.payment_status) return;
+    initialPaymentChecked.current = true;
+    const ps = currentRide.payment_status;
+    if (ps === 'paid' || ps === 'waived_admin') {
+      clearRide();
+      router.replace('/(tabs)');
+    } else if (ps === 'held_for_review') {
+      // Landed here (e.g. re-opened from the home screen) on a ride the
+      // pre-charge GPS-spoof gate already held — same as attemptRidePayment's
+      // held_for_review case, show why and leave rather than show the rating/
+      // payment form again for something no rider input can resolve.
+      showPaymentAlert(HELD_FOR_REVIEW_ALERT(''));
+      clearRide();
+      router.replace('/(tabs)');
+    }
+    // clearRide is a zustand action (stable); router is expo-router's
+    // stable singleton. initialPaymentChecked ref already guards this to
+    // fire at most once, so adding these doesn't change that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- showPaymentAlert is recreated every render (not memoized); including it would refire this effect on every render, defeating the once-only guard it already has via initialPaymentChecked.
+  }, [currentRide?.payment_status, clearRide, router]);
+
   const handleSubmit = async (overrideCardId?: string) => {
     if (isSubmitting) return; // prevent double tap
     if (overrideCardId) activeOverrideCardRef.current = overrideCardId;
@@ -365,6 +378,15 @@ function RideCompletedScreenContent() {
         chargedAmount = result.charged;
         if (!paymentOk && result.alert) {
           showPaymentAlert(result.alert);
+        }
+        // Held for review: nothing was charged and no retry/change-card here
+        // can change that (an admin resolves it) — unlike a real payment
+        // failure, staying on this back-blocked screen serves no purpose.
+        // Leave once the alert is dismissed, same as the paid/waived path.
+        if (result.heldForReview) {
+          clearRide();
+          router.replace('/(tabs)');
+          return;
         }
       }
 

@@ -61,6 +61,8 @@ def test_projects_matched_geometry_with_observed_provenance_and_distance():
             "gap_reason": None,
             "distance_km": 0.17,
             "coordinates": [[50.45, -104.62], [50.451, -104.621]],
+            "segment_start_captured_at": BASE_TIME,
+            "segment_end_captured_at": BASE_TIME + timedelta(seconds=10),
         }
     ]
 
@@ -79,6 +81,16 @@ def test_matching_failure_falls_back_to_observed_geometry_without_joining():
     assert sections[0]["geometry_kind"] == "observed"
     assert sections[0]["coordinates"] == [[50.45, -104.62], [50.451, -104.621]]
     assert sections[0]["distance_km"] > 0
+
+
+def test_fallback_section_also_carries_segment_captured_at_bounds():
+    sections = project_observed_sections(
+        _segmented(),
+        {"segments": [{"segment_index": 0, "matched_segments": []}], "failures": []},
+    )
+
+    assert sections[0]["segment_start_captured_at"] == BASE_TIME
+    assert sections[0]["segment_end_captured_at"] == BASE_TIME + timedelta(seconds=10)
 
 
 def test_single_coordinate_fallback_is_not_a_reconstruction_anchor():

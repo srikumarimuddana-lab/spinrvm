@@ -54,6 +54,20 @@ def _rpc_result(**overrides):
     return row
 
 
+def _batched_in(tables: dict):
+    """get_rows_batched_in side_effect: filters fixture rows to those whose
+    `column` value is in `values`, mirroring the real $in-filtered helper —
+    rollup_driver_day batches the existence check (driver_daily_stats) and
+    the driver->service_area lookup (drivers) upfront instead of one call
+    per driver in the loop."""
+
+    async def side_effect(table, column, values, extra_filters=None, **kw):
+        wanted = set(values)
+        return [r for r in tables.get(table, []) if r.get(column) in wanted]
+
+    return side_effect
+
+
 @pytest.mark.asyncio
 async def test_rollup_day_writes_regina_rows_with_seconds():
     calls = {"get_rows": [], "insert": [], "update": []}
@@ -76,22 +90,25 @@ async def test_rollup_day_writes_regina_rows_with_seconds():
         if table == "driver_insurance_periods":
             assert filters["started_at"]["$lt"] == WIN_END.isoformat()
             return [{"driver_id": "drv-1"}, {"driver_id": "drv-2"}]
-        if table == "driver_daily_stats":
-            return []  # nothing exists yet → insert path
         raise AssertionError(f"unexpected table {table}")
 
     async def _insert(table, row):
         calls["insert"].append(row)
         return row
 
+    batched_tables = {
+        "driver_daily_stats": [],  # nothing exists yet -> insert path for both
+        "drivers": [{"id": "drv-1", "service_area_id": "sa-1"}],  # drv-2 unregistered
+    }
+
     with (
         patch("utils.driver_daily_rollup.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch(
+            "utils.driver_daily_rollup.db_supabase.get_rows_batched_in",
+            AsyncMock(side_effect=_batched_in(batched_tables)),
+        ),
         patch("utils.driver_daily_rollup.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
         patch("utils.driver_daily_rollup.db_supabase.update_one", AsyncMock()),
-        patch(
-            "utils.driver_daily_rollup.db_supabase.get_driver_by_id",
-            AsyncMock(return_value={"service_area_id": "sa-1"}),
-        ),
         patch(
             "utils.driver_daily_rollup._phase_stats",
             AsyncMock(return_value=_rpc_result()),
@@ -108,31 +125,40 @@ async def test_rollup_day_writes_regina_rows_with_seconds():
     row = by_id["drv-1"]
     assert row["id"] == f"drv-1_{STAT_DATE.isoformat()}"
     assert row["day_tz"] == "regina"
+    assert row["service_area_id"] == "sa-1"
     assert row["idle_seconds"] == 3600
     assert row["navigating_seconds"] == 900
     assert row["trip_seconds"] == 5400
     assert row["total_km"] == pytest.approx(46.8)
     assert row["total_earnings"] == 25.50
     assert row["rides_declined"] == 1
-    # drv-2 was online (insurance periods) but had no rides — still recorded.
+    # drv-2 was online (insurance periods) but had no rides — still recorded,
+    # and has no drivers-table match in the batched lookup -> None, not KeyError.
     assert by_id["drv-2"]["rides_completed"] == 0
+    assert by_id["drv-2"]["service_area_id"] is None
 
 
 @pytest.mark.asyncio
 async def test_rollup_day_updates_existing_row_in_place():
     async def _get_rows(table, filters, **kw):
-        if table == "driver_daily_stats":
-            return [{"id": filters["id"]}]
         if table == "driver_insurance_periods":
             return [{"driver_id": "drv-1"}]
         return []
 
+    batched_tables = {
+        "driver_daily_stats": [{"driver_id": "drv-1"}],  # already exists -> update path
+        "drivers": [],  # no match -> service_area_id stays None, same as get_driver_by_id(None) before
+    }
+
     update_mock = AsyncMock()
     with (
         patch("utils.driver_daily_rollup.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch(
+            "utils.driver_daily_rollup.db_supabase.get_rows_batched_in",
+            AsyncMock(side_effect=_batched_in(batched_tables)),
+        ),
         patch("utils.driver_daily_rollup.db_supabase.insert_one", AsyncMock()) as insert_mock,
         patch("utils.driver_daily_rollup.db_supabase.update_one", update_mock),
-        patch("utils.driver_daily_rollup.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         patch("utils.driver_daily_rollup._phase_stats", AsyncMock(return_value=_rpc_result())),
     ):
         from utils.driver_daily_rollup import rollup_driver_day
@@ -154,9 +180,12 @@ async def test_rpc_failure_counts_failed_and_skips_write():
 
     with (
         patch("utils.driver_daily_rollup.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch(
+            "utils.driver_daily_rollup.db_supabase.get_rows_batched_in",
+            AsyncMock(side_effect=_batched_in({"driver_daily_stats": [], "drivers": []})),
+        ),
         patch("utils.driver_daily_rollup.db_supabase.insert_one", AsyncMock()) as insert_mock,
         patch("utils.driver_daily_rollup.db_supabase.update_one", AsyncMock()) as update_mock,
-        patch("utils.driver_daily_rollup.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         patch(
             "utils.driver_daily_rollup._phase_stats",
             AsyncMock(side_effect=RuntimeError("rpc down")),
@@ -168,6 +197,37 @@ async def test_rpc_failure_counts_failed_and_skips_write():
 
     assert result["failed"] == 1
     insert_mock.assert_not_awaited()
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batched_lookup_failure_degrades_but_does_not_abort():
+    """If the batched existence/driver lookups themselves fail, the rollup
+    must still process every driver (treating each as new/no-service-area)
+    rather than losing the whole day's rollup — same fail-safe direction as
+    every other error path in this module."""
+
+    async def _get_rows(table, filters, **kw):
+        if table == "driver_insurance_periods":
+            return [{"driver_id": "drv-1"}]
+        return []
+
+    with (
+        patch("utils.driver_daily_rollup.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        patch(
+            "utils.driver_daily_rollup.db_supabase.get_rows_batched_in",
+            AsyncMock(side_effect=RuntimeError("batched lookup down")),
+        ),
+        patch("utils.driver_daily_rollup.db_supabase.insert_one", AsyncMock()) as insert_mock,
+        patch("utils.driver_daily_rollup.db_supabase.update_one", AsyncMock()) as update_mock,
+        patch("utils.driver_daily_rollup._phase_stats", AsyncMock(return_value=_rpc_result())),
+    ):
+        from utils.driver_daily_rollup import rollup_driver_day
+
+        result = await rollup_driver_day(STAT_DATE)
+
+    assert result["created"] == 1  # treated as new since the existence lookup failed
+    insert_mock.assert_awaited_once()
     update_mock.assert_not_awaited()
 
 

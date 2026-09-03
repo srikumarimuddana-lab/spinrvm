@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { ZohoConfigCard } from "./_components/zoho-config-card";
 import { Headphones, Inbox, BarChart3, Settings as SettingsIcon, AlertCircle, Info, RefreshCw, Ticket as TicketIcon } from "lucide-react";
@@ -104,31 +105,33 @@ export default function HelpDeskPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="flex items-center gap-2 text-2xl font-bold">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         <Headphones className="h-6 w-6" /> Help Desk
-                    </h1>
-                    <p className="text-sm text-muted-foreground">Zoho Desk support tickets</p>
-                </div>
-                <div className="flex items-center gap-2">
-                    {connected && (
-                        <Button variant="outline" size="sm" onClick={runSync} disabled={syncing} title={`Last synced ${timeAgo(cfg?.last_synced_at)}`}>
-                            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
-                            {syncing ? "Syncing…" : `Synced ${timeAgo(cfg?.last_synced_at)}`}
+                    </span>
+                }
+                description="Zoho Desk support tickets"
+                actions={
+                    <div className="flex items-center gap-2">
+                        {connected && (
+                            <Button variant="outline" size="sm" onClick={runSync} disabled={syncing} title={`Last synced ${timeAgo(cfg?.last_synced_at)}`}>
+                                <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                                {syncing ? "Syncing…" : `Synced ${timeAgo(cfg?.last_synced_at)}`}
+                            </Button>
+                        )}
+                        <Button asChild variant="outline">
+                            <Link href="/dashboard/support-tickets/tickets"><Inbox className="mr-2 h-4 w-4" /> Tickets</Link>
                         </Button>
-                    )}
-                    <Button asChild variant="outline">
-                        <Link href="/dashboard/support-tickets/tickets"><Inbox className="mr-2 h-4 w-4" /> Tickets</Link>
-                    </Button>
-                    <Button asChild variant="outline">
-                        <Link href="/dashboard/support-tickets/trends"><BarChart3 className="mr-2 h-4 w-4" /> Trends</Link>
-                    </Button>
-                    <Button variant="ghost" onClick={() => setShowSettings((v) => !v)}>
-                        <SettingsIcon className="mr-2 h-4 w-4" /> Settings
-                    </Button>
-                </div>
-            </div>
+                        <Button asChild variant="outline">
+                            <Link href="/dashboard/support-tickets/trends"><BarChart3 className="mr-2 h-4 w-4" /> Trends</Link>
+                        </Button>
+                        <Button variant="ghost" onClick={() => setShowSettings((v) => !v)}>
+                            <SettingsIcon className="mr-2 h-4 w-4" /> Settings
+                        </Button>
+                    </div>
+                }
+            />
 
             {loading && <Card><CardContent className="p-6 text-muted-foreground">Loading…</CardContent></Card>}
 

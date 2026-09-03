@@ -19998,12 +19998,35 @@ how much they de-risk a public launch._
   must not change claim-won/claim-lost semantics, only retry count/timing
   on a genuine transient failure).
 
-### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip
-- [ ] **Status:** open — found 2026-09-03 while babysitting PR #4887 (C53
-  finding 4). Confirmed via GitHub Actions run 33711534411 that
-  `backend-test` fails identically on `main`'s own latest commit
-  (`e71760e`), not just on the PR branch — this is base-branch-red, not
-  introduced by #4887's diff.
+### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip — reopened (fix written 2026-09-03, lost in a squash-merge, resubmitting)
+- [ ] **Status:** the fix below was written, verified 61/61 locally (twice),
+  and pushed as PR #4887's final commit (`2457622`) — but GitHub's
+  squash-merge of #4887 onto `main` (commit `dbcebe0`) captured a **stale**
+  snapshot of the branch that stopped at the prior commit (`48d0553`, the
+  C58 fix): `git show dbcebe0:backend/tests/rls/conftest.py` has none of
+  this fix's content, and `main`'s own next CI run (33728094406, same
+  commit `dbcebe0`) reproduced the exact original 24 RLS failures /
+  2 direct_pool failures, byte-for-byte, proving the fix never actually
+  shipped despite the PR showing "merged." Discovered while investigating
+  a follow-up request to look into the "5 CI-only RLS failures" this entry
+  had flagged as unreproducible — the real finding turned out to be this,
+  not a 6th RLS mystery. This is the second time in this session's history
+  a GitHub squash-merge has silently dropped a late-pushed commit (see the
+  PR #4879 lost-commit recovery earlier in this session) — push-then-merge
+  races on this repo's merge tooling appear to be a recurring, not
+  one-off, risk. Recovering via the standard "PR already merged" protocol:
+  restart the branch from `main`, re-land the same diff, open a fresh PR.
+  (C59, bundled in the same lost commit, is unaffected — `main` already
+  has an independent, better fix for that one; see C59.)
+- **Fix content below is unchanged and still accurate** — only the
+  shipping status changed. Found while babysitting PR #4887 (C53 finding
+  4); confirmed via GitHub Actions run 33711534411 that `backend-test`
+  failed identically on `main`'s own latest commit (`e71760e`), not just
+  on the PR branch — base-branch-red, not introduced by #4887's diff.
+  Fixed the same session with a local Postgres 16 cluster (a libpq
+  connection string exported as `TEST_DATABASE_URL` — see
+  `tests/rls/conftest.py`'s own docstring for the exact placeholder form)
+  to reproduce and verify against a real DB rather than guessing.
 - **Issue/gap:** `backend/tests/rls/conftest.py` builds its Postgres RLS
   test schema from `backend/supabase_schema.sql` plus a hand-picked
   allowlist of specific migration files applied verbatim (58, 64, 70, 290,
@@ -20012,25 +20035,82 @@ how much they de-risk a public launch._
   `backend/migrations/399_transactional_outbox.sql` (merged as part of the
   `fc6f922` dark launch, well before this gap was found), so every test
   touching `settings.outbox_receipts_enabled`, `outbox_messages`, or the
-  `outbox_*` RPCs fails with `UndefinedColumn`/`UndefinedTable`/`does not
-  exist`. 19 of 24 current RLS-suite failures are this one root cause
-  (`backend/tests/rls/test_transactional_outbox.py`, almost entirely). The
-  remaining ~5 (`test_core_tables_rls.py::test_service_role_bypasses_rls_on_users`,
-  two `test_money_and_safety_rls.py` cases, and
-  `test_saved_addresses_rls.py::test_service_role_bypasses_rls_on_saved_addresses`)
-  are a **separate, unrelated** pre-existing gap in the same harness —
-  assertion/permission mismatches with nothing to do with the outbox
-  migration; flagged here for visibility, not diagnosed further.
-- **Action:** update `tests/rls/conftest.py`'s schema-setup fixture to also
-  execute `backend/migrations/399_transactional_outbox.sql` verbatim, same
-  pattern as the existing 58/64/70/290/378 calls (`cur.execute((migrations_dir
-  / "NN_....sql").read_text())`, including the existing handling of the
-  trailing `NOTIFY pgrst, 'reload schema';` line those migrations already
-  strip).
+  `outbox_*` RPCs failed with `UndefinedColumn`/`UndefinedTable`/`does not
+  exist`. 19 of the original 24 CI RLS-suite failures were this one root
+  cause.
+- **Root-caused, not just patched — 2 more layers found while fixing:**
+  1. Applying 399 verbatim wasn't enough on its own:
+     `test_producer_flag_defaults_false` still failed
+     (`assert row is not None` → `None`) because this harness's minimal
+     `settings` stub table (id-only, no seeded row) never had an
+     `id='app_settings'` row for 399's `ALTER TABLE ... ADD COLUMN
+     outbox_receipts_enabled BOOLEAN NOT NULL DEFAULT FALSE` to apply to —
+     real Supabase always has that row; this test harness didn't. Fixed by
+     seeding `INSERT INTO settings (id) VALUES ('app_settings')` in the
+     stub-tables SQL.
+  2. `test_redrive_only_accepts_dead_lettered_and_writes_audit` then failed
+     with `UndefinedTable: relation "public.audit_logs" does not exist` —
+     `outbox_redrive()`'s own audit-log INSERT (migration 399) targets the
+     real `audit_logs` table (migration 06, `actor_id` added migration
+     57), which is outside this harness's declared 5-table coverage scope
+     and was never stubbed. Fixed with a minimal 6-column stub matching
+     exactly what `outbox_redrive()` writes.
+  3. Also added `outbox_messages`/`audit_logs` to the per-test `TRUNCATE`
+     list and a per-test reset of `settings.outbox_receipts_enabled` back
+     to `FALSE` (the flag and audit rows aren't per-test-isolated data like
+     the other 6 tables, but `_enable_producer()`-style tests mutate them
+     and would otherwise leak state into whichever test runs next).
+- **The "separate, unrelated ~5 CI failures" flagged when C57 was
+  opened — root-caused and fixed 2026-09-03, same PR (#4896).**
+  (`test_core_tables_rls.py::test_service_role_bypasses_rls_on_users`,
+  `test_money_and_safety_rls.py::test_no_role_can_update_financial_event`/
+  `test_service_role_can_insert_insurance_period`/
+  `test_no_role_can_delete_insurance_period`,
+  `test_saved_addresses_rls.py::test_service_role_bypasses_rls_on_saved_addresses`.)
+  Confirmed live via PR #4896's own CI run (33773016060) once the migration-399
+  fix above landed and stopped masking these under 19 other failures: RLS
+  went from 24 failed straight to exactly these 5 — never reproduced on a
+  *fresh* local Postgres, which was the tell.
+  - **Root cause:** these `anon`/`authenticated`/`service_role` roles are
+    Postgres-**cluster-level**, not per-database, and CI's `backend-test`
+    job runs 3 pytest sessions back-to-back against the **same**
+    `postgres:15` service container: "Run backend tests" (nominally
+    mocked, but `tests/test_phase_distance_parity.py`'s `pg` fixture
+    connects to the same real `DATABASE_URL` and creates
+    `anon`/`authenticated`/`service_role` with a bare `CREATE ROLE ...
+    NOLOGIN` — **no `BYPASSRLS`**), then "Run direct-pool...", then "Run
+    RLS...". Role creation across all 3 is the same idempotent
+    `CREATE ROLE ... EXCEPTION WHEN duplicate_object THEN NULL` pattern —
+    first writer wins, everyone after silently accepts whatever attributes
+    that first writer left. `test_phase_distance_parity.py` runs first in
+    step order and has no reason to know or care that RLS's tests later
+    depend on `service_role` actually bypassing RLS, so it "poisons" the
+    role for the rest of the job. Reproduced deterministically on a local
+    Postgres 16 by manually dropping and recreating `service_role` as bare
+    `NOLOGIN` (simulating the CI ordering) immediately before running
+    `tests/rls` — all 5 failures reproduced byte-for-byte, confirming the
+    mechanism precisely (not just plausible).
+  - **Fix:** `tests/rls/conftest.py`'s `_ROLE_SETUP_SQL` now `ALTER ROLE`s
+    on the `duplicate_object` exception path instead of a bare `NULL`, so
+    this file is authoritative over `anon`/`authenticated`/`service_role`'s
+    attributes regardless of what any earlier same-job pytest session left
+    them as. Verified by re-poisoning `service_role` (and separately
+    `anon`) to bare `NOLOGIN` immediately before each run — self-heals to
+    61/61 both times, plus a further clean 61/61 re-run and an unaffected
+    `tests/direct_pool` 30/30. `test_phase_distance_parity.py` itself is
+    untouched (out of scope — its own role creation is fine for its own
+    purposes; the bug was in RLS's conftest trusting a shared, mutable
+    cluster resource it doesn't own).
+- **Fix:** `tests/rls/conftest.py` now applies `399_transactional_outbox.sql`
+  verbatim (same pattern as 58/64/70/290/378) as the last statement in the
+  session-scoped schema setup — after the blanket `GRANT ... ON ALL TABLES`
+  re-grant, so 399's own `REVOKE ALL ... FROM anon, authenticated` has the
+  final say (same reasoning as the existing financial_events re-revoke),
+  plus the `app_settings` seed row and `audit_logs` stub above.
 - **Files:** `backend/tests/rls/conftest.py`.
 - **Acceptance:** `TEST_DATABASE_URL=<local pg> pytest tests/rls -c
-  /dev/null --confcutdir=tests/rls -v` — `test_transactional_outbox.py`
-  passes in full; no other RLS file regresses.
+  /dev/null --confcutdir=tests/rls -q` — 61/61 pass, run twice for
+  stability (no order-dependence).
 
 ### C58. `test_email_deliverability.py` never updated for migration 392's server-side aggregation — CLOSED (2026-09-03)
 - [x] **Status:** resolved 2026-09-03. Flagged as C53 finding 4 item 7
@@ -20070,6 +20150,194 @@ how much they de-risk a public launch._
 - **Acceptance:** `pytest tests/test_email_deliverability.py` — 5/5 pass.
   Broader sweep (`-k "monitoring or deliverability"`, 37 tests) green, no
   regressions.
+
+### C59. `tests/direct_pool/test_claim_batch.py`: two concurrency tests share a synthetic phone number, `UniqueViolation` on `main`'s own tip — CLOSED (2026-09-03, fixed independently on `main`, not by this session)
+- [x] **Status:** resolved — but not by the fix this session originally
+  wrote. Found 2026-09-03 while verifying C57's fix (2 failed / 28 passed
+  on PR #4887's "Run direct-pool real-Postgres tests" step); this session
+  first fixed it with a targeted id rename
+  (`"lock-rider-a"/"b"` → `"lock-rider-c"/"d"`), verified 30/30 locally,
+  and shipped it in PR #4887's final commit. **That commit never actually
+  reached `main`** — see the "lost-commit" note in C57 below — so while
+  investigating "5 CI-only RLS failures" per a follow-up request, this
+  entry's fix was found to already be superseded on `main` by a different,
+  independently-landed, more robust fix
+  (`d7187b4 fix(tests): make the direct-pool real-Postgres suite runnable
+  in its isolated CI step`, not from this session): a process-wide
+  `itertools.count`-based `_next_phone()` sequence that makes every seeded
+  phone number unique regardless of which literal id a test picks —
+  strictly better than this session's one-pair rename, since it can never
+  recur for a *different* colliding pair. This session's own rename was
+  discarded in favor of `main`'s fix rather than re-applied. No action
+  needed; documented here only so the original (accurate, still worth
+  reading for the root-cause explanation) diagnosis isn't lost.
+- **Original issue/gap (still an accurate root-cause description):**
+  `test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking`
+  failed with `psycopg2.errors.UniqueViolation: duplicate key value
+  violates unique constraint "users_phone_key" DETAIL: Key
+  (phone)=(+1306555er-a) already exists`. `tests/direct_pool/conftest.py`'s
+  `pg_cur` fixture truncates `users`/`drivers`/`rides`/etc. before each
+  test for isolation — but 3 tests in this file (the ones needing
+  genuinely concurrent, separate real Postgres connections to prove
+  row-lock/race behavior) take the raw session-scoped `pg_conn` fixture
+  instead, deliberately **not** truncated between tests. The old
+  `_insert_user()` derived each seeded phone from `uid[-4:]`, so
+  `"race-rider-a"` and `"lock-rider-a"` (different tests, same suffix)
+  collided on `+1306555er-a` whichever ran second.
+- **Files:** `backend/tests/direct_pool/test_claim_batch.py` (already
+  fixed on `main`; not touched by this session's final push).
+- **Acceptance:** `TEST_DATABASE_URL=<local pg> pytest tests/direct_pool -c
+  /dev/null --confcutdir=tests/direct_pool -q` — 30/30 pass on `main`'s
+  current `test_claim_batch.py`, run twice for stability.
+
+### C60. Transactional-outbox loguru calls pass `exc_info=True`, which loguru doesn't support — `test_no_exc_info_kwarg_in_loguru_calls` red on `main`'s own tip — CLOSED (2026-09-03)
+
+- [x] **Status:** fixed. All 9 sites converted to
+  `logger.opt(exception=True).error(...)`, matching this repo's existing
+  loguru convention elsewhere. `pytest tests/test_loguru_call_conventions.py
+  -q` → 5/5 passed. `ruff check` clean on all 3 touched files.
+- [x] Found 2026-09-03 while babysitting PR #4896 (C57):
+  `backend-test`'s "Run backend tests" step fails
+  `tests/test_loguru_call_conventions.py::test_no_exc_info_kwarg_in_loguru_calls`
+  on `main`'s own tip (confirmed on this PR's exact base commit `92fa5f9`,
+  and independently via `grep -n exc_info` on the files below — not
+  introduced by PR #4896's diff, which touches only `ACTION_ITEMS.md` and
+  `tests/rls/conftest.py`).
+- **Issue/gap:** `logger.error(..., exc_info=True)` is the stdlib
+  `logging`-module convention. These files log via **loguru**, which has
+  no `exc_info` parameter — this repo already has a pre-existing regression
+  gate for exactly this mistake (see C-era history above, the
+  `documents.py` loguru-convention fix from 2026-08-19) but 9 new call
+  sites reintroduced it in the C53 finding-4 transactional-outbox work
+  (PR #4887, already merged to `main`), which this gate did not catch
+  before merge (see `.github/ISSUE_TEMPLATE/ci_change_request.yml`
+  precedent — same class of gap as C7/C9's "no automated PR review is
+  currently running").
+- **Root cause:** loguru's `logger.error(msg, exc_info=True)` silently
+  swallows `exc_info` as an ordinary `str.format` keyword and captures no
+  traceback — the loguru-correct form is `logger.opt(exception=True)
+  .error(msg, ...)`.
+- **Files (9 call sites needing the same `logger.opt(exception=True)`
+  fix already used elsewhere in these same modules):**
+  `backend/services/outbox.py:185`, `backend/services/outbox_receipts.py:48`,
+  `backend/utils/outbox_worker.py:78,103,143,169,199,213,229`.
+- **Blast radius:** logging-only — each site is inside an `except` block
+  around outbox processing; fixing the call convention changes no control
+  flow, only whether a traceback is actually captured when these paths
+  error. Not fixed in PR #4896 (out of scope — that PR is RLS-conftest
+  only); tracked here for a follow-up fix.
+- **Acceptance:** `pytest tests/test_loguru_call_conventions.py -q` passes
+  once all 9 sites use `logger.opt(exception=True).error(...)`.
+
+### C61. `test_referral_analytics.py::test_funnel_counts_and_amounts` red on `main`'s own tip — `assert 0 == 2` — CLOSED (2026-09-03)
+
+- [x] **Status:** fixed and root-caused. Found 2026-09-03 alongside C60,
+  same PR #4896 babysitting session; confirmed pre-existing on `main`'s tip
+  (`92fa5f9`), unrelated to PR #4896's diff.
+- **Root cause (confirmed):** exactly the C58 class of bug —
+  `admin_get_referral_analytics`'s top-of-funnel `total_referred` count was
+  refactored under migration 387 (`admin_referred_user_count_fn.sql`) from
+  a Python-side fetch-all-10k-`users`-rows-and-count to a single
+  `db_supabase.rpc("admin_referred_user_count", {"p_kind", "p_start",
+  "p_end"})` call. The test never mocked `db_supabase.rpc`, so the real
+  (unconfigured-in-tests) client's call returned `None`, which
+  `admin_get_referral_analytics` treats as `total_referred = 0` (its `else`
+  branch) — the actual failing assertion is `f["total_referred"] == 2`
+  (`assert 0 == 2`, matching the CI summary line), not `redeemed` as
+  initially guessed.
+- **Fix:** mocked `admin_drivers.db_supabase.rpc` with
+  `AsyncMock(return_value=2)` (a bare scalar, matching what
+  `repositories._base.rpc()`/PostgREST actually returns for this
+  `RETURNS bigint` function) and added an `assert_awaited_once_with(...)`
+  check pinning the RPC's call args (`p_kind="driver"`, `p_start=None`,
+  `p_end=None`) as real regression coverage of the new contract. The
+  now-dead `users` list (kept only for the scenario doc since `get_rows`
+  is never called with `table="users"` in this code path any more) is left
+  in place with an explanatory comment rather than removed, per the
+  surgical-changes rule.
+- **Verified:** `pytest tests/test_referral_analytics.py -q` → 5/5 passed;
+  `pytest tests/ -k "outbox or referral" -q` → 189 passed, 21 skipped (no
+  regressions in adjacent referral/outbox suites); `ruff check` clean.
+- **Files:** `backend/tests/test_referral_analytics.py` only — the
+  endpoint itself (`backend/routes/admin/drivers.py`) is correct and
+  unchanged, same as C58.
+- **Acceptance:** `pytest tests/test_referral_analytics.py -q` passes. ✅
+
+### C62. Repo-wide sweep for other squash-merge "fix never shipped" incidents (per C57/C52 precedent) — CLOSED, clean result (2026-09-03)
+
+- [x] **Status:** closed — audit performed, no new instances found beyond
+  the 2 already known and already fixed (#4879 → C52,
+  #4887 → C57/C59). Requested directly: "sweep and check through the repo
+  and identify the PR's whose fix never actually shipped."
+- **Method:** for every non-trivial (excluding `chore(deps)` dependency
+  bumps and pure `docs:` commits) squash-merge commit in `origin/main`'s
+  last ~400 commits (119 PRs, spanning 2026-08-27 → 2026-09-03 — this
+  repo's commit velocity is high enough that this window is ~1 week), fetched
+  each PR's frozen `refs/pull/<N>/head` ref (persists after branch deletion)
+  and compared its diff against `origin/main` — via `git patch-id --stable`
+  on `git diff <merge-base> <pr-head>` vs `git diff <squash-commit>^
+  <squash-commit>` — to the diff the squash-merge commit actually landed.
+  A patch-id mismatch flags a candidate; each candidate was then
+  hand-verified with a per-file content diff (`git show <sha>:<file>`)
+  before concluding anything, since a `.md`/`ACTION_ITEMS.md`-only
+  divergence or an unusual branch-rebase history produces false positives
+  (see below) that a bare patch-id mismatch can't distinguish from a real
+  drop.
+- **Result:** 115/119 matched cleanly. 4 flagged, all 4 investigated and
+  confirmed **not** lost fixes:
+  - **#4784** (`5e15c28`, "Broaden pre-launch flag driver scope..."): the
+    squash-merge commit itself is a **no-op** — empty diff against its own
+    parent, product code included. Root cause: PR #4785 (`bb37f54`,
+    "Migration Checklist status panel...") branched from on top of #4784's
+    branch and **merged first** (chronologically earlier in `main`'s
+    history despite the higher PR number), so its own squash-merge already
+    carried #4784's `pre_launch_flag_service.py` changes as part of its
+    total diff. By the time #4784 later merged, `main` already had the
+    content, so GitHub computed (and merged) an empty commit. Confirmed
+    live: `backend/services/pre_launch_flag_service.py` on `main` has the
+    `LAUNCH_DATE`-gate-drop and `mongo_driver_history` marker described in
+    #4784's own commit message. **Fix genuinely shipped** — just credited
+    to a different commit than its own PR's squash-merge.
+  - **#4880, #4759, #4734:** all 3 flagged only because their PR branches'
+    topology (non-linear history — earlier feature work merged separately
+    before these PRs' own merge, or in #4734's case a deliberate
+    "no-ops-once-the-real-PR-merges" ported test-fix commit per its own
+    commit message) made `<squash-commit>^` a poor stand-in for the
+    branch's true fork point, so `git merge-base` picked up unrelated
+    already-on-`main` files as if they were part of this PR's diff. Per-file
+    diff on the files the squash-merge commit *did* touch showed **zero
+    byte differences** against the PR head in all 3 cases — every actual
+    changed file matched exactly. Confirmed the extra files present-only-on
+    the PR-head side (e.g. `backend/ai/mcp_server.py` for #4759,
+    `backend/routes/rides/cancellation.py` for #4734) are already live on
+    `main` via the separate PRs that actually own them.
+- **Known blind spot (not closed by this sweep):** `refs/pull/<N>/head`
+  itself can lag behind the true last push before merge — this is the
+  exact mechanism that caused #4887's fix to be lost (confirmed directly:
+  `refs/pull/4887/head` stops at `48d0553`, the commit *before* the
+  C57/C59 fix `2457622` that was pushed and then dropped by the
+  squash-merge; the sweep's own comparison of `dbcebe0` against
+  `refs/pull/4887/head` reports a clean match, i.e. **this method cannot
+  detect that specific incident** — it was only found and fixed because
+  this session had the lost commit's SHA from its own earlier work).
+  There is no read-only way to reconstruct "what was actually pushed
+  immediately before the merge button was clicked" once that state is only
+  reachable via a deleted branch ref and GitHub's own ref hasn't caught up
+  — a real gap, not just a methodology nitpick. Mitigation is process, not
+  audit: watch every PR's CI status on its actual last-pushed commit before
+  merging (already this repo's standing PR-babysitting practice) rather
+  than trusting a post-hoc sweep to catch it.
+- **Scope not covered:** `chore(deps)` bumps and pure `docs:` commits were
+  excluded (low fix-loss risk, and dependency-bump content is trivially
+  re-derivable from `package.json`/`requirements.txt` diffs if ever in
+  doubt); history older than ~2026-08-27 was not swept (cost/time
+  trade-off — this window already covers both known incidents). Re-run
+  periodically or widen the window if squash-merge content loss is
+  suspected again.
+- **Acceptance:** no code change; this is an audit record. Re-running the
+  sweep script (see this session's transcript for the exact `git fetch` /
+  `git patch-id` commands) against a wider commit window is the way to
+  extend coverage.
 
 ## Recently completed (do not redo)
 

@@ -175,3 +175,37 @@ config without re-deriving anything from CLAUDE.md again.
 runbook summarizes. If the two ever disagree, the YAML file's
 `sla_source` fields (which cite the exact CLAUDE.md table row) win —
 update this runbook to match, not the other way around.
+
+---
+
+## Health-check coverage across the rest of the stack (audit, 2026-09-03)
+
+The three probes above only cover the backend API. This section records
+what actually exists for every other component, found by reading each
+workflow/config rather than assuming — see
+`docs/change-log/2026-09-03-e5-leading-indicator-monitoring.md`.
+
+| Component | What exists today | Gap |
+|---|---|---|
+| Backend (`/health`) | Internal: Fly `[[http_service.checks]]`, Railway `healthcheckPath`, Docker `HEALTHCHECK`. External: none live (E4 above is scaffolding only). Leading-indicator: `cert-domain-monitor.yml` (added 2026-09-03) | External liveness probing still not live — E4 remains the open item |
+| `admin-dashboard` (Vercel) | Vercel's own build-time deploy gate (a failed build never goes live) — `deploy-backend-staging.yml`/related workflows reference `secrets.VERCEL_*` but no *post-deploy* health probe was found for the live Vercel URL | No external check that the deployed admin dashboard is actually reachable, only that it built successfully |
+| `rider-app` / `driver-app` (mobile) | `mobile-bundle-smoke.yml`, `eas-build.yml`/`eas-native-build.yml` gate the build pipeline; `maestro-e2e.yml` exists for real-device E2E but per ACTION_ITEMS.md B25 is opt-in-only and its required secrets are unconfirmed — it does not fire automatically | No automated confirmation a shipped build actually launches on a real device before/after store submission |
+| Redis | `capacity_watchdog`/`loop_watchdog` background loops (in-process, backend-side) cover Redis reachability as a side effect of their own operation; `docs/runbooks/redis-down.md` exists for manual triage | No standalone external Redis liveness probe — acceptable today since Redis failures mostly surface as backend-side degradation the existing loops already catch |
+| Supabase | Internal: `_db_ready()` backs `/health`'s DB check. External: none | Covered transitively through `/health`, same caveat as backend row above |
+| Fly.io / Railway platform health | `capacity-scaling.md` §6's `capacity_watchdog` alerts on DB/connection saturation; deploy workflows fail the job on a bad rolling deploy | Certificate state specifically was the gap closed by `cert-domain-monitor.yml` — this is the exact class of "internal gate passes, external reality doesn't" failure from the 2026-09-02 incident |
+
+**Open, not closed by this audit:** none of the above adds new automated
+checks beyond `cert-domain-monitor.yml` — this table is intentionally
+just the honest inventory. Treat `admin-dashboard` post-deploy reachability
+and Maestro's dormant trigger as candidate follow-up ACTION_ITEMS entries,
+not implicitly "handled."
+
+### `capacity_watchdog` alerting — confirm this is actually wired
+
+`docs/runbooks/capacity-scaling.md` §6 states its alerts are **silent by
+default** unless `ALERT_WEBHOOK_URL` and `ALERT_EMAIL_TO` are set as Fly
+secrets. This audit could not confirm whether those are set — verifying
+requires Fly dashboard/CLI access this session did not have. **A human
+with Fly access should confirm both are set** before treating
+`capacity_watchdog` as live alerting rather than a loop that runs with
+nowhere to send its findings.

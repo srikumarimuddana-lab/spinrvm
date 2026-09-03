@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 import bcrypt
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -59,9 +59,23 @@ class Settings(BaseSettings):
     # max_size=). Plain env config (not a secret) — these are safe to see in
     # a process listing / deploy manifest, unlike the DSN above. Future
     # Phase-2 wiring point (T12/T13); has no effect while DISPATCH_POOL_DSN
-    # is unset or the flag is off.
-    DISPATCH_POOL_MIN_SIZE: int = 1
-    DISPATCH_POOL_MAX_SIZE: int = 8
+    # is unset or the flag is off. Bounds are validated at config load
+    # (review fix, 2026-09-03): psycopg_pool rejects min > max with a
+    # ValueError at open time, which in non-production is caught, logged
+    # once, and leaves the process running with no pool — so a
+    # misconfiguration would only surface in production. Fail at startup in
+    # every environment instead, with a message naming the setting.
+    DISPATCH_POOL_MIN_SIZE: int = Field(default=1, ge=0)
+    DISPATCH_POOL_MAX_SIZE: int = Field(default=8, ge=1)
+
+    @model_validator(mode="after")
+    def _validate_dispatch_pool_sizes(self) -> "Settings":
+        if self.DISPATCH_POOL_MIN_SIZE > self.DISPATCH_POOL_MAX_SIZE:
+            raise ValueError(
+                "DISPATCH_POOL_MIN_SIZE must be <= DISPATCH_POOL_MAX_SIZE "
+                f"(got {self.DISPATCH_POOL_MIN_SIZE} > {self.DISPATCH_POOL_MAX_SIZE})"
+            )
+        return self
 
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None

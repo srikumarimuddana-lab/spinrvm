@@ -179,6 +179,9 @@ _MIGRATION_FILES = (
     "12_driver_lifecycle_status.sql",
     "157_driver_availability_claimed_at.sql",
     "402_dispatch_claim_batch.sql",
+    # 403 replaces 402's body with the #4883 review fixes (append-only rule:
+    # 402 is never edited). Applied after it, exactly as the runner would.
+    "403_dispatch_claim_batch_v2.sql",
 )
 
 # 100_batch_dispatch.sql and 64_driver_insurance_periods.sql both define RLS

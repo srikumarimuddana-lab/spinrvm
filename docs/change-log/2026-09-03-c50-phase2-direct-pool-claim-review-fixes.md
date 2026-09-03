@@ -55,7 +55,7 @@ fresh series on `fix/c50-phase2-direct-pool-review-fixes` (#4883), each one logi
 
 | Commit | Change |
 |---|---|
-| `fix(migrations): harden dispatch_claim_batch …` | `FOR UPDATE SKIP LOCKED` claim; 399-style argument validation; `SECURITY INVOKER` + `pg_catalog, public`; `ON CONFLICT (ride_id, driver_id) DO NOTHING` with release; `insurance_written` return column; release clamped to `is_online`; `NOTIFY pgrst` |
+| `fix(migrations): harden dispatch_claim_batch …` (as `403_dispatch_claim_batch_v2.sql` — 402 is merged and append-only) | `FOR UPDATE SKIP LOCKED` claim; 399-style argument validation; `SECURITY INVOKER` + `pg_catalog, public`; `ON CONFLICT (ride_id, driver_id) DO NOTHING` with release; `insurance_written` return column; release clamped to `is_online`; `NOTIFY pgrst` |
 | `fix(dispatch): guard the direct-pool claim path …` | `is_open()` guard → loud PostgREST fallback + `spinr_dispatch_claim_path_total{path=postgrest_pool_unavailable}`; `insurance_written=false` → ERROR log + `spinr_insurance_period_write_failed_total{reason=direct_pool}`; redacted error log; bounded, concurrent cache invalidation carrying `user_id` |
 | `fix(dispatch-pool): bound query execution …` | transaction-local `statement_timeout` (remaining deadline capped at 10 s) + `asyncio.wait_for` backstop; `check=check_connection`; wait histogram observed on timeout; `_redact_dsn`; pool closed on failed open; `::text[]`/`::int[]` casts and empty-list early return; corrected lock-count docstring; sub-ms queue-wait buckets |
 | `fix(config,lifespan): …` | `Field(ge=…)` + min ≤ max validator; boot-time flag read bounded to 10 s |
@@ -98,7 +98,7 @@ Not visible mid-session to anyone already using the app.
 | File path | What changed | Why |
 |---|---|---|
 | `backend/migrations/401_settings_dispatch_direct_pool_enabled.sql` | renamed from 400 | prefix collided with `main`'s 400 |
-| `backend/migrations/402_dispatch_claim_batch.sql` | renamed from 401; function body hardened | deadlock, visibility, security, validation, conflict handling |
+| `backend/migrations/403_dispatch_claim_batch_v2.sql` | new — `CREATE OR REPLACE` of 402's function with the hardened body (402 untouched: append-only) | deadlock, visibility, security, validation, conflict handling |
 | `backend/routes/rides/matching.py` | pool-open guard, insurance reporting, redacted log, bounded invalidation | flag-on failure modes |
 | `backend/repositories/dispatch_pool.py` | statement timeout, liveness check, timeout metric, DSN redaction, leak close, casts | unbounded execution, blind saturation signal, credential leak, binding risk |
 | `backend/repositories/_base.py` | docstring numbers, queue-wait buckets | wrong derived ceilings; unusable histogram |
@@ -150,9 +150,9 @@ if _direct_pool_enabled and not _dispatch_pool.is_open():
   WHERE id = 'app_settings'`). Propagates within the 60 s settings cache; no redeploy. Note
   the admin dashboard has no UI toggle for this field yet.
 - Schema: `DROP FUNCTION IF EXISTS public.dispatch_claim_batch(text, text[], int[], int,
-  timestamptz, timestamptz);` (nothing calls it while the flag is off). Migration 401's
-  column is additive and can stay.
-- **Deploy order:** apply migrations 401 and 402 before the backend that carries this
+  timestamptz, timestamptz);` (nothing calls it while the flag is off), or re-apply 402's
+  body. Migration 401's column is additive and can stay.
+- **Deploy order:** apply migrations 401, 402 and 403 before the backend that carries this
   change. A backend that ships first makes `PUT /api/admin/settings` with the new field
   fail with PGRST204 until the column exists.
 - No Stripe, wallet, or ride-state data is touched by the fixes; `git revert` of the code

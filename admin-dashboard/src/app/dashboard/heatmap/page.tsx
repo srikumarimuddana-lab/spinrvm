@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -297,27 +298,29 @@ export default function HeatMapPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Heat Map</h1>
-                    <p className="text-muted-foreground mt-1">
+            <PageHeader
+                title="Heat Map"
+                description={
+                    <>
                         Historical ride density —{" "}
                         {DATE_RANGE_PRESETS.find((p) => p.value === dateRange)?.label ?? "custom range"}.
                         Live demand is in the section below.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={fetchHeatMapData}
-                        disabled={loading || !!dateError}
-                    >
-                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+                    </>
+                }
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={fetchHeatMapData}
+                            disabled={loading || !!dateError}
+                        >
+                            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                }
+            />
 
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

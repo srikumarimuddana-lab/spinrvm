@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -197,22 +198,25 @@ export default function VenuesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><MapPin className="h-5 w-5" /> Pickup Venues</h1>
-          <p className="text-sm text-muted-foreground">
-            Curated meeting points for malls, the airport, and other large venues where a pin can land somewhere a car can&apos;t reach.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={load} className="flex items-center gap-1.5 text-sm border rounded-lg px-3 py-2 hover:bg-muted">
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-          </button>
-          <button onClick={startNew} className="flex items-center gap-1.5 text-sm font-semibold bg-primary text-primary-foreground rounded-lg px-3 py-2 hover:bg-primary/90">
-            <Plus className="h-4 w-4" /> Add venue
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        className="flex items-start justify-between gap-4 flex-wrap"
+        title={
+          <span className="inline-flex items-center gap-2">
+            <MapPin className="h-5 w-5" /> Pickup Venues
+          </span>
+        }
+        description="Curated meeting points for malls, the airport, and other large venues where a pin can land somewhere a car can't reach."
+        actions={
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={load} className="flex items-center gap-1.5 text-sm border rounded-lg px-3 py-2 hover:bg-muted">
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+            </button>
+            <button onClick={startNew} className="flex items-center gap-1.5 text-sm font-semibold bg-primary text-primary-foreground rounded-lg px-3 py-2 hover:bg-primary/90">
+              <Plus className="h-4 w-4" /> Add venue
+            </button>
+          </div>
+        }
+      />
 
       {editing && d && (
         <Card>

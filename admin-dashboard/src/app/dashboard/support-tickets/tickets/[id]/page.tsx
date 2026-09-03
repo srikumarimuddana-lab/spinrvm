@@ -601,31 +601,31 @@ export default function TicketDetailPage() {
                             <CardHeader><CardTitle className="text-base">Properties</CardTitle></CardHeader>
                             <CardContent className="space-y-3">
                                 <div className="space-y-1">
-                                    <Label>Status</Label>
+                                    <Label htmlFor="ticket-status">Status</Label>
                                     <Select value={ticket.status} onValueChange={(v) => patch({ status: v }, "Status")} disabled={savingField}>
-                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectTrigger id="ticket-status"><SelectValue /></SelectTrigger>
                                         <SelectContent>
                                             {STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                                         </SelectContent>
                                     </Select>
                                 </div>
                                 <div className="space-y-1">
-                                    <Label>Priority</Label>
+                                    <Label htmlFor="ticket-priority">Priority</Label>
                                     <Select value={ticket.priority || ""} onValueChange={(v) => patch({ priority: v }, "Priority")} disabled={savingField}>
-                                        <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                                        <SelectTrigger id="ticket-priority"><SelectValue placeholder="None" /></SelectTrigger>
                                         <SelectContent>
                                             {PRIORITIES.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
                                         </SelectContent>
                                     </Select>
                                 </div>
                                 <div className="space-y-1">
-                                    <Label>Assignee</Label>
+                                    <Label htmlFor="ticket-assignee">Assignee</Label>
                                     <Select
                                         value={ticket.assigneeId || ticket.assignee?.id || ""}
                                         onValueChange={(v) => patch({ assigneeId: v }, "Assignee")}
                                         disabled={savingField}
                                     >
-                                        <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                                        <SelectTrigger id="ticket-assignee"><SelectValue placeholder="Unassigned" /></SelectTrigger>
                                         <SelectContent>
                                             {agents.map((a) => (
                                                 <SelectItem key={a.id} value={a.id}>
@@ -642,17 +642,17 @@ export default function TicketDetailPage() {
                             <CardHeader><CardTitle className="text-base">Classify & tag</CardTitle></CardHeader>
                             <CardContent className="space-y-3">
                                 <div className="space-y-1">
-                                    <Label>Category</Label>
-                                    <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Driver Request" disabled={savingField} />
+                                    <Label htmlFor="ticket-category">Category</Label>
+                                    <Input id="ticket-category" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Driver Request" disabled={savingField} />
                                 </div>
                                 <div className="space-y-1">
-                                    <Label>Sub-category</Label>
-                                    <Input value={subCategory} onChange={(e) => setSubCategory(e.target.value)} placeholder="optional" disabled={savingField} />
+                                    <Label htmlFor="ticket-subcategory">Sub-category</Label>
+                                    <Input id="ticket-subcategory" value={subCategory} onChange={(e) => setSubCategory(e.target.value)} placeholder="optional" disabled={savingField} />
                                 </div>
                                 <div className="space-y-1">
-                                    <Label>Classification</Label>
+                                    <Label htmlFor="ticket-classification">Classification</Label>
                                     <Select value={classification || undefined} onValueChange={setClassification} disabled={savingField}>
-                                        <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                                        <SelectTrigger id="ticket-classification"><SelectValue placeholder="Select" /></SelectTrigger>
                                         <SelectContent>
                                             {CLASSIFICATIONS.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                                         </SelectContent>

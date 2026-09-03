@@ -283,15 +283,17 @@ export default function StaffPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <Label className="mb-1 block">First Name</Label>
+              <Label htmlFor="staff-first-name" className="mb-1 block">First Name</Label>
               <Input
+                id="staff-first-name"
                 value={form.first_name}
                 onChange={(e) => setForm({ ...form, first_name: e.target.value })}
               />
             </div>
             <div>
-              <Label className="mb-1 block">Last Name</Label>
+              <Label htmlFor="staff-last-name" className="mb-1 block">Last Name</Label>
               <Input
+                id="staff-last-name"
                 value={form.last_name}
                 onChange={(e) => setForm({ ...form, last_name: e.target.value })}
               />
@@ -300,8 +302,9 @@ export default function StaffPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <Label className="mb-1 block">Email</Label>
+              <Label htmlFor="staff-email" className="mb-1 block">Email</Label>
               <Input
+                id="staff-email"
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -310,9 +313,10 @@ export default function StaffPage() {
             </div>
             {!editingId && (
               <div>
-                <Label className="mb-1 block">Password</Label>
+                <Label htmlFor="staff-password" className="mb-1 block">Password</Label>
                 <div className="relative">
                   <Input
+                    id="staff-password"
                     className="pr-10"
                     type={showPassword ? "text" : "password"}
                     value={form.password}

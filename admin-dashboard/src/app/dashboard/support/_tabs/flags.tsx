@@ -109,9 +109,9 @@ export default function FlagsTab() {
                             <TableCell>{f.is_active === false ? <Badge className="text-[10px] bg-muted text-muted-foreground">Inactive</Badge> : <Badge className="text-[10px] bg-warning/15 text-warning">Active</Badge>}</TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(f.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(f); }}><Eye className="h-3.5 w-3.5" /></Button>
-                                {f.is_active !== false && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); deactivateFlag(f.id).then(load); }} title="Deactivate"><EyeOff className="h-3.5 w-3.5" /></Button>}
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(f.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="View flag" onClick={(e) => { e.stopPropagation(); setSelected(f); }}><Eye className="h-3.5 w-3.5" /></Button>
+                                {f.is_active !== false && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); deactivateFlag(f.id).then(load); }} title="Deactivate" aria-label="Deactivate"><EyeOff className="h-3.5 w-3.5" /></Button>}
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Delete flag" onClick={(e) => { e.stopPropagation(); setDeleteTarget(f.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
@@ -144,12 +144,12 @@ export default function FlagsTab() {
             <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) setDialogOpen(false); }}>
                 <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">Create Flag</DialogTitle></DialogHeader>
                     <div className="space-y-3">
-                        <div className="space-y-1.5"><Label className="text-xs">Ride ID *</Label><Input placeholder="Enter ride ID" value={form.ride_id} onChange={(e) => setForm({ ...form, ride_id: e.target.value })} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="flag-ride-id" className="text-xs">Ride ID *</Label><Input id="flag-ride-id" placeholder="Enter ride ID" value={form.ride_id} onChange={(e) => setForm({ ...form, ride_id: e.target.value })} /></div>
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1.5"><Label className="text-xs">Target</Label><Select value={form.target_type} onValueChange={(v) => setForm({ ...form, target_type: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="driver">Driver</SelectItem><SelectItem value="rider">Rider</SelectItem></SelectContent></Select></div>
-                            <div className="space-y-1.5"><Label className="text-xs">Reason</Label><Select value={form.reason} onValueChange={(v) => setForm({ ...form, reason: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{REASONS.map((r) => <SelectItem key={r} value={r} className="capitalize">{r.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
+                            <div className="space-y-1.5"><Label htmlFor="flag-target" className="text-xs">Target</Label><Select value={form.target_type} onValueChange={(v) => setForm({ ...form, target_type: v })}><SelectTrigger id="flag-target"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="driver">Driver</SelectItem><SelectItem value="rider">Rider</SelectItem></SelectContent></Select></div>
+                            <div className="space-y-1.5"><Label htmlFor="flag-reason" className="text-xs">Reason</Label><Select value={form.reason} onValueChange={(v) => setForm({ ...form, reason: v })}><SelectTrigger id="flag-reason"><SelectValue /></SelectTrigger><SelectContent>{REASONS.map((r) => <SelectItem key={r} value={r} className="capitalize">{r.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
                         </div>
-                        <div className="space-y-1.5"><Label className="text-xs">Description</Label><Textarea placeholder="Optional details..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="flag-description" className="text-xs">Description</Label><Textarea id="flag-description" placeholder="Optional details..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} /></div>
                         <ServiceAreaSelect value={form.service_area_id} onChange={(v) => setForm({ ...form, service_area_id: v })} areas={areas} />
                         <Button className="w-full" size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Flag"}</Button>
                     </div>

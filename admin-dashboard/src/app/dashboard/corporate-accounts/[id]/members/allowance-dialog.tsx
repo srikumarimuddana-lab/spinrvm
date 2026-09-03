@@ -103,9 +103,9 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
 
                 <div className="space-y-3 py-2">
                     <div>
-                        <Label>Type</Label>
+                        <Label htmlFor="allowance-type">Type</Label>
                         <Select value={type} onValueChange={(v) => setType(v as AllowanceTypeValue)}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectTrigger id="allowance-type"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="fixed_recurring">fixed_recurring</SelectItem>
                                 <SelectItem value="one_time">one_time</SelectItem>
@@ -116,8 +116,9 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
 
                     {type !== "unlimited" && (
                         <div>
-                            <Label>Amount (CAD)</Label>
+                            <Label htmlFor="allowance-amount">Amount (CAD)</Label>
                             <Input
+                                id="allowance-amount"
                                 type="number"
                                 min={1}
                                 value={amount}
@@ -130,16 +131,18 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
                         <>
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <Label>Period start</Label>
+                                    <Label htmlFor="allowance-period-start">Period start</Label>
                                     <Input
+                                        id="allowance-period-start"
                                         type="date"
                                         value={periodStart}
                                         onChange={(e) => setPeriodStart(e.target.value)}
                                     />
                                 </div>
                                 <div>
-                                    <Label>Period end</Label>
+                                    <Label htmlFor="allowance-period-end">Period end</Label>
                                     <Input
+                                        id="allowance-period-end"
                                         type="date"
                                         value={periodEnd}
                                         onChange={(e) => setPeriodEnd(e.target.value)}
@@ -152,8 +155,9 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                    <Label>Auto-approve cap (per request)</Label>
+                                    <Label htmlFor="allowance-auto-cap">Auto-approve cap (per request)</Label>
                                     <Input
+                                        id="allowance-auto-cap"
                                         type="number"
                                         placeholder="e.g. 50"
                                         value={autoCap}
@@ -161,8 +165,9 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
                                     />
                                 </div>
                                 <div>
-                                    <Label>Auto-approve count / month</Label>
+                                    <Label htmlFor="allowance-auto-monthly">Auto-approve count / month</Label>
                                     <Input
+                                        id="allowance-auto-monthly"
                                         type="number"
                                         placeholder="e.g. 5"
                                         value={autoMonthly}

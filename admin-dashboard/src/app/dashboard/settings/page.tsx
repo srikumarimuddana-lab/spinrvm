@@ -188,8 +188,9 @@ export default function SettingsPage() {
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
                             <div className="space-y-2">
-                                <Label>Publishable Key</Label>
+                                <Label htmlFor="stripe-publishable-key">Publishable Key</Label>
                                 <Input
+                                    id="stripe-publishable-key"
                                     value={settings.stripe_publishable_key || ""}
                                     onChange={(e) =>
                                         update("stripe_publishable_key", e.target.value)
@@ -198,8 +199,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Secret Key</Label>
+                                <Label htmlFor="stripe-secret-key">Secret Key</Label>
                                 <Input
+                                    id="stripe-secret-key"
                                     type="password"
                                     value={settings.stripe_secret_key || ""}
                                     onChange={(e) =>
@@ -209,8 +211,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Webhook Secret</Label>
+                                <Label htmlFor="stripe-webhook-secret">Webhook Secret</Label>
                                 <Input
+                                    id="stripe-webhook-secret"
                                     type="password"
                                     value={settings.stripe_webhook_secret || ""}
                                     onChange={(e) =>
@@ -223,8 +226,9 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                             <div className="space-y-2">
-                                <Label>Connect Webhook Secret</Label>
+                                <Label htmlFor="stripe-connect-webhook-secret">Connect Webhook Secret</Label>
                                 <Input
+                                    id="stripe-connect-webhook-secret"
                                     type="password"
                                     value={settings.stripe_connect_webhook_secret || ""}
                                     onChange={(e) =>
@@ -276,8 +280,9 @@ export default function SettingsPage() {
                                 to straight-line distance.
                             </p>
                             <div className="space-y-2">
-                                <Label>API Key</Label>
+                                <Label htmlFor="google-maps-api-key">API Key</Label>
                                 <Input
+                                    id="google-maps-api-key"
                                     type="password"
                                     value={settings.google_maps_api_key || ""}
                                     onChange={(e) =>
@@ -304,8 +309,9 @@ export default function SettingsPage() {
                                 The Proxy Service SID enables anonymous in-ride calling.
                             </p>
                             <div className="space-y-2">
-                                <Label>Account SID</Label>
+                                <Label htmlFor="twilio-account-sid">Account SID</Label>
                                 <Input
+                                    id="twilio-account-sid"
                                     type="password"
                                     value={settings.twilio_account_sid || ""}
                                     onChange={(e) =>
@@ -315,8 +321,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Auth Token</Label>
+                                <Label htmlFor="twilio-auth-token">Auth Token</Label>
                                 <Input
+                                    id="twilio-auth-token"
                                     type="password"
                                     value={settings.twilio_auth_token || ""}
                                     onChange={(e) =>
@@ -326,8 +333,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>From Number</Label>
+                                <Label htmlFor="twilio-from-number">From Number</Label>
                                 <Input
+                                    id="twilio-from-number"
                                     value={settings.twilio_from_number || ""}
                                     onChange={(e) =>
                                         update("twilio_from_number", e.target.value)
@@ -336,8 +344,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Proxy Service SID</Label>
+                                <Label htmlFor="twilio-proxy-service-sid">Proxy Service SID</Label>
                                 <Input
+                                    id="twilio-proxy-service-sid"
                                     type="password"
                                     value={settings.twilio_proxy_service_sid || ""}
                                     onChange={(e) =>
@@ -373,12 +382,13 @@ export default function SettingsPage() {
                                     <>
                                         <div className="flex items-center justify-between">
                                             <div>
-                                                <Label>Enable AI assistant</Label>
+                                                <Label htmlFor="ai-assistant-enabled">Enable AI assistant</Label>
                                                 <p className="text-xs text-muted-foreground">
                                                     Kill switch for the rider AI mode + SupportScreen chat.
                                                 </p>
                                             </div>
                                             <Switch
+                                                id="ai-assistant-enabled"
                                                 aria-label="Enable AI assistant"
                                                 checked={!!settings.ai_assistant_enabled}
                                                 onCheckedChange={(v) => update("ai_assistant_enabled", v)}
@@ -386,7 +396,7 @@ export default function SettingsPage() {
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <div>
-                                                <Label>Enable public chat (website)</Label>
+                                                <Label htmlFor="ai-public-chat-enabled">Enable public chat (website)</Label>
                                                 <p className="text-xs text-muted-foreground">
                                                     Allows the Spinr website chat widget to use this assistant
                                                     via <code>/ai/public-chat</code>. Requires the main AI
@@ -394,6 +404,7 @@ export default function SettingsPage() {
                                                 </p>
                                             </div>
                                             <Switch
+                                                id="ai-public-chat-enabled"
                                                 aria-label="Enable public chat (website)"
                                                 checked={!!settings.ai_public_chat_enabled}
                                                 onCheckedChange={(v) => update("ai_public_chat_enabled", v)}
@@ -403,7 +414,7 @@ export default function SettingsPage() {
                                         {!settings.ai_assistant_enabled && (
                                             <div className="flex items-center justify-between rounded-lg border border-dashed p-3">
                                                 <div>
-                                                    <Label>While disabled, show</Label>
+                                                    <Label htmlFor="ai-disabled-mode">While disabled, show</Label>
                                                     <p className="text-xs text-muted-foreground">
                                                         How the apps present AI entry points when the assistant is off.
                                                     </p>
@@ -412,7 +423,7 @@ export default function SettingsPage() {
                                                     value={settings.ai_disabled_mode || "coming_soon"}
                                                     onValueChange={(v) => update("ai_disabled_mode", v)}
                                                 >
-                                                    <SelectTrigger className="w-44" aria-label="While disabled, show"><SelectValue /></SelectTrigger>
+                                                    <SelectTrigger id="ai-disabled-mode" className="w-44" aria-label="While disabled, show"><SelectValue /></SelectTrigger>
                                                     <SelectContent>
                                                         <SelectItem value="coming_soon">Coming-soon placeholder</SelectItem>
                                                         <SelectItem value="hidden">Hide the icon entirely</SelectItem>
@@ -422,7 +433,7 @@ export default function SettingsPage() {
                                         )}
                                         <div className="grid grid-cols-2 gap-4">
                                             <div className="space-y-2">
-                                                <Label>Provider</Label>
+                                                <Label htmlFor="ai-provider">Provider</Label>
                                                 <Select
                                                     value={provider}
                                                     onValueChange={(v) => {
@@ -431,7 +442,7 @@ export default function SettingsPage() {
                                                         if (next?.models?.length) update("ai_model", next.models[0].id);
                                                     }}
                                                 >
-                                                    <SelectTrigger aria-label="Provider"><SelectValue /></SelectTrigger>
+                                                    <SelectTrigger id="ai-provider" aria-label="Provider"><SelectValue /></SelectTrigger>
                                                     <SelectContent>
                                                         {(aiCatalog.length ? aiCatalog : [{ provider: "anthropic", label: "Anthropic (Claude)", key_field: "ai_api_key_anthropic", models: [] }]).map((p) => (
                                                             <SelectItem key={p.provider} value={p.provider}>{p.label}</SelectItem>
@@ -440,12 +451,12 @@ export default function SettingsPage() {
                                                 </Select>
                                             </div>
                                             <div className="space-y-2">
-                                                <Label>Model</Label>
+                                                <Label htmlFor="ai-model">Model</Label>
                                                 <Select
                                                     value={modelSelectValue}
                                                     onValueChange={(v) => update("ai_model", v === "__custom__" ? "" : v)}
                                                 >
-                                                    <SelectTrigger aria-label="Model"><SelectValue /></SelectTrigger>
+                                                    <SelectTrigger id="ai-model" aria-label="Model"><SelectValue /></SelectTrigger>
                                                     <SelectContent>
                                                         {suggestions.map((m) => (
                                                             <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
@@ -463,8 +474,9 @@ export default function SettingsPage() {
                                             </div>
                                         </div>
                                         <div className="space-y-2">
-                                            <Label>{entry?.label ?? provider} API key</Label>
+                                            <Label htmlFor="ai-provider-api-key">{entry?.label ?? provider} API key</Label>
                                             <Input
+                                                id="ai-provider-api-key"
                                                 type="password"
                                                 value={settings[keyField] || ""}
                                                 onChange={(e) => update(keyField, e.target.value)}
@@ -496,12 +508,13 @@ export default function SettingsPage() {
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <div>
-                                                <Label>MCP server (/mcp)</Label>
+                                                <Label htmlFor="ai-mcp-enabled">MCP server (/mcp)</Label>
                                                 <p className="text-xs text-muted-foreground">
                                                     Read-only tool access for external agent clients. Leave off unless needed.
                                                 </p>
                                             </div>
                                             <Switch
+                                                id="ai-mcp-enabled"
                                                 aria-label="MCP server (/mcp)"
                                                 checked={!!settings.ai_mcp_enabled}
                                                 onCheckedChange={(v) => update("ai_mcp_enabled", v)}
@@ -521,12 +534,13 @@ export default function SettingsPage() {
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <div>
-                                                <Label>AI escalation opens Zoho tickets</Label>
+                                                <Label htmlFor="ai-escalation-creates-ticket">AI escalation opens Zoho tickets</Label>
                                                 <p className="text-xs text-muted-foreground">
                                                     Off = the assistant only deep-links to human support (recommended).
                                                 </p>
                                             </div>
                                             <Switch
+                                                id="ai-escalation-creates-ticket"
                                                 aria-label="AI escalation opens Zoho tickets"
                                                 checked={!!settings.ai_escalation_creates_ticket}
                                                 onCheckedChange={(v) => update("ai_escalation_creates_ticket", v)}
@@ -554,16 +568,18 @@ export default function SettingsPage() {
                                 <code>SPINR_INTEGRATION_API_KEY</code> set on the LMS deployment.
                             </p>
                             <div className="space-y-2">
-                                <Label>LMS Base URL</Label>
+                                <Label htmlFor="lms-api-base-url">LMS Base URL</Label>
                                 <Input
+                                    id="lms-api-base-url"
                                     value={settings.lms_api_base_url || ""}
                                     onChange={(e) => update("lms_api_base_url", e.target.value)}
                                     placeholder="https://training.spinr.ca"
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>API Key</Label>
+                                <Label htmlFor="lms-api-key">API Key</Label>
                                 <Input
+                                    id="lms-api-key"
                                     type="password"
                                     value={settings.lms_api_key || ""}
                                     onChange={(e) => update("lms_api_key", e.target.value)}
@@ -593,8 +609,9 @@ export default function SettingsPage() {
                                 verified identity in the SES account.
                             </p>
                             <div className="space-y-2">
-                                <Label>Region</Label>
+                                <Label htmlFor="aws-ses-region">Region</Label>
                                 <Input
+                                    id="aws-ses-region"
                                     type="text"
                                     value={settings.aws_ses_region || ""}
                                     onChange={(e) =>
@@ -604,8 +621,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Access Key ID</Label>
+                                <Label htmlFor="aws-ses-access-key-id">Access Key ID</Label>
                                 <Input
+                                    id="aws-ses-access-key-id"
                                     type="text"
                                     value={settings.aws_ses_access_key_id || ""}
                                     onChange={(e) =>
@@ -615,8 +633,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Secret Access Key</Label>
+                                <Label htmlFor="aws-ses-secret-access-key">Secret Access Key</Label>
                                 <Input
+                                    id="aws-ses-secret-access-key"
                                     type="password"
                                     value={settings.aws_ses_secret_access_key || ""}
                                     onChange={(e) =>
@@ -626,8 +645,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>From Email</Label>
+                                <Label htmlFor="aws-ses-from-email">From Email</Label>
                                 <Input
+                                    id="aws-ses-from-email"
                                     type="email"
                                     value={settings.aws_ses_from_email || ""}
                                     onChange={(e) =>
@@ -652,8 +672,9 @@ export default function SettingsPage() {
                                 address (then a code default) is used as a fallback.
                             </p>
                             <div className="space-y-2">
-                                <Label>API Key</Label>
+                                <Label htmlFor="resend-api-key">API Key</Label>
                                 <Input
+                                    id="resend-api-key"
                                     type="password"
                                     value={settings.resend_api_key || ""}
                                     onChange={(e) =>
@@ -663,8 +684,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>From Email</Label>
+                                <Label htmlFor="resend-from-email">From Email</Label>
                                 <Input
+                                    id="resend-from-email"
                                     type="email"
                                     value={settings.resend_from_email || ""}
                                     onChange={(e) =>
@@ -849,12 +871,12 @@ export default function SettingsPage() {
                                 Global defaults. Per-service-area overrides take precedence when set.
                             </p>
                             <div className="space-y-2">
-                                <Label>Driver matching algorithm</Label>
+                                <Label htmlFor="driver-matching-algorithm">Driver matching algorithm</Label>
                                 <Select
                                     value={settings.driver_matching_algorithm || "nearest"}
                                     onValueChange={(v) => update("driver_matching_algorithm", v)}
                                 >
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="driver-matching-algorithm"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="nearest">Nearest</SelectItem>
                                         <SelectItem value="rating_based">Highest rated</SelectItem>
@@ -865,8 +887,9 @@ export default function SettingsPage() {
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <Label>Simultaneous offers</Label>
+                                    <Label htmlFor="max-simultaneous-offers">Simultaneous offers</Label>
                                     <Input
+                                        id="max-simultaneous-offers"
                                         type="number"
                                         min={1} max={10}
                                         value={settings.max_simultaneous_offers ?? 3}
@@ -875,8 +898,9 @@ export default function SettingsPage() {
                                     <p className="text-xs text-muted-foreground">Drivers offered per ride (1–10)</p>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Offer timeout (s)</Label>
+                                    <Label htmlFor="ride-offer-timeout-seconds">Offer timeout (s)</Label>
                                     <Input
+                                        id="ride-offer-timeout-seconds"
                                         type="number"
                                         min={5} max={60}
                                         value={settings.ride_offer_timeout_seconds ?? 15}
@@ -887,8 +911,9 @@ export default function SettingsPage() {
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <Label>Search radius (km)</Label>
+                                    <Label htmlFor="search-radius-km">Search radius (km)</Label>
                                     <Input
+                                        id="search-radius-km"
                                         type="number"
                                         min={1} max={100}
                                         value={settings.search_radius_km ?? 10}
@@ -896,8 +921,9 @@ export default function SettingsPage() {
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Min driver rating</Label>
+                                    <Label htmlFor="min-driver-rating">Min driver rating</Label>
                                     <Input
+                                        id="min-driver-rating"
                                         type="number"
                                         min={1} max={5} step={0.1}
                                         value={settings.min_driver_rating ?? 4.0}
@@ -935,7 +961,7 @@ export default function SettingsPage() {
                             </p>
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <Label>Scheduled dispatch</Label>
+                                    <Label htmlFor="scheduled-dispatch-enabled">Scheduled dispatch</Label>
                                     <p className="text-xs text-muted-foreground">
                                         Pauses the loop that promotes scheduled rides to searching at their dispatch
                                         time. Already-scheduled rides stay parked, not lost — they dispatch normally
@@ -943,6 +969,7 @@ export default function SettingsPage() {
                                     </p>
                                 </div>
                                 <Switch
+                                    id="scheduled-dispatch-enabled"
                                     aria-label="Scheduled dispatch enabled"
                                     checked={!!settings.scheduled_dispatch_enabled}
                                     onCheckedChange={(v) => update("scheduled_dispatch_enabled", v)}
@@ -950,7 +977,7 @@ export default function SettingsPage() {
                             </div>
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <Label>Surge engine</Label>
+                                    <Label htmlFor="surge-engine-enabled">Surge engine</Label>
                                     <p className="text-xs text-muted-foreground">
                                         Pauses the automatic surge recompute cycle. Multipliers freeze at their last
                                         value — this does not reset current pricing. To reset a specific area's
@@ -958,6 +985,7 @@ export default function SettingsPage() {
                                     </p>
                                 </div>
                                 <Switch
+                                    id="surge-engine-enabled"
                                     aria-label="Surge engine enabled"
                                     checked={!!settings.surge_engine_enabled}
                                     onCheckedChange={(v) => update("surge_engine_enabled", v)}
@@ -965,13 +993,14 @@ export default function SettingsPage() {
                             </div>
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <Label>Promo redemption</Label>
+                                    <Label htmlFor="promo-redemption-enabled">Promo redemption</Label>
                                     <p className="text-xs text-muted-foreground">
                                         Pauses promo code application (rider self-service and admin apply-on-behalf-of-
                                         rider). Existing promo codes are unaffected — this only blocks new redemptions.
                                     </p>
                                 </div>
                                 <Switch
+                                    id="promo-redemption-enabled"
                                     aria-label="Promo redemption enabled"
                                     checked={!!settings.promo_redemption_enabled}
                                     onCheckedChange={(v) => update("promo_redemption_enabled", v)}
@@ -979,7 +1008,7 @@ export default function SettingsPage() {
                             </div>
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <Label>Corporate billing</Label>
+                                    <Label htmlFor="corporate-billing-enabled">Corporate billing</Label>
                                     <p className="text-xs text-muted-foreground">
                                         Pauses automatic corporate money movement: ride settlement, auto-top-up,
                                         low-balance nudges, allowance reset, and KYB re-verification reminders. Does
@@ -987,6 +1016,7 @@ export default function SettingsPage() {
                                     </p>
                                 </div>
                                 <Switch
+                                    id="corporate-billing-enabled"
                                     aria-label="Corporate billing enabled"
                                     checked={!!settings.corporate_billing_enabled}
                                     onCheckedChange={(v) => update("corporate_billing_enabled", v)}
@@ -1011,12 +1041,12 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Default Time Range</Label>
+                                <Label htmlFor="heat-map-default-range">Default Time Range</Label>
                                 <Select
                                     value={settings.heat_map_default_range || "30d"}
                                     onValueChange={(v) => update("heat_map_default_range", v)}
                                 >
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="heat-map-default-range"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="today">Today</SelectItem>
                                         <SelectItem value="7d">7 Days</SelectItem>
@@ -1027,12 +1057,12 @@ export default function SettingsPage() {
                                 </Select>
                             </div>
                             <div className="space-y-2">
-                                <Label>Heat Intensity</Label>
+                                <Label htmlFor="heat-map-intensity">Heat Intensity</Label>
                                 <Select
                                     value={settings.heat_map_intensity || "medium"}
                                     onValueChange={(v) => update("heat_map_intensity", v)}
                                 >
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="heat-map-intensity"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="low">Low</SelectItem>
                                         <SelectItem value="medium">Medium</SelectItem>
@@ -1042,13 +1072,13 @@ export default function SettingsPage() {
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <Label>Radius (px)</Label>
-                                    <Input type="number" value={settings.heat_map_radius || 25}
+                                    <Label htmlFor="heat-map-radius">Radius (px)</Label>
+                                    <Input id="heat-map-radius" type="number" value={settings.heat_map_radius || 25}
                                         onChange={(e) => update("heat_map_radius", parseInt(e.target.value))} />
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Blur (px)</Label>
-                                    <Input type="number" value={settings.heat_map_blur || 15}
+                                    <Label htmlFor="heat-map-blur">Blur (px)</Label>
+                                    <Input id="heat-map-blur" type="number" value={settings.heat_map_blur || 15}
                                         onChange={(e) => update("heat_map_blur", parseInt(e.target.value))} />
                                 </div>
                             </div>
@@ -1166,8 +1196,9 @@ export default function SettingsPage() {
                         <Separator />
                         <CardContent className="pt-4 grid gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
-                                <Label>Company Name</Label>
+                                <Label htmlFor="company-name">Company Name</Label>
                                 <Input
+                                    id="company-name"
                                     value={settings.company_name || ""}
                                     onChange={(e) => update("company_name", e.target.value)}
                                     placeholder="Spinr"
@@ -1180,8 +1211,9 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                             <div className="space-y-2">
-                                <Label>App Name</Label>
+                                <Label htmlFor="company-app-name">App Name</Label>
                                 <Input
+                                    id="company-app-name"
                                     value={settings.company_app_name || ""}
                                     onChange={(e) => update("company_app_name", e.target.value)}
                                     placeholder="Spinr"
@@ -1195,16 +1227,18 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                             <div className="space-y-2">
-                                <Label>Phone</Label>
+                                <Label htmlFor="company-phone">Phone</Label>
                                 <Input
+                                    id="company-phone"
                                     value={settings.company_phone || ""}
                                     onChange={(e) => update("company_phone", e.target.value)}
                                     placeholder="+1 306 555 0100"
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Email</Label>
+                                <Label htmlFor="company-email">Email</Label>
                                 <Input
+                                    id="company-email"
                                     type="email"
                                     value={settings.company_email || ""}
                                     onChange={(e) => update("company_email", e.target.value)}
@@ -1212,16 +1246,18 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Website</Label>
+                                <Label htmlFor="company-website">Website</Label>
                                 <Input
+                                    id="company-website"
                                     value={settings.company_website || ""}
                                     onChange={(e) => update("company_website", e.target.value)}
                                     placeholder="https://spinr.ca"
                                 />
                             </div>
                             <div className="space-y-2 sm:col-span-2">
-                                <Label>Address</Label>
+                                <Label htmlFor="company-address">Address</Label>
                                 <Textarea
+                                    id="company-address"
                                     value={settings.company_address || ""}
                                     onChange={(e) => update("company_address", e.target.value)}
                                     placeholder="123 Example St, Saskatoon, SK S7K 1A1"
@@ -1233,8 +1269,9 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                             <div className="space-y-2 sm:col-span-2">
-                                <Label>App download / open link</Label>
+                                <Label htmlFor="company-app-download-url">App download / open link</Label>
                                 <Input
+                                    id="company-app-download-url"
                                     value={settings.company_app_download_url || ""}
                                     onChange={(e) => update("company_app_download_url", e.target.value)}
                                     placeholder="Leave blank to omit the button in the welcome email"
@@ -1248,8 +1285,9 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                             <div className="space-y-2 sm:col-span-2">
-                                <Label>Email logo URL</Label>
+                                <Label htmlFor="company-logo-url">Email logo URL</Label>
                                 <Input
+                                    id="company-logo-url"
                                     value={settings.company_logo_url || ""}
                                     onChange={(e) => update("company_logo_url", e.target.value)}
                                     placeholder="Leave blank to use the built-in Spinr logo"
@@ -1291,8 +1329,9 @@ export default function SettingsPage() {
                         <Separator />
                         <CardContent className="pt-4 space-y-6">
                             <div className="space-y-2">
-                                <Label>Terms of Service</Label>
+                                <Label htmlFor="terms-of-service-text">Terms of Service</Label>
                                 <Textarea
+                                    id="terms-of-service-text"
                                     value={settings.terms_of_service_text || ""}
                                     onChange={(e) => update("terms_of_service_text", e.target.value)}
                                     placeholder="Enter full terms of service text here..."
@@ -1300,8 +1339,9 @@ export default function SettingsPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Privacy Policy</Label>
+                                <Label htmlFor="privacy-policy-text">Privacy Policy</Label>
                                 <Textarea
+                                    id="privacy-policy-text"
                                     value={settings.privacy_policy_text || ""}
                                     onChange={(e) => update("privacy_policy_text", e.target.value)}
                                     placeholder="Enter full privacy policy text here..."
@@ -1323,8 +1363,9 @@ export default function SettingsPage() {
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-2">
-                            <Label>Tracking base URL</Label>
+                            <Label htmlFor="track-base-url">Tracking base URL</Label>
                             <Input
+                                id="track-base-url"
                                 value={settings.track_base_url || ""}
                                 onChange={(e) => update("track_base_url", e.target.value)}
                                 placeholder="https://track.spinr.ca/track"
@@ -1347,9 +1388,10 @@ export default function SettingsPage() {
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
                             <div className="space-y-2">
-                                <Label>Upload MP3 or WAV (≤500 KB)</Label>
+                                <Label htmlFor="ride-offer-sound-upload">Upload MP3 or WAV (≤500 KB)</Label>
                                 <div className="flex items-center gap-2">
                                     <Input
+                                        id="ride-offer-sound-upload"
                                         type="file"
                                         accept="audio/mpeg,audio/mp3,audio/wav"
                                         disabled={soundUploading}

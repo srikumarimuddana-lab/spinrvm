@@ -121,6 +121,7 @@ export default function SettingsPage() {
                                     variant="ghost"
                                     onClick={() => onRemove(d.domain)}
                                     disabled={busy}
+                                    aria-label="Remove domain"
                                 >
                                     <Trash2 className="h-4 w-4" />
                                 </Button>

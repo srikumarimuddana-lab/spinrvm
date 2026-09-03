@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import {
     Table,
@@ -295,26 +296,26 @@ export default function AuditLogsPage() {
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                         <Shield className="h-8 w-8 text-violet-500" />
                         Audit Logs
-                    </h1>
-                    <p className="text-muted-foreground mt-1">
-                        Track all admin actions and changes across the system.
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={fetchLogs} disabled={loading}>
-                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={handleExport} disabled={logs.length === 0}>
-                        <Download className="mr-2 h-4 w-4" /> Export Page
-                    </Button>
-                </div>
-            </div>
+                    </span>
+                }
+                description="Track all admin actions and changes across the system."
+                actions={
+                    <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={fetchLogs} disabled={loading}>
+                            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleExport} disabled={logs.length === 0}>
+                            <Download className="mr-2 h-4 w-4" /> Export Page
+                        </Button>
+                    </div>
+                }
+            />
 
             {/* Filters — row 1: search + action + entity */}
             <div className="flex flex-wrap items-center gap-3">

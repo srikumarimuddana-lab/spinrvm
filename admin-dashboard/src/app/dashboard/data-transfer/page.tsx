@@ -2,6 +2,7 @@
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 import { useRequireSuperAdmin } from "@/hooks/useRequireSuperAdmin";
 import { EntitySearchTable } from "@/components/data-transfer/EntitySearchTable";
 import { useEntitySelection } from "@/components/data-transfer/useEntitySelection";
@@ -33,13 +34,10 @@ export default function DataTransferPage() {
 
     return (
         <div className="p-6 space-y-6">
-            <div>
-                <h1 className="text-2xl font-semibold">Data Transfer</h1>
-                <p className="text-muted-foreground">
-                    Search, export, and import users and drivers — with documents, ride history, and the
-                    insurance-period audit trail — between Spinr's own environments.
-                </p>
-            </div>
+            <PageHeader
+                title="Data Transfer"
+                description="Search, export, and import users and drivers — with documents, ride history, and the insurance-period audit trail — between Spinr's own environments."
+            />
 
             <Tabs defaultValue="search">
                 <TabsList>

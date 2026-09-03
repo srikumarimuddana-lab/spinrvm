@@ -296,6 +296,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide, o
                                                 window.open(`tel:${ride.driver_phone}`);
                                             }}
                                             title="Call driver"
+                                            aria-label="Call driver"
                                         >
                                             <Phone className="h-3.5 w-3.5" />
                                         </Button>

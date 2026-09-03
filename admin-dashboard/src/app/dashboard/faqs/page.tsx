@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -172,18 +173,21 @@ export default function FaqsPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <HelpCircle className="h-5 w-5 text-muted-foreground" />
-                    <h1 className="text-xl font-semibold">FAQs</h1>
-                    <Badge variant="secondary">{faqs.length}</Badge>
-                </div>
-                <Button onClick={openCreate} size="sm">
-                    <Plus className="h-4 w-4 mr-1" />
-                    New FAQ
-                </Button>
-            </div>
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
+                        <HelpCircle className="h-5 w-5 text-muted-foreground" />
+                        FAQs
+                        <Badge variant="secondary">{faqs.length}</Badge>
+                    </span>
+                }
+                actions={
+                    <Button onClick={openCreate} size="sm">
+                        <Plus className="h-4 w-4 mr-1" />
+                        New FAQ
+                    </Button>
+                }
+            />
 
             {/* Filters */}
             <div className="flex gap-2">

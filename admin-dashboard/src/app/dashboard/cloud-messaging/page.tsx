@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { PageHeader } from "@/components/page-header";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -406,20 +407,21 @@ export default function CloudMessagingPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                         <Cloud className="h-8 w-8 text-violet-500" />
                         Notifications
-                    </h1>
-                    <p className="text-muted-foreground mt-1">Send push, email, and SMS — service notices or consent-gated marketing — to customers and drivers.</p>
-                </div>
-                <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
-                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-                </Button>
-            </div>
+                    </span>
+                }
+                description="Send push, email, and SMS — service notices or consent-gated marketing — to customers and drivers."
+                actions={
+                    <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
+                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+                    </Button>
+                }
+            />
 
             {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -537,9 +539,9 @@ export default function CloudMessagingPage() {
                                 {/* Service-area filter (optional) — narrows customers/drivers */}
                                 {(form.audience === "customers" || form.audience === "drivers") && (
                                     <div className="space-y-2 pt-1 max-w-sm">
-                                        <Label className="text-sm font-medium flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" /> Service Area <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                                        <Label htmlFor="cm-service-area" className="text-sm font-medium flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" /> Service Area <span className="text-muted-foreground font-normal">(optional)</span></Label>
                                         <Select value={form.service_area_id || "all"} onValueChange={(v) => setForm({ ...form, service_area_id: v === "all" ? "" : v })}>
-                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                            <SelectTrigger id="cm-service-area"><SelectValue /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="all">All areas</SelectItem>
                                                 {serviceAreas.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
@@ -572,17 +574,17 @@ export default function CloudMessagingPage() {
                             </CardHeader>
                             <CardContent className="space-y-4">
                                 <div className="space-y-2">
-                                    <Label className="text-sm font-medium">Title <span className="text-destructive">*</span></Label>
-                                    <Input placeholder="Enter notification title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                                    <Label htmlFor="cm-title" className="text-sm font-medium">Title <span className="text-destructive">*</span></Label>
+                                    <Input id="cm-title" placeholder="Enter notification title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
                                 </div>
                                 <div className="space-y-2">
-                                    <Label className="text-sm font-medium">Description <span className="text-destructive">*</span></Label>
-                                    <Textarea placeholder="Enter notification message..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={5} className="resize-none" />
+                                    <Label htmlFor="cm-description" className="text-sm font-medium">Description <span className="text-destructive">*</span></Label>
+                                    <Textarea id="cm-description" placeholder="Enter notification message..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={5} className="resize-none" />
                                 </div>
                                 <div className="space-y-2 max-w-xs">
-                                    <Label className="text-sm font-medium">Notification Type</Label>
+                                    <Label htmlFor="cm-notification-type" className="text-sm font-medium">Notification Type</Label>
                                     <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectTrigger id="cm-notification-type"><SelectValue /></SelectTrigger>
                                         <SelectContent>
                                             {NOTIFICATION_TYPES.map((t) => (
                                                 <SelectItem key={t.value} value={t.value}>
@@ -654,8 +656,9 @@ export default function CloudMessagingPage() {
                                 </div>
                                 {form.is_scheduled && (
                                     <div className="space-y-1.5">
-                                        <Label className="text-xs text-muted-foreground">Date & Time</Label>
+                                        <Label htmlFor="cm-scheduled-at" className="text-xs text-muted-foreground">Date & Time</Label>
                                         <Input
+                                            id="cm-scheduled-at"
                                             type="datetime-local"
                                             value={form.scheduled_at}
                                             onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })}
@@ -709,8 +712,8 @@ export default function CloudMessagingPage() {
                                             <TableCell><div className="flex items-center gap-1 text-sm"><Calendar className="h-3 w-3 text-blue-500" />{msg.scheduled_at ? formatDate(msg.scheduled_at) : "—"}</div></TableCell>
                                             <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
                                             <TableCell className="text-right"><div className="flex justify-end gap-1">
-                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedMessage(msg)}><Eye className="h-4 w-4" /></Button>
-                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(msg.id)}><Trash2 className="h-4 w-4" /></Button>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="View message details" onClick={() => setSelectedMessage(msg)}><Eye className="h-4 w-4" /></Button>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label="Cancel scheduled message" onClick={() => handleDelete(msg.id)}><Trash2 className="h-4 w-4" /></Button>
                                             </div></TableCell>
                                         </TableRow>
                                     ))}
@@ -744,8 +747,8 @@ export default function CloudMessagingPage() {
                             <Select value={audienceFilter} onValueChange={setAudienceFilter}><SelectTrigger className="w-36"><SelectValue placeholder="Audience" /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem>{AUDIENCE_OPTIONS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}</SelectContent></Select>
                         </div>
                         <div className="flex flex-wrap items-center gap-3">
-                            <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" /></div>
-                            <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" /></div>
+                            <div className="flex items-center gap-2"><Label htmlFor="cm-history-date-from" className="text-xs text-muted-foreground">From</Label><Input id="cm-history-date-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" /></div>
+                            <div className="flex items-center gap-2"><Label htmlFor="cm-history-date-to" className="text-xs text-muted-foreground">To</Label><Input id="cm-history-date-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" /></div>
                             {(dateFrom || dateTo) && <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear</Button>}
                         </div>
 
@@ -778,8 +781,8 @@ export default function CloudMessagingPage() {
                                                     <TableCell className="text-xs text-muted-foreground">{formatDate(msg.sent_at || msg.scheduled_at || msg.created_at)}</TableCell>
                                                     <TableCell className="text-right">
                                                         <div className="flex justify-end gap-1">
-                                                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); setSelectedMessage(msg); }}><Eye className="h-4 w-4" /></Button>
-                                                            {(msg.status === "scheduled" || msg.status === "pending") && <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(msg.id); }}><Trash2 className="h-4 w-4" /></Button>}
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="View message details" onClick={(e) => { e.stopPropagation(); setSelectedMessage(msg); }}><Eye className="h-4 w-4" /></Button>
+                                                            {(msg.status === "scheduled" || msg.status === "pending") && <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label="Cancel message" onClick={(e) => { e.stopPropagation(); handleDelete(msg.id); }}><Trash2 className="h-4 w-4" /></Button>}
                                                         </div>
                                                     </TableCell>
                                                 </TableRow>
@@ -828,15 +831,15 @@ export default function CloudMessagingPage() {
                         {/* Manual add */}
                         <div className="flex flex-wrap items-end gap-2">
                             <div className="space-y-1.5">
-                                <Label className="text-xs text-muted-foreground">Channel</Label>
+                                <Label htmlFor="cm-supp-channel" className="text-xs text-muted-foreground">Channel</Label>
                                 <Select value={newSupp.channel} onValueChange={(v) => setNewSupp({ ...newSupp, channel: v })}>
-                                    <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="cm-supp-channel" className="w-28"><SelectValue /></SelectTrigger>
                                     <SelectContent><SelectItem value="email">Email</SelectItem><SelectItem value="sms">SMS</SelectItem></SelectContent>
                                 </Select>
                             </div>
                             <div className="space-y-1.5 flex-1 min-w-[220px]">
-                                <Label className="text-xs text-muted-foreground">Email or phone to suppress</Label>
-                                <Input placeholder={newSupp.channel === "email" ? "name@example.com" : "+13065551234"} value={newSupp.target} onChange={(e) => setNewSupp({ ...newSupp, target: e.target.value })} />
+                                <Label htmlFor="cm-supp-target" className="text-xs text-muted-foreground">Email or phone to suppress</Label>
+                                <Input id="cm-supp-target" placeholder={newSupp.channel === "email" ? "name@example.com" : "+13065551234"} value={newSupp.target} onChange={(e) => setNewSupp({ ...newSupp, target: e.target.value })} />
                             </div>
                             <Button onClick={handleAddSuppression}><Plus className="mr-2 h-4 w-4" /> Suppress</Button>
                         </div>
@@ -860,7 +863,7 @@ export default function CloudMessagingPage() {
                                                 <TableCell><span className="text-xs text-muted-foreground">{s.source}</span></TableCell>
                                                 <TableCell className="text-xs text-muted-foreground">{s.created_at ? formatDate(s.created_at) : "—"}</TableCell>
                                                 <TableCell className="text-right">
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" title="Lift suppression (re-allow marketing)" onClick={() => handleRemoveSuppression(s.id)}><Trash2 className="h-4 w-4" /></Button>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" title="Lift suppression (re-allow marketing)" aria-label="Lift suppression" onClick={() => handleRemoveSuppression(s.id)}><Trash2 className="h-4 w-4" /></Button>
                                                 </TableCell>
                                             </TableRow>
                                         ))}

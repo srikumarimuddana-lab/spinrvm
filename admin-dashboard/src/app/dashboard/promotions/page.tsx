@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Pagination } from "@/components/ui/pagination";
+import { PageHeader } from "@/components/page-header";
 import {
     Ticket, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Search, Download,
     RefreshCw, Tag, Users, Lock, Globe,
@@ -495,17 +496,21 @@ export default function PromotionsPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon tint, not a status signal (#2816) */}
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2"><Ticket className="h-8 w-8 text-violet-500" /> Promotions</h1>
-                    <p className="text-muted-foreground mt-1">Manage promo codes, private coupons, and track usage.</p>
-                </div>
-                <Button variant="outline" size="sm" onClick={() => { fetchAll(); fetchUsage(); }} disabled={loading}>
-                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-                </Button>
-            </div>
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon tint (#2816) */}
+                        <Ticket className="h-8 w-8 text-violet-500" />
+                        Promotions
+                    </span>
+                }
+                description="Manage promo codes, private coupons, and track usage."
+                actions={
+                    <Button variant="outline" size="sm" onClick={() => { fetchAll(); fetchUsage(); }} disabled={loading}>
+                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+                    </Button>
+                }
+            />
 
             {/* Summary Stats */}
             {stats && (
@@ -589,9 +594,9 @@ export default function PromotionsPage() {
                                                 <TableCell className="text-sm text-muted-foreground">{p.expiry_date ? formatDate(p.expiry_date) : "No expiry"}</TableCell>
                                                 <TableCell><Badge className={sc.color}>{sc.label}</Badge></TableCell>
                                                 <TableCell className="text-right"><div className="flex gap-1 justify-end">
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                                                    {promoTab !== "expired" && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-success" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>}
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(p.id)}><Trash2 className="h-4 w-4" /></Button>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Edit promo code" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
+                                                    {promoTab !== "expired" && <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={p.is_active ? "Deactivate promo code" : "Activate promo code"} onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-success" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>}
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label="Delete promo code" onClick={() => handleDelete(p.id)}><Trash2 className="h-4 w-4" /></Button>
                                                 </div></TableCell>
                                             </TableRow>
                                         );
@@ -772,7 +777,7 @@ export default function PromotionsPage() {
                     <DialogHeader><DialogTitle className="flex items-center gap-2"><Ticket className="h-5 w-5 text-violet-500" /> {editingPromo ? "Edit" : "Create"} {(promoTab === "private" || editingPromo?.promo_type === "private") ? "Private Coupon" : "Promo Code"}</DialogTitle></DialogHeader>
                     <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2"><Label>Code</Label><Input placeholder="e.g. SAVE10" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} className="uppercase tracking-widest font-mono" /></div>
+                            <div className="space-y-2"><Label htmlFor="promo-code">Code</Label><Input id="promo-code" placeholder="e.g. SAVE10" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} className="uppercase tracking-widest font-mono" /></div>
                             <div className="flex items-center gap-2 pt-6">
                                 <Switch id="free-ride-toggle" checked={form.free_ride} onCheckedChange={(v) => setForm({ ...form, free_ride: v })} />
                                 <Label htmlFor="free-ride-toggle" className="cursor-pointer text-sm font-medium">Free ride (100% covered)</Label>
@@ -782,9 +787,9 @@ export default function PromotionsPage() {
                             <>
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="space-y-2">
-                                        <Label>Type</Label>
+                                        <Label htmlFor="promo-discount-type">Type</Label>
                                         <Select value={form.discount_type} onValueChange={(v) => setForm({ ...form, discount_type: v as any })}>
-                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                            <SelectTrigger id="promo-discount-type"><SelectValue /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="flat">Flat ($) — fixed dollar off</SelectItem>
                                                 <SelectItem value="percentage">Percentage (%) — % of ride fare</SelectItem>
@@ -792,8 +797,8 @@ export default function PromotionsPage() {
                                         </Select>
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>{form.discount_type === "flat" ? "Discount Amount ($)" : "Discount Percentage (%)"}</Label>
-                                        <Input type="number" placeholder={form.discount_type === "flat" ? "10.00" : "20"} value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })} />
+                                        <Label htmlFor="promo-discount-value">{form.discount_type === "flat" ? "Discount Amount ($)" : "Discount Percentage (%)"}</Label>
+                                        <Input id="promo-discount-value" type="number" placeholder={form.discount_type === "flat" ? "10.00" : "20"} value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })} />
                                         <p className="text-xs text-muted-foreground">
                                             {form.discount_type === "flat"
                                                 ? "Deducted from ride fare only (not booking fees or taxes)"
@@ -804,8 +809,8 @@ export default function PromotionsPage() {
                                 {form.discount_type === "percentage" && (
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-2">
-                                            <Label>Max Discount Cap ($) <span className="text-destructive font-normal">*required</span></Label>
-                                            <Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-warning focus-visible:ring-warning" : ""} />
+                                            <Label htmlFor="promo-max-discount">Max Discount Cap ($) <span className="text-destructive font-normal">*required</span></Label>
+                                            <Input id="promo-max-discount" type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-warning focus-visible:ring-warning" : ""} />
                                             {!form.max_discount && (
                                                 <p className="text-xs text-warning">Without a cap, a 75% promo on a $100 fare gives $75 off. Set a cap to limit this.</p>
                                             )}
@@ -815,18 +820,18 @@ export default function PromotionsPage() {
                             </>
                         )}
                         <div className="grid grid-cols-3 gap-4">
-                            <div className="space-y-2"><Label>Max Uses</Label><Input type="number" value={form.max_uses} onChange={(e) => setForm({ ...form, max_uses: e.target.value })} /></div>
-                            <div className="space-y-2"><Label>Per User</Label><Input type="number" value={form.max_uses_per_user} onChange={(e) => setForm({ ...form, max_uses_per_user: e.target.value })} /></div>
-                            <div className="space-y-2"><Label>Expiry Date</Label><Input type="date" value={form.expiry_date} onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} /></div>
+                            <div className="space-y-2"><Label htmlFor="promo-max-uses">Max Uses</Label><Input id="promo-max-uses" type="number" value={form.max_uses} onChange={(e) => setForm({ ...form, max_uses: e.target.value })} /></div>
+                            <div className="space-y-2"><Label htmlFor="promo-max-uses-per-user">Per User</Label><Input id="promo-max-uses-per-user" type="number" value={form.max_uses_per_user} onChange={(e) => setForm({ ...form, max_uses_per_user: e.target.value })} /></div>
+                            <div className="space-y-2"><Label htmlFor="promo-expiry-date">Expiry Date</Label><Input id="promo-expiry-date" type="date" value={form.expiry_date} onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} /></div>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2"><Label>Min Ride Fare ($)</Label><Input type="number" placeholder="0" value={form.min_ride_fare} onChange={(e) => setForm({ ...form, min_ride_fare: e.target.value })} /></div>
+                            <div className="space-y-2"><Label htmlFor="promo-min-fare">Min Ride Fare ($)</Label><Input id="promo-min-fare" type="number" placeholder="0" value={form.min_ride_fare} onChange={(e) => setForm({ ...form, min_ride_fare: e.target.value })} /></div>
                             <div className="flex items-center gap-2 pt-6"><Switch id="first-ride" checked={form.first_ride_only} onCheckedChange={(v) => setForm({ ...form, first_ride_only: v })} /><Label htmlFor="first-ride" className="cursor-pointer text-sm">First ride only</Label></div>
                         </div>
-                        <div className="space-y-2"><Label>Description</Label><Input placeholder="Optional description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+                        <div className="space-y-2"><Label htmlFor="promo-description">Description</Label><Input id="promo-description" placeholder="Optional description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
 
                         <div className="space-y-2">
-                            <Label className="flex items-center gap-1.5">
+                            <Label htmlFor="promo-service-area" className="flex items-center gap-1.5">
                                 Service Area
                                 <span className="text-xs font-normal text-muted-foreground">(leave blank to apply in all areas)</span>
                             </Label>
@@ -834,7 +839,7 @@ export default function PromotionsPage() {
                                 value={form.service_area_id || "all"}
                                 onValueChange={(v) => setForm({ ...form, service_area_id: v === "all" ? "" : v })}
                             >
-                                <SelectTrigger>
+                                <SelectTrigger id="promo-service-area">
                                     <SelectValue placeholder="All areas" />
                                 </SelectTrigger>
                                 <SelectContent>

@@ -300,12 +300,12 @@ export default function CompanyMembersPage() {
                             />
                         </div>
                         <div>
-                            <Label>Role</Label>
+                            <Label htmlFor="invite-role">Role</Label>
                             <Select
                                 value={inviteRole}
                                 onValueChange={(v) => setInviteRole(v as CorporateMember["role"])}
                             >
-                                <SelectTrigger className="w-36">
+                                <SelectTrigger id="invite-role" className="w-36">
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>

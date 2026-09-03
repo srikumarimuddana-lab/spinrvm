@@ -59,6 +59,7 @@ import { DataQualityScan } from "./_components/DataQualityScan";
 import { DriverRepairPass } from "./_components/DriverRepairPass";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -554,15 +555,10 @@ export default function BulkOperationsPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-8 p-4">
-            <div>
-                <h1 className="text-2xl font-semibold">Bulk Operations</h1>
-                <p className="text-sm text-muted-foreground">
-                    Super-admin migration tools, grouped below into the order a fresh export should
-                    go through them — see the phase headings for what each group does and why it
-                    comes where it does. Every tool is dry-run first: preview or validate, review
-                    the report, then commit. Nothing writes until you click commit.
-                </p>
-            </div>
+            <PageHeader
+                title="Bulk Operations"
+                description="Super-admin migration tools, grouped below into the order a fresh export should go through them — see the phase headings for what each group does and why it comes where it does. Every tool is dry-run first: preview or validate, review the report, then commit. Nothing writes until you click commit."
+            />
 
             <MigrationChecklist />
 

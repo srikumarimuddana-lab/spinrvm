@@ -27,6 +27,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { LifeBuoy, HelpCircle, PackageSearch, Flag, FileWarning, BookOpen, ScrollText } from "lucide-react";
 import dynamic from "next/dynamic";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 const TicketsTab = dynamic(() => import("./_tabs/tickets"), { ssr: false, loading: () => <TabLoader /> });
@@ -87,10 +88,14 @@ function SupportPageInner() {
     return (
         <div className="px-1 sm:px-0">
             <div className="mb-4">
-                <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
-                    <LifeBuoy className="h-5 w-5 sm:h-6 sm:w-6" /> Support & Issues
-                </h1>
-                <p className="text-xs sm:text-sm text-muted-foreground mt-1">Manage tickets, disputes, lost items, and user flags</p>
+                <PageHeader
+                    title={
+                        <span className="inline-flex items-center gap-2">
+                            <LifeBuoy className="h-5 w-5 sm:h-6 sm:w-6" /> Support & Issues
+                        </span>
+                    }
+                    description="Manage tickets, disputes, lost items, and user flags"
+                />
             </div>
 
             <Tabs value={activeTab} onValueChange={onTabChange}>

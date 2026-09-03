@@ -348,10 +348,11 @@ export function CreateRideModal({
 
                     {/* Rider Selection */}
                     <div className="relative">
-                        <Label>Rider</Label>
+                        <Label htmlFor="create-ride-rider">Rider</Label>
                         <div className="relative mt-1">
                             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                             <Input
+                                id="create-ride-rider"
                                 placeholder="Search by name, email, or phone..."
                                 value={riderSearch}
                                 onChange={(e) => {
@@ -391,10 +392,11 @@ export function CreateRideModal({
 
                     {/* Driver Selection */}
                     <div className="relative">
-                        <Label>Driver (Optional — online &amp; available only)</Label>
+                        <Label htmlFor="create-ride-driver">Driver (Optional — online &amp; available only)</Label>
                         <div className="relative mt-1">
                             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                             <Input
+                                id="create-ride-driver"
                                 placeholder="Search driver by name or phone..."
                                 value={driverSearch}
                                 onChange={(e) => {
@@ -432,7 +434,7 @@ export function CreateRideModal({
 
                     {/* Pickup Address */}
                     <div className="relative">
-                        <Label>
+                        <Label htmlFor="create-ride-pickup">
                             Pickup Location
                             {!adminLoc && (
                                 <span className="ml-2 text-xs text-muted-foreground">
@@ -444,6 +446,7 @@ export function CreateRideModal({
                             {/* eslint-disable-next-line no-restricted-syntax -- decorative pickup map-pin color convention, not a status signal (#2816) */}
                             <MapPin className="absolute left-2.5 top-2.5 h-4 w-4 text-blue-500" />
                             <Input
+                                id="create-ride-pickup"
                                 placeholder="Start typing address or place..."
                                 value={pickupInput}
                                 onChange={(e) => {
@@ -478,7 +481,7 @@ export function CreateRideModal({
 
                     {/* Dropoff Address */}
                     <div className="relative">
-                        <Label>
+                        <Label htmlFor="create-ride-dropoff">
                             Dropoff Location
                             {selectedPickup && (
                                 <span className="ml-2 text-xs text-muted-foreground">(biased to pickup)</span>
@@ -488,6 +491,7 @@ export function CreateRideModal({
                             {/* eslint-disable-next-line no-restricted-syntax -- decorative dropoff map-pin color convention, not a status signal (#2816) */}
                             <MapPin className="absolute left-2.5 top-2.5 h-4 w-4 text-red-500" />
                             <Input
+                                id="create-ride-dropoff"
                                 placeholder="Start typing address or place..."
                                 value={dropoffInput}
                                 onChange={(e) => {
@@ -522,9 +526,9 @@ export function CreateRideModal({
 
                     {/* Vehicle Type */}
                     <div className="grid gap-2">
-                        <Label>Vehicle Type</Label>
+                        <Label htmlFor="create-ride-vehicle-type">Vehicle Type</Label>
                         <Select value={vehicleTypeId} onValueChange={setVehicleTypeId}>
-                            <SelectTrigger>
+                            <SelectTrigger id="create-ride-vehicle-type">
                                 <SelectValue placeholder={vehicleTypes.length ? "Select vehicle type" : "Loading..."} />
                             </SelectTrigger>
                             <SelectContent>
@@ -583,9 +587,10 @@ export function CreateRideModal({
                     {/* Promo */}
                     {estimate && (
                         <div className="grid gap-2">
-                            <Label>Promo Code (Optional)</Label>
+                            <Label htmlFor="create-ride-promo-code">Promo Code (Optional)</Label>
                             <div className="flex gap-2">
                                 <Input
+                                    id="create-ride-promo-code"
                                     placeholder="e.g. WELCOME10"
                                     value={promoCode}
                                     onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
@@ -610,13 +615,14 @@ export function CreateRideModal({
 
                     {/* Final fare (editable override) */}
                     <div className="grid gap-2">
-                        <Label>
+                        <Label htmlFor="create-ride-total-fare">
                             Total Fare
                             {fareEdited && <span className="ml-2 text-xs text-warning">(overridden)</span>}
                         </Label>
                         <div className="relative">
                             <span className="absolute left-3 top-2.5 text-sm text-muted-foreground">$</span>
                             <Input
+                                id="create-ride-total-fare"
                                 type="number"
                                 step="0.01"
                                 placeholder="0.00"

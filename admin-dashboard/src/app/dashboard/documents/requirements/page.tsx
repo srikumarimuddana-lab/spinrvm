@@ -137,12 +137,12 @@ function ReqModal({ open, req, onClose, onSave }: ReqModalProps) {
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1">
-                            <Label>Applies To</Label>
+                            <Label htmlFor="req-applicable-to">Applies To</Label>
                             <Select
                                 value={form.applicable_to}
                                 onValueChange={(v) => setForm((f) => ({ ...f, applicable_to: v }))}
                             >
-                                <SelectTrigger>
+                                <SelectTrigger id="req-applicable-to">
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -154,10 +154,11 @@ function ReqModal({ open, req, onClose, onSave }: ReqModalProps) {
                         </div>
                         <div className="flex items-center gap-2 pt-6">
                             <Switch
+                                id="req-required"
                                 checked={form.is_required}
                                 onCheckedChange={(v) => setForm((f) => ({ ...f, is_required: v }))}
                             />
-                            <Label>Required</Label>
+                            <Label htmlFor="req-required">Required</Label>
                         </div>
                     </div>
                     {error && <p className="text-sm text-destructive">{error}</p>}

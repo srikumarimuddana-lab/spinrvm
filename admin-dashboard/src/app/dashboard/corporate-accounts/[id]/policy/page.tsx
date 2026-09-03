@@ -315,7 +315,7 @@ export default function CompanyPolicyPage() {
             <Card>
                 <CardContent className="space-y-3 p-4">
                     <div>
-                        <Label>Allowed payment source</Label>
+                        <Label htmlFor="payment-source">Allowed payment source</Label>
                         <p className="text-xs text-muted-foreground mb-2">
                             Controls whether the rider&apos;s personal card can be used as fallback.
                         </p>
@@ -323,7 +323,7 @@ export default function CompanyPolicyPage() {
                             value={paymentSource}
                             onValueChange={(v) => setPaymentSource(v as PaymentSourcePolicy)}
                         >
-                            <SelectTrigger className="w-72">
+                            <SelectTrigger id="payment-source" className="w-72">
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>

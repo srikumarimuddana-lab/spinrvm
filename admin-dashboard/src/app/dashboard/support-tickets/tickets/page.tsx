@@ -285,37 +285,37 @@ export default function TicketListPage() {
                     </DialogHeader>
                     <div className="space-y-3">
                         <div className="space-y-1">
-                            <Label>Subject *</Label>
-                            <Input value={form.subject} onChange={(e) => setF("subject", e.target.value)} />
+                            <Label htmlFor="new-ticket-subject">Subject *</Label>
+                            <Input id="new-ticket-subject" value={form.subject} onChange={(e) => setF("subject", e.target.value)} />
                         </div>
                         <div className="space-y-1">
-                            <Label>Description</Label>
-                            <Textarea rows={3} value={form.description} onChange={(e) => setF("description", e.target.value)} />
+                            <Label htmlFor="new-ticket-description">Description</Label>
+                            <Textarea id="new-ticket-description" rows={3} value={form.description} onChange={(e) => setF("description", e.target.value)} />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                             <div className="space-y-1">
-                                <Label>Requester name</Label>
-                                <Input value={form.name} onChange={(e) => setF("name", e.target.value)} />
+                                <Label htmlFor="new-ticket-name">Requester name</Label>
+                                <Input id="new-ticket-name" value={form.name} onChange={(e) => setF("name", e.target.value)} />
                             </div>
                             <div className="space-y-1">
-                                <Label>Requester email</Label>
-                                <Input type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} />
+                                <Label htmlFor="new-ticket-email">Requester email</Label>
+                                <Input id="new-ticket-email" type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} />
                             </div>
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                             <div className="space-y-1">
-                                <Label>Department</Label>
+                                <Label htmlFor="new-ticket-department">Department</Label>
                                 <Select value={form.department || undefined} onValueChange={(v) => setF("department", v)}>
-                                    <SelectTrigger aria-label={departments.length ? "Select" : "No departments"}><SelectValue placeholder={departments.length ? "Select" : "No departments"} /></SelectTrigger>
+                                    <SelectTrigger id="new-ticket-department" aria-label={departments.length ? "Select" : "No departments"}><SelectValue placeholder={departments.length ? "Select" : "No departments"} /></SelectTrigger>
                                     <SelectContent>
                                         {departments.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
                                     </SelectContent>
                                 </Select>
                             </div>
                             <div className="space-y-1">
-                                <Label>Priority</Label>
+                                <Label htmlFor="new-ticket-priority">Priority</Label>
                                 <Select value={form.priority} onValueChange={(v) => setF("priority", v)}>
-                                    <SelectTrigger aria-label="Priority"><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="new-ticket-priority" aria-label="Priority"><SelectValue /></SelectTrigger>
                                     <SelectContent>{PRIORITIES.filter((p) => p !== "All").map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
                                 </Select>
                             </div>

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -159,22 +160,21 @@ export default function DisputesPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
             <AlertTriangle className="h-6 w-6 text-warning" />
             Dispute Resolution
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Review and resolve rider payment disputes and refund requests
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
-      </div>
+          </span>
+        }
+        description="Review and resolve rider payment disputes and refund requests"
+        actions={
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        }
+      />
 
       <Tabs defaultValue="rider">
         <TabsList>
@@ -319,9 +319,9 @@ export default function DisputesPage() {
               {(selected.status === "open" || selected.status === "under_review") ? (
                 <>
                   <div>
-                    <Label>Resolution</Label>
+                    <Label htmlFor="dispute-resolution">Resolution</Label>
                     <Select value={resolution} onValueChange={(v) => { setResolution(v); setResolveError(null); }}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="dispute-resolution"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="approved">Approve Full Refund</SelectItem>
                         <SelectItem value="partial_refund">Partial Refund</SelectItem>
@@ -331,13 +331,13 @@ export default function DisputesPage() {
                   </div>
                   {resolution === "partial_refund" && (
                     <div>
-                      <Label>Refund Amount ($)</Label>
-                      <Input type="number" step="0.01" value={refundAmount} onChange={e => setRefundAmount(e.target.value)} placeholder={String(selected.requested_amount || 0)} />
+                      <Label htmlFor="dispute-refund-amount">Refund Amount ($)</Label>
+                      <Input id="dispute-refund-amount" type="number" step="0.01" value={refundAmount} onChange={e => setRefundAmount(e.target.value)} placeholder={String(selected.requested_amount || 0)} />
                     </div>
                   )}
                   <div>
-                    <Label>Admin Note (optional)</Label>
-                    <Input value={adminNote} onChange={e => setAdminNote(e.target.value)} placeholder="Internal note about this resolution" />
+                    <Label htmlFor="dispute-admin-note">Admin Note (optional)</Label>
+                    <Input id="dispute-admin-note" value={adminNote} onChange={e => setAdminNote(e.target.value)} placeholder="Internal note about this resolution" />
                   </div>
                   {resolveError && (
                     <p className="text-sm text-destructive">{resolveError}</p>

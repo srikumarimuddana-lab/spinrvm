@@ -219,8 +219,8 @@ export default function DriverAppealsPage() {
               {selected.status === "pending" ? (
                 <>
                   <div>
-                    <Label>Admin note (optional, shared internally)</Label>
-                    <Input value={adminNote} onChange={(e) => setAdminNote(e.target.value)} placeholder="Reasoning for this decision" />
+                    <Label htmlFor="appeal-admin-note">Admin note (optional, shared internally)</Label>
+                    <Input id="appeal-admin-note" value={adminNote} onChange={(e) => setAdminNote(e.target.value)} placeholder="Reasoning for this decision" />
                   </div>
                   {resolveError && <p className="text-sm text-destructive">{resolveError}</p>}
                   <p className="text-xs text-muted-foreground">

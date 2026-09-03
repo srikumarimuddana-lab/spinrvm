@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -297,27 +298,29 @@ export default function HeatMapPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Heat Map</h1>
-                    <p className="text-muted-foreground mt-1">
+            <PageHeader
+                title="Heat Map"
+                description={
+                    <>
                         Historical ride density —{" "}
                         {DATE_RANGE_PRESETS.find((p) => p.value === dateRange)?.label ?? "custom range"}.
                         Live demand is in the section below.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={fetchHeatMapData}
-                        disabled={loading || !!dateError}
-                    >
-                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+                    </>
+                }
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={fetchHeatMapData}
+                            disabled={loading || !!dateError}
+                        >
+                            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                }
+            />
 
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -381,9 +384,9 @@ export default function HeatMapPage() {
 
                         {/* Date Range */}
                         <div className="space-y-2">
-                            <Label>Date Range</Label>
+                            <Label htmlFor="heatmap-date-range">Date Range</Label>
                             <Select value={dateRange} onValueChange={setDateRange}>
-                                <SelectTrigger>
+                                <SelectTrigger id="heatmap-date-range">
                                     <SelectValue placeholder="Select range" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -398,9 +401,9 @@ export default function HeatMapPage() {
 
                         {/* Service Area */}
                         <div className="space-y-2">
-                            <Label>Service Area</Label>
+                            <Label htmlFor="heatmap-service-area">Service Area</Label>
                             <Select value={serviceAreaId} onValueChange={setServiceAreaId}>
-                                <SelectTrigger>
+                                <SelectTrigger id="heatmap-service-area">
                                     <SelectValue placeholder="All Areas" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -416,9 +419,9 @@ export default function HeatMapPage() {
 
                         {/* Group By */}
                         <div className="space-y-2">
-                            <Label>Show</Label>
+                            <Label htmlFor="heatmap-group-by">Show</Label>
                             <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
-                                <SelectTrigger>
+                                <SelectTrigger id="heatmap-group-by">
                                     <SelectValue placeholder="Select" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -433,16 +436,18 @@ export default function HeatMapPage() {
                     {/* Custom Date Range */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                         <div className="space-y-2">
-                            <Label>Start Date (Custom)</Label>
+                            <Label htmlFor="heatmap-start-date">Start Date (Custom)</Label>
                             <Input
+                                id="heatmap-start-date"
                                 type="date"
                                 value={startDate}
                                 onChange={(e) => setStartDate(e.target.value)}
                             />
                         </div>
                         <div className="space-y-2">
-                            <Label>End Date (Custom)</Label>
+                            <Label htmlFor="heatmap-end-date">End Date (Custom)</Label>
                             <Input
+                                id="heatmap-end-date"
                                 type="date"
                                 value={endDate}
                                 onChange={(e) => setEndDate(e.target.value)}

@@ -327,6 +327,7 @@ export default function VehicleTypesPage() {
                                         <Button
                                             variant="ghost"
                                             size="icon"
+                                            aria-label="Edit vehicle type"
                                             onClick={() => openEdit(vt)}
                                         >
                                             <Pencil className="h-4 w-4" />
@@ -335,6 +336,7 @@ export default function VehicleTypesPage() {
                                             variant="ghost"
                                             size="icon"
                                             className="text-destructive hover:text-destructive"
+                                            aria-label="Delete vehicle type"
                                             onClick={() => handleDelete(vt.id)}
                                         >
                                             <Trash2 className="h-4 w-4" />
@@ -358,8 +360,9 @@ export default function VehicleTypesPage() {
 
                     <div className="space-y-4">
                         <div className="space-y-2">
-                            <Label>Name</Label>
+                            <Label htmlFor="vehicle-type-name">Name</Label>
                             <Input
+                                id="vehicle-type-name"
                                 placeholder="e.g. Spinr Go"
                                 value={form.name}
                                 onChange={(e) =>
@@ -369,8 +372,9 @@ export default function VehicleTypesPage() {
                         </div>
 
                         <div className="space-y-2">
-                            <Label>Description</Label>
+                            <Label htmlFor="vehicle-type-description">Description</Label>
                             <Input
+                                id="vehicle-type-description"
                                 placeholder="e.g. Affordable rides"
                                 value={form.description}
                                 onChange={(e) =>
@@ -381,8 +385,9 @@ export default function VehicleTypesPage() {
 
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <Label>Icon Name</Label>
+                                <Label htmlFor="vehicle-type-icon">Icon Name</Label>
                                 <Input
+                                    id="vehicle-type-icon"
                                     placeholder="car"
                                     value={form.icon}
                                     onChange={(e) =>
@@ -391,8 +396,9 @@ export default function VehicleTypesPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <Label>Capacity</Label>
+                                <Label htmlFor="vehicle-type-capacity">Capacity</Label>
                                 <Input
+                                    id="vehicle-type-capacity"
                                     type="number"
                                     min={1}
                                     max={20}

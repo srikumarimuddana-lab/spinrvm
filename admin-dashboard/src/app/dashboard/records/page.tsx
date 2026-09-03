@@ -39,6 +39,7 @@ import { Suspense, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ShieldAlert } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 import { useAuthStore } from "@/store/authStore";
 
 import DataTransferPage from "../data-transfer/page";
@@ -114,13 +115,10 @@ function RecordsPageInner() {
 
     return (
         <div className="p-6 space-y-6">
-            <div>
-                <h1 className="text-2xl font-semibold">Records &amp; Compliance</h1>
-                <p className="text-muted-foreground">
-                    Search, export, import, and report on regulated driver/rider data — SGI compliance forms, tax
-                    reports, bulk data tools, and the dual-approval queue that gates the largest exports.
-                </p>
-            </div>
+            <PageHeader
+                title="Records & Compliance"
+                description="Search, export, import, and report on regulated driver/rider data — SGI compliance forms, tax reports, bulk data tools, and the dual-approval queue that gates the largest exports."
+            />
 
             <Tabs value={activeTab} onValueChange={onTabChange}>
                 <TabsList>

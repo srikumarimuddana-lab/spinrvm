@@ -1027,26 +1027,43 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         )
             else:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest"})
-                for driver, eta_sec, _ in ranked:
-                    if len(claimed_drivers) >= max_offers:
-                        break
-                    fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
-                    if fresh:
-                        # The claim's own UPDATE returns the post-claim row, so no follow-up
-                        # get_driver_by_id is needed — and that read was guaranteed uncached
-                        # anyway, because claim_driver_atomic invalidates the cache entry on
-                        # both sides of the update. Up to max_offers of those per attempt.
-                        #
-                        # Revalidate the FULL eligibility set on the freshly-read row, not
-                        # just is_online. claim_driver_atomic only guards id + is_available,
-                        # so an admin who suspended the driver or flipped them back to
-                        # needs_review between the candidate read and the claim would
-                        # otherwise still get offered — the exact stale-status case the
-                        # candidate filter (is_verified + status='active') is meant to stop.
-                        if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
-                            claimed_drivers.append((fresh, eta_sec))
-                        else:
-                            await _deps.db_supabase.set_driver_available(driver["id"], True)
+                try:
+                    for driver, eta_sec, _ in ranked:
+                        if len(claimed_drivers) >= max_offers:
+                            break
+                        fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+                        if fresh:
+                            # The claim's own UPDATE returns the post-claim row, so no follow-up
+                            # get_driver_by_id is needed — and that read was guaranteed uncached
+                            # anyway, because claim_driver_atomic invalidates the cache entry on
+                            # both sides of the update. Up to max_offers of those per attempt.
+                            #
+                            # Revalidate the FULL eligibility set on the freshly-read row, not
+                            # just is_online. claim_driver_atomic only guards id + is_available,
+                            # so an admin who suspended the driver or flipped them back to
+                            # needs_review between the candidate read and the claim would
+                            # otherwise still get offered — the exact stale-status case the
+                            # candidate filter (is_verified + status='active') is meant to stop.
+                            if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
+                                claimed_drivers.append((fresh, eta_sec))
+                            else:
+                                await _deps.db_supabase.set_driver_available(driver["id"], True)
+                except Exception as e:
+                    # Release every driver claimed so far before propagating.
+                    # Mirrors the ride_offers-insert failure handling below
+                    # (:1080-1086) — without this, a mid-loop exception (e.g. a
+                    # transient PostgREST error on the 3rd of 5 claims) would
+                    # strand the earlier-claimed drivers is_available=False
+                    # with no ride_offers row and no re-dispatch, invisible to
+                    # both the driver and dispatch (ACTION_ITEMS.md C54,
+                    # plans/2026-09-03-path-to-a-implementation-plan.md WS-1).
+                    logger.error(
+                        f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}",
+                        exc_info=True,
+                    )
+                    for d, _ in claimed_drivers:
+                        await _deps.db_supabase.set_driver_available(d["id"], True)
+                    raise
 
             if not claimed_drivers:
                 logger.info(f"[DISPATCH] no drivers could be claimed for ride {ride_id}")
@@ -1377,8 +1394,42 @@ async def _offer_timeout_handler(
         if not ride:
             return
 
-        # Only act if the ride hasn't progressed past assignment.
+        # Only act if the ride hasn't progressed past assignment. This is a
+        # cheap pre-check to skip wasted work in the common case, but is NOT
+        # itself race-safe — the driver can still accept between this read
+        # and the conditional update below, so that update (not this check)
+        # is the real guard for everything else in this function.
         if ride.get("status") != RideStatus.DRIVER_ASSIGNED or ride.get("driver_id") != driver_id:
+            return
+
+        # Conditional revert to searching, scoped to the exact state just
+        # observed — the same optimistic-lock pattern
+        # routes/drivers/ride_flow.py:331 uses for driver-side accept. 0 rows
+        # means the driver accepted in the same window: nothing below this
+        # point may run. Incrementing the miss streak, releasing the driver
+        # back to the available pool, or auto-offlining them would all be
+        # acting on a driver who just became correctly obligated to this
+        # ride (insurance Period 2), not one who missed the offer — and
+        # re-dispatching (below) would search for a second driver on a ride
+        # that already has one. See ACTION_ITEMS.md C54 /
+        # plans/2026-09-03-path-to-a-implementation-plan.md WS-1.
+        reverted = await _deps.db.update_one(
+            "rides",
+            {"id": ride_id, "status": RideStatus.DRIVER_ASSIGNED, "driver_id": driver_id},
+            {
+                "$set": {
+                    "status": RideStatus.SEARCHING,
+                    "driver_id": None,
+                    "driver_notified_at": None,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+        if reverted is None:
+            logger.info(
+                f"[DISPATCH] Offer timeout for ride {ride_id} driver {driver_id} lost the race — "
+                "accepted in the same window, skipping revert/notify/re-dispatch"
+            )
             return
 
         logger.info(
@@ -1425,21 +1476,6 @@ async def _offer_timeout_handler(
             # online/commercial-insurance window for an offline driver.
             if isinstance(released, dict) and released.get("is_available"):
                 await _deps.record_period_transition(driver_id, 1)
-
-        # Put the ride back in the searching state so it can be
-        # re-dispatched or picked up by the next dispatch cycle.
-        await _deps.db.update_one(
-            "rides",
-            {"id": ride_id},
-            {
-                "$set": {
-                    "status": RideStatus.SEARCHING,
-                    "driver_id": None,
-                    "driver_notified_at": None,
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
 
         # Notify rider via WebSocket.
         if rider_id:

@@ -157,7 +157,7 @@ def pytest_collection_modifyitems(config, items):
 
 # Migrations applied, in dependency order. See the module docstring for why
 # 77/80 are excluded and why 100/64 were added beyond the plan doc's list.
-# 401 added for C50 Phase 2 (T14) -- the dispatch_claim_batch RPC itself,
+# 402 added for C50 Phase 2 (T14) -- the dispatch_claim_batch RPC itself,
 # the actual object under test in test_claim_batch.py. 12 and 157 added
 # alongside it: dispatch_claim_batch's SQL body references drivers.status
 # and drivers.availability_claimed_at, and NEITHER column exists in the

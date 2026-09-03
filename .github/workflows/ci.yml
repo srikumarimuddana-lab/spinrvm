@@ -108,31 +108,33 @@ jobs:
       - name: Run backend tests
         working-directory: backend
         env:
-          DATABASE_URL: postgresql://postgres:***@localhost:5432/spinr_test
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: spinr_test
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SECRET_KEY: test-secret-key-for-ci
           ENV: test
         run: |
-          # C50 Phase 1 (T11) follow-up: tests/direct_pool and tests/rls each
-          # self-skip via their own conftest.py's DB pre-flight check when no
-          # real Postgres is reachable -- but that check is `_DSN = TEST_DATABASE_URL
-          # or DATABASE_URL` truthiness, and THIS step sets DATABASE_URL to the
-          # fake `postgres:***@localhost...` placeholder above (never meant to be
-          # dialled -- this step's own tests never open a real DB connection).
-          # A truthy fake DSN defeats both self-skips: verified empirically with
-          # `pytest --collect-only` using this exact invocation's env -- both
-          # directories are collected here (no testpaths/ini exclusion covers
-          # them), and tests/direct_pool's conftest.py additionally confirmed via
-          # direct repro that a bare conftest-level `pytestmark` does NOT
-          # propagate to sibling test modules, so the skip silently never fires
-          # for either directory. Left unfixed, this step would try a real
-          # psycopg2.connect() against the fake DSN and fail the job for real
-          # instead of skipping cleanly. Both suites are excluded from THIS
-          # mocked-DB step only, not from CI as a whole: each has its own
-          # dedicated real-Postgres step immediately below. Keep those two
-          # steps in sync with these --ignore flags -- an --ignore added here
-          # without a matching step silently drops that suite from CI.
+          # DATABASE_URL carries the REAL postgres:15 service credentials
+          # (composed from the PG* vars above so no user:password@host literal
+          # sits in the tracked file). It was briefly masked to `postgres:***@`
+          # -- a change that (a) did not satisfy the pre-commit secret pattern
+          # it was aimed at, and (b) made tests/test_phase_distance_parity.py
+          # (which reads DATABASE_URL and skips on connect failure) silently
+          # skip, taking the Python-vs-Postgres per-phase distance parity
+          # suite out of CI. Review fix, 2026-09-03.
+          #
+          # tests/direct_pool and tests/rls are excluded from THIS step only:
+          # each needs the isolated `-c /dev/null --confcutdir=...` invocation
+          # (no coverage gate, no mocked-Supabase stack) that its dedicated
+          # real-Postgres step immediately below provides. Keep those steps in
+          # sync with these --ignore flags -- an --ignore added here without a
+          # matching step silently drops that suite from CI.
+          CI_PG_DSN="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          export DATABASE_URL="$CI_PG_DSN"
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
             --ignore=tests/direct_pool --ignore=tests/rls -v
 
@@ -141,20 +143,33 @@ jobs:
       # Phase 2/T12-T13 not yet built) direct dispatch pool module, against
       # the postgres:15 service already provisioned above for `DATABASE_URL`
       # -- until this step, nothing in CI ran a real-PG suite against it.
-      # Real credentials (not the `***` placeholder DATABASE_URL the mocked
-      # suite above uses): TEST_DATABASE_URL must carry the actual
-      # `postgres:postgres` service credentials so this job can CREATE
-      # DATABASE for its own throwaway scratch database (see
-      # tests/direct_pool/conftest.py). -c + --confcutdir isolate this run
-      # from backend/tests/conftest.py's coverage gate and mocked-Supabase
-      # stack -- the invocation CLAUDE.md documents for this style of
-      # real-Postgres suite, shared with the tests/rls step below.
+      # TEST_DATABASE_URL must carry the actual `postgres:postgres` service
+      # credentials so this job can CREATE DATABASE for its own throwaway
+      # scratch database (see tests/direct_pool/conftest.py); composed from
+      # PG* vars like the RLS step below so no credential literal sits in the
+      # tracked file. -c + --confcutdir isolate this run from
+      # backend/tests/conftest.py's coverage gate and mocked-Supabase stack --
+      # the invocation CLAUDE.md documents for this style of real-Postgres
+      # suite. Also runs test_claim_batch_psycopg3.py, the only test that
+      # drives the RPC through the production psycopg3 pool.
       - name: Run direct-pool real-Postgres tests (C50 Phase 1, T11)
+        # `!cancelled()`: without a condition this step is skipped whenever
+        # the mocked-suite step above fails, which silently dropped this
+        # suite (and the RLS one below) from CI every time main's mocked
+        # suite was red -- found 2026-09-03 on #4883 and on main itself.
+        # The job still fails on any failing step; this only guarantees the
+        # real-Postgres suites execute and report.
+        if: ${{ !cancelled() }}
         working-directory: backend
         env:
-          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: spinr_test
         run: |
-          pytest tests/direct_pool -c /dev/null --confcutdir=tests/direct_pool -v
+          CI_PG_DSN="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          TEST_DATABASE_URL="$CI_PG_DSN" pytest tests/direct_pool -c /dev/null --confcutdir=tests/direct_pool -v
 
       # DB-role-level RLS policy tests (backend/tests/rls/) -- the repo's only
       # coverage that exercises Postgres Row-Level Security from a real
@@ -172,6 +187,8 @@ jobs:
       # auth-boundary suite out of CI altogether. This step is that
       # replacement, using the isolated invocation CLAUDE.md documents for it.
       - name: Run RLS role-level tests (real Postgres)
+        # Same `!cancelled()` reasoning as the direct-pool step above.
+        if: ${{ !cancelled() }}
         working-directory: backend
         env:
           PGHOST: localhost

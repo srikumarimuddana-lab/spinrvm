@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Any, Dict
 
 try:
+    from ...repositories._base import _redact_pg_error
     from ...repositories._base import get_db_call_count as _get_db_call_count
     from ...repositories._base import reset_db_call_count as _reset_db_call_count
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
@@ -15,6 +16,7 @@ try:
     from ...utils.metrics import time_ms as _time_ms
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
 except ImportError:  # pragma: no cover - dual-import pattern
+    from repositories._base import _redact_pg_error  # type: ignore
     from repositories._base import get_db_call_count as _get_db_call_count  # type: ignore
     from repositories._base import reset_db_call_count as _reset_db_call_count  # type: ignore
     from services.incentive_service import (  # type: ignore
@@ -873,6 +875,24 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # flag-off path — see test_dispatch_claim_parity.py's
         # flag-off-byte-identical assertion.
         _direct_pool_enabled = bool(app_settings.get("dispatch_direct_pool_enabled", False))
+        if _direct_pool_enabled and not _dispatch_pool.is_open():
+            # Review fix (2026-09-03): the flag is re-read per attempt (the
+            # <=60 s rollback contract) but the pool is opened only at boot,
+            # and only when DISPATCH_POOL_DSN was set and the flag was already
+            # on. Flag on + pool closed (flag flipped on against a running
+            # process, DSN unset, or a non-production open failure) must not
+            # turn every attempt into a raise — that would stall 100% of rides
+            # in `searching` until someone flipped the flag back. A config
+            # mismatch is not a transport failure: log it loudly, count it,
+            # and take the PostgREST path. A transport error on an OPEN pool
+            # still raises below (D2 — no silent fallback).
+            logger.error(
+                "[DISPATCH] dispatch_direct_pool_enabled is on but the direct pool is not open "
+                "(DISPATCH_POOL_DSN unset, pool never opened at boot, or open failed) — using "
+                f"the PostgREST claim path for ride {ride_id}; enabling the pool requires a restart"
+            )
+            _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest_pool_unavailable"})
+            _direct_pool_enabled = False
 
         with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "claim"}):
             # ── Batch claim ───────────────────────────────────────────────
@@ -884,6 +904,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 _pool_driver_ids = [d["id"] for d, _eta, _dist in ranked]
                 _pool_eta_by_id = {d["id"]: eta for d, eta, _dist in ranked}
                 _pool_eta_seconds = [eta for _d, eta, _dist in ranked]
+                _pool_user_by_id = {d["id"]: d.get("user_id") for d, _eta, _dist in ranked}
 
                 # invalidate_driver_cache for every driver about to be attempted —
                 # kept on the Python side per T13 (Redis side effect; the SQL RPC
@@ -891,8 +912,22 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 # discipline docstring: no waiting on anything but Postgres while
                 # holding a pooled connection). Mirrors claim_driver_atomic's own
                 # unconditional pre-claim invalidate (driver_repo.py:269).
-                for _did in _pool_driver_ids:
-                    await _deps.db_supabase.invalidate_driver_cache(driver_id=_did)
+                #
+                # Review fix (2026-09-03): bounded to the first max_offers
+                # candidates and run concurrently. The RPC stops after
+                # max_offers successful claims, so that prefix is the likely
+                # attempted set, and the post-call loop below invalidates the
+                # EXACT attempted set the RPC reports. A serial loop over the
+                # whole ranked list (up to max(max_offers*5, 15) candidates)
+                # put ~15 sequential Redis round-trips ahead of the claim on
+                # the P95 < 2 s offer path. The by-user cache key is evicted
+                # too — the candidate projection carries user_id.
+                await asyncio.gather(
+                    *(
+                        _deps.db_supabase.invalidate_driver_cache(driver_id=_did, user_id=_pool_user_by_id.get(_did))
+                        for _did in _pool_driver_ids[:max_offers]
+                    )
+                )
 
                 # Offer timestamps must exist BEFORE the claim call on this path —
                 # T12's RPC claims, inserts ride_offers, AND writes the insurance
@@ -930,7 +965,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         now,
                         _offer_expires_at_dt,
                     )
-                except Exception:
+                except Exception as _exc:
                     # Fail loud, no silent fallback to PostgREST (D2 in the plan
                     # doc). The RPC is one transaction covering claim + offer
                     # insert + insurance write, so a mid-call failure means
@@ -938,9 +973,15 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     # is left claimed, so there is nothing to release here
                     # (unlike the PostgREST path's two-phase claim-then-insert,
                     # which DOES need an explicit release-on-failure loop below).
+                    #
+                    # Review fix (2026-09-03): log the REDACTED message, not the
+                    # raw traceback — a Postgres error can embed
+                    # `Failing row contains (...)` with driver PII, which
+                    # _redact_pg_error exists to strip (dispatch_pool.py has
+                    # already logged the same redacted message at ERROR).
                     logger.error(
-                        f"[DISPATCH] direct-pool claim_batch failed for ride {ride_id}",
-                        exc_info=True,
+                        f"[DISPATCH] direct-pool claim_batch failed for ride {ride_id}: "
+                        f"{type(_exc).__name__}: {_redact_pg_error(str(_exc))}"
                     )
                     raise
 
@@ -953,12 +994,37 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 # invalidate on release (driver_repo.py:149), both of which
                 # normally run on the Python side but happened inside the RPC
                 # transaction here.
-                for _row in _pool_results:
-                    await _deps.db_supabase.invalidate_driver_cache(driver_id=_row["driver_id"])
+                await asyncio.gather(
+                    *(
+                        _deps.db_supabase.invalidate_driver_cache(
+                            driver_id=_row["driver_id"],
+                            user_id=(_row.get("driver_row") or {}).get("user_id")
+                            or _pool_user_by_id.get(_row["driver_id"]),
+                        )
+                        for _row in _pool_results
+                    )
+                )
 
                 for _row in _pool_results:
-                    if _row.get("claimed"):
-                        claimed_drivers.append((_row["driver_row"], _pool_eta_by_id.get(_row["driver_id"])))
+                    if not _row.get("claimed"):
+                        continue
+                    claimed_drivers.append((_row["driver_row"], _pool_eta_by_id.get(_row["driver_id"])))
+                    if _row.get("insurance_written") is False:
+                        # Review fix (2026-09-03): the RPC's Period-2 write is
+                        # best-effort inside its own sub-transaction; a failure
+                        # used to surface only as a Postgres-side RAISE WARNING
+                        # that nothing in the app pipeline reads. Mirror
+                        # utils/insurance_periods.py's failure handling so the
+                        # flag-on path pages exactly like the PostgREST path.
+                        logger.error(
+                            "[INSURANCE] Period 2 transition write failed inside dispatch_claim_batch "
+                            f"for driver {_row['driver_id']} ride {ride_id} (claim and offer stand) — "
+                            "underlying error is in the Postgres server log"
+                        )
+                        _metric_inc(
+                            "spinr_insurance_period_write_failed_total",
+                            {"reason": "direct_pool", "period": "2"},
+                        )
             else:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest"})
                 for driver, eta_sec, _ in ranked:

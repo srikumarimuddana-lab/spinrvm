@@ -52,6 +52,7 @@ logger = logging.getLogger("seed_loadtest_bots")
 # Must match loadtest/locustfile.py's PHONE_PREFIX default exactly, or the
 # harness's bots and this script's seeded rows point at different numbers.
 PHONE_PREFIX = "+1306555"
+_ALLOWED_ENVS = frozenset({"development", "dev", "test", "staging", "preview"})
 SASKATOON_LAT = 52.1332
 SASKATOON_LNG = -106.6700
 # A generous square around downtown Saskatoon — must fully contain the
@@ -152,11 +153,13 @@ async def _ensure_vehicle_type_and_area() -> tuple[str, str]:
             "id": str(uuid.uuid4()),
             "service_area_id": area["id"],
             "vehicle_type_id": vt["id"],
-            "base_fare": 3.50,
-            "per_km_rate": 1.50,
-            "per_minute_rate": 0.25,
-            "minimum_fare": 8.0,
-            "booking_fee": 2.0,
+            # Money as decimal strings, never floats (CLAUDE.md money rule);
+            # PostgREST/NUMERIC accepts the string form exactly.
+            "base_fare": "3.50",
+            "per_km_rate": "1.50",
+            "per_minute_rate": "0.25",
+            "minimum_fare": "8.00",
+            "booking_fee": "2.00",
             "is_active": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -248,26 +251,48 @@ async def _ensure_driver(n: int, vehicle_type_id: str, service_area_id: str) -> 
     return phone
 
 
+_CLEANUP_PAGE = 500
+
+
 async def _cleanup() -> None:
-    riders = await db_supabase.get_rows("users", {}, limit=2000)
-    bot_users = [u for u in riders if str(u.get("phone") or "").startswith(PHONE_PREFIX)]
-    logger.info("Found %d loadtest bot users to remove", len(bot_users))
-    for u in bot_users:
-        drv = await db_supabase.get_rows("drivers", {"user_id": u["id"]}, limit=1)
-        if drv:
-            if not db_supabase.supabase:
-                raise RuntimeError("Supabase client not configured")
+    """Hard-delete every bot user (phone prefix +1306555) and its driver row.
 
-            def _del_driver(did=drv[0]["id"]):
-                return db_supabase.supabase.table("drivers").delete().eq("id", did).execute()
+    Review fix (2026-09-03): this used to pull ONE client-side page of 2 000
+    `users` rows and filter in Python -- above 2 000 users it silently left
+    bots behind while logging a confident "Cleanup complete". It now filters
+    server-side on the phone prefix (`$regex` compiles to ILIKE in
+    repositories/_base.py -- the layer owns escaping, callers pass the raw
+    term) and loops until no matching row remains, so it cannot truncate.
+    The caller must pass --yes (see main) because this is an unconditional
+    hard delete of every account in the prefix range.
+    """
+    if not db_supabase.supabase:
+        raise RuntimeError("Supabase client not configured")
 
-            await db_supabase.run_sync(_del_driver)
+    removed = 0
+    while True:
+        batch = await db_supabase.get_rows("users", {"phone": {"$regex": PHONE_PREFIX}}, limit=_CLEANUP_PAGE)
+        # ILIKE is a contains-match; keep the exact prefix check so a real
+        # number that merely CONTAINS the digits is never touched.
+        batch = [u for u in batch if str(u.get("phone") or "").startswith(PHONE_PREFIX)]
+        if not batch:
+            break
+        for u in batch:
+            drv = await db_supabase.get_rows("drivers", {"user_id": u["id"]}, limit=1)
+            if drv:
 
-        def _del_user(uid=u["id"]):
-            return db_supabase.supabase.table("users").delete().eq("id", uid).execute()
+                def _del_driver(did=drv[0]["id"]):
+                    return db_supabase.supabase.table("drivers").delete().eq("id", did).execute()
 
-        await db_supabase.run_sync(_del_user)
-    logger.info("Cleanup complete — %d bot users (and their driver rows) removed.", len(bot_users))
+                await db_supabase.run_sync(_del_driver)
+
+            def _del_user(uid=u["id"]):
+                return db_supabase.supabase.table("users").delete().eq("id", uid).execute()
+
+            await db_supabase.run_sync(_del_user)
+            removed += 1
+        logger.info("Removed %d bot users so far...", removed)
+    logger.info("Cleanup complete — %d bot users (and their driver rows) removed.", removed)
 
 
 async def main() -> None:
@@ -275,6 +300,11 @@ async def main() -> None:
     parser.add_argument("--riders", type=int, default=45, help="number of rider bot accounts")
     parser.add_argument("--drivers", type=int, default=15, help="number of driver bot accounts")
     parser.add_argument("--cleanup", action="store_true", help="delete all previously-seeded bot users/drivers")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="required with --cleanup: confirms the unconditional hard delete of every user in the bot phone range",
+    )
     args = parser.parse_args()
 
     # ── Hard safety interlocks (checked in code, not just documented) ──
@@ -282,15 +312,27 @@ async def main() -> None:
         logger.error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — refusing to run against an unknown project.")
         sys.exit(1)
 
-    env_value = os.environ.get("ENV", "development").lower()
-    if env_value == "production":
+    # Review fix (2026-09-03): allowlist, not a production denylist. The old
+    # check only refused ENV=production, so an UNSET ENV (the default) with a
+    # production SUPABASE_URL sailed through and would have written 60 users
+    # and 15 drivers into the live project with the service key.
+    env_value = os.environ.get("ENV", "").lower()
+    if env_value not in _ALLOWED_ENVS:
         logger.error(
-            "ENV=production — refusing to seed synthetic bot accounts into a production project. "
-            "This script is for staging/dev load-testing only."
+            "ENV=%r is not one of %s — refusing to seed synthetic bot accounts. Set ENV explicitly "
+            "to the staging/dev environment you are targeting; this script never runs against production.",
+            env_value,
+            sorted(_ALLOWED_ENVS),
         )
         sys.exit(1)
 
     if args.cleanup:
+        if not args.yes:
+            logger.error(
+                "--cleanup hard-deletes every user whose phone starts with %s; re-run with --yes to confirm.",
+                PHONE_PREFIX,
+            )
+            sys.exit(1)
         await _cleanup()
         return
 

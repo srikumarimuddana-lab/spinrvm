@@ -6,6 +6,7 @@ import { getDeskTickets, getDeskAgents, getDeskDepartments, createDeskTicket, se
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -263,19 +264,24 @@ export default function TicketListPage() {
 
     return (
         <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <h1 className="flex items-center gap-2 text-2xl font-bold">
-                    <Inbox className="h-6 w-6" /> Zoho Tickets
-                </h1>
-                <div className="flex items-center gap-2">
-                    <Button onClick={() => setCreateOpen(true)}>
-                        <Plus className="mr-2 h-4 w-4" /> New ticket
-                    </Button>
-                    <Button variant="outline" size="icon" onClick={load} disabled={loading} aria-label="Refresh">
-                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                className="flex flex-wrap items-center justify-between gap-3"
+                title={
+                    <span className="inline-flex items-center gap-2">
+                        <Inbox className="h-6 w-6" /> Zoho Tickets
+                    </span>
+                }
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Button onClick={() => setCreateOpen(true)}>
+                            <Plus className="mr-2 h-4 w-4" /> New ticket
+                        </Button>
+                        <Button variant="outline" size="icon" onClick={load} disabled={loading} aria-label="Refresh">
+                            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                        </Button>
+                    </div>
+                }
+            />
 
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
                 <DialogContent>

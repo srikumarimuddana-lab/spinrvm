@@ -24,6 +24,7 @@ import {
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import {
     Select,
     SelectContent,
@@ -183,20 +184,19 @@ export default function ApprovalQueuePage() {
 
     return (
         <div className="space-y-4">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                    <h1 className="text-xl font-bold tracking-tight">Approval Queue</h1>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                        Oldest-first applicants and re-uploads waiting on a reviewer.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
-                        <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                className="flex items-start justify-between gap-3 flex-wrap"
+                title="Approval Queue"
+                description="Oldest-first applicants and re-uploads waiting on a reviewer."
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
+                            <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                }
+            />
 
             <QueueStats stats={stats} />
 

@@ -16,6 +16,7 @@ import {
     type DriverImportReport,
     type DriverImportReportItem,
 } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -246,18 +247,20 @@ export default function BulkImportPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
-            <div>
-                <h1 className="text-2xl font-semibold">Bulk Driver Import</h1>
-                <p className="text-sm text-muted-foreground">
-                    Upload a CSV of drivers to create their accounts and profiles. Validate first, review
-                    the report, then commit. Document files are uploaded per-driver afterwards from the
-                    driver&apos;s page. Importing the previous app&apos;s raw MongoDB export instead? Use{" "}
-                    <a href="/dashboard/drivers/legacy-import" className="underline">
-                        Legacy Driver Import
-                    </a>{" "}
-                    — a different CSV shape, a different driver population.
-                </p>
-            </div>
+            <PageHeader
+                title="Bulk Driver Import"
+                description={
+                    <>
+                        Upload a CSV of drivers to create their accounts and profiles. Validate first, review
+                        the report, then commit. Document files are uploaded per-driver afterwards from the
+                        driver&apos;s page. Importing the previous app&apos;s raw MongoDB export instead? Use{" "}
+                        <a href="/dashboard/drivers/legacy-import" className="underline">
+                            Legacy Driver Import
+                        </a>{" "}
+                        — a different CSV shape, a different driver population.
+                    </>
+                }
+            />
 
             {/* No longer linked from the sidebar (moved to Data Transfer, which
                 also carries documents/history/SGI forms) — kept reachable by

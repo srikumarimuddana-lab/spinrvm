@@ -28,6 +28,7 @@ import {
     type VehicleHistoryBackfillReport,
     type VehicleHistoryBackfillReportItem,
 } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -253,19 +254,21 @@ export default function LegacyVehicleHistoryBackfillPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
-            <div>
-                <h1 className="text-2xl font-semibold">Legacy Vehicle-History Backfill</h1>
-                <p className="text-sm text-muted-foreground">
-                    Backfill <span className="font-mono">driver_vehicle_history</span> (the 7-year
-                    regulatory driver/vehicle-linkage record) from the previous app&apos;s raw Mongo
-                    export, for drivers already created by the{" "}
-                    <Link href="/dashboard/drivers/legacy-import" className="underline">
-                        Legacy Driver Import
-                    </Link>
-                    . This is append-only — it never mutates or deletes an existing history row,
-                    and it never touches a live driver or vehicle field.
-                </p>
-            </div>
+            <PageHeader
+                title="Legacy Vehicle-History Backfill"
+                description={
+                    <>
+                        Backfill <span className="font-mono">driver_vehicle_history</span> (the 7-year
+                        regulatory driver/vehicle-linkage record) from the previous app&apos;s raw Mongo
+                        export, for drivers already created by the{" "}
+                        <Link href="/dashboard/drivers/legacy-import" className="underline">
+                            Legacy Driver Import
+                        </Link>
+                        . This is append-only — it never mutates or deletes an existing history row,
+                        and it never touches a live driver or vehicle field.
+                    </>
+                }
+            />
 
             <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

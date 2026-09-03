@@ -18,6 +18,7 @@ import {
     Zap,
 } from "lucide-react";
 
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -249,24 +250,21 @@ export default function RedisMonitoringPage() {
 
     return (
         <div className="flex flex-col gap-4 p-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-2xl font-semibold">Redis & Infrastructure</h1>
-                    <p className="text-sm text-muted-foreground">
-                        Cache memory, hit rate, evictions, and per-replica process stats.
-                    </p>
-                </div>
-                <Button
-                    variant="outline"
-                    onClick={handleManualRefresh}
-                    disabled={scanRefreshing}
-                    className="gap-2"
-                >
-                    <RefreshCw className={`h-4 w-4 ${scanRefreshing ? "animate-spin" : ""}`} />
-                    Refresh (incl. key scan)
-                </Button>
-            </div>
+            <PageHeader
+                title="Redis & Infrastructure"
+                description="Cache memory, hit rate, evictions, and per-replica process stats."
+                actions={
+                    <Button
+                        variant="outline"
+                        onClick={handleManualRefresh}
+                        disabled={scanRefreshing}
+                        className="gap-2"
+                    >
+                        <RefreshCw className={`h-4 w-4 ${scanRefreshing ? "animate-spin" : ""}`} />
+                        Refresh (incl. key scan)
+                    </Button>
+                }
+            />
 
             {errorMsg && (
                 <Card className="border-destructive/50">

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { FileText, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
@@ -104,14 +105,16 @@ export default function DriverLicenseBackfillPage() {
 
     return (
         <div className="p-6 space-y-6">
-            <div>
-                <h1 className="text-2xl font-semibold">Driver Licence Backfill</h1>
-                <p className="text-muted-foreground">
-                    Drivers missing a licence number or class — SGI D00032 renders these fields blank until they&apos;re
-                    filled in here. View each driver&apos;s uploaded licence document, then transcribe the number and
-                    class exactly as printed. See ACTION_ITEMS.md B14 for background.
-                </p>
-            </div>
+            <PageHeader
+                title="Driver Licence Backfill"
+                description={
+                    <>
+                        Drivers missing a licence number or class — SGI D00032 renders these fields blank until they&apos;re
+                        filled in here. View each driver&apos;s uploaded licence document, then transcribe the number and
+                        class exactly as printed. See ACTION_ITEMS.md B14 for background.
+                    </>
+                }
+            />
 
             <Card>
                 <CardHeader>

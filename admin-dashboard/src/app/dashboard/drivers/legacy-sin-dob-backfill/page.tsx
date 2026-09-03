@@ -27,6 +27,7 @@ import {
     type SinDobBackfillReportItem,
     type SinDobBackfillFiles,
 } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -254,20 +255,22 @@ export default function LegacySinDobBackfillPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
-            <div>
-                <h1 className="text-2xl font-semibold">Legacy SIN/DOB Backfill</h1>
-                <p className="text-sm text-muted-foreground">
-                    Backfill SIN and date of birth for drivers already created by the{" "}
-                    <Link href="/dashboard/drivers/legacy-import" className="underline">
-                        Legacy Driver Import
-                    </Link>{" "}
-                    (Mongo export), using the export&apos;s{" "}
-                    <span className="font-mono">banks.csv</span> and{" "}
-                    <span className="font-mono">drivers.csv</span>. Matches are made by phone
-                    number, and only ever touch drivers already tagged as legacy-imported — a
-                    phone coincidence can never reach an organic driver&apos;s SIN or DOB.
-                </p>
-            </div>
+            <PageHeader
+                title="Legacy SIN/DOB Backfill"
+                description={
+                    <>
+                        Backfill SIN and date of birth for drivers already created by the{" "}
+                        <Link href="/dashboard/drivers/legacy-import" className="underline">
+                            Legacy Driver Import
+                        </Link>{" "}
+                        (Mongo export), using the export&apos;s{" "}
+                        <span className="font-mono">banks.csv</span> and{" "}
+                        <span className="font-mono">drivers.csv</span>. Matches are made by phone
+                        number, and only ever touch drivers already tagged as legacy-imported — a
+                        phone coincidence can never reach an organic driver&apos;s SIN or DOB.
+                    </>
+                }
+            />
 
             <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

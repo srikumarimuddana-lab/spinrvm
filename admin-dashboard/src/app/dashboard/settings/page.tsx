@@ -116,11 +116,30 @@ export default function SettingsPage() {
         setSaved(false);
         try {
             const updated = await updateSettings(settings);
-            setSettings(updated);
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
             if (updated?.audit_log_id) {
                 toast({ title: "Settings saved", description: `Ref: ${updated.audit_log_id}` });
+            }
+            // PUT /api/admin/settings only ever returns {message, audit_log_id}
+            // (it's an upsert + audit-log endpoint, not an echo) — it was never
+            // the full settings object. Reassigning `settings` to that response
+            // (the old `setSettings(updated)` here) collapsed every field on
+            // this page to undefined immediately after a successful save, so
+            // every input/toggle appeared to reset until a manual page
+            // refresh, even though nothing was actually lost server-side.
+            // Re-fetch the real settings instead, same as the initial load,
+            // so the UI reflects what was just persisted (including
+            // server-side masking). Its own try/catch is separate from the
+            // save's: a refetch hiccup after a successful save must not be
+            // reported to the operator as "Settings not saved" — the save
+            // already went through by this point.
+            try {
+                setSettings(await getSettings());
+            } catch {
+                // Save succeeded; only the post-save refresh failed. The
+                // fields keep showing their last-saved-locally values until
+                // the next manual refresh — not ideal, but not a lost save.
             }
         } catch (err: any) {
             // A silent catch here made failed saves look like successful

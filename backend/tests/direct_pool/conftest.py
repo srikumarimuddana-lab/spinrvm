@@ -119,6 +119,21 @@ except ImportError:  # pragma: no cover - environment without psycopg2 installed
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
 
+# This directory runs with `-c /dev/null --confcutdir=tests/direct_pool`, so
+# neither pytest.ini's `env =` block nor backend/tests/conftest.py's env
+# defaults apply here. `core.config.Settings` (pulled in by any backend
+# module import, e.g. test_claim_batch_psycopg3.py importing
+# repositories.dispatch_pool) requires JWT_SECRET and ADMIN_PASSWORD and
+# fails validation without them -- the first CI run of this suite
+# (2026-09-03) failed the psycopg3 test on exactly that. Same values as
+# backend/tests/conftest.py; setdefault so a real environment still wins.
+os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test_key")
+os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
+os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
+os.environ.setdefault("ADMIN_EMAIL", "admin@spinr.ca")
+os.environ.setdefault("ENV", "test")
+
 _DSN = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
 _SKIP_REASON = (

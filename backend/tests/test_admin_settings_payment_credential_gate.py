@@ -131,6 +131,37 @@ def test_stripe_secret_key_masked_preview_roundtrip_passes_validation():
     assert req.stripe_secret_key == "sk_test_*****"
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "field,raw,expected",
+    [
+        ("stripe_secret_key", "sk_test_ok\n", "sk_test_ok"),
+        ("stripe_secret_key", "  sk_test_ok", "sk_test_ok"),
+        ("stripe_webhook_secret", "whsec_ok\n", "whsec_ok"),
+        ("stripe_webhook_secret", " whsec_ok ", "whsec_ok"),
+        ("stripe_connect_webhook_secret", "whsec_connect_ok\r\n", "whsec_connect_ok"),
+    ],
+)
+def test_stripe_credential_whitespace_is_stripped_on_save(field, raw, expected):
+    """A copy-pasted secret with a stray leading/trailing newline or space is
+    stored verbatim otherwise, and that whitespace becomes part of the API
+    key / HMAC signing key — breaking every Stripe call or webhook signature
+    check with no other symptom (100% failure, every event, until an admin
+    re-saves a clean value). Strip at the point of save so this class of bug
+    can't be introduced in the first place."""
+    req = admin_settings.SettingsUpdateRequest(**{field: raw})
+    assert getattr(req, field) == expected
+
+
+@pytest.mark.unit
+def test_stripe_secret_key_leading_whitespace_does_not_trip_environment_check():
+    """The whitespace strip must run BEFORE the live/test-prefix validator,
+    or a merely-whitespace-padded (but otherwise correct) key would be
+    rejected as the wrong environment instead of being cleaned up."""
+    req = admin_settings.SettingsUpdateRequest(stripe_secret_key="  sk_test_ok  ")
+    assert req.stripe_secret_key == "sk_test_ok"
+
+
 def test_credential_reveal_allows_payment_credentials_for_super_admin():
     for field in (
         "stripe_secret_key",

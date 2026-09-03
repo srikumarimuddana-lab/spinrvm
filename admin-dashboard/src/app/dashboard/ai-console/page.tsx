@@ -434,7 +434,7 @@ export default function AiConsolePage() {
                     <CardContent className="pt-4 space-y-3">
                         <div className="grid grid-cols-2 gap-2">
                             <div className="space-y-1">
-                                <Label>Audience</Label>
+                                <Label htmlFor="ai-console-audience">Audience</Label>
                                 <Select
                                     value={roleFilter}
                                     onValueChange={(v: "rider" | "driver") => {
@@ -442,7 +442,7 @@ export default function AiConsolePage() {
                                         selectUser("");
                                     }}
                                 >
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="ai-console-audience"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="rider">Rider</SelectItem>
                                         <SelectItem value="driver">Driver</SelectItem>
@@ -450,8 +450,9 @@ export default function AiConsolePage() {
                                 </Select>
                             </div>
                             <div className="space-y-1">
-                                <Label>Search</Label>
+                                <Label htmlFor="ai-console-search">Search</Label>
                                 <Input
+                                    id="ai-console-search"
                                     value={search}
                                     onChange={(e) => setSearch(e.target.value)}
                                     placeholder="name / phone / id"
@@ -459,9 +460,9 @@ export default function AiConsolePage() {
                             </div>
                         </div>
                         <div className="space-y-1">
-                            <Label>User</Label>
+                            <Label htmlFor="ai-console-user">User</Label>
                             <Select value={targetId} onValueChange={selectUser}>
-                                <SelectTrigger>
+                                <SelectTrigger id="ai-console-user">
                                     <SelectValue placeholder={`Select a ${roleFilter}…`} />
                                 </SelectTrigger>
                                 <SelectContent>

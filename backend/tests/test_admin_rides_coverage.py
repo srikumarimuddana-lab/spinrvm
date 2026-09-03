@@ -127,8 +127,8 @@ class TestAdminCancelRideExtra:
 
         cancelled_ride = {**_RIDE_WITH_DRIVER, "status": "cancelled"}
         with (
-            patch("db_supabase.get_ride", AsyncMock(side_effect=[_RIDE_WITH_DRIVER, cancelled_ride])),
-            patch("db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_WITH_DRIVER)),
+            patch("db_supabase.update_one", AsyncMock(return_value=cancelled_ride)),
             patch("db_supabase.set_driver_available", AsyncMock(side_effect=_set_avail)),
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
@@ -147,8 +147,8 @@ class TestAdminCancelRideExtra:
         cancelled_ride = {**_RIDE_WITH_DRIVER, "status": "cancelled"}
         push_mock = AsyncMock()
         with (
-            patch("db_supabase.get_ride", AsyncMock(side_effect=[_RIDE_WITH_DRIVER, cancelled_ride])),
-            patch("db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_WITH_DRIVER)),
+            patch("db_supabase.update_one", AsyncMock(return_value=cancelled_ride)),
             patch("db_supabase.set_driver_available", AsyncMock()),
             patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
@@ -162,18 +162,19 @@ class TestAdminCancelRideExtra:
         assert calls_by_recipient[_DRIVER["user_id"]] == "driver"
         assert calls_by_recipient[_RIDE_WITH_DRIVER["rider_id"]] == "rider"
 
-    def test_cancel_silent_no_op_surfaces_500(self, client, as_super_admin):
-        """If the status update doesn't actually persist, this must surface loudly (500), not
-        silently report success — a broken admin cancel would otherwise strand riders/drivers
-        thinking a ride is over when it is not."""
+    def test_cancel_race_lost_returns_409(self, client, as_super_admin):
+        """The write is a conditional update filtered on the status just read
+        (optimistic lock). If a concurrent change (driver accepted/arrived,
+        another admin action) wins the race first, update_one matches 0 rows
+        and returns None -- this must surface as a 409, not a silent 200 that
+        would strand riders/drivers thinking a ride is cancelled when it
+        isn't."""
         with (
             patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_SEARCHING)),
-            patch("db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
         ):
-            # verify() re-reads and still shows "searching" -> update never took.
-            with patch("db_supabase.get_ride", AsyncMock(side_effect=[_RIDE_SEARCHING, _RIDE_SEARCHING])):
-                resp = client.post("/api/admin/rides/ride-1/cancel", json={"reason": "x"})
-        assert resp.status_code == 500
+            resp = client.post("/api/admin/rides/ride-1/cancel", json={"reason": "x"})
+        assert resp.status_code == 409
 
     def test_cancel_db_write_failure_propagates(self, client, as_super_admin):
         """Both the mig-38 and mig-37 fallback writes fail -> the underlying error must
@@ -184,7 +185,7 @@ class TestAdminCancelRideExtra:
         asserting; a real deployment's registered Exception handler turns this into a 500."""
         with (
             patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_SEARCHING)),
-            patch("db_supabase.update_ride", AsyncMock(side_effect=RuntimeError("db down"))),
+            patch("db_supabase.update_one", AsyncMock(side_effect=RuntimeError("db down"))),
             pytest.raises(RuntimeError, match="db down"),
         ):
             client.post("/api/admin/rides/ride-1/cancel", json={"reason": "x"})
@@ -192,8 +193,8 @@ class TestAdminCancelRideExtra:
     def test_cancel_no_reason_defaults(self, client, as_super_admin):
         cancelled_ride = {**_RIDE_SEARCHING, "status": "cancelled"}
         with (
-            patch("db_supabase.get_ride", AsyncMock(side_effect=[_RIDE_SEARCHING, cancelled_ride])),
-            patch("db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_SEARCHING)),
+            patch("db_supabase.update_one", AsyncMock(return_value=cancelled_ride)),
             patch("socket_manager.manager.send_personal_message", AsyncMock()),
             patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
             patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),

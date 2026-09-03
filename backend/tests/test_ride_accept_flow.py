@@ -419,19 +419,24 @@ class TestAdminCancelRide:
         pre_ride = _ride_row("driver_accepted", driver_id=DRIVER_ID)
         post_ride = _ride_row("cancelled", driver_id=DRIVER_ID)
 
-        get_ride_mock = AsyncMock(side_effect=[pre_ride, post_ride])
-        update_ride_mock = AsyncMock(return_value=post_ride)
+        get_ride_mock = AsyncMock(return_value=pre_ride)
+        update_one_mock = AsyncMock(return_value=post_ride)
         set_avail_mock = AsyncMock()
+        record_period_mock = AsyncMock()
         get_driver_mock = AsyncMock(return_value=_driver_row())
         send_ws_mock = AsyncMock()
         send_push_mock = AsyncMock()
 
         with (
             patch("backend.routes.admin.rides.db_supabase.get_ride", get_ride_mock),
-            patch("backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.admin.rides.db_supabase.update_one", update_one_mock),
             patch(
                 "backend.routes.admin.rides.db_supabase.set_driver_available",
                 set_avail_mock,
+            ),
+            patch(
+                "backend.routes.admin.rides.record_period_transition",
+                record_period_mock,
             ),
             patch(
                 "backend.routes.admin.rides.db_supabase.get_driver_by_id",
@@ -465,14 +470,22 @@ class TestAdminCancelRide:
         audit_mock.assert_awaited_once()
         assert audit_mock.call_args[0][1] == "ride_cancelled_by_admin"
 
-        # The write must set status=cancelled + stamp the reason + admin id
-        update_payload = update_ride_mock.call_args.args[1]
+        # The write is a conditional update scoped to the status just read
+        # (optimistic lock — mirrors routes/drivers/ride_flow.py:331), and
+        # sets status=cancelled + stamps the reason + admin id.
+        update_one_mock.assert_awaited_once()
+        call_args = update_one_mock.call_args
+        assert call_args.args[0] == "rides"
+        assert call_args.args[1] == {"id": RIDE_ID, "status": "driver_accepted"}
+        update_payload = call_args.args[2]
         assert update_payload["status"] == "cancelled"
         assert update_payload["cancellation_reason"] == "ops test"
         assert update_payload["cancelled_by_admin_id"] == "admin-1"
 
-        # Driver freed so they can take new rides immediately.
+        # Driver freed so they can take new rides immediately, and Period 1
+        # (online, no ride) recorded for the regulatory insurance audit trail.
         set_avail_mock.assert_awaited_once_with(DRIVER_ID, True)
+        record_period_mock.assert_awaited_once_with(DRIVER_ID, 1)
 
         # Both sides notified: 1 rider_<id> ws + 1 driver_<user_id> ws.
         ws_channels = [call.args[1] for call in send_ws_mock.call_args_list]
@@ -488,13 +501,13 @@ class TestAdminCancelRide:
         from backend.routes.admin.rides import AdminCancelRideRequest
         from backend.utils.error_handling import SpinrException
 
-        update_ride_mock = AsyncMock()
+        update_one_mock = AsyncMock()
         with (
             patch(
                 "backend.routes.admin.rides.db_supabase.get_ride",
                 AsyncMock(return_value=_ride_row("completed", driver_id=DRIVER_ID)),
             ),
-            patch("backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.admin.rides.db_supabase.update_one", update_one_mock),
         ):
             with pytest.raises((HTTPException, SpinrException)) as excinfo:
                 asyncio.run(
@@ -505,4 +518,4 @@ class TestAdminCancelRide:
                     )
                 )
         assert excinfo.value.status_code == 400
-        update_ride_mock.assert_not_awaited()
+        update_one_mock.assert_not_awaited()

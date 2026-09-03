@@ -322,17 +322,25 @@ class TestAdminRideCancel:
         assert resp.status_code in (400, 409)
 
     def test_cancel_active_ride_happy_path(self, client):
+        cancelled_ride = {**_FAKE_RIDE, "status": "cancelled"}
         with (
             patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=_FAKE_RIDE),
-            patch("db_supabase.update_one", new_callable=AsyncMock, return_value=None),
+            # update_one returning the row (not None) is the conditional-update
+            # success case — None would mean the optimistic-lock filter matched
+            # 0 rows (a race), which correctly 409s instead.
+            patch("db_supabase.update_one", new_callable=AsyncMock, return_value=cancelled_ride),
             patch("db_supabase.insert_one", new_callable=AsyncMock, return_value={}),
             patch("db_supabase.get_rows", new_callable=AsyncMock, return_value=[]),
+            patch("socket_manager.manager.send_personal_message", new_callable=AsyncMock),
+            patch("socket_manager.manager.broadcast_ride_status", new_callable=AsyncMock),
+            patch("socket_manager.manager.broadcast_to_admins", new_callable=AsyncMock),
+            patch("routes.admin.rides.send_push_notification", new_callable=AsyncMock),
         ):
             resp = client.post(
                 "/api/admin/rides/ride-1/cancel",
                 json={"reason": "Admin override"},
             )
-        assert resp.status_code in (200, 500)  # 500 ok if WS/notification deps are live
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

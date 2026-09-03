@@ -19,6 +19,7 @@ try:
     from ..services import corporate_allowance_service, corporate_wallet_service, ledger_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..services.fare_service import driver_earnings_with_tip
+    from ..services.outbox_receipts import maybe_send_auto_receipt
     from ..socket_manager import manager
     from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride, increment_authorization
 except ImportError:
@@ -26,6 +27,7 @@ except ImportError:
     from services import corporate_allowance_service, corporate_wallet_service, ledger_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
     from services.fare_service import driver_earnings_with_tip  # type: ignore
+    from services.outbox_receipts import maybe_send_auto_receipt  # type: ignore
     from socket_manager import manager  # type: ignore
     from utils.stripe_charge import (  # type: ignore
         cancel_authorization,
@@ -1391,8 +1393,13 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
         #
         # Runs inline rather than spawned: this whole coroutine is already
         # backgrounded by its caller in routes/drivers/ride_complete.py.
+        # Outbox-gated: skip the direct send when the Postgres trigger already
+        # queued ride_receipt.v1 for this ride
+        # (migrations/399_transactional_outbox.sql). ``send`` pins the
+        # fallback to this module's own send_ride_receipt binding so a test
+        # double patched here still takes effect.
         try:
-            await send_ride_receipt(ride, ride.get("rider_id") or "", Decimal("0"))
+            await maybe_send_auto_receipt(ride, ride.get("rider_id") or "", Decimal("0"), send=send_ride_receipt)
         except Exception:
             logger.opt(exception=True).error("[PAYMENT] guest receipt failed for ride {}", ride_id)
     return result
@@ -2121,3 +2128,52 @@ async def send_ride_receipt(
     except Exception as e:
         logger.opt(exception=True).error(f"Receipt email error: {e}")
         return False
+
+
+async def send_ride_receipt_result(ride_id: str, recipient_email: Optional[str] = None):
+    """Outbox-worker entry point: hydrate a ride by id and send its receipt.
+
+    Same rider/driver hydration as :func:`send_ride_receipt`, but starts from
+    a bare ``ride_id`` (the only thing the outbox payload carries — see
+    ``migrations/399_transactional_outbox.sql``) and returns a typed
+    ``utils.email_provider.EmailDeliveryResult`` instead of a bool, so
+    ``utils.outbox_worker._dispatch`` can distinguish accepted / terminal_skip
+    (discard) / retryable_failure (retry with backoff).
+
+    A missing ride is itself treated as retryable — the outbox row can be
+    processed before a replication lag or a same-transaction visibility edge
+    resolves, and it is safer to retry (bounded by max_attempts, eventually
+    dead-lettered) than to discard a real ride's receipt permanently.
+    """
+    try:
+        from utils.email_provider import EmailDeliveryResult, EmailDeliveryStatus
+        from utils.email_receipt import send_receipt_email_result
+    except ImportError:  # pragma: no cover
+        from backend.utils.email_provider import EmailDeliveryResult, EmailDeliveryStatus  # type: ignore
+        from backend.utils.email_receipt import send_receipt_email_result  # type: ignore
+
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        logger.error(f"send_ride_receipt_result: ride {ride_id} not found")
+        return EmailDeliveryResult(status=EmailDeliveryStatus.retryable_failure, error_code="ride_not_found")
+
+    rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
+    driver_info = None
+    if ride.get("driver_id"):
+        drv = await db_supabase.get_driver_by_id(ride["driver_id"])
+        if drv:
+            du = await db_supabase.get_user_by_id(drv.get("user_id"))
+            if du:
+                driver_info = {
+                    **du,
+                    "name": f"{du.get('first_name', '')} {du.get('last_name', '')}".strip(),
+                    "driver_code": drv.get("driver_code", ""),
+                    "driver_vehicle": f"{drv.get('vehicle_make', '')} {drv.get('vehicle_model', '')}".strip(),
+                }
+
+    tip = _f(_d(ride.get("tip_amount") or 0))
+    try:
+        return await send_receipt_email_result(ride, rider or {}, driver_info, tip, recipient_email=recipient_email)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Receipt email error (outbox) ride_id={ride_id}: {e}")
+        return EmailDeliveryResult(status=EmailDeliveryStatus.retryable_failure, error_code="provider_unavailable")

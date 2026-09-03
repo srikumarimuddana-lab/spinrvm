@@ -38,6 +38,11 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     "distance_reconciliation (daily 04:00 UTC)": 24 * 3600 * 2,  # 48 h
     "stale_p3_closer (15min)": 15 * 60 * 3,  # 45 min — 3 missed ticks
     "driver_daily_rollup (30min)": 30 * 60 * 3,  # 90 min — 3 missed ticks
+    # Dedicated worker (worker.py) loops — see core/background_loop_registry.py.
+    "outbox_poller (1-10s)": 5 * 60,  # 5 min — generous even against the 10 s idle-poll ceiling
+    "push_retry (30s)": 30 * 4,  # 2 min
+    "zoho_desk_sync (10min)": 10 * 60 * 4,  # 40 min
+    "driver_onboarding_reminders (15min)": 15 * 60 * 3,  # 45 min — 3 missed ticks
 }
 
 _lock = threading.Lock()

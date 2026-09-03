@@ -35,9 +35,15 @@ _UNBRANDED_BY_DESIGN = {
     # rates, no production callers) until it was deleted by N8
     # (ACTION_ITEMS.md) — no exemption needed for a file that no longer
     # exists.
-    # utils/email_provider.py is deliberately absent: it *defines*
-    # send_transactional_email rather than awaiting one, so the detector below
-    # never sees it and an entry here would be a dead exemption.
+    "utils/email_provider.py": (
+        "This is the provider layer itself: send_transactional_email (the "
+        "bool-returning wrapper kept for its 12 existing callers) now "
+        "delegates to send_transactional_email_result internally, so the "
+        "detector's own await-call regex matches this file's internal "
+        "delegation, not a caller sending unbranded HTML. It never renders a "
+        "body — every caller supplies its own html/text, branded or not; the "
+        "callers themselves are the real senders this test walks."
+    ),
     "features.py": (
         "send_email is the generic wrapper. It renders plain-text bodies "
         "through the layout itself, which is what brands the six senders that "
@@ -56,7 +62,7 @@ _BRANDED_VIA_SEND_EMAIL = {
     "routes/admin/driver_statements.py",
 }
 
-_SEND_CALL = re.compile(r"\bawait\s+(?:\w+\.)?send_(?:transactional_)?email\(")
+_SEND_CALL = re.compile(r"\bawait\s+(?:\w+\.)?send_(?:transactional_)?email(?:_result)?\(")
 _LAYOUT_IMPORT = re.compile(r"from\s+[\w.]*email_layout\s+import|email_layout\.")
 
 

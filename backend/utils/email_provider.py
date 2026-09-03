@@ -29,6 +29,8 @@ boto3 is synchronous, so the SES call runs in a worker thread via
 
 import asyncio
 import logging
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 try:
@@ -37,6 +39,42 @@ except ImportError:
     from utils.pii import redact_email  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+class EmailDeliveryStatus(str, Enum):
+    """Outcome of one transactional-email delivery attempt.
+
+    The transactional outbox worker (utils/outbox_worker.py) needs more than
+    a bool to decide ack/discard/retry:
+
+    - ``accepted``          — a provider took the message. Ack (remove from outbox).
+    - ``terminal_skip``     — will never succeed on retry (no recipient, empty
+      body, suppressed address). Discard, don't retry.
+    - ``retryable_failure`` — a transient provider/config problem. Retry with
+      backoff; dead-letter after max_attempts.
+    """
+
+    accepted = "accepted"
+    terminal_skip = "terminal_skip"
+    retryable_failure = "retryable_failure"
+
+
+@dataclass
+class EmailDeliveryResult:
+    """Typed outcome of a send, replacing the plain bool for outbox callers.
+
+    ``error_code`` is one of the allowlisted codes in
+    ``services/outbox.py::_ALLOWED_ERROR_CODES`` (e.g. "no_recipient",
+    "empty_body", "suppressed", "provider_unavailable") — never a raw
+    provider error string, which may contain PII (see the PIPEDA notes on
+    ``_try_ses``/``_try_resend`` above).
+    """
+
+    status: EmailDeliveryStatus
+    provider: Optional[str] = None
+    message_id: Optional[str] = None
+    error_code: Optional[str] = None
+
 
 # Default SES region — Canada, for PIPEDA data-residency alignment. Overridden
 # by the aws_ses_region setting when present.
@@ -509,7 +547,7 @@ async def _log_send(
         logger.error("[EMAIL] email_send_log write failed status=%s provider=%s", status, provider, exc_info=True)
 
 
-async def send_transactional_email(
+async def send_transactional_email_result(
     *,
     to: str,
     subject: str,
@@ -522,11 +560,17 @@ async def send_transactional_email(
     attachments: Optional[list] = None,
     from_email: Optional[str] = None,
     extra_headers: Optional[Dict[str, str]] = None,
-) -> bool:
+) -> EmailDeliveryResult:
     """Send one transactional email: AWS SES primary, Resend guardrail.
 
-    Skips addresses on the suppression list (hard bounce/complaint) and records
-    every attempt in email_send_log.
+    Same delivery logic as :func:`send_transactional_email` (which now
+    delegates here), but returns a typed :class:`EmailDeliveryResult`
+    instead of a bare bool — the distinction the transactional outbox worker
+    (utils/outbox_worker.py) needs between a terminal skip (discard, never
+    retry) and a retryable provider failure (retry with backoff).
+
+    Skips addresses on the suppression list (hard bounce/complaint) and
+    records every attempt in email_send_log.
 
     Args:
         to: Recipient address (single recipient).
@@ -541,16 +585,13 @@ async def send_transactional_email(
         recipient_user_id: PIPEDA-safe user id recorded in email_send_log.
         from_email: Optional sender override (e.g. the marketing sender).
         extra_headers: Optional top-level headers (e.g. List-Unsubscribe).
-
-    Returns:
-        True if either provider accepted the message, False otherwise.
     """
     if not to:
         logger.warning("[EMAIL] send skipped log_id=%s — no recipient", log_id)
-        return False
+        return EmailDeliveryResult(status=EmailDeliveryStatus.terminal_skip, error_code="no_recipient")
     if not html and not text:
         logger.error("[EMAIL] send skipped log_id=%s — empty body", log_id)
-        return False
+        return EmailDeliveryResult(status=EmailDeliveryStatus.terminal_skip, error_code="empty_body")
 
     # Suppression gate — never send to a hard-bounced / complained address.
     if await _is_suppressed(to):
@@ -562,7 +603,7 @@ async def send_transactional_email(
             email_type=email_type,
             recipient_user_id=recipient_user_id,
         )
-        return False
+        return EmailDeliveryResult(status=EmailDeliveryStatus.terminal_skip, error_code="suppressed")
 
     # Fail-open, matching _is_suppressed just above: a transient app_settings
     # read failure (DB hiccup) must degrade to "no provider configured" (the
@@ -602,7 +643,7 @@ async def send_transactional_email(
             email_type=email_type,
             recipient_user_id=recipient_user_id,
         )
-        return True
+        return EmailDeliveryResult(status=EmailDeliveryStatus.accepted, provider="ses", message_id=ses_id)
 
     # 2. Guardrail: Resend (fires when SES unconfigured OR SES failed).
     resend_id, resend_err = await _try_resend(
@@ -625,7 +666,7 @@ async def send_transactional_email(
             email_type=email_type,
             recipient_user_id=recipient_user_id,
         )
-        return True
+        return EmailDeliveryResult(status=EmailDeliveryStatus.accepted, provider="resend", message_id=resend_id)
 
     # 3. Neither provider sent it. Prefer the SES error (the primary) when
     # both attempted and failed; a None here just means that provider was
@@ -645,4 +686,44 @@ async def send_transactional_email(
         recipient_user_id=recipient_user_id,
         error_detail=error_detail,
     )
-    return False
+    return EmailDeliveryResult(status=EmailDeliveryStatus.retryable_failure, error_code="provider_unavailable")
+
+
+async def send_transactional_email(
+    *,
+    to: str,
+    subject: str,
+    html: Optional[str] = None,
+    text: Optional[str] = None,
+    default_from: str = _DEFAULT_FROM,
+    log_id: str = "-",
+    email_type: Optional[str] = "transactional",
+    recipient_user_id: Optional[str] = None,
+    attachments: Optional[list] = None,
+    from_email: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Send one transactional email: AWS SES primary, Resend guardrail.
+
+    Thin bool wrapper over :func:`send_transactional_email_result`, kept for
+    the 12 existing call sites that only need "was it accepted" (auth OTPs,
+    marketing, corporate signup, …) — see that function's docstring for the
+    full delivery-logic description.
+
+    Returns:
+        True if either provider accepted the message, False otherwise.
+    """
+    result = await send_transactional_email_result(
+        to=to,
+        subject=subject,
+        html=html,
+        text=text,
+        default_from=default_from,
+        log_id=log_id,
+        email_type=email_type,
+        recipient_user_id=recipient_user_id,
+        attachments=attachments,
+        from_email=from_email,
+        extra_headers=extra_headers,
+    )
+    return result.status == EmailDeliveryStatus.accepted

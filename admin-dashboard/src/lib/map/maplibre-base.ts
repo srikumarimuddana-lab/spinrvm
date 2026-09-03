@@ -16,6 +16,23 @@ import {
 // Swap the key in the URL to change the look (liberty / positron / bright / dark-matter).
 export const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 export const MAP_STYLE_POSITRON = "https://tiles.openfreemap.org/styles/positron";
+// Dark counterpart to MAP_STYLE_URL — every admin map that reaches for a
+// light OpenFreeMap style directly (not via trackBaseMapStyle(), which is
+// rider-tracking-specific) should pick between this pair with
+// themedMapStyle() instead of hardcoding MAP_STYLE_URL, so a cream-white
+// basemap never sits inside an otherwise dark admin UI.
+export const MAP_STYLE_DARK = "https://tiles.openfreemap.org/styles/dark-matter";
+
+/**
+ * Pick the admin-dashboard basemap style for the given resolved theme
+ * (from next-themes' `useTheme()`). Callers read this once at map-creation
+ * time — MapLibre's setStyle() drops runtime-added sources/layers, so we
+ * don't support live-swapping an already-mounted map's style; remounting
+ * the component (e.g. keying it by resolvedTheme) picks up a theme change.
+ */
+export function themedMapStyle(resolvedTheme: string | undefined): string {
+    return resolvedTheme === "dark" ? MAP_STYLE_DARK : MAP_STYLE_URL;
+}
 
 // Protomaps hosted basemap. The API key is a *public*, domain-restricted key
 // (like a Google Maps JS key) and is meant to ship in the browser, so it lives

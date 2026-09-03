@@ -117,6 +117,7 @@ Not visible mid-session to anyone already using the app.
 | `backend/tests/**` (5 files + 2 new) | see commit | coverage of every fix |
 | `backend/tests/direct_pool/conftest.py`, `backend/tests/test_direct_pool_conftest_scope.py` | skip hook scoped to its own directory; regression test | the hook was skipping the whole suite in any DSN-less run |
 | `.github/workflows/ci.yml`, `.gitignore`, `backend/.coveragerc` | DSN composition, token cache ignore, omit | see §3 |
+| `.github/workflows/ci.yml` (backend-test steps 10–11) | `if: ${{ !cancelled() }}` on the direct-pool and RLS real-Postgres steps | both were skipped whenever the mocked suite failed, so neither suite had run in CI since `main`'s mocked suite went red |
 | `backend/scripts/seed_loadtest_bots.py`, `loadtest/preauth_bots.py`, T16 doc | guards, cleanup, redaction | production safety, PII |
 | `ACTION_ITEMS.md`, retro doc, `requirements.txt` | merge resolution | numbering collision, lockfile drift |
 
@@ -208,6 +209,10 @@ if _direct_pool_enabled and not _dispatch_pool.is_open():
   naming `services/outbox.py` and `utils/outbox_worker.py`) — none in files this PR touches.
   The conftest scoping fix above is the first run in which the guard-rail coverage gates
   measure a suite that actually executed; their numbers before it are meaningless.
+- Until the `!cancelled()` conditions above, `backend-test`'s direct-pool and RLS steps were
+  skipped on every run where the mocked suite failed — on this PR and on `main`. The 402→403
+  real-Postgres scenarios and `test_claim_batch_psycopg3.py` therefore first execute in CI on
+  the head that carries this fix; anything they surface is this PR's to fix.
 - The T16 round-2 report records a `DISPATCH_POOL_DSN` Fly secret already staged on
   `spinr-backend-staging` that nobody in that session set. It will activate on the next
   staging deploy; its origin should be confirmed before merge.

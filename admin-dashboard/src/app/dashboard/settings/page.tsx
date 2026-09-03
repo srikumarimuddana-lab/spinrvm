@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound, getAiCatalog, getEmailDeliverability, type AiCatalogProvider } from "@/lib/api";
+import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound, getAiCatalog, getEmailDeliverability, getHeatMapSettings, updateHeatMapSettings, type AiCatalogProvider, type HeatMapSettings } from "@/lib/api";
 import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,6 +43,17 @@ export default function SettingsPage() {
     const [soundUploading, setSoundUploading] = useState(false);
     const [aiCatalog, setAiCatalog] = useState<AiCatalogProvider[]>([]);
 
+    // Heat Map Configuration (below) reads/writes a *separate* `settings`
+    // table row (id="heatmap_settings") behind its own GET/PUT
+    // /api/admin/settings/heatmap — the same endpoint pair
+    // dashboard/heatmap/page.tsx already uses. It is NOT part of
+    // app_settings/the `settings` state above, so it needs its own state
+    // and its own save action rather than riding the page's shared
+    // "Save Changes" button.
+    const [heatMapSettings, setHeatMapSettings] = useState<HeatMapSettings | null>(null);
+    const [heatMapSaving, setHeatMapSaving] = useState(false);
+    const [heatMapSaved, setHeatMapSaved] = useState(false);
+
     const handleUploadOfferSound = async (file: File) => {
         if (file.size > 500 * 1024) {
             toast({ title: "File too large", description: "Max 500 KB.", variant: "destructive" });
@@ -81,6 +92,10 @@ export default function SettingsPage() {
 
         getAiCatalog()
             .then((d) => setAiCatalog(d.providers ?? []))
+            .catch(() => { });
+
+        getHeatMapSettings()
+            .then(setHeatMapSettings)
             .catch(() => { });
 
         mfaStatus()
@@ -158,6 +173,30 @@ export default function SettingsPage() {
 
     const update = (key: string, value: any) => {
         setSettings((prev: any) => ({ ...prev, [key]: value }));
+    };
+
+    const updateHeatMap = (key: keyof HeatMapSettings, value: any) => {
+        setHeatMapSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
+    };
+
+    const handleSaveHeatMap = async () => {
+        if (!heatMapSettings) return;
+        setHeatMapSaving(true);
+        setHeatMapSaved(false);
+        try {
+            await updateHeatMapSettings(heatMapSettings);
+            setHeatMapSaved(true);
+            setTimeout(() => setHeatMapSaved(false), 2000);
+            toast({ title: "Heat map settings saved" });
+        } catch (err: any) {
+            toast({
+                title: "Heat map settings not saved",
+                description: err?.message || "The server rejected the update.",
+                variant: "destructive",
+            });
+        } finally {
+            setHeatMapSaving(false);
+        }
     };
 
     if (loading) {
@@ -1044,26 +1083,60 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Heat Map Configuration */}
+                    {/* Heat Map Configuration — these 9 fields live on a
+                        separate `settings` table row (id="heatmap_settings")
+                        behind its own GET/PUT /api/admin/settings/heatmap
+                        endpoints (dashboard/heatmap/page.tsx already reads
+                        them from there for the map itself); they are not
+                        part of app_settings/the generic Save Changes button
+                        above. Bug found 2026-09-03: this card used to bind
+                        into the shared `settings` state and save via
+                        PUT /api/admin/settings, whose SettingsUpdateRequest
+                        model never declared these field names — extra="ignore"
+                        silently dropped every one of them on every save, so
+                        every control here was a no-op that still showed
+                        "Settings saved". Fixed by giving this card its own
+                        state + save action against the endpoint that
+                        actually persists these fields. */}
                     <Card className="border-border/50">
-                        <CardHeader>
+                        <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
                             <CardTitle className="text-base">Heat Map Configuration</CardTitle>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={handleSaveHeatMap}
+                                disabled={heatMapSaving || !heatMapSettings}
+                            >
+                                {heatMapSaved ? (
+                                    <>
+                                        <Check className="mr-2 h-4 w-4" /> Saved!
+                                    </>
+                                ) : (
+                                    <>
+                                        <Save className="mr-2 h-4 w-4" /> {heatMapSaving ? "Saving..." : "Save"}
+                                    </>
+                                )}
+                            </Button>
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
+                            {!heatMapSettings ? (
+                                <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                            ) : (
+                            <>
                             <div className="flex items-center justify-between">
                                 <Label htmlFor="heat_map_enabled">Enable Heat Map</Label>
                                 <Switch
                                     id="heat_map_enabled"
-                                    checked={settings.heat_map_enabled ?? true}
-                                    onCheckedChange={(v) => update("heat_map_enabled", v)}
+                                    checked={heatMapSettings.heat_map_enabled ?? true}
+                                    onCheckedChange={(v) => updateHeatMap("heat_map_enabled", v)}
                                 />
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="heat-map-default-range">Default Time Range</Label>
                                 <Select
-                                    value={settings.heat_map_default_range || "30d"}
-                                    onValueChange={(v) => update("heat_map_default_range", v)}
+                                    value={heatMapSettings.heat_map_default_range || "30d"}
+                                    onValueChange={(v) => updateHeatMap("heat_map_default_range", v)}
                                 >
                                     <SelectTrigger id="heat-map-default-range"><SelectValue /></SelectTrigger>
                                     <SelectContent>
@@ -1078,8 +1151,8 @@ export default function SettingsPage() {
                             <div className="space-y-2">
                                 <Label htmlFor="heat-map-intensity">Heat Intensity</Label>
                                 <Select
-                                    value={settings.heat_map_intensity || "medium"}
-                                    onValueChange={(v) => update("heat_map_intensity", v)}
+                                    value={heatMapSettings.heat_map_intensity || "medium"}
+                                    onValueChange={(v) => updateHeatMap("heat_map_intensity", v)}
                                 >
                                     <SelectTrigger id="heat-map-intensity"><SelectValue /></SelectTrigger>
                                     <SelectContent>
@@ -1092,40 +1165,42 @@ export default function SettingsPage() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
                                     <Label htmlFor="heat-map-radius">Radius (px)</Label>
-                                    <Input id="heat-map-radius" type="number" value={settings.heat_map_radius || 25}
-                                        onChange={(e) => update("heat_map_radius", parseInt(e.target.value))} />
+                                    <Input id="heat-map-radius" type="number" value={heatMapSettings.heat_map_radius || 25}
+                                        onChange={(e) => updateHeatMap("heat_map_radius", parseInt(e.target.value))} />
                                 </div>
                                 <div className="space-y-2">
                                     <Label htmlFor="heat-map-blur">Blur (px)</Label>
-                                    <Input id="heat-map-blur" type="number" value={settings.heat_map_blur || 15}
-                                        onChange={(e) => update("heat_map_blur", parseInt(e.target.value))} />
+                                    <Input id="heat-map-blur" type="number" value={heatMapSettings.heat_map_blur || 15}
+                                        onChange={(e) => updateHeatMap("heat_map_blur", parseInt(e.target.value))} />
                                 </div>
                             </div>
                             <div className="space-y-4 pt-2">
                                 <div className="flex items-center justify-between">
                                     <Label htmlFor="heat_map_show_pickups">Show Pickups</Label>
-                                    <Switch id="heat_map_show_pickups" checked={settings.heat_map_show_pickups ?? true}
-                                        onCheckedChange={(v) => update("heat_map_show_pickups", v)} />
+                                    <Switch id="heat_map_show_pickups" checked={heatMapSettings.heat_map_show_pickups ?? true}
+                                        onCheckedChange={(v) => updateHeatMap("heat_map_show_pickups", v)} />
                                 </div>
                                 <div className="flex items-center justify-between">
                                     <Label htmlFor="heat_map_show_dropoffs">Show Dropoffs</Label>
-                                    <Switch id="heat_map_show_dropoffs" checked={settings.heat_map_show_dropoffs ?? true}
-                                        onCheckedChange={(v) => update("heat_map_show_dropoffs", v)} />
+                                    <Switch id="heat_map_show_dropoffs" checked={heatMapSettings.heat_map_show_dropoffs ?? true}
+                                        onCheckedChange={(v) => updateHeatMap("heat_map_show_dropoffs", v)} />
                                 </div>
                             </div>
                             <Separator />
                             <div className="space-y-4">
                                 <div className="flex items-center justify-between">
                                     <Label htmlFor="corporate_heat_map_enabled">Corporate Heat Map</Label>
-                                    <Switch id="corporate_heat_map_enabled" checked={settings.corporate_heat_map_enabled ?? true}
-                                        onCheckedChange={(v) => update("corporate_heat_map_enabled", v)} />
+                                    <Switch id="corporate_heat_map_enabled" checked={heatMapSettings.corporate_heat_map_enabled ?? true}
+                                        onCheckedChange={(v) => updateHeatMap("corporate_heat_map_enabled", v)} />
                                 </div>
                                 <div className="flex items-center justify-between">
                                     <Label htmlFor="regular_rider_heat_map_enabled">Regular Rider Heat Map</Label>
-                                    <Switch id="regular_rider_heat_map_enabled" checked={settings.regular_rider_heat_map_enabled ?? true}
-                                        onCheckedChange={(v) => update("regular_rider_heat_map_enabled", v)} />
+                                    <Switch id="regular_rider_heat_map_enabled" checked={heatMapSettings.regular_rider_heat_map_enabled ?? true}
+                                        onCheckedChange={(v) => updateHeatMap("regular_rider_heat_map_enabled", v)} />
                                 </div>
                             </div>
+                            </>
+                            )}
                         </CardContent>
                     </Card>
 

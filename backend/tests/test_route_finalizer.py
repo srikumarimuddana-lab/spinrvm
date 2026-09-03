@@ -52,6 +52,24 @@ def _route_row(**overrides) -> dict:
     return route
 
 
+def test_route_window_prefers_assigned_at_over_driver_accepted_at_for_pickup_leg():
+    # Period 2 starts on assignment, not acceptance (CLAUDE.md). With
+    # include_pickup_leg widening the window, a point captured between
+    # assigned_at and driver_accepted_at must still be selected as P2
+    # evidence, not dropped as "before the window".
+    ride = {
+        "assigned_at": "2026-07-17T20:58:00Z",
+        "driver_accepted_at": "2026-07-17T20:59:00Z",
+        "ride_started_at": "2026-07-17T21:00:00Z",
+        "ride_completed_at": "2026-07-17T21:10:00Z",
+    }
+    between_point = {"captured_at": "2026-07-17T20:58:30Z", "sequence_number": 0}
+
+    selected = route_finalizer._route_window_points([between_point], ride, include_pickup_leg=True)
+
+    assert selected == [between_point]
+
+
 def test_mark_route_pending_upserts_versioned_completion_metadata(monkeypatch):
     update = AsyncMock()
     monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)
@@ -338,6 +356,73 @@ def test_finalizer_persists_reconstructed_sections_and_distance_quality(monkeypa
     assert _rc_args[2] == 4
     assert _rc_kwargs["reconstructed"] == reconstructed
     assert isinstance(_rc_kwargs["coverage"], float)
+
+
+def test_gps_spoof_validation_stored_on_route_quality_when_flag_enabled(monkeypatch):
+    # Dark-by-default flag: only touches OSRM/Google (via validate_trip_route)
+    # and only lands in route_quality when explicitly enabled.
+    updates = []
+    verdict = {"total_points": 8, "snapped_points": 3, "deviation_pct": 62.5, "verdict": "likely_spoofed"}
+
+    async def update_one(table, filters, payload, **_kwargs):
+        updates.append((table, filters, payload))
+        return {"ride_id": "ride_1"}
+
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride()))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_recompute_ride_distance_stats", AsyncMock())
+    monkeypatch.setattr(
+        route_finalizer,
+        "get_app_settings",
+        AsyncMock(return_value={"gps_spoof_charge_gate_enabled": True}),
+    )
+    validate = AsyncMock(return_value=verdict)
+    monkeypatch.setattr(route_finalizer, "validate_trip_route", validate)
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": "osrm_match", "failures": []}),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    route_update = next(payload for table, _filters, payload in updates if table == "ride_routes")
+    assert result["processing_status"] == "complete"
+    assert route_update["route_quality"]["gps_route_validation"] == verdict
+    validate.assert_awaited_once()
+
+
+def test_gps_spoof_validation_skipped_when_flag_disabled(monkeypatch):
+    updates = []
+
+    async def update_one(table, filters, payload, **_kwargs):
+        updates.append((table, filters, payload))
+        return {"ride_id": "ride_1"}
+
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride()))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_recompute_ride_distance_stats", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "get_app_settings", AsyncMock(return_value={}))
+    validate = AsyncMock()
+    monkeypatch.setattr(route_finalizer, "validate_trip_route", validate)
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": "osrm_match", "failures": []}),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    route_update = next(payload for table, _filters, payload in updates if table == "ride_routes")
+    assert result["processing_status"] == "complete"
+    assert "gps_route_validation" not in route_update["route_quality"]
+    validate.assert_not_awaited()
 
 
 def _failed_reconstruction() -> dict:

@@ -776,12 +776,34 @@ jobs:
         working-directory: rider-app
         run: yarn install --frozen-lockfile
 
+      # No --profile flag here (deliberately held, not an oversight): the
+      # question of what profile a main-branch [build] trigger should
+      # actually produce — this job has never pinned one explicitly — is
+      # captured for discussion, see ACTION_ITEMS.md B25 area / this PR's
+      # discussion. Do not add --profile production without that decision
+      # being made first.
       - name: Build iOS (Rider)
         working-directory: rider-app
         run: eas build --platform ios --non-interactive
 
       - name: Build Android (Rider)
         working-directory: rider-app
+        run: eas build --platform android --non-interactive
+
+      # Driver-app was previously missing here even though this job's `needs`
+      # already required driver-app-test to pass — gating on a test job whose
+      # app was never built. Added to make [build] on main produce both apps'
+      # native builds symmetrically, same as rider-app above.
+      - name: Install driver app dependencies
+        working-directory: driver-app
+        run: yarn install --frozen-lockfile
+
+      - name: Build iOS (Driver)
+        working-directory: driver-app
+        run: eas build --platform ios --non-interactive
+
+      - name: Build Android (Driver)
+        working-directory: driver-app
         run: eas build --platform android --non-interactive
 
   # Security Scan — filesystem (dependency CVEs) + secrets

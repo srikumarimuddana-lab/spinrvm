@@ -31,6 +31,7 @@ try:
     from ...services.stripe_kyc_sync import get_legal_name_and_address_from_stripe
     from ...settings_loader import get_app_settings
     from ...utils import metrics, report_branding
+    from ...utils.datetime_utils import parse_iso_utc
     from ...utils.legacy_rides import is_legacy_ride
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
@@ -1626,3 +1627,219 @@ async def get_airport_trips(
         pdf_col_widths=[1.5, 1.3, 1.5, 1.5, 1.8, 2.0, 2.0, 1.0, 1.3],
     )
     return resp
+
+
+async def _resolve_saskatoon_service_area_ids() -> list[str]:
+    """Saskatoon's service_area id(s), resolved by name rather than a
+    hardcoded id — ids differ across environments (fresh Supabase
+    projects, seed order). Raises rather than falling back to "every
+    area" when nothing matches: a City-of-Saskatoon report that quietly
+    included Regina rides would misstate the filing (CLAUDE.md: never
+    replace a failing lookup with a generic fallback that hides the
+    symptom)."""
+    rows = await db_supabase.get_rows("service_areas", {"name": {"$regex": "Saskatoon"}}, columns="id,name", limit=50)
+    if not rows:
+        raise RuntimeError("No service area matching 'Saskatoon' was found — cannot scope the City trip log")
+    return [r["id"] for r in rows]
+
+
+def _report_minutes_between(start: "str | None", end: "str | None") -> "int | None":
+    """Whole minutes between two raw ISO timestamp columns, rounded to the
+    nearest minute (minimum 1 once both ends exist) — same rounding rule as
+    routes/drivers/ride_complete.py's local _minutes_between, reused here
+    for the Passenger_Wait_Time (Mins) column."""
+    start_dt = parse_iso_utc(start)
+    end_dt = parse_iso_utc(end)
+    if not start_dt or not end_dt:
+        return None
+    secs = (end_dt - start_dt).total_seconds()
+    if secs <= 0:
+        return None
+    return max(1, int(round(secs / 60)))
+
+
+async def _saskatoon_city_trip_log_rows(start_date: datetime, end_date: datetime) -> tuple[list[dict], bool]:
+    """City of Saskatoon monthly trip log: every Saskatoon ride *requested*
+    in the window that either completed, or was cancelled by the rider or
+    driver after a driver had already accepted it. Scoped to Saskatoon via
+    the ride's own service_area_id (not the driver's home area) — same
+    convention as _airport_trips_rows/_gst_pst_rows, and the right one here
+    since the City cares about trips within its own limits.
+
+    Filtered on ride_requested_at (not ride_completed_at/cancelled_at) so a
+    single date filter applies uniformly to both completed and cancelled
+    rows — "all the rides based on the date selected" is read here as the
+    trips *requested* in that window. Flagged as an assumption (not a
+    confirmed City spec) via the Hint on the Compliance page's Saskatoon
+    City tab, same convention _airport_trips_rows' own Hint uses for its
+    column-set assumption.
+
+    "Cancelled after acceptance" is derived from driver_accepted_at being
+    set at cancellation time — cancelled_by/cancellation_type alone isn't
+    enough, since both rider and driver can also cancel *before*
+    acceptance (searching / driver_assigned offer-pending), which this
+    report must exclude per spec. System (no_drivers_found) and
+    admin/corporate cancellations are excluded outright regardless of
+    driver_accepted_at — this report is scoped to rider/driver
+    cancellations only, confirmed with the requester 2026-09-03.
+
+    Passenger_Wait_Time (Mins) = ride_started_at − ride_requested_at
+    (confirmed with the requester 2026-09-03); blank for cancelled rows
+    since the trip never started, along with Begin_Timestamp and
+    End_Timestamp.
+
+    Driver_License_Number (added 2026-09-03 per requester follow-up) is
+    the assigned driver's license number, decrypted via the same
+    _decrypt_driver_pii vault round-trip _driver_roster_rows uses — every
+    retained row has a driver_id (completed rides always have one;
+    cancelled-after-acceptance rows are only kept because
+    driver_accepted_at is set, which implies one)."""
+    saskatoon_ids = await _resolve_saskatoon_service_area_ids()
+    filters: dict = {
+        "status": {"$in": ["completed", "cancelled"]},
+        "service_area_id": {"$in": saskatoon_ids},
+        "ride_requested_at": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+    }
+    rides = await db_supabase.get_rows(
+        "rides",
+        filters,
+        columns=(
+            "id,status,ride_requested_at,driver_accepted_at,ride_started_at,ride_completed_at,"
+            "cancelled_at,cancelled_by,driver_id"
+        ),
+        limit=_ROW_LIMIT,
+    )
+    truncated = _check_truncated(len(rides), "saskatoon_city_trip_log")
+
+    kept: list[tuple[dict, str, str, str, "int | None"]] = []
+    for r in rides:
+        status = r.get("status")
+        if status == "completed":
+            trip_status = "Completed"
+            begin_ts = report_branding.format_report_timestamp(r.get("ride_started_at"))
+            end_ts = report_branding.format_report_timestamp(r.get("ride_completed_at"))
+            wait_minutes = _report_minutes_between(r.get("ride_requested_at"), r.get("ride_started_at"))
+        elif status == "cancelled":
+            cancelled_by = r.get("cancelled_by")
+            if not r.get("driver_accepted_at") or cancelled_by not in ("rider", "driver"):
+                # Cancelled before any driver accepted, or cancelled by
+                # someone other than the rider/driver (system auto-cancel,
+                # admin, corporate suspension) — out of scope for this report.
+                continue
+            trip_status = f"Cancelled by {cancelled_by.capitalize()}"
+            begin_ts = ""
+            end_ts = ""
+            wait_minutes = None
+        else:
+            # Defensive: the DB filter above already restricts to
+            # completed/cancelled — a third value here would be a ride-status
+            # contract violation per CLAUDE.md. Surface loudly, don't guess.
+            logger.error(f"Unexpected ride status '{status}' on ride {r.get('id')} in Saskatoon City trip log query")
+            continue
+        kept.append((r, trip_status, begin_ts, end_ts, wait_minutes))
+
+    # Batched, decrypted driver-license lookup — same $in-chunking-by-200
+    # and vault round-trip _airport_trips_rows/_driver_roster_rows use.
+    driver_ids = sorted({r.get("driver_id") for r, *_ in kept if r.get("driver_id")})
+    license_by_driver: dict[str, str] = {}
+    for i in range(0, len(driver_ids), 200):
+        batch = driver_ids[i : i + 200]
+        driver_rows = await db_supabase.get_rows(
+            "drivers", {"id": {"$in": batch}}, columns="id,license_number", limit=len(batch)
+        )
+        for d in driver_rows:
+            decrypted = await _decrypt_driver_pii(d)
+            license_by_driver[d["id"]] = decrypted.get("license_number") or ""
+
+    rows = [
+        {
+            "Request_Timestamp": report_branding.format_report_timestamp(r.get("ride_requested_at")),
+            "Accept_Timestamp": report_branding.format_report_timestamp(r.get("driver_accepted_at")),
+            "Begin_Timestamp": begin_ts,
+            "End_Timestamp": end_ts,
+            "Passenger_Wait_Time (Mins)": "" if wait_minutes is None else str(wait_minutes),
+            "Trip_Status": trip_status,
+            "Driver_License_Number": license_by_driver.get(r.get("driver_id"), ""),
+        }
+        for r, trip_status, begin_ts, end_ts, wait_minutes in kept
+    ]
+    rows.sort(key=lambda row: row["Request_Timestamp"], reverse=True)
+    return rows, truncated
+
+
+@api_router.get("/saskatoon-city-trip-log")
+@limiter.limit("10/minute")
+async def get_saskatoon_city_trip_log(
+    request: Request,
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to the 1st of the current month"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today"),
+    format: str = Query("pdf", pattern="^(pdf|csv|xlsx|docx)$"),
+    admin: dict = Depends(get_admin_user),
+):
+    """City of Saskatoon monthly trip log — every Saskatoon ride requested
+    in the window that completed, or was cancelled by the rider or driver
+    after a driver had already accepted it. Trip_Status distinguishes
+    Completed / Cancelled by Rider / Cancelled by Driver; Begin_Timestamp,
+    End_Timestamp, and Passenger_Wait_Time are blank for cancelled trips
+    since the trip never started. Driver_License_Number is the assigned
+    driver's decrypted license number. See _saskatoon_city_trip_log_rows's
+    docstring for the date-field and wait-time definitions this report
+    uses."""
+    _require_super_admin(admin)
+    start_date, end_date = _resolve_date_window(date_from, date_to)
+
+    try:
+        rows, truncated = await _saskatoon_city_trip_log_rows(start_date, end_date)
+    except Exception as e:
+        logger.error(f"Failed to build Saskatoon City trip log report: {e}", exc_info=True)
+        _capture_export_failure("saskatoon_city_trip_log", e)
+        metrics.inc(
+            "spinr_admin_compliance_export_total", {"report_type": "saskatoon_city_trip_log", "outcome": "error"}
+        )
+        raise HTTPException(status_code=503, detail="Compliance report data unavailable — database error") from e
+
+    gate_response = await _check_export_gate(
+        admin,
+        "compliance.saskatoon_city_trip_log",
+        {"date_from": date_from, "date_to": date_to, "format": format},
+        len(rows),
+    )
+    if gate_response is not None:
+        return gate_response
+
+    fieldnames = [
+        "Request_Timestamp",
+        "Accept_Timestamp",
+        "Begin_Timestamp",
+        "End_Timestamp",
+        "Passenger_Wait_Time (Mins)",
+        "Trip_Status",
+        "Driver_License_Number",
+    ]
+    completed_count = sum(1 for r in rows if r["Trip_Status"] == "Completed")
+    cancelled_count = len(rows) - completed_count
+    subtitle = [
+        f"{report_branding.period_label(start_date, end_date)} — City of Saskatoon",
+        f"{len(rows)} trip(s)  ·  {completed_count} completed  ·  {cancelled_count} cancelled after acceptance",
+    ]
+    if truncated:
+        subtitle[-1] += f" — ⚠ TRUNCATED at {_ROW_LIMIT} rides scanned; narrow the date range"
+
+    await _log_compliance_export(
+        admin,
+        "saskatoon_city_trip_log",
+        {"date_from": date_from, "date_to": date_to, "format": format},
+        len(rows),
+    )
+    metrics.inc("spinr_admin_compliance_export_total", {"report_type": "saskatoon_city_trip_log", "outcome": "success"})
+
+    return _render_tabular_report(
+        title="City of Saskatoon — Monthly Trip Log",
+        filename_base="saskatoon_city_trip_log",
+        fieldnames=fieldnames,
+        rows=rows,
+        subtitle=subtitle,
+        format=format,
+        pdf_landscape=True,
+        pdf_col_widths=[1.4, 1.4, 1.4, 1.4, 1.6, 1.4, 1.6],
+    )

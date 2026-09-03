@@ -440,6 +440,23 @@ export async function downloadAirportTrips(
     return { blob, filename: `airport_trips.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
 }
 
+/** City of Saskatoon monthly trip log — completed rides, plus rides
+ *  cancelled by the rider or driver after a driver had already accepted.
+ *  No service-area param: the backend always scopes this to the Saskatoon
+ *  service area, since that's the report's entire purpose. */
+export async function downloadSaskatoonCityTripLog(
+    format: ComplianceReportFormat,
+    dateFrom?: string,
+    dateTo?: string,
+): Promise<{ blob: Blob; filename: string }> {
+    const sp = new URLSearchParams({
+        ...dateWindowParams(dateFrom, dateTo),
+        format,
+    });
+    const blob = await downloadComplianceReport(`/api/admin/compliance/saskatoon-city-trip-log?${sp.toString()}`);
+    return { blob, filename: `saskatoon_city_trip_log.${COMPLIANCE_FILE_EXTENSIONS[format]}` };
+}
+
 export interface DataTransferJob {
     id: string;
     requested_by_admin_id?: string;

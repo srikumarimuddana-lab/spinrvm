@@ -19998,12 +19998,35 @@ how much they de-risk a public launch._
   must not change claim-won/claim-lost semantics, only retry count/timing
   on a genuine transient failure).
 
-### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip
-- [ ] **Status:** open — found 2026-09-03 while babysitting PR #4887 (C53
-  finding 4). Confirmed via GitHub Actions run 33711534411 that
-  `backend-test` fails identically on `main`'s own latest commit
-  (`e71760e`), not just on the PR branch — this is base-branch-red, not
-  introduced by #4887's diff.
+### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip — reopened (fix written 2026-09-03, lost in a squash-merge, resubmitting)
+- [ ] **Status:** the fix below was written, verified 61/61 locally (twice),
+  and pushed as PR #4887's final commit (`2457622`) — but GitHub's
+  squash-merge of #4887 onto `main` (commit `dbcebe0`) captured a **stale**
+  snapshot of the branch that stopped at the prior commit (`48d0553`, the
+  C58 fix): `git show dbcebe0:backend/tests/rls/conftest.py` has none of
+  this fix's content, and `main`'s own next CI run (33728094406, same
+  commit `dbcebe0`) reproduced the exact original 24 RLS failures /
+  2 direct_pool failures, byte-for-byte, proving the fix never actually
+  shipped despite the PR showing "merged." Discovered while investigating
+  a follow-up request to look into the "5 CI-only RLS failures" this entry
+  had flagged as unreproducible — the real finding turned out to be this,
+  not a 6th RLS mystery. This is the second time in this session's history
+  a GitHub squash-merge has silently dropped a late-pushed commit (see the
+  PR #4879 lost-commit recovery earlier in this session) — push-then-merge
+  races on this repo's merge tooling appear to be a recurring, not
+  one-off, risk. Recovering via the standard "PR already merged" protocol:
+  restart the branch from `main`, re-land the same diff, open a fresh PR.
+  (C59, bundled in the same lost commit, is unaffected — `main` already
+  has an independent, better fix for that one; see C59.)
+- **Fix content below is unchanged and still accurate** — only the
+  shipping status changed. Found while babysitting PR #4887 (C53 finding
+  4); confirmed via GitHub Actions run 33711534411 that `backend-test`
+  failed identically on `main`'s own latest commit (`e71760e`), not just
+  on the PR branch — base-branch-red, not introduced by #4887's diff.
+  Fixed the same session with a local Postgres 16 cluster (a libpq
+  connection string exported as `TEST_DATABASE_URL` — see
+  `tests/rls/conftest.py`'s own docstring for the exact placeholder form)
+  to reproduce and verify against a real DB rather than guessing.
 - **Issue/gap:** `backend/tests/rls/conftest.py` builds its Postgres RLS
   test schema from `backend/supabase_schema.sql` plus a hand-picked
   allowlist of specific migration files applied verbatim (58, 64, 70, 290,
@@ -20012,25 +20035,54 @@ how much they de-risk a public launch._
   `backend/migrations/399_transactional_outbox.sql` (merged as part of the
   `fc6f922` dark launch, well before this gap was found), so every test
   touching `settings.outbox_receipts_enabled`, `outbox_messages`, or the
-  `outbox_*` RPCs fails with `UndefinedColumn`/`UndefinedTable`/`does not
-  exist`. 19 of 24 current RLS-suite failures are this one root cause
-  (`backend/tests/rls/test_transactional_outbox.py`, almost entirely). The
-  remaining ~5 (`test_core_tables_rls.py::test_service_role_bypasses_rls_on_users`,
-  two `test_money_and_safety_rls.py` cases, and
-  `test_saved_addresses_rls.py::test_service_role_bypasses_rls_on_saved_addresses`)
-  are a **separate, unrelated** pre-existing gap in the same harness —
-  assertion/permission mismatches with nothing to do with the outbox
-  migration; flagged here for visibility, not diagnosed further.
-- **Action:** update `tests/rls/conftest.py`'s schema-setup fixture to also
-  execute `backend/migrations/399_transactional_outbox.sql` verbatim, same
-  pattern as the existing 58/64/70/290/378 calls (`cur.execute((migrations_dir
-  / "NN_....sql").read_text())`, including the existing handling of the
-  trailing `NOTIFY pgrst, 'reload schema';` line those migrations already
-  strip).
+  `outbox_*` RPCs failed with `UndefinedColumn`/`UndefinedTable`/`does not
+  exist`. 19 of the original 24 CI RLS-suite failures were this one root
+  cause.
+- **Root-caused, not just patched — 2 more layers found while fixing:**
+  1. Applying 399 verbatim wasn't enough on its own:
+     `test_producer_flag_defaults_false` still failed
+     (`assert row is not None` → `None`) because this harness's minimal
+     `settings` stub table (id-only, no seeded row) never had an
+     `id='app_settings'` row for 399's `ALTER TABLE ... ADD COLUMN
+     outbox_receipts_enabled BOOLEAN NOT NULL DEFAULT FALSE` to apply to —
+     real Supabase always has that row; this test harness didn't. Fixed by
+     seeding `INSERT INTO settings (id) VALUES ('app_settings')` in the
+     stub-tables SQL.
+  2. `test_redrive_only_accepts_dead_lettered_and_writes_audit` then failed
+     with `UndefinedTable: relation "public.audit_logs" does not exist` —
+     `outbox_redrive()`'s own audit-log INSERT (migration 399) targets the
+     real `audit_logs` table (migration 06, `actor_id` added migration
+     57), which is outside this harness's declared 5-table coverage scope
+     and was never stubbed. Fixed with a minimal 6-column stub matching
+     exactly what `outbox_redrive()` writes.
+  3. Also added `outbox_messages`/`audit_logs` to the per-test `TRUNCATE`
+     list and a per-test reset of `settings.outbox_receipts_enabled` back
+     to `FALSE` (the flag and audit rows aren't per-test-isolated data like
+     the other 6 tables, but `_enable_producer()`-style tests mutate them
+     and would otherwise leak state into whichever test runs next).
+- **On the "separate, unrelated ~5 CI failures" flagged when C57 was
+  opened** (`test_core_tables_rls.py`/`test_money_and_safety_rls.py`/
+  `test_saved_addresses_rls.py` service-role-bypass/permission mismatches):
+  **did not reproduce** on a fresh local Postgres 16 — ran the full `tests/rls`
+  suite twice locally, both times 61/61 passed with zero failures outside
+  `test_transactional_outbox.py` (before this fix) or zero failures at all
+  (after). This means the extra ~5 CI failures are environment/ordering
+  -specific to CI's `postgres:15` service container (shared across 3
+  same-job steps: "Run backend tests", "Run direct-pool...", "Run RLS...")
+  rather than a deterministic conftest bug reproducible from a clean DB —
+  left unfixed since it can't be diagnosed without CI access to actually
+  reproduce it; flag for a maintainer with CI access to re-run and inspect
+  if it recurs.
+- **Fix:** `tests/rls/conftest.py` now applies `399_transactional_outbox.sql`
+  verbatim (same pattern as 58/64/70/290/378) as the last statement in the
+  session-scoped schema setup — after the blanket `GRANT ... ON ALL TABLES`
+  re-grant, so 399's own `REVOKE ALL ... FROM anon, authenticated` has the
+  final say (same reasoning as the existing financial_events re-revoke),
+  plus the `app_settings` seed row and `audit_logs` stub above.
 - **Files:** `backend/tests/rls/conftest.py`.
 - **Acceptance:** `TEST_DATABASE_URL=<local pg> pytest tests/rls -c
-  /dev/null --confcutdir=tests/rls -v` — `test_transactional_outbox.py`
-  passes in full; no other RLS file regresses.
+  /dev/null --confcutdir=tests/rls -q` — 61/61 pass, run twice for
+  stability (no order-dependence).
 
 ### C58. `test_email_deliverability.py` never updated for migration 392's server-side aggregation — CLOSED (2026-09-03)
 - [x] **Status:** resolved 2026-09-03. Flagged as C53 finding 4 item 7
@@ -20070,6 +20122,45 @@ how much they de-risk a public launch._
 - **Acceptance:** `pytest tests/test_email_deliverability.py` — 5/5 pass.
   Broader sweep (`-k "monitoring or deliverability"`, 37 tests) green, no
   regressions.
+
+### C59. `tests/direct_pool/test_claim_batch.py`: two concurrency tests share a synthetic phone number, `UniqueViolation` on `main`'s own tip — CLOSED (2026-09-03, fixed independently on `main`, not by this session)
+- [x] **Status:** resolved — but not by the fix this session originally
+  wrote. Found 2026-09-03 while verifying C57's fix (2 failed / 28 passed
+  on PR #4887's "Run direct-pool real-Postgres tests" step); this session
+  first fixed it with a targeted id rename
+  (`"lock-rider-a"/"b"` → `"lock-rider-c"/"d"`), verified 30/30 locally,
+  and shipped it in PR #4887's final commit. **That commit never actually
+  reached `main`** — see the "lost-commit" note in C57 below — so while
+  investigating "5 CI-only RLS failures" per a follow-up request, this
+  entry's fix was found to already be superseded on `main` by a different,
+  independently-landed, more robust fix
+  (`d7187b4 fix(tests): make the direct-pool real-Postgres suite runnable
+  in its isolated CI step`, not from this session): a process-wide
+  `itertools.count`-based `_next_phone()` sequence that makes every seeded
+  phone number unique regardless of which literal id a test picks —
+  strictly better than this session's one-pair rename, since it can never
+  recur for a *different* colliding pair. This session's own rename was
+  discarded in favor of `main`'s fix rather than re-applied. No action
+  needed; documented here only so the original (accurate, still worth
+  reading for the root-cause explanation) diagnosis isn't lost.
+- **Original issue/gap (still an accurate root-cause description):**
+  `test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking`
+  failed with `psycopg2.errors.UniqueViolation: duplicate key value
+  violates unique constraint "users_phone_key" DETAIL: Key
+  (phone)=(+1306555er-a) already exists`. `tests/direct_pool/conftest.py`'s
+  `pg_cur` fixture truncates `users`/`drivers`/`rides`/etc. before each
+  test for isolation — but 3 tests in this file (the ones needing
+  genuinely concurrent, separate real Postgres connections to prove
+  row-lock/race behavior) take the raw session-scoped `pg_conn` fixture
+  instead, deliberately **not** truncated between tests. The old
+  `_insert_user()` derived each seeded phone from `uid[-4:]`, so
+  `"race-rider-a"` and `"lock-rider-a"` (different tests, same suffix)
+  collided on `+1306555er-a` whichever ran second.
+- **Files:** `backend/tests/direct_pool/test_claim_batch.py` (already
+  fixed on `main`; not touched by this session's final push).
+- **Acceptance:** `TEST_DATABASE_URL=<local pg> pytest tests/direct_pool -c
+  /dev/null --confcutdir=tests/direct_pool -q` — 30/30 pass on `main`'s
+  current `test_claim_batch.py`, run twice for stability.
 
 ## Recently completed (do not redo)
 

@@ -166,11 +166,24 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 _STUB_TABLES_SQL = """
 CREATE TABLE otp_records (id text primary key);
 CREATE TABLE settings (id text primary key);
+INSERT INTO settings (id) VALUES ('app_settings');
 CREATE TABLE support_tickets (id text primary key, user_id text);
 CREATE TABLE faqs (id text primary key);
 CREATE TABLE vehicle_types (id text primary key);
 CREATE TABLE fare_configs (id text primary key);
 CREATE TABLE service_areas (id text primary key);
+-- Minimal stub matching the 6 columns migration 399's outbox_redrive() RPC
+-- writes (id/action/entity_type/entity_id/actor_id/details) -- the real
+-- audit_logs table (migration 06, actor_id added migration 57) isn't part
+-- of this harness's 5-table coverage scope; only outbox_redrive touches it.
+CREATE TABLE audit_logs (
+    id text primary key,
+    action text,
+    entity_type text,
+    entity_id text,
+    actor_id text,
+    details text
+);
 """
 
 
@@ -265,6 +278,17 @@ def pg_conn(pg_test_dbname):
     cur.execute("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON financial_events FROM authenticated")
     cur.execute("GRANT SELECT ON financial_events TO authenticated")
 
+    # --- outbox_messages / settings.outbox_receipts_enabled / outbox_* RPCs:
+    # migration 399, verbatim. Applied last (after the blanket ALL-TABLES
+    # grant above) so its own `REVOKE ALL ... FROM anon, authenticated` has
+    # the final say -- same reasoning as the financial_events re-revoke just
+    # above, except 399 already carries its own REVOKE/GRANT statements, so
+    # nothing extra needs re-applying here. (ACTION_ITEMS.md C57: this file
+    # never picked up 399 when the outbox feature dark-launched, so every
+    # test in test_transactional_outbox.py failed with
+    # UndefinedColumn/UndefinedTable/"function ... does not exist".)
+    cur.execute((migrations_dir / "399_transactional_outbox.sql").read_text())
+
     yield conn
 
     cur.execute("RESET ROLE")
@@ -290,8 +314,16 @@ def pg_cur(pg_conn):
         "financial_events",
         "driver_insurance_periods",
         "saved_addresses",
+        "outbox_messages",
+        "audit_logs",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
+    # settings isn't truncated (it's a single always-present config row, not
+    # per-test data) -- but outbox_receipts_enabled must reset to its
+    # documented default between tests, since _enable_producer() flips it to
+    # TRUE and several tests (e.g. test_producer_flag_defaults_false) assert
+    # the default.
+    cur.execute("UPDATE settings SET outbox_receipts_enabled = FALSE WHERE id = 'app_settings'")
     yield cur
     cur.execute("RESET ROLE")
     cur.execute("SELECT set_config('request.jwt.claims', '', false)")

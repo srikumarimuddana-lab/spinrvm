@@ -20190,6 +20190,65 @@ how much they de-risk a public launch._
   /dev/null --confcutdir=tests/direct_pool -q` — 30/30 pass on `main`'s
   current `test_claim_batch.py`, run twice for stability.
 
+### C60. Transactional-outbox loguru calls pass `exc_info=True`, which loguru doesn't support — `test_no_exc_info_kwarg_in_loguru_calls` red on `main`'s own tip
+
+- [ ] **Status:** open. Found 2026-09-03 while babysitting PR #4896 (C57):
+  `backend-test`'s "Run backend tests" step fails
+  `tests/test_loguru_call_conventions.py::test_no_exc_info_kwarg_in_loguru_calls`
+  on `main`'s own tip (confirmed on this PR's exact base commit `92fa5f9`,
+  and independently via `grep -n exc_info` on the files below — not
+  introduced by PR #4896's diff, which touches only `ACTION_ITEMS.md` and
+  `tests/rls/conftest.py`).
+- **Issue/gap:** `logger.error(..., exc_info=True)` is the stdlib
+  `logging`-module convention. These files log via **loguru**, which has
+  no `exc_info` parameter — this repo already has a pre-existing regression
+  gate for exactly this mistake (see C-era history above, the
+  `documents.py` loguru-convention fix from 2026-08-19) but 9 new call
+  sites reintroduced it in the C53 finding-4 transactional-outbox work
+  (PR #4887, already merged to `main`), which this gate did not catch
+  before merge (see `.github/ISSUE_TEMPLATE/ci_change_request.yml`
+  precedent — same class of gap as C7/C9's "no automated PR review is
+  currently running").
+- **Root cause:** loguru's `logger.error(msg, exc_info=True)` silently
+  swallows `exc_info` as an ordinary `str.format` keyword and captures no
+  traceback — the loguru-correct form is `logger.opt(exception=True)
+  .error(msg, ...)`.
+- **Files (9 call sites needing the same `logger.opt(exception=True)`
+  fix already used elsewhere in these same modules):**
+  `backend/services/outbox.py:185`, `backend/services/outbox_receipts.py:48`,
+  `backend/utils/outbox_worker.py:78,103,143,169,199,213,229`.
+- **Blast radius:** logging-only — each site is inside an `except` block
+  around outbox processing; fixing the call convention changes no control
+  flow, only whether a traceback is actually captured when these paths
+  error. Not fixed in PR #4896 (out of scope — that PR is RLS-conftest
+  only); tracked here for a follow-up fix.
+- **Acceptance:** `pytest tests/test_loguru_call_conventions.py -q` passes
+  once all 9 sites use `logger.opt(exception=True).error(...)`.
+
+### C61. `test_referral_analytics.py::test_funnel_counts_and_amounts` red on `main`'s own tip — `assert 0 == 2`
+
+- [ ] **Status:** open. Found 2026-09-03 alongside C60, same PR #4896
+  babysitting session; confirmed pre-existing on `main`'s tip (`92fa5f9`),
+  unrelated to PR #4896's diff.
+- **Issue/gap:** `TestReferralAnalytics::test_funnel_counts_and_amounts`
+  (driver-source referral funnel) asserts `f["redeemed"] == 2` but the
+  admin referral-analytics endpoint under test
+  (`routes/admin/drivers.py`) now returns 0. Likely the same class of
+  stale-mock-after-RPC-refactor issue documented for C58 and referenced in
+  `92fa5f9`'s own commit message ("TestRiderReferralLeaderboard and the
+  driver-source referral-analytics funnel test needed a 'rides' get_rows
+  branch added") — not yet fully root-caused; needs a look at whether the
+  underlying endpoint moved to a `db_supabase.rpc(...)` aggregation (per
+  the C58/migration-392 pattern) that the test's `get_rows` mock doesn't
+  cover, or whether the `92fa5f9` fix's added "rides" branch is itself
+  incomplete for this specific assertion.
+- **Files:** `backend/tests/test_referral_analytics.py`,
+  `backend/routes/admin/drivers.py` (referral analytics endpoint — exact
+  function not yet confirmed).
+- **Not fixed in PR #4896** (out of scope — that PR is RLS-conftest only);
+  tracked here for a follow-up fix.
+- **Acceptance:** `pytest tests/test_referral_analytics.py -q` passes.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

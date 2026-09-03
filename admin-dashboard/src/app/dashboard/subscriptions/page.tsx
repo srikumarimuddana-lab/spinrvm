@@ -402,8 +402,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                         <Label>Tax collection enabled</Label>
                     </div>
                     <div className="space-y-1">
-                        <Label>Province code</Label>
+                        <Label htmlFor="tax-province">Province code</Label>
                         <Input
+                            id="tax-province"
                             value={form.province}
                             maxLength={3}
                             placeholder="SK"
@@ -412,8 +413,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                         <div className="space-y-1">
-                            <Label>GST rate (%)</Label>
+                            <Label htmlFor="tax-gst-rate">GST rate (%)</Label>
                             <Input
+                                id="tax-gst-rate"
                                 type="number"
                                 min={0}
                                 max={25}
@@ -423,8 +425,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                             />
                         </div>
                         <div className="space-y-1">
-                            <Label>PST rate (%)</Label>
+                            <Label htmlFor="tax-pst-rate">PST rate (%)</Label>
                             <Input
+                                id="tax-pst-rate"
                                 type="number"
                                 min={0}
                                 max={25}
@@ -434,8 +437,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                             />
                         </div>
                         <div className="space-y-1">
-                            <Label>HST rate (%)</Label>
+                            <Label htmlFor="tax-hst-rate">HST rate (%)</Label>
                             <Input
+                                id="tax-hst-rate"
                                 type="number"
                                 min={0}
                                 max={25}

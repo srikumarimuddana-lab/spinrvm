@@ -367,9 +367,12 @@ class SettingsUpdateRequest(BaseModel):
     meta_driver_dataset_id: Optional[str] = Field(default=None, max_length=64)
     meta_capi_access_token: Optional[str] = None
     meta_test_event_code: Optional[str] = Field(default=None, max_length=64)
-    # admin-dashboard visual refresh (epic #2785 Phase 3+) — canary flag for
-    # the shared shell/typography/radius restyle. Not a credential, no
-    # special masking/super-admin gate needed.
+    # admin-dashboard visual refresh (epic #2785 Phase 3+) — single global
+    # on/off flag for the shared shell/typography/radius restyle. No
+    # per-user or per-role targeting exists (see useFeatureFlag.tsx):
+    # flipping this turns it on for every admin/staff account at once, not
+    # a subset. Not a credential, no special masking/super-admin gate
+    # needed.
     admin_theme_v2_enabled: Optional[bool] = None
     # Admin command palette (Cmd+K/Ctrl+K route jumper) — same shape as
     # admin_theme_v2_enabled above. Not a credential, no masking/

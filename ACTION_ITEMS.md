@@ -17395,10 +17395,23 @@ how much they de-risk a public launch._
     Supabase, Fly/Railway) and a flag that `capacity_watchdog`'s
     `ALERT_WEBHOOK_URL`/`ALERT_EMAIL_TO` wiring could not be confirmed from
     this session (no Fly access) — needs a human check.
-  **Still open after this entry**: every TBD date in the two new trackers,
+  **Follow-up landed same day**: `.github/workflows/billing-usage-monitor.yml`
+  — daily Stripe balance + Twilio balance check (both optional/gated, same
+  no-secrets-no-op pattern), covering the usage-based-service risk class
+  (spend spike / suspended account) that the renewal-calendar tracker can't
+  express since these services have no renewal date. **Deliberately does
+  NOT cover Google Maps or Firebase** — real spend/budget tracking there
+  needs the GCP Billing Budgets API (service account + billing.budgets
+  scope + a configured budget object), a materially bigger setup; tracked
+  as an open gap in `renewal-calendar.md`'s Google Maps/Firebase rows, not
+  silently assumed covered. See
+  `docs/change-log/2026-09-03-e13-billing-usage-monitoring.md`.
+  **Still open after this entry**: every TBD date in the two trackers,
   confirming `capacity_watchdog`'s alert secrets are actually set, deciding
-  whether to activate the optional Supabase capacity check, and E4 itself
-  (still no live external synthetic monitor).
+  whether to activate the optional Supabase capacity and Stripe/Twilio
+  billing checks (all need a human to create the underlying API
+  credentials), GCP Billing Budgets coverage for Google Maps/Firebase, and
+  E4 itself (still no live external synthetic monitor).
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated

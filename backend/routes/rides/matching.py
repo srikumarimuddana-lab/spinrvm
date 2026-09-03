@@ -161,6 +161,44 @@ def _build_offer_rows(claimed_drivers, ride_id, offered_at_iso, expires_at_iso):
     ]
 
 
+# Mirrors repositories._base's _IN_BATCH_SIZE (same edge-proxy URL-length
+# ceiling, same 150 figure) — not imported from there to avoid a new
+# cross-module dependency on a private constant for a single int.
+_SUBSCRIPTION_IN_BATCH_SIZE = 150
+
+
+async def _get_active_subscriptions_batched(driver_ids: list, columns: str) -> list:
+    """Fetch active ``driver_subscriptions`` rows for ``driver_ids``, batched.
+
+    2026-09-03 incident: a bare ``{"driver_id": {"$in": driver_ids}}`` renders
+    as a PostgREST ``col=in.(…)`` URL query parameter. The dispatch candidate
+    pool caps at 500 (see the "pool truncated" log above), and once the id
+    list gets that large the edge proxy in front of PostgREST rejects the
+    oversized URL with a plain-text 400 before PostgREST ever sees it —
+    surfaces as the opaque ``APIError: JSON could not be generated``, exactly
+    the failure class documented on ``repositories._base``'s
+    ``get_rows_batched_in``/``_IN_BATCH_SIZE``.
+
+    Loops ``_deps.db_supabase.get_rows`` in-place (same call every existing
+    caller already makes) rather than switching to that shared helper, so
+    every test mocking ``_deps.db_supabase.get_rows`` keeps working unchanged
+    for the small pools they use — a small pool makes exactly one iteration
+    here, identical to today's single call. Only a real, large candidate pool
+    is actually split across requests.
+    """
+    out: list = []
+    for i in range(0, len(driver_ids), _SUBSCRIPTION_IN_BATCH_SIZE):
+        chunk = driver_ids[i : i + _SUBSCRIPTION_IN_BATCH_SIZE]
+        rows = await _deps.db_supabase.get_rows(
+            "driver_subscriptions",
+            {"driver_id": {"$in": chunk}, "status": "active"},
+            columns=columns,
+            limit=len(chunk),
+        )
+        out.extend(rows or [])
+    return out
+
+
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
     """Dispatch a driver for ``ride_id`` — recovery shell.
 
@@ -535,14 +573,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         _sub_required = bool((await _parent_area()).get("subscription_required"))
                     if _sub_required:
                         _candidate_ids = [d["id"] for d in all_drivers]
-                        _active_subs = await _deps.db_supabase.get_rows(
-                            "driver_subscriptions",
-                            {"driver_id": {"$in": _candidate_ids}, "status": "active"},
-                            # started_at/rides_per_day are not read here — they are the
-                            # two extra columns the daily-quota filter needs, carried on
-                            # this query so that filter can skip a second identical read.
-                            columns="driver_id,started_at,expires_at,plan_id,rides_per_day",
-                            limit=len(_candidate_ids),
+                        # started_at/rides_per_day are not read here — they are the
+                        # two extra columns the daily-quota filter needs, carried on
+                        # this query so that filter can skip a second identical read.
+                        # Batched — see _get_active_subscriptions_batched's docstring.
+                        _active_subs = await _get_active_subscriptions_batched(
+                            _candidate_ids, "driver_id,started_at,expires_at,plan_id,rides_per_day"
                         )
                         _gate_subs = list(_active_subs or [])
                         _now_utc = datetime.now(timezone.utc)
@@ -634,11 +670,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         # Free area: the gate never ran, so this is the only read. There
                         # is no area-level "has finite passes" flag to short-circuit on,
                         # and discovering one would cost the very query it would save.
-                        _q_subs = await _deps.db_supabase.get_rows(
-                            "driver_subscriptions",
-                            {"driver_id": {"$in": _q_ids}, "status": "active"},
-                            columns="driver_id,started_at,expires_at,rides_per_day",
-                            limit=len(_q_ids),
+                        # Batched — see _get_active_subscriptions_batched's docstring.
+                        _q_subs = await _get_active_subscriptions_batched(
+                            _q_ids, "driver_id,started_at,expires_at,rides_per_day"
                         )
                     if _q_subs:
                         # area_timezone() would re-read the row we already hold; it is

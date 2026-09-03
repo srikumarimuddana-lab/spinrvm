@@ -133,6 +133,115 @@ class TestStripeWebhookSignatureFailure:
         assert exc.value.status_code == 400
 
 
+class TestStripeWebhookSecretWhitespaceNormalization:
+    """A secret pasted into the admin settings UI (Stripe Dashboard, a
+    password manager, a terminal) frequently carries a stray leading/
+    trailing newline or space. Used verbatim as the HMAC key, that
+    whitespace makes EVERY delivery fail signature verification with no
+    other symptom — this is the exact production failure mode reported in
+    the runbook ("No signatures found matching the expected signature for
+    payload", 100% of deliveries). The handler must strip before verifying
+    so an already-corrupted stored secret doesn't take down webhook
+    processing until an admin happens to re-save it."""
+
+    def test_platform_secret_whitespace_is_stripped_before_verification(self):
+        from backend.routes import webhooks as wh
+
+        event = _make_stripe_event("some.unhandled.event", {}, event_id="evt_ws_1")
+        event_obj = MagicMock()
+        event_obj.get = lambda k, d=None: event.get(k, d)
+        event_obj.to_dict_recursive = lambda: event
+
+        async def mock_get_app_settings():
+            return {
+                # Trailing newline + leading space, as if pasted straight
+                # from the Stripe Dashboard's "Reveal" field into a textarea.
+                "stripe_webhook_secret": " whsec_platform\n",
+                "stripe_secret_key": "sk_test",
+            }
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "t=123,v1=sig"}
+
+        import stripe
+
+        seen_secrets = []
+
+        def _construct(payload, sig, secret):
+            seen_secrets.append(secret)
+            if secret != "whsec_platform":
+                raise stripe.error.SignatureVerificationError("wrong secret", "sig")
+            return event_obj
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
+            patch.object(stripe.Webhook, "construct_event", side_effect=_construct),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=req))
+
+        # construct_event must never see the raw whitespace-padded secret —
+        # only the stripped value.
+        assert seen_secrets == ["whsec_platform"]
+        assert result["received"] is True
+        assert result.get("unhandled") is True
+
+    def test_connect_secret_whitespace_is_stripped_before_verification(self):
+        from backend.routes import webhooks as wh
+
+        event = _make_stripe_event("some.unhandled.event", {}, event_id="evt_ws_2")
+        event_obj = MagicMock()
+        event_obj.get = lambda k, d=None: event.get(k, d)
+        event_obj.to_dict_recursive = lambda: event
+
+        async def mock_get_app_settings():
+            return {
+                "stripe_webhook_secret": "whsec_platform",
+                "stripe_connect_webhook_secret": "\twhsec_connect \r\n",
+                "stripe_secret_key": "sk_test",
+            }
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "t=123,v1=sig"}
+
+        import stripe
+
+        seen_secrets = []
+
+        def _construct(payload, sig, secret):
+            seen_secrets.append(secret)
+            if secret != "whsec_connect":
+                raise stripe.error.SignatureVerificationError("wrong secret", "sig")
+            return event_obj
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
+            patch.object(stripe.Webhook, "construct_event", side_effect=_construct),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=req))
+
+        assert seen_secrets == ["whsec_platform", "whsec_connect"]
+        assert result["received"] is True
+
+    def test_whitespace_only_webhook_secret_treated_as_unset(self):
+        from backend.routes import webhooks as wh
+
+        async def mock_get_app_settings():
+            return {"stripe_webhook_secret": "   \n", "stripe_secret_key": "sk_test"}
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {}
+
+        with patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings):
+            with pytest.raises(Exception) as exc:
+                asyncio.run(wh.stripe_webhook(request=req))
+        assert exc.value.status_code == 500
+
+
 class TestStripeWebhookConnectSecret:
     """Dual-secret verification: the Connected-accounts endpoint signs with
     its own whsec_, so an event the platform secret can't verify must still

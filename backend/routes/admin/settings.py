@@ -526,6 +526,21 @@ class SettingsUpdateRequest(BaseModel):
             return v
         raise ValueError("sos_paging_webhook_url must use https:// (http:// is allowed only for localhost)")
 
+    @field_validator("stripe_secret_key", "stripe_webhook_secret", "stripe_connect_webhook_secret", mode="before")
+    @classmethod
+    def _strip_stripe_credentials(cls, v):
+        """A copy-pasted Stripe secret (from the Dashboard, a password
+        manager, or a terminal) frequently carries a leading/trailing
+        newline or space. Stored verbatim, that whitespace becomes part of
+        the API key / HMAC signing key and breaks every Stripe call or
+        webhook signature verification with no other symptom — see the
+        matching defensive `.strip()` on read in routes/webhooks.py, which
+        only protects against a value already corrupted before this fix.
+        Runs before the environment-prefix check below so a leading space
+        doesn't also trip a false "wrong environment" rejection.
+        """
+        return v.strip() if isinstance(v, str) else v
+
     @field_validator("stripe_secret_key")
     @classmethod
     def _stripe_secret_key_matches_environment(cls, v: Optional[str]) -> Optional[str]:

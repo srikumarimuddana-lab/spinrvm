@@ -550,9 +550,18 @@ async def stripe_webhook(request: Request):
     sig_header = request.headers.get("stripe-signature")
 
     settings = await get_app_settings()
-    webhook_secret = settings.get("stripe_webhook_secret", "")
-    connect_webhook_secret = settings.get("stripe_connect_webhook_secret", "")
-    stripe_secret = settings.get("stripe_secret_key", "")
+    # An admin-pasted secret frequently carries a leading/trailing newline or
+    # space (copy-paste from the Stripe Dashboard, a password manager, or a
+    # terminal). That raw value is used verbatim as the HMAC key below, so a
+    # single stray whitespace character makes EVERY signature verification
+    # fail with no other symptom ("No signatures found matching the expected
+    # signature for payload"). Normalize on read so an already-corrupted
+    # stored value doesn't take down webhook processing until an admin
+    # re-saves it — routes/admin/settings.py strips on write too, but that
+    # only protects saves made after this fix ships.
+    webhook_secret = (settings.get("stripe_webhook_secret") or "").strip()
+    connect_webhook_secret = (settings.get("stripe_connect_webhook_secret") or "").strip()
+    stripe_secret = (settings.get("stripe_secret_key") or "").strip()
 
     if not webhook_secret:
         logger.error("stripe_webhook_secret not set — rejecting unverified webhook")

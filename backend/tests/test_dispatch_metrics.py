@@ -330,6 +330,10 @@ async def test_db_call_counter_includes_calls_made_in_gather_children():
 
 @pytest.mark.anyio
 async def test_db_call_counter_isolates_concurrent_dispatch_attempts():
+    # Review note (2026-09-03): this passes against the pre-fix int-based
+    # ContextVar too (each gathered child rebinds in its own context copy),
+    # so it guards against a future module-global regression rather than
+    # re-proving the gather-additivity fix — that is the test above.
     """Two dispatch attempts running concurrently must not pool their counts.
 
     The mutable-container counter that makes the gather case above work must

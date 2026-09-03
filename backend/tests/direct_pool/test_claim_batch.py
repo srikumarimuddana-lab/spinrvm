@@ -88,6 +88,16 @@ def _call_claim_batch(cur, ride_id, driver_ids, eta_seconds, max_offers, offered
     return cur.fetchall()
 
 
+def _call_claim_batch_full(cur, ride_id, driver_ids, eta_seconds, max_offers, offered_at=_NOW, expires_at=_EXPIRES):
+    """Same call, all five result columns (adds insurance_written)."""
+    cur.execute(
+        "SELECT driver_id, claimed, driver_row, ride_offer_id, insurance_written "
+        "FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
+        (ride_id, driver_ids, eta_seconds, max_offers, offered_at, expires_at),
+    )
+    return cur.fetchall()
+
+
 # ── Basic claim / offer / insurance semantics ──────────────────────────
 
 
@@ -180,33 +190,46 @@ def test_insurance_write_failure_does_not_roll_back_claim_or_offer(pg_cur):
     container's owner/superuser role, so a plain REVOKE has no effect on a
     SECURITY DEFINER function's *internal* PERFORM -- it runs as the
     function's owner, not the invoking role, which is exactly the point of
-    SECURITY DEFINER). Restores the name in a finally block so later tests
-    in this session aren't affected.
+    SECURITY DEFINER). The rename runs on a dedicated connection inside its
+    own try/finally (review fix, 2026-09-03) so a crash mid-test cannot
+    leave the session-scoped schema renamed for every later test.
+
+    Review fix (2026-09-03): the RPC now also REPORTS the failure via the
+    insurance_written column (false), which matching.py turns into the
+    same ERROR log + metric the PostgREST path emits.
     """
     _insert_user(pg_cur, "u1")
     _insert_driver(pg_cur, "d1", "u1")
     _insert_user(pg_cur, "rider1")
     _insert_ride(pg_cur, "r1", "rider1")
 
-    pg_cur.execute(
-        "ALTER FUNCTION record_insurance_period_transition(text, smallint, text) "
-        "RENAME TO record_insurance_period_transition_renamed_for_test"
-    )
+    rename_conn = psycopg2.connect(_dsn_for_direct_connection(pg_cur.connection))
+    rename_conn.autocommit = True
     try:
-        rows = _call_claim_batch(pg_cur, "r1", ["d1"], [123], max_offers=1)
+        with rename_conn.cursor() as rcur:
+            rcur.execute(
+                "ALTER FUNCTION record_insurance_period_transition(text, smallint, text) "
+                "RENAME TO record_insurance_period_transition_renamed_for_test"
+            )
+        try:
+            rows = _call_claim_batch_full(pg_cur, "r1", ["d1"], [123], max_offers=1)
+        finally:
+            with rename_conn.cursor() as rcur:
+                rcur.execute(
+                    "ALTER FUNCTION record_insurance_period_transition_renamed_for_test(text, smallint, text) "
+                    "RENAME TO record_insurance_period_transition"
+                )
     finally:
-        pg_cur.execute(
-            "ALTER FUNCTION record_insurance_period_transition_renamed_for_test(text, smallint, text) "
-            "RENAME TO record_insurance_period_transition"
-        )
+        rename_conn.close()
 
     # The claim + ride_offers insert must have gone through despite the
     # insurance write failing (undefined_function error) -- this is the
     # whole point of the fix.
     assert len(rows) == 1
-    driver_id, claimed, driver_row, ride_offer_id = rows[0]
+    driver_id, claimed, driver_row, ride_offer_id, insurance_written = rows[0]
     assert claimed is True
     assert ride_offer_id is not None
+    assert insurance_written is False  # reported, not just swallowed
 
     pg_cur.execute("SELECT count(*) FROM ride_offers WHERE driver_id = 'd1'")
     assert pg_cur.fetchone()[0] == 1
@@ -268,7 +291,10 @@ def test_failed_revalidation_releases_driver_and_skips_offer(pg_cur, overrides):
 
     pg_cur.execute("SELECT is_available, availability_claimed_at FROM drivers WHERE id = 'd1'")
     is_available, claimed_at = pg_cur.fetchone()
-    assert is_available is True  # released back
+    # Released back -- clamped to is_online (review fix, 2026-09-03), the
+    # `is_available => is_online` invariant set_driver_available enforces:
+    # an offline driver is never marked available.
+    assert is_available is overrides.get("is_online", True)
     assert claimed_at is None  # claim stamp cleared -- orphan reaper (migration 157) won't misfire
 
     pg_cur.execute("SELECT count(*) FROM ride_offers WHERE driver_id = 'd1'")
@@ -285,7 +311,108 @@ def test_mismatched_array_lengths_raises(pg_cur):
 
     with pytest.raises(psycopg2.errors.RaiseException, match="length mismatch"):
         _call_claim_batch(pg_cur, "r1", ["d1"], [1, 2], max_offers=1)
-    pg_cur.connection.rollback()
+    # (pg_conn is autocommit; there is no open transaction to roll back.)
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"max_offers": None}, "p_max_offers"),
+        ({"max_offers": 0}, "p_max_offers"),
+        ({"max_offers": 51}, "p_max_offers"),
+        ({"expires_at": None}, "expires_at"),
+        ({"offered_at": _EXPIRES, "expires_at": _NOW}, "expires_at"),
+    ],
+    ids=["max_offers_null", "max_offers_zero", "max_offers_over_cap", "expires_null", "expires_before_offered"],
+)
+def test_invalid_control_arguments_raise_instead_of_widening_the_batch(pg_cur, kwargs, match):
+    """Review fix (2026-09-03): a NULL p_max_offers made both guards
+    evaluate to NULL (never fire) and the function claimed EVERY driver in
+    the array; a NULL expires_at produced an offer the durable reaper could
+    never expire. 399-style validation now RAISEs."""
+    _insert_user(pg_cur, "u1")
+    _insert_user(pg_cur, "u2")
+    _insert_driver(pg_cur, "d1", "u1")
+    _insert_driver(pg_cur, "d2", "u2")
+    _insert_user(pg_cur, "rider1")
+    _insert_ride(pg_cur, "r1", "rider1")
+
+    call_kwargs = {"max_offers": 1}
+    call_kwargs.update(kwargs)
+    with pytest.raises(psycopg2.errors.RaiseException, match=match):
+        _call_claim_batch(pg_cur, "r1", ["d1", "d2"], [1, 2], **call_kwargs)
+
+    pg_cur.execute("SELECT count(*) FROM drivers WHERE is_available = false")
+    assert pg_cur.fetchone()[0] == 0  # nothing claimed
+    pg_cur.execute("SELECT count(*) FROM ride_offers")
+    assert pg_cur.fetchone()[0] == 0
+
+
+def test_null_ride_id_raises(pg_cur):
+    with pytest.raises(psycopg2.errors.RaiseException, match="p_ride_id"):
+        _call_claim_batch(pg_cur, None, ["d1"], [1], max_offers=1)
+
+
+def test_existing_offer_row_releases_driver_instead_of_aborting_the_batch(pg_cur):
+    """Review fix (2026-09-03): ride_offers_ride_driver_uq means a driver
+    re-ranked for a ride they already hold a row for (the Redis offer_skip
+    guard is skipped when Redis is down) used to raise unique_violation and
+    roll back EVERY other driver's claim in the batch. Now: ON CONFLICT DO
+    NOTHING, the driver is released and reported unclaimed, and the other
+    drivers' claims stand."""
+    _insert_user(pg_cur, "u1")
+    _insert_user(pg_cur, "u2")
+    _insert_driver(pg_cur, "d1", "u1")
+    _insert_driver(pg_cur, "d2", "u2")
+    _insert_user(pg_cur, "rider1")
+    _insert_ride(pg_cur, "r1", "rider1")
+    pg_cur.execute(
+        "INSERT INTO ride_offers (ride_id, driver_id, status, eta_seconds, offered_at, expires_at) "
+        "VALUES ('r1', 'd1', 'expired', 50, %s, %s)",
+        (_NOW - timedelta(minutes=1), _NOW - timedelta(seconds=45)),
+    )
+
+    rows = _call_claim_batch(pg_cur, "r1", ["d1", "d2"], [100, 200], max_offers=2)
+
+    assert [(r[0], r[1]) for r in rows] == [("d1", False), ("d2", True)]
+    pg_cur.execute("SELECT is_available, availability_claimed_at FROM drivers WHERE id = 'd1'")
+    assert pg_cur.fetchone() == (True, None)  # released, not left claimed
+    pg_cur.execute("SELECT status FROM ride_offers WHERE ride_id = 'r1' AND driver_id = 'd1'")
+    assert pg_cur.fetchone() == ("expired",)  # prior row untouched
+    pg_cur.execute("SELECT count(*) FROM ride_offers WHERE ride_id = 'r1' AND driver_id = 'd2' AND status = 'pending'")
+    assert pg_cur.fetchone()[0] == 1  # d2's claim in the same batch stands
+
+
+def test_insurance_written_is_true_on_a_successful_claim_and_null_when_unclaimed(pg_cur):
+    _insert_user(pg_cur, "u1")
+    _insert_user(pg_cur, "u2")
+    _insert_driver(pg_cur, "d1", "u1")
+    _insert_driver(pg_cur, "d2", "u2", is_available=False)
+    _insert_user(pg_cur, "rider1")
+    _insert_ride(pg_cur, "r1", "rider1")
+
+    rows = _call_claim_batch_full(pg_cur, "r1", ["d1", "d2"], [1, 2], max_offers=2)
+    assert [(r[0], r[1], r[4]) for r in rows] == [("d1", True, True), ("d2", False, None)]
+
+
+def test_dispatch_claim_batch_is_not_executable_by_anon_or_authenticated(pg_cur):
+    """The grant model IS the access control for this RPC (migration 402
+    header); 354's sweep covers only SECURITY DEFINER functions that existed
+    when it ran, so the migration must lock itself down."""
+    sig = "dispatch_claim_batch(text, text[], int[], int, timestamptz, timestamptz)"
+    for role, expected in (("anon", False), ("authenticated", False), ("service_role", True)):
+        pg_cur.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')", (role, sig))
+        assert pg_cur.fetchone()[0] is expected, role
+
+
+def test_dispatch_claim_batch_is_security_invoker_with_catalog_first_search_path(pg_cur):
+    pg_cur.execute(
+        "SELECT p.prosecdef, p.proconfig FROM pg_proc p "
+        "WHERE p.proname = 'dispatch_claim_batch' AND p.pronamespace = 'public'::regnamespace"
+    )
+    prosecdef, proconfig = pg_cur.fetchone()
+    assert prosecdef is False  # SECURITY INVOKER
+    assert any(c.startswith("search_path=") and c.split("=", 1)[1].strip().startswith("pg_catalog") for c in proconfig)
 
 
 def test_empty_driver_list_returns_no_rows(pg_cur):
@@ -426,3 +553,57 @@ def test_driver_flipped_unavailable_between_read_and_claim_is_skipped(pg_conn):
     check_cur = pg_conn.cursor()
     check_cur.execute("SELECT count(*) FROM ride_offers WHERE driver_id = 'flip-d1'")
     assert check_cur.fetchone()[0] == 0
+
+
+def test_claim_skips_a_row_locked_by_a_concurrent_batch_instead_of_blocking(pg_conn):
+    """Review fix (2026-09-03) — the SKIP LOCKED proof. Session A holds an
+    OPEN transaction that has claimed d1 (the state a concurrent batch is in
+    between its claim and its COMMIT). Session B then claims [d1, d2]. With
+    a bare UPDATE, B would block on d1 until A ends (and with reversed
+    ordering the two would deadlock); with FOR UPDATE SKIP LOCKED, B must
+    return immediately with d1 unclaimed and d2 claimed. B runs under a
+    short statement_timeout so a regression fails fast instead of hanging.
+    """
+    dsn = _dsn_for_direct_connection(pg_conn)
+
+    setup_cur = pg_conn.cursor()
+    _insert_user(setup_cur, "lock-u1")
+    _insert_user(setup_cur, "lock-u2")
+    _insert_driver(setup_cur, "lock-d1", "lock-u1")
+    _insert_driver(setup_cur, "lock-d2", "lock-u2")
+    _insert_user(setup_cur, "lock-rider-a")
+    _insert_user(setup_cur, "lock-rider-b")
+    _insert_ride(setup_cur, "lock-ride-a", "lock-rider-a")
+    _insert_ride(setup_cur, "lock-ride-b", "lock-rider-b")
+
+    session_a = psycopg2.connect(dsn)
+    session_a.autocommit = False  # transaction stays open until rollback below
+    session_b = psycopg2.connect(dsn)
+    session_b.autocommit = True
+    try:
+        cur_a = session_a.cursor()
+        cur_a.execute(
+            "SELECT driver_id, claimed FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
+            ("lock-ride-a", ["lock-d1"], [100], 1, _NOW, _EXPIRES),
+        )
+        assert cur_a.fetchall() == [("lock-d1", True)]  # A holds d1's row lock, uncommitted
+
+        cur_b = session_b.cursor()
+        cur_b.execute("SET statement_timeout = '3000ms'")
+        cur_b.execute(
+            "SELECT driver_id, claimed FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
+            ("lock-ride-b", ["lock-d1", "lock-d2"], [100, 200], 2, _NOW, _EXPIRES),
+        )
+        rows_b = cur_b.fetchall()
+    finally:
+        session_a.rollback()
+        session_a.close()
+        session_b.close()
+
+    assert rows_b == [("lock-d1", False), ("lock-d2", True)]
+
+    check_cur = pg_conn.cursor()
+    check_cur.execute("SELECT count(*) FROM ride_offers WHERE driver_id = 'lock-d1'")
+    assert check_cur.fetchone()[0] == 0  # A rolled back; B never touched d1
+    check_cur.execute("SELECT count(*) FROM ride_offers WHERE driver_id = 'lock-d2' AND status = 'pending'")
+    assert check_cur.fetchone()[0] == 1

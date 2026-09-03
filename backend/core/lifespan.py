@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -90,7 +91,15 @@ async def init_database():
             from settings_loader import get_app_settings as _get_app_settings_for_pool  # type: ignore
 
         try:
-            _app_settings = await _get_app_settings_for_pool()
+            # Review fix (2026-09-03): bounded. No deadline middleware has run
+            # at boot, so run_sync's own deadline propagation is inactive and
+            # a PostgREST that accepts the TCP connection but never answers
+            # would hang init_database forever — Fly's health checks would
+            # then kill and restart the machine in a loop, and the except
+            # below (written to keep boot alive) would never fire because
+            # nothing raised. asyncio.TimeoutError lands in that same except
+            # and fails closed (flag treated as off).
+            _app_settings = await asyncio.wait_for(_get_app_settings_for_pool(), timeout=10.0)
             _dispatch_direct_pool_enabled = bool(_app_settings.get("dispatch_direct_pool_enabled", False))
         except Exception as e:
             # app_settings unreadable at boot must not crash the API (every

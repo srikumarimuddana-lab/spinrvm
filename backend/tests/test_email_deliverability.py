@@ -41,6 +41,20 @@ _SEND_ROWS = [
         "created_at": "2026-06-15T10:03:00Z",
     },
 ]
+# Migration 392 moved the total/by_status/by_provider/by_type aggregation
+# server-side (admin_email_log_stats RPC, GROUP BY over email_send_log) —
+# get_email_deliverability no longer fetches+Counter()s all rows in Python.
+# This is the RPC's jsonb return shape for the _SEND_ROWS fixture above.
+_STATS_RPC_RESULT = {
+    "total": 4,
+    "by_status": {"sent": 2, "failed": 1, "suppressed": 1},
+    "by_provider": {"ses": 1, "resend": 1, "none": 2},
+    "by_type": {"receipt": 3, "dsar": 1},
+}
+# get_rows is still used for the two *lists* the RPC doesn't return: the
+# most-recent failed rows (pre-filtered to status="failed" server-side) and
+# the most-recent suppression rows — not the full unfiltered send-log.
+_RECENT_FAIL_ROWS = [r for r in _SEND_ROWS if r["status"] == "failed"]
 _SUPP_ROWS = [
     {
         "email": "bounced@example.com",
@@ -56,7 +70,8 @@ _SUPP_ROWS = [
 @pytest.mark.anyio
 async def test_deliverability_aggregates_and_omits_pii():
     with (
-        patch("routes.admin.monitoring.get_rows", AsyncMock(side_effect=[_SEND_ROWS, _SUPP_ROWS])),
+        patch("routes.admin.monitoring.db_supabase.rpc", AsyncMock(return_value=_STATS_RPC_RESULT)),
+        patch("routes.admin.monitoring.get_rows", AsyncMock(side_effect=[_RECENT_FAIL_ROWS, _SUPP_ROWS])),
         patch("routes.admin.monitoring.count_documents", AsyncMock(return_value=1)),
     ):
         out = await get_email_deliverability(days=7, current_admin={"id": "admin"})
@@ -76,6 +91,7 @@ async def test_deliverability_aggregates_and_omits_pii():
 @pytest.mark.anyio
 async def test_deliverability_empty_window():
     with (
+        patch("routes.admin.monitoring.db_supabase.rpc", AsyncMock(return_value={})),
         patch("routes.admin.monitoring.get_rows", AsyncMock(side_effect=[[], []])),
         patch("routes.admin.monitoring.count_documents", AsyncMock(return_value=0)),
     ):
@@ -87,6 +103,7 @@ async def test_deliverability_empty_window():
 @pytest.mark.anyio
 async def test_deliverability_days_clamped():
     with (
+        patch("routes.admin.monitoring.db_supabase.rpc", AsyncMock(return_value={})),
         patch("routes.admin.monitoring.get_rows", AsyncMock(side_effect=[[], []])),
         patch("routes.admin.monitoring.count_documents", AsyncMock(return_value=0)),
     ):

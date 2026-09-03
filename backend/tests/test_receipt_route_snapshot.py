@@ -167,11 +167,13 @@ def test_email_receipt_attaches_private_snapshot_without_an_expiring_html_url(mo
         "route_snapshot_url": signed_url,
         "route_quality": {"coverage_ratio": 0.91},
     }
-    send = AsyncMock(return_value=True)
+    send = AsyncMock(
+        return_value=email_provider.EmailDeliveryResult(status=email_provider.EmailDeliveryStatus.accepted)
+    )
     monkeypatch.setattr(email_receipt, "_await_route_receipt_projection", AsyncMock(return_value=route))
     monkeypatch.setattr(email_receipt, "_download_route_snapshot", AsyncMock(return_value=_png_bytes()))
     monkeypatch.setattr(receipt_pdf, "generate_receipt_pdf", lambda *_args, **_kwargs: b"pdf")
-    monkeypatch.setattr(email_provider, "send_transactional_email", send)
+    monkeypatch.setattr(email_receipt, "send_transactional_email_result", send)
 
     assert asyncio.run(email_receipt.send_receipt_email(RIDE, RIDER, recipient_email="rider@example.test"))
 

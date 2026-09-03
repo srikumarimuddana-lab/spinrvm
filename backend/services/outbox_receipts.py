@@ -45,10 +45,9 @@ async def maybe_send_auto_receipt(
         try:
             queued = await auto_receipt_is_queued(str(ride_id))
         except Exception:
-            logger.error(
+            logger.opt(exception=True).error(
                 "outbox auto-receipt lookup failed ride_id={} — falling back to direct send",
                 ride_id,
-                exc_info=True,
             )
             queued = False
     if queued:

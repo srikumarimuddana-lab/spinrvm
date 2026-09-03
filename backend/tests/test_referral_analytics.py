@@ -39,13 +39,23 @@ class TestReferralAnalytics:
             {"status": "processing", "referrer_reward": "10.00", "referee_reward": "0", "paid_at": None, "created_at": "2026-06-03T09:00:00Z"},
             {"status": "failed", "referrer_reward": "10.00", "referee_reward": "0", "paid_at": None, "created_at": "2026-06-03T09:30:00Z"},
         ]
+        # Kept only as documentation of the scenario (2 driver-coded sign-ups,
+        # 1 rider-coded, excluded) -- migration 387 moved total_referred off
+        # this users-table fetch onto the admin_referred_user_count RPC below,
+        # so get_rows is never actually called with table="users" any more.
         users = [
             {"referred_by": "d1", "referral_code_used": "DRIVERABC", "created_at": "2026-06-01T00:00:00Z"},
             {"referred_by": "d1", "referral_code_used": "DRIVERABC", "created_at": "2026-06-02T00:00:00Z"},
             {"referred_by": "r1", "referral_code_used": "RIDEXYZ", "created_at": "2026-06-02T00:00:00Z"},  # rider — excluded for driver source
         ]
-        with patch.object(admin_drivers.db_supabase, "get_rows", _rows_router(payouts, users)):
+        rpc_mock = AsyncMock(return_value=2)
+        with patch.object(admin_drivers.db_supabase, "get_rows", _rows_router(payouts, users)), patch.object(
+            admin_drivers.db_supabase, "rpc", rpc_mock
+        ):
             res = _call(source="driver")
+        rpc_mock.assert_awaited_once_with(
+            "admin_referred_user_count", {"p_kind": "driver", "p_start": None, "p_end": None}
+        )
         f = res["funnel"]
         assert f["qualified"] == 4
         assert f["redeemed"] == 2

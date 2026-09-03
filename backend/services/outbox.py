@@ -182,9 +182,8 @@ async def is_auto_receipt_queued(ride_id: str) -> bool:
         )
         return isinstance(row, dict)
     except Exception:
-        logger.error(
+        logger.opt(exception=True).error(
             "outbox auto-receipt lookup failed ride_id={} — falling back to direct send",
             ride_id,
-            exc_info=True,
         )
         return False

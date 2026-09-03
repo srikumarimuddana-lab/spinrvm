@@ -605,9 +605,7 @@ class TestPeriod1InformationalRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, total_km, groups, truncated = asyncio.run(
-                compliance._period1_informational_rows(_START, _END)
-            )
+            rows, total_km, groups, truncated = asyncio.run(compliance._period1_informational_rows(_START, _END))
 
         assert not truncated
         assert total_km == Decimal("12.5")
@@ -745,3 +743,191 @@ class TestPeriod1InformationalRows:
         assert not p1_queries
         assert all(r["phase"] != "Period 1 — contingent, not billed" for r in captured["rows"])
         assert "Periods 2+3 only" in captured["subtitle"][0]
+
+
+class TestSaskatoonCityTripLogRows:
+    """_saskatoon_city_trip_log_rows — City of Saskatoon monthly trip log:
+    completed rides, plus rides cancelled by the rider or driver after a
+    driver had already accepted, scoped to the Saskatoon service area."""
+
+    def _get_rows_side(self, rides, saskatoon_areas=None):
+        areas = saskatoon_areas if saskatoon_areas is not None else [{"id": "sk1", "name": "Saskatoon"}]
+
+        async def side(table, filters=None, **kw):
+            if table == "service_areas":
+                return areas
+            if table == "rides":
+                return rides
+            return []
+
+        return side
+
+    def test_completed_ride_included_with_full_timeline(self):
+        rides = [
+            {
+                "id": "r1",
+                "status": "completed",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": "2026-07-05T10:10:00Z",
+                "ride_completed_at": "2026-07-05T10:30:00Z",
+                "cancelled_at": None,
+                "cancelled_by": None,
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert not truncated
+        assert rows == [
+            {
+                "Request_Timestamp": "2026-07-05 10:00 UTC",
+                "Accept_Timestamp": "2026-07-05 10:02 UTC",
+                "Begin_Timestamp": "2026-07-05 10:10 UTC",
+                "End_Timestamp": "2026-07-05 10:30 UTC",
+                "Passenger_Wait_Time (Mins)": "10",
+                "Trip_Status": "Completed",
+            }
+        ]
+
+    def test_cancelled_before_acceptance_excluded(self):
+        """Rider/driver can cancel while still searching / offer-pending —
+        no driver has accepted yet, so this is out of scope."""
+        rides = [
+            {
+                "id": "r2",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": None,
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:01:00Z",
+                "cancelled_by": "rider",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == []
+
+    def test_cancelled_after_acceptance_by_rider_included_with_blank_timeline(self):
+        rides = [
+            {
+                "id": "r3",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:05:00Z",
+                "cancelled_by": "rider",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == [
+            {
+                "Request_Timestamp": "2026-07-05 10:00 UTC",
+                "Accept_Timestamp": "2026-07-05 10:02 UTC",
+                "Begin_Timestamp": "",
+                "End_Timestamp": "",
+                "Passenger_Wait_Time (Mins)": "",
+                "Trip_Status": "Cancelled by Rider",
+            }
+        ]
+
+    def test_cancelled_after_acceptance_by_driver_included(self):
+        rides = [
+            {
+                "id": "r4",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:06:00Z",
+                "cancelled_by": "driver",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert len(rows) == 1
+        assert rows[0]["Trip_Status"] == "Cancelled by Driver"
+
+    def test_system_auto_cancel_excluded_even_if_driver_had_accepted(self):
+        """Out of scope by spec (rider/driver cancellations only), so
+        excluded regardless of driver_accepted_at — a system auto-cancel
+        (no_drivers_found) can't really carry one, but the exclusion must
+        not silently depend on that."""
+        rides = [
+            {
+                "id": "r5",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:06:00Z",
+                "cancelled_by": "system",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == []
+
+    def test_admin_cancel_excluded(self):
+        rides = [
+            {
+                "id": "r6",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "cancelled_by": "admin",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == []
+
+    def test_scoped_to_saskatoon_service_area_and_request_date(self):
+        captured = {}
+
+        async def side(table, filters=None, **kw):
+            captured[table] = filters
+            if table == "service_areas":
+                return [{"id": "sk1", "name": "Saskatoon"}]
+            return []
+
+        with _patch_get_rows(side):
+            asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert captured["service_areas"] == {"name": {"$regex": "Saskatoon"}}
+        assert captured["rides"]["service_area_id"] == {"$in": ["sk1"]}
+        assert captured["rides"]["status"] == {"$in": ["completed", "cancelled"]}
+        assert captured["rides"]["ride_requested_at"] == {"$gte": _START.isoformat(), "$lte": _END.isoformat()}
+
+    def test_raises_loudly_when_saskatoon_area_is_missing(self):
+        """Never silently falls back to 'every area' (CLAUDE.md: don't mask
+        a failing lookup behind a generic fallback) — a City-of-Saskatoon
+        report that quietly included every service area would misstate the
+        filing."""
+        with _patch_get_rows(self._get_rows_side([], saskatoon_areas=[])):
+            with pytest.raises(RuntimeError, match="Saskatoon"):
+                asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+
+class TestReportMinutesBetween:
+    def test_normal_case_rounds_to_nearest_minute(self):
+        assert compliance._report_minutes_between("2026-07-05T10:00:00Z", "2026-07-05T10:04:40Z") == 5
+
+    def test_missing_either_end_returns_none(self):
+        assert compliance._report_minutes_between(None, "2026-07-05T10:04:40Z") is None
+        assert compliance._report_minutes_between("2026-07-05T10:00:00Z", None) is None
+
+    def test_non_positive_duration_returns_none(self):
+        assert compliance._report_minutes_between("2026-07-05T10:05:00Z", "2026-07-05T10:05:00Z") is None
+        assert compliance._report_minutes_between("2026-07-05T10:05:00Z", "2026-07-05T10:00:00Z") is None

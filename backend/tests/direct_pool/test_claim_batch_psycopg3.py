@@ -37,13 +37,18 @@ def _dsn_for(pg_conn) -> str:
 
 
 def _seed(cur):
-    for uid in ("p3-u1", "p3-u2", "p3-rider"):
-        cur.execute("INSERT INTO users (id, phone) VALUES (%s, %s)", (uid, f"+1306555{uid[-4:].replace('-', '0')}"))
-    for did, uid in (("p3-d1", "p3-u1"), ("p3-d2", "p3-u2")):
+    # `users.phone` is UNIQUE and the scratch database is shared with
+    # test_claim_batch.py's rows for the whole session, so use a prefix no
+    # other file in this directory seeds and number the rows explicitly
+    # (the earlier last-four-characters scheme let "p3-rider" collide with
+    # test_claim_batch.py's "flip-rider" on +1306555ider).
+    for n, uid in enumerate(("p3-u1", "p3-u2", "p3-rider"), start=1):
+        cur.execute("INSERT INTO users (id, phone) VALUES (%s, %s)", (uid, f"+1306777{n:04d}"))
+    for n, (did, uid) in enumerate((("p3-d1", "p3-u1"), ("p3-d2", "p3-u2")), start=1):
         cur.execute(
             "INSERT INTO drivers (id, user_id, name, phone, is_online, is_available, is_verified, status) "
             "VALUES (%s, %s, %s, %s, true, true, true, 'active')",
-            (did, uid, f"Driver {did}", f"+1306555{did[-2:]}00"),
+            (did, uid, f"Driver {did}", f"+1306778{n:04d}"),
         )
     cur.execute(
         "INSERT INTO rides (id, rider_id, pickup_address, pickup_lat, pickup_lng, dropoff_address, dropoff_lat, dropoff_lng) "

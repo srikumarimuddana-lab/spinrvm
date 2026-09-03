@@ -40,7 +40,7 @@ import {
   publishLiveRoute,
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
-import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed } from '../../../utils/locationDisplayGate';
+import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, MIN_DISPLAYED_SPEED_MPS } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
@@ -1273,8 +1273,11 @@ function DriverDashboard() {
 
       {/* Current speed — GPS-derived (coords.speed, m/s), shown while
           online and actually moving. Throttled location state is fine for a
-          readout; hidden when stationary to keep the map minimal. */}
-      {isOnline && (location.coords.speed ?? 0) >= 1.5 && (
+          readout; hidden when stationary to keep the map minimal.
+          MIN_DISPLAYED_SPEED_MPS (not a bare 1.5 here) — a stationary
+          vehicle was live-reported showing ~8 km/h from GPS speed noise
+          alone; see locationDisplayGate.ts for the reasoning. */}
+      {isOnline && (location.coords.speed ?? 0) >= MIN_DISPLAYED_SPEED_MPS && (
         <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
           <Text style={styles.speedChipValue} allowFontScaling={false}>
             {Math.round((location.coords.speed ?? 0) * 3.6)}

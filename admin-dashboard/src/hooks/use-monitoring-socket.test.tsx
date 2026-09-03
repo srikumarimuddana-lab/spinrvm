@@ -15,7 +15,7 @@ class MockWebSocket {
     onopen: (() => void) | null = null;
     onmessage: ((event: MessageEvent) => void) | null = null;
     onerror: (() => void) | null = null;
-    onclose: (() => void) | null = null;
+    onclose: ((event?: { code?: number; reason?: string }) => void) | null = null;
     sent: string[] = [];
 
     constructor(public url: string) {
@@ -26,9 +26,9 @@ class MockWebSocket {
         this.sent.push(message);
     }
 
-    close() {
+    close(code?: number, reason?: string) {
         this.readyState = MockWebSocket.CLOSED;
-        this.onclose?.();
+        this.onclose?.({ code, reason });
     }
 
     open() {
@@ -133,6 +133,32 @@ describe("useMonitoringSocket", () => {
         });
 
         expect(result.current.status).toBe("error");
+        expect(vi.getTimerCount()).toBe(0);
+
+        act(() => {
+            vi.advanceTimersByTime(30_000);
+        });
+
+        expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    it("stops reconnecting and explains itself when evicted by another tab (close code 4409)", () => {
+        // Backend keys admin WS connections by admin_{user_id}, not per tab
+        // (socket_manager.py's WS_CLOSE_REPLACED_BY_NEW_CONNECTION = 4409) —
+        // opening the monitoring page in a second tab closes the first with
+        // this code. Reconnecting would just evict the second tab right
+        // back, an infinite eviction ping-pong between the two.
+        const onEvent = vi.fn();
+        const { result } = renderHook(() => useMonitoringSocket({ token: "token", onEvent }));
+
+        expect(MockWebSocket.instances).toHaveLength(1);
+
+        act(() => {
+            MockWebSocket.instances[0].close(4409, "replaced by new connection");
+        });
+
+        expect(result.current.status).toBe("error");
+        expect(result.current.lastError).toMatch(/another tab or window/i);
         expect(vi.getTimerCount()).toBe(0);
 
         act(() => {

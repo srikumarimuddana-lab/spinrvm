@@ -226,6 +226,13 @@ export function MonitoringMap({
     const serviceAreasRef = useRef<MonitoringServiceArea[]>(serviceAreas ?? []);
     serviceAreasRef.current = serviceAreas ?? [];
 
+    // Declared here (rather than near fitArea/etc. below) so
+    // updateDriverMarker can reference it directly — see the follow-mode
+    // pan call inside that callback.
+    const panTo = useCallback((lat: number, lng: number) => {
+        mapRef.current?.panTo([lng, lat]);
+    }, []);
+
     // ── Imperative driver marker management ──────────────────────────
     const updateDriverMarker = useCallback((driver: MonitoringDriver) => {
         if (!mapRef.current || !driver.lat || !driver.lng) return;
@@ -264,7 +271,17 @@ export function MonitoringMap({
             else if (!visible && wasVisible) marker.remove();
             driverVisibleRef.current.set(driver.id, visible);
         }
-    }, [filters, searchQuery]);
+
+        // Follow mode: driver position updates arrive as imperative marker
+        // moves (driversMap is a ref, mutated in place — a position update
+        // never itself triggers a React re-render), so panning has to happen
+        // HERE, tied to the actual movement, rather than in a separate
+        // effect that can only ever fire when something unrelated happens
+        // to re-render this component.
+        if (followMode && selected?.type === "driver" && selected.id === driver.id) {
+            panTo(driver.lat, driver.lng);
+        }
+    }, [filters, searchQuery, followMode, selected, panTo]);
 
     const removeDriverMarker = useCallback((driverId: string) => {
         const m = driverMarkersRef.current.get(driverId);
@@ -394,10 +411,6 @@ export function MonitoringMap({
         if (mapRef.current.getSource(entry.sourceId)) mapRef.current.removeSource(entry.sourceId);
         rideMarkersRef.current.delete(rideId);
         rideVisibleRef.current.delete(rideId);
-    }, []);
-
-    const panTo = useCallback((lat: number, lng: number) => {
-        mapRef.current?.panTo([lng, lat]);
     }, []);
 
     const fitArea = useCallback((areaId: string) => {
@@ -531,13 +544,22 @@ export function MonitoringMap({
         }
     }, [serviceAreas, isLoaded, demandData, filters.showDemand]);
 
-    // Re-apply filter visibility when filters change
+    // Re-apply filter visibility when filters change. Must mirror
+    // updateDriverMarker's own visibility rule exactly (search takes
+    // priority over the online/offline toggles) — this used to recompute
+    // from online/offline status alone, ignoring an active search query, so
+    // toggling any unrelated filter (e.g. "Show Offline") while search was
+    // narrowing the map to name matches re-showed every non-matching marker.
     useEffect(() => {
         if (!isLoaded) return;
         driverMarkersRef.current.forEach((_marker, id) => {
             const d = driversMap.current.get(id);
             if (!d) return;
-            const vis = d.is_online ? filters.showOnline : filters.showOffline;
+            const vis = searchQuery
+                ? d.name.toLowerCase().includes(searchQuery.toLowerCase())
+                : d.is_online
+                ? filters.showOnline
+                : filters.showOffline;
             const wasVis = driverVisibleRef.current.get(id) ?? false;
             if (vis && !wasVis) _marker.addTo(mapRef.current!);
             else if (!vis && wasVis) _marker.remove();
@@ -546,14 +568,18 @@ export function MonitoringMap({
         rideMarkersRef.current.forEach((_entry, id) => {
             setRideVisible(id, filters.showRides);
         });
-    }, [filters, driversMap, isLoaded, setRideVisible]);
+    }, [filters, searchQuery, driversMap, isLoaded, setRideVisible]);
 
-    // Follow selected driver
+    // Follow selected driver. Missing dependency array previously meant this
+    // ran after EVERY render of MonitoringMap, not just when the followed
+    // driver's position or selection actually changed — an unrelated parent
+    // re-render (a new alert, a filter toggle, the counts poll) re-panned
+    // the map and fought a manual pan/zoom gesture in progress.
     useEffect(() => {
         if (!isLoaded || !followMode || !selected || selected.type !== "driver") return;
         const d = driversMap.current.get(selected.id);
         if (d?.lat && d.lng) panTo(d.lat, d.lng);
-    });
+    }, [isLoaded, followMode, selected, driversMap, panTo]);
 
     if (loadError) {
         return (

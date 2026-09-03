@@ -116,7 +116,19 @@ export default function MonitoringPage() {
   }, []);
 
   // ── Apply a driver update to the ref map + map marker ───────────────
+  // driversMapRef is the source-of-truth map for ALL known drivers,
+  // filtered or not — refreshCounts() and the "re-apply filters when they
+  // change" effect below both depend on that (the latter literally iterates
+  // driversMapRef.current to re-decide each driver's marker visibility). The
+  // Area/Vehicle-Type filters below must only ever affect whether a driver's
+  // MAP MARKER is shown, never whether the driver is tracked here — an
+  // earlier `return` before `.set()` used to skip filtered-out drivers
+  // entirely, so switching a filter back to "All" only restored drivers
+  // still present in this ref, not the ones excluded while it was active
+  // (which stayed invisible/undercounted until the next full WS/REST
+  // snapshot, up to POLL_INTERVAL_MS away).
   const applyDriver = useCallback((d: MonitoringDriver) => {
+    driversMapRef.current.set(d.id, d);
     // Apply service area filter
     if (filters.serviceAreaId && d.service_area_id !== filters.serviceAreaId) {
       mapHandlesRef.current?.removeDriverMarker(d.id);
@@ -127,7 +139,6 @@ export default function MonitoringPage() {
       mapHandlesRef.current?.removeDriverMarker(d.id);
       return;
     }
-    driversMapRef.current.set(d.id, d);
     mapHandlesRef.current?.updateDriverMarker(d);
   }, [filters.serviceAreaId, filters.vehicleTypeId]);
 

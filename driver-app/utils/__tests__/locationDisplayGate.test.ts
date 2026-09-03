@@ -2,6 +2,7 @@ import {
   ACCURACY_OVERRIDE_MS,
   FOLLOW_ZOOM_TIERS,
   MAX_DISPLAY_ACCURACY_M,
+  MIN_DISPLAYED_SPEED_MPS,
   shouldDisplayFix,
   zoomTierForSpeed,
 } from '../locationDisplayGate';
@@ -26,6 +27,19 @@ describe('shouldDisplayFix', () => {
     expect(shouldDisplayFix(null, 0)).toBe(true);
     expect(shouldDisplayFix(undefined, 0)).toBe(true);
     expect(shouldDisplayFix(-1, 0)).toBe(true);
+  });
+});
+
+describe('MIN_DISPLAYED_SPEED_MPS', () => {
+  it('clears the live-reported stationary GPS-noise reading (8 km/h) with margin', () => {
+    const reportedStationaryKmh = 8;
+    const reportedStationaryMps = reportedStationaryKmh / 3.6;
+    expect(MIN_DISPLAYED_SPEED_MPS).toBeGreaterThan(reportedStationaryMps);
+  });
+
+  it('stays well below real driving speed so movement is still shown promptly', () => {
+    const slowResidentialKmh = 20;
+    expect(MIN_DISPLAYED_SPEED_MPS).toBeLessThan(slowResidentialKmh / 3.6);
   });
 });
 

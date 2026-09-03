@@ -11025,7 +11025,20 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
 
-- [ ] **Status:** open. Found 2026-08-22 during the same coverage/validation
+- [ ] **Status:** open, partially closed 2026-09-02 — 5 of 6 baselines seeded
+  (`login`, `dashboard-home`, `dashboard-drivers`, `dashboard-monitoring`,
+  `dashboard-settings`; see `docs/change-log/2026-09-02-seed-visual-regression-baselines.md`).
+  Full acceptance below still not met: `dashboard-rides` is unseeded (its
+  first capture surfaced a real mock-fixture bug, now fixed — needs one
+  more `update-visual-baselines.yml` run to pick up a corrected shot before
+  it can be added), and `continue-on-error` on `visual-regression-test` in
+  `ci.yml` deliberately stays `true` until all 6 are seeded. The
+  403-blocked-from-this-session finding below is now resolved too: the
+  workflow can be triggered from the GitHub web UI by an account with
+  Actions-dispatch access (confirmed working 2026-09-02) — this session's
+  own GitHub App integration still lacks that scope, but that's no longer
+  the blocker it was when this item was filed.
+- **Original finding (2026-08-22):** found during the same coverage/validation
   audit as B37 — distinct surface from B25 (which covers Maestro
   real-device mobile E2E for rider-app/driver-app); this is
   admin-dashboard's own visual-regression Playwright job.

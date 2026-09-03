@@ -93,6 +93,18 @@ export async function setupAdminMocks(
       return json(200, []);
     }
 
+    // /api/admin/rides returns { rides, total_count, limit, offset }
+    // (admin-dashboard/src/lib/api/rides.ts::getRides) — needs its own case
+    // for the same reason as service-areas above: the generic { items,
+    // data, total, ... } fallback has no `rides` key, so RidesPage's
+    // `setRides(res.rides)` stores `undefined` and a child component
+    // crashes on `.map()`. Found 2026-09-02 seeding visual-regression
+    // baselines: dashboard-rides rendered the dashboard error boundary
+    // instead of the page.
+    if (url.includes('/api/admin/rides') && method === 'GET') {
+      return json(200, { rides: [], total_count: 0, limit: 25, offset: 0 });
+    }
+
     // Generic fallback: empty-but-valid shapes so list pages render an
     // empty state instead of crashing on `undefined.map`.
     return json(200, { items: [], data: [], total: 0, page: 1, per_page: 20 });

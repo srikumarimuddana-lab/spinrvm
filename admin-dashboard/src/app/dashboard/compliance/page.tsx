@@ -711,9 +711,10 @@ export default function CompliancePage() {
                                 <span>
                                     Every Saskatoon ride requested in the selected window that completed, or was
                                     cancelled by the rider or driver after a driver had already accepted it —
-                                    Request/Accept/Begin/End timestamps, passenger wait time, and trip status,
-                                    for the City of Saskatoon&apos;s monthly report. Always scoped to the
-                                    Saskatoon service area, independent of the Service Area filter above.
+                                    Request/Accept/Begin/End timestamps, passenger wait time, trip status, and
+                                    the assigned driver&apos;s license number, for the City of Saskatoon&apos;s
+                                    monthly report. Always scoped to the Saskatoon service area, independent of
+                                    the Service Area filter above.
                                 </span>
                                 <Hint text="Dated by when the ride was requested (not completed/cancelled), so one date filter covers both completed and cancelled rows. Passenger wait time is trip-start minus request time. Begin/End timestamps and wait time are left blank for a cancelled trip since it never started. Rides cancelled before a driver accepted, and cancellations by the system or an admin, are excluded — confirm these definitions against the City's own reporting spec before submitting." />
                             </CardDescription>

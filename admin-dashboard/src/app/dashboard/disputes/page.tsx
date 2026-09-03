@@ -319,9 +319,9 @@ export default function DisputesPage() {
               {(selected.status === "open" || selected.status === "under_review") ? (
                 <>
                   <div>
-                    <Label>Resolution</Label>
+                    <Label htmlFor="dispute-resolution">Resolution</Label>
                     <Select value={resolution} onValueChange={(v) => { setResolution(v); setResolveError(null); }}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="dispute-resolution"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="approved">Approve Full Refund</SelectItem>
                         <SelectItem value="partial_refund">Partial Refund</SelectItem>
@@ -331,13 +331,13 @@ export default function DisputesPage() {
                   </div>
                   {resolution === "partial_refund" && (
                     <div>
-                      <Label>Refund Amount ($)</Label>
-                      <Input type="number" step="0.01" value={refundAmount} onChange={e => setRefundAmount(e.target.value)} placeholder={String(selected.requested_amount || 0)} />
+                      <Label htmlFor="dispute-refund-amount">Refund Amount ($)</Label>
+                      <Input id="dispute-refund-amount" type="number" step="0.01" value={refundAmount} onChange={e => setRefundAmount(e.target.value)} placeholder={String(selected.requested_amount || 0)} />
                     </div>
                   )}
                   <div>
-                    <Label>Admin Note (optional)</Label>
-                    <Input value={adminNote} onChange={e => setAdminNote(e.target.value)} placeholder="Internal note about this resolution" />
+                    <Label htmlFor="dispute-admin-note">Admin Note (optional)</Label>
+                    <Input id="dispute-admin-note" value={adminNote} onChange={e => setAdminNote(e.target.value)} placeholder="Internal note about this resolution" />
                   </div>
                   {resolveError && (
                     <p className="text-sm text-destructive">{resolveError}</p>

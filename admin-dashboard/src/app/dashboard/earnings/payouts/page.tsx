@@ -297,9 +297,9 @@ export default function PayoutsPage() {
             {/* Filters */}
             <div className="flex flex-wrap gap-3 items-end">
                 <div className="space-y-1">
-                    <Label className="text-xs">Status</Label>
+                    <Label htmlFor="payout-status-filter" className="text-xs">Status</Label>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="w-36" aria-label="Status">
+                        <SelectTrigger id="payout-status-filter" className="w-36" aria-label="Status">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -313,10 +313,11 @@ export default function PayoutsPage() {
                     </Select>
                 </div>
                 <div className="space-y-1">
-                    <Label className="text-xs">Search</Label>
+                    <Label htmlFor="payout-search" className="text-xs">Search</Label>
                     <div className="relative">
                         <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
+                            id="payout-search"
                             className="pl-8 w-56"
                             placeholder="Driver, payout ID, Stripe ID"
                             value={search}
@@ -325,12 +326,12 @@ export default function PayoutsPage() {
                     </div>
                 </div>
                 <div className="space-y-1">
-                    <Label className="text-xs">From</Label>
-                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" aria-label="Start date" />
+                    <Label htmlFor="payout-date-from" className="text-xs">From</Label>
+                    <Input id="payout-date-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" aria-label="Start date" />
                 </div>
                 <div className="space-y-1">
-                    <Label className="text-xs">To</Label>
-                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" aria-label="End date" />
+                    <Label htmlFor="payout-date-to" className="text-xs">To</Label>
+                    <Input id="payout-date-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" aria-label="End date" />
                 </div>
                 {(search || dateFrom || dateTo || statusFilter !== "all") && (
                     <Button

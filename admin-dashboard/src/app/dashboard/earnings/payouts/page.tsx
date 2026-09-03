@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -205,23 +206,24 @@ export default function PayoutsPage() {
 
     return (
         <div className="space-y-6 p-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <Link href="/dashboard/earnings" className="text-muted-foreground hover:text-foreground">
-                        <ArrowLeft className="h-5 w-5" />
-                    </Link>
-                    <Wallet className="h-6 w-6 text-primary" />
-                    <div>
-                        <h1 className="text-2xl font-bold">Payout Management</h1>
-                        <p className="text-sm text-muted-foreground">Review, filter, and retry driver payouts</p>
-                    </div>
-                </div>
-                <Button variant="outline" onClick={load} disabled={loading}>
-                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-                    Refresh
-                </Button>
-            </div>
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-3">
+                        <Link href="/dashboard/earnings" className="text-muted-foreground hover:text-foreground">
+                            <ArrowLeft className="h-5 w-5" />
+                        </Link>
+                        <Wallet className="h-6 w-6 text-primary" />
+                        Payout Management
+                    </span>
+                }
+                description="Review, filter, and retry driver payouts"
+                actions={
+                    <Button variant="outline" onClick={load} disabled={loading}>
+                        <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
+                }
+            />
 
             {/* Toast */}
             {toast && (

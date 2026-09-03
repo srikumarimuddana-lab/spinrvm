@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -245,29 +246,28 @@ export default function QuestsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
             {/* eslint-disable-next-line no-restricted-syntax -- decorative trophy icon tint, not a status signal (#2816) */}
             <Trophy className="h-6 w-6 text-amber-500" />
             Quests & Bonus Challenges
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Create and manage driver incentive challenges
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={fetchQuests} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-          <Button size="sm" onClick={() => setShowCreate(true)}>
-            <Plus className="h-4 w-4 mr-1" />
-            Create Quest
-          </Button>
-        </div>
-      </div>
+          </span>
+        }
+        description="Create and manage driver incentive challenges"
+        actions={
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={fetchQuests} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+            <Button size="sm" onClick={() => setShowCreate(true)}>
+              <Plus className="h-4 w-4 mr-1" />
+              Create Quest
+            </Button>
+          </div>
+        }
+      />
 
       {/* Stats Grid */}
       <div className="grid grid-cols-4 gap-4">

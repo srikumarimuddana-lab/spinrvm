@@ -73,6 +73,54 @@ async def test_settle_corporate_fails_closed_on_settings_read_error():
 
 
 @pytest.mark.anyio
+async def test_fail_closed_releases_the_settlement_claim():
+    """auto_settle_guest_corporate claims the ride pending/failed ->
+    'processing' BEFORE calling settle_corporate and, per its own comment,
+    relies on settle_corporate resetting payment_status on its known failure
+    paths (its except-branch only fires on a raise; this path returns). Every
+    other failure branch in settle_corporate resets it; the fail-closed branch
+    must too, or the ride sticks at 'processing' forever -- the guest-corporate
+    retry sweep only polls 'pending', and stripe_reconcile's healer bails on a
+    ride with no payment_intent_id, which a company_allowance ride never has.
+    """
+    update_ride_mock = AsyncMock()
+    with (
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(side_effect=RuntimeError("settings db down")),
+        ),
+        patch("backend.utils.metrics.inc"),
+        patch("backend.services.payment_service.db_supabase.update_ride", update_ride_mock),
+    ):
+        result = await settle_corporate(_RIDE, "ride_1", Decimal("20.00"), Decimal("0.00"))
+
+    assert result.status_code == 503
+    update_ride_mock.assert_awaited_once_with("ride_1", {"payment_status": "pending"})
+
+
+@pytest.mark.anyio
+async def test_fail_closed_still_503s_when_the_claim_release_also_fails():
+    """The read failure that triggers this branch is a degraded settings/DB
+    read, which can take the release write down too. A failed release must be
+    logged, not raised -- it must never mask the 503 the caller depends on."""
+    with (
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(side_effect=RuntimeError("settings db down")),
+        ),
+        patch("backend.utils.metrics.inc"),
+        patch(
+            "backend.services.payment_service.db_supabase.update_ride",
+            AsyncMock(side_effect=RuntimeError("db still down")),
+        ),
+    ):
+        result = await settle_corporate(_RIDE, "ride_1", Decimal("20.00"), Decimal("0.00"))
+
+    assert result.success is False
+    assert result.status_code == 503
+
+
+@pytest.mark.anyio
 async def test_settle_corporate_explicit_false_still_503s():
     """Regression guard: the flag explicitly set to False must keep working
     exactly as before -- this change only touches the read-error branch."""

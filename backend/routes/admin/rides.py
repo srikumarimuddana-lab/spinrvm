@@ -663,9 +663,27 @@ async def admin_cancel_ride(
             raise
 
     if updated is None:
+        # 0 rows matched. Two very different causes, and they must not be
+        # reported the same way: either the ride genuinely moved on (a real
+        # race — expected, 409, info), or the row still holds the status we
+        # filtered on and the write silently did nothing (RLS/service-role
+        # misconfiguration — the "silent no-op" this endpoint has surfaced
+        # loudly since it was first reported). One extra read, on the failure
+        # path only, is what separates them.
+        current = await db_supabase.get_ride(ride_id)
+        current_status = (current or {}).get("status")
+        if current is not None and current_status == status_from:
+            logger.error(
+                f"admin_cancel_ride: silent no-op on {ride_id} — conditional update matched 0 rows "
+                f"but the ride is still status={status_from!r} (RLS or service-role misconfiguration?)"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Cancel did not persist — see backend logs.",
+            )
         logger.info(
             f"admin_cancel_ride: ride_state_changed ride_id={ride_id} "
-            f"admin_id={admin_user.get('id')} expected_status={status_from}"
+            f"admin_id={admin_user.get('id')} expected_status={status_from} current_status={current_status}"
         )
         raise HTTPException(
             status_code=409,
@@ -673,11 +691,27 @@ async def admin_cancel_ride(
         )
 
     driver_user_id: str | None = None
-    driver_id = ride.get("driver_id")
+    # Read driver_id from the row the conditional update RETURNED, not from the
+    # pre-write read: cancel_filter pins the status but not the driver, so a
+    # concurrent offer-timeout revert + re-claim on another replica can hand
+    # this ride to a different driver between our read and our write. Freeing
+    # the stale driver would both open a bogus Period 1 for someone not on this
+    # ride and leave the driver who actually held it stuck is_available=False
+    # until the orphan-claim reaper. `updated` is the post-update row (this
+    # update never writes driver_id, so it carries the real holder).
+    driver_id = (updated or {}).get("driver_id") or ride.get("driver_id")
     if driver_id:
         try:
-            await db_supabase.set_driver_available(driver_id, True)
-            await record_period_transition(driver_id, 1)
+            released = await db_supabase.set_driver_available(driver_id, True)
+            # Only open Period 1 (online, no ride) if the release actually made
+            # the driver available. set_driver_available clamps is_available to
+            # False for a driver who went offline (or was suspended) while
+            # assigned; their go-offline already logged Period 0, so recording
+            # Period 1 here would falsely reopen a commercial-insurance window
+            # for a driver who is on personal auto only. Mirrors the guarded
+            # pattern in routes/rides/matching.py's offer-timeout handler.
+            if isinstance(released, dict) and released.get("is_available"):
+                await record_period_transition(driver_id, 1)
         except Exception as e:
             logger.error(
                 f"admin_cancel_ride: could not free driver {driver_id}: {e}",

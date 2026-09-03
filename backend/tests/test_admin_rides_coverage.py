@@ -168,13 +168,29 @@ class TestAdminCancelRideExtra:
         another admin action) wins the race first, update_one matches 0 rows
         and returns None -- this must surface as a 409, not a silent 200 that
         would strand riders/drivers thinking a ride is cancelled when it
-        isn't."""
+        isn't. The failure-path re-read shows the ride HAS moved on, which is
+        what distinguishes this from the silent-no-op case below."""
+        raced_ride = {**_RIDE_SEARCHING, "status": "driver_accepted"}
         with (
-            patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_SEARCHING)),
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[_RIDE_SEARCHING, raced_ride])),
             patch("db_supabase.update_one", AsyncMock(return_value=None)),
         ):
             resp = client.post("/api/admin/rides/ride-1/cancel", json={"reason": "x"})
         assert resp.status_code == 409
+
+    def test_cancel_silent_no_op_surfaces_500(self, client, as_super_admin):
+        """0 rows updated while the ride still holds the status we filtered on
+        is NOT a race -- it means the write silently did nothing (RLS or
+        service-role misconfiguration). That must stay a loud 500 with an
+        error-level log, exactly as it did before the conditional update was
+        introduced; a 409 would misreport a broken deployment as normal
+        concurrency."""
+        with (
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[_RIDE_SEARCHING, _RIDE_SEARCHING])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/cancel", json={"reason": "x"})
+        assert resp.status_code == 500
 
     def test_cancel_db_write_failure_propagates(self, client, as_super_admin):
         """Both the mig-38 and mig-37 fallback writes fail -> the underlying error must

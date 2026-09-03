@@ -62,13 +62,27 @@ re-checked that the race hadn't already been lost.
    status_code=503)` on a settings-read exception — identical to the flag
    being explicitly `False`. Fails closed.
 2. `_atomic_settle_enabled` keeps its existing behavior (fall back to the
-   legacy settle path) but now logs at `error` with `exc_info=True`. Both
-   1 and 2 increment `spinr_payment_settings_read_failed_total{flag=...}`.
+   legacy settle path) but now logs at `error` with a real traceback via
+   `logger.opt(exception=True)` — **not** `exc_info=True`, which loguru
+   silently swallows as a `str.format` keyword, capturing no traceback and
+   reaching Sentry with no stack (ACTION_ITEMS.md C60; the first draft of
+   this change used `exc_info=True` and would have failed the repo's own
+   `tests/test_loguru_call_conventions.py` gate in CI). Both 1 and 2
+   increment `spinr_payment_settings_read_failed_total{flag=...}`.
    The asymmetry (1 fails closed, 2 keeps its fallback) is deliberate — see
    `docs/adr/011-flag-read-failure-semantics.md`.
 3. The claim loop is wrapped in `try/except Exception`: on failure, every
    driver in `claimed_drivers` is released via `set_driver_available` before
-   the exception is logged (`error`, `exc_info=True`) and re-raised.
+   the exception is logged (`error`, with a real traceback via
+   `logger.opt(exception=True)`) and re-raised. Each
+   release is individually try/except-guarded — the most likely trigger for
+   the claim failing at all is a DB blip, which makes the release call just
+   as likely to fail; an unguarded loop (as the sibling `ride_offers`
+   handler still has) would abort at the first failed release, strand the
+   remaining drivers, and replace the original exception with the release
+   error, losing the root cause. Caught in adversarial self-review of this
+   PR; the same weakness in the pre-existing `ride_offers` release loop is
+   left alone here (out of WS-1 scope) and noted for follow-up.
 4. The revert-to-searching write moved earlier in the function and became a
    conditional `update_one({"id", "status": driver_assigned, "driver_id"},
    ...)` — the same optimistic-lock pattern `routes/drivers/
@@ -79,13 +93,29 @@ re-checked that the race hadn't already been lost.
 
 ## 4. Risk & impact on existing functionality
 
-- **Subtask 1** — blast radius: `settle_corporate` has one production
-  caller, `backend/routes/rides/payments.py`. It already handles a 503
-  `PaymentResult` (the pre-existing "flag explicitly off" branch returns
-  the identical shape); this change only widens *when* that branch is
-  taken, not its shape. No other reader/writer of `corporate_billing_enabled`
-  exists besides the admin settings write path and
-  `tests/test_kill_switch_flags.py` (schema-shape tests only, unaffected).
+- **Subtask 1** — blast radius: `settle_corporate` has **two** production
+  callers, `backend/routes/rides/payments.py` and
+  `auto_settle_guest_corporate` inside `payment_service.py` itself (spawned
+  from `routes/drivers/ride_complete.py` and re-driven by
+  `utils/payment_retry.py`'s guest-corporate sweep). **The first draft of
+  this log claimed only one**, having dismissed the in-file caller as the
+  definition — and that missed caller is exactly where the review found a
+  blocker: `auto_settle_guest_corporate` atomically claims the ride
+  `pending|failed → processing` before calling us and relies on
+  `settle_corporate` resetting `payment_status` on its known failure paths
+  (its own except-branch fires only on a raise; the new fail-closed path
+  *returns*). The fail-closed branch therefore now releases that claim back
+  to `pending`, as all five other failure branches in the function do; without
+  it the ride would stick at `processing` indefinitely (the guest-corporate
+  sweep polls only `pending`, and `stripe_reconcile`'s healer bails on a ride
+  with no `payment_intent_id`, which a `company_allowance` ride never has),
+  needing manual intervention precisely during the incident this branch
+  exists for. Both callers already handle a 503 `PaymentResult` — the
+  pre-existing "flag explicitly off" branch returns the identical shape — so
+  this change only widens *when* that branch is taken, not its shape. No
+  other reader/writer of `corporate_billing_enabled` exists besides the admin
+  settings write path and `tests/test_kill_switch_flags.py` (schema-shape
+  tests only, unaffected).
 - **Subtask 2** — blast radius: `_atomic_settle_enabled` has one call site,
   inside `payment_service.py` itself, gating RPC vs. legacy settle. No
   behavior change on the happy path or the failure path's *outcome* (still
@@ -96,9 +126,13 @@ re-checked that the race hadn't already been lost.
   handling (single RPC transaction, nothing to release on failure). No
   change to the successful-claim path or the existing `ride_offers`
   insert-failure path.
-- **Subtask 4** — blast radius: `_offer_timeout_handler` is spawned
-  fire-and-forget from the dispatch offer loop; no caller reads its return
-  value. Reordering the conditional update ahead of the miss-streak/release
+- **Subtask 4** — blast radius: `_offer_timeout_handler` has exactly one
+  production caller — `routes/admin/rides.py`'s admin direct-assignment flow
+  (confirmed by full-backend grep during review; the *organic* batch-dispatch
+  timeout path is the separate `_batch_offer_timeout_handler` /
+  `process_expired_offer` pair, which never sets `status=driver_assigned` at
+  all and is untouched here). It is spawned fire-and-forget; no caller reads
+  its return value. Reordering the conditional update ahead of the miss-streak/release
   logic changes *when* driver-state side effects happen relative to each
   other, but they have no data dependency (the ride update doesn't read
   driver state; the driver release doesn't read ride state), so this is
@@ -149,12 +183,17 @@ re-checked that the race hadn't already been lost.
 
 # After
     except Exception as settings_err:
-        logger.error(
+        logger.opt(exception=True).error(
             "[PAYMENT] app_settings lookup failed ({}), failing closed on corporate_billing_enabled",
             settings_err,
-            exc_info=True,
         )
         _metric_inc("spinr_payment_settings_read_failed_total", {"flag": "corporate_billing_enabled"})
+        # Release the settlement claim auto_settle_guest_corporate took before
+        # calling us — every other failure branch here does the same.
+        try:
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+        except Exception:
+            logger.opt(exception=True).error(...)
         return PaymentResult(success=False, error="Corporate billing is temporarily unavailable", status_code=503)
 ```
 
@@ -175,7 +214,7 @@ re-checked that the race hadn't already been lost.
                         fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
                         ...
                 except Exception as e:
-                    logger.error(f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}")
                     for d, _ in claimed_drivers:
                         await _deps.db_supabase.set_driver_available(d["id"], True)
                     raise

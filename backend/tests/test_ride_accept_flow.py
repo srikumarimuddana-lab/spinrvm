@@ -421,7 +421,9 @@ class TestAdminCancelRide:
 
         get_ride_mock = AsyncMock(return_value=pre_ride)
         update_one_mock = AsyncMock(return_value=post_ride)
-        set_avail_mock = AsyncMock()
+        # The post-release driver row: is_available True is what authorises the
+        # Period-1 write (a clamped-offline driver must not get one).
+        set_avail_mock = AsyncMock(return_value={"id": DRIVER_ID, "is_available": True})
         record_period_mock = AsyncMock()
         get_driver_mock = AsyncMock(return_value=_driver_row())
         send_ws_mock = AsyncMock()

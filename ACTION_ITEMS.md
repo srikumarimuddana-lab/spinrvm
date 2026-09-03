@@ -20245,6 +20245,97 @@ how much they de-risk a public launch._
 - **Acceptance:** `pytest tests/test_loguru_call_conventions.py -q` passes
   once all 9 sites use `logger.opt(exception=True).error(...)`.
 
+### C63. `test_loguru_call_conventions.py` selects files by the literal loguru import line — modules that take `logger` from a re-export are never scanned
+
+- [ ] **Status:** open — found 2026-09-03 during the WS-1 self-review
+  (PR #4909), immediately after C60 fixed 9 real offenders that this gate
+  *did* catch.
+- **Issue/gap:** `_loguru_modules()` selects files with
+  `if "from loguru import logger" in src`. A module that obtains loguru's
+  `logger` indirectly — e.g. `backend/routes/rides/matching.py`, which takes
+  it from `routes/rides/_deps.py`'s re-export — never matches, so none of its
+  loguru calls are checked. Measured by temporarily making the file match:
+  the scan then reported **~20 `exc_info=` offenders and ~10+ `%s`-style
+  offenders in `matching.py` alone**, all pre-existing and all invisible to
+  CI today. Both defect classes are exactly what C60 documents as silent:
+  `exc_info` is swallowed as a `str.format` kwarg so no traceback is
+  captured and the loguru→Sentry bridge sends a stack-less
+  `capture_message`; `%s` placeholders emit literally and drop every argument.
+  `matching.py` is the dispatch hot path, so the affected lines include the
+  ERROR logs an operator would rely on during a dispatch incident.
+- **Why it matters:** the gate reads as repo-wide but is not; its own
+  non-vacuity guard (`test_scan_actually_sees_the_backend`, >20 modules /
+  >200 calls) passes comfortably while missing a whole class of file, so
+  nothing signals the gap. This is the CI-gate-decay case CLAUDE.md's
+  pre-merge gate #8 says to file rather than work around.
+- **Action:** widen the selector to detect the re-exported `logger` (resolve
+  `from ._deps import logger`-style indirection, or simply scan any module
+  whose `logger` name resolves to loguru), then fix the offenders it newly
+  surfaces — `matching.py` first. Expect the fix to be mechanical
+  (`exc_info=True` → `logger.opt(exception=True)`, `%s` → `{}`) but large;
+  do it as its own PR, not bundled with a behavior change.
+- **Files:** `backend/tests/test_loguru_call_conventions.py` (selector),
+  `backend/routes/rides/matching.py` (largest known offender), plus whatever
+  else the widened scan reports.
+- **Note:** WS-1 (PR #4909) fixed only the call sites it introduced, using
+  `logger.opt(exception=True)`, and did **not** touch the pre-existing ones —
+  deliberately out of scope. Beware: adding the literal import string to a
+  file *in a comment* is enough to pull it into the scan and turn the gate
+  red (this happened once during that PR and was caught before push).
+
+### C64. Admin ride-mutation endpoints: `admin_complete_ride` has no optimistic lock and both admin endpoints can open Period 1 for an offline driver
+
+- [ ] **Status:** open — found 2026-09-03 by `spinr-insurance-period-auditor`
+  reviewing PR #4909, which fixed the equivalent gaps in `admin_cancel_ride`
+  only.
+- **Issue/gap:** two residual gaps in `backend/routes/admin/rides.py`:
+  1. `admin_complete_ride` still writes via `update_ride(ride_id, payload)` —
+     filtered on `id` alone, with no conditional/optimistic guard. It is the
+     symmetric sibling of `admin_cancel_ride`, which PR #4909 converted to a
+     status-scoped conditional `update_one`; the same read-then-blind-write
+     race remains open on the complete path.
+  2. `admin_complete_ride`'s `record_period_transition(driver_id, 1)` fires
+     unconditionally after `set_driver_available(driver_id, True)`, with no
+     check that the release actually made the driver available.
+     `set_driver_available` clamps `is_available` to False for a driver who
+     went offline or was suspended while assigned (their go-offline already
+     logged Period 0), so this can open a Period 1 — TNC contingent
+     liability — for a driver who is really Period 0, personal auto only.
+     PR #4909 added the guarded form (`if isinstance(released, dict) and
+     released.get("is_available")`) to `admin_cancel_ride`, matching
+     `routes/rides/matching.py`'s offer-timeout handler; `admin_complete_ride`
+     was left as-is (out of scope).
+- **Action:** port both fixes from `admin_cancel_ride` (PR #4909) to
+  `admin_complete_ride`, with a test per gap.
+- **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
+
+### C65. `settle_corporate`'s explicit kill-switch-off branch strands a guest-corporate ride at `payment_status='processing'`
+
+- [ ] **Status:** open — found 2026-09-03 by `spinr-money-auditor` reviewing
+  PR #4909, which fixed the identical gap in the adjacent fail-closed branch.
+- **Issue/gap:** when `corporate_billing_enabled` is explicitly `False`,
+  `settle_corporate` returns a 503 `PaymentResult` **without** resetting
+  `payment_status` to `pending`, unlike its five other failure branches.
+  `auto_settle_guest_corporate` claims the ride `pending|failed → processing`
+  before calling it and relies on that reset (its own except-branch fires only
+  on a raise, and this path returns), so flipping the kill switch off strands
+  every in-flight guest-corporate ride at `processing`: the guest-corporate
+  sweep in `utils/payment_retry.py` polls only `pending`, and
+  `stripe_reconcile`'s healer bails on a ride with no `payment_intent_id`,
+  which a `company_allowance` ride never has. Recovery is manual, and the
+  trigger is deliberately flipping the incident kill switch — i.e. it fires
+  when the system is already degraded.
+- **Action:** reset `payment_status` to `pending` in that branch too (the
+  fail-closed branch immediately below it now does this, PR #4909), or make
+  `auto_settle_guest_corporate` release its own claim on any
+  `not result.success` rather than only on a raise. Add a test through the
+  `auto_settle_guest_corporate` → `settle_corporate` seam —
+  `tests/test_guest_auto_settle.py` currently stubs `settle_corporate` out
+  entirely, which is why neither this nor the PR #4909 blocker was caught by
+  the existing suite.
+- **Files:** `backend/services/payment_service.py`,
+  `backend/tests/test_guest_auto_settle.py`.
+
 ### C61. `test_referral_analytics.py::test_funnel_counts_and_amounts` red on `main`'s own tip — `assert 0 == 2` — CLOSED (2026-09-03)
 
 - [x] **Status:** fixed and root-caused. Found 2026-09-03 alongside C60,

@@ -223,6 +223,14 @@ export default function RideDetailScreen() {
                             scrollEnabled={false}
                             zoomEnabled={false}
                             rotateEnabled={false}
+                            // Explicit rather than relying on rotateEnabled=false to
+                            // keep the native adaptive compass hidden — this is a
+                            // static route-preview map with no compass control of
+                            // its own, and no reason for the SDK's default chrome to
+                            // ever appear here. See index.tsx's MapView for the
+                            // same fix on the live/rotating dashboard map, where the
+                            // native compass was reported live as misplaced.
+                            showsCompass={false}
                             onMapReady={() => setRouteMapReady(true)}
                         >
                             {/* Booked-route dashed underlay (v2 only): drawn when

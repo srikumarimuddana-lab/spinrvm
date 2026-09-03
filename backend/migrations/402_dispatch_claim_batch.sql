@@ -119,7 +119,7 @@
 --   3. Insert one `ride_offers` row mirroring `_build_offer_rows`
 --      (matching.py:132-150) column-for-column: ride_id, driver_id,
 --      status='pending', eta_seconds, offered_at, expires_at. The insert
---      is `ON CONFLICT (ride_id, driver_id) DO NOTHING` (review fix,
+--      is `ON CONFLICT ON CONSTRAINT ride_offers_ride_driver_uq DO NOTHING` (review fix,
 --      2026-09-03): ride_offers_ride_driver_uq (migration 100) means a
 --      driver re-ranked for a ride they already hold a row for (the Redis
 --      offer_skip guard in matching.py is skipped when Redis is down)
@@ -396,7 +396,10 @@ BEGIN
         ) VALUES (
             p_ride_id, v_driver_row.id, 'pending', v_eta, p_offered_at, p_expires_at
         )
-        ON CONFLICT (ride_id, driver_id) DO NOTHING
+        -- Named constraint, not a column list: inside plpgsql the output
+        -- column `driver_id` is also a variable, so `ON CONFLICT (ride_id,
+        -- driver_id)` is rejected as ambiguous (caught by the local psql run).
+        ON CONFLICT ON CONSTRAINT ride_offers_ride_driver_uq DO NOTHING
         RETURNING id INTO v_offer_id;
 
         IF NOT FOUND OR v_offer_id IS NULL THEN

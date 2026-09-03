@@ -20058,26 +20058,35 @@ how much they de-risk a public launch._
   must not change claim-won/claim-lost semantics, only retry count/timing
   on a genuine transient failure).
 
-### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip — reopened (fix written 2026-09-03, lost in a squash-merge, resubmitting)
-- [ ] **Status:** the fix below was written, verified 61/61 locally (twice),
-  and pushed as PR #4887's final commit (`2457622`) — but GitHub's
-  squash-merge of #4887 onto `main` (commit `dbcebe0`) captured a **stale**
-  snapshot of the branch that stopped at the prior commit (`48d0553`, the
-  C58 fix): `git show dbcebe0:backend/tests/rls/conftest.py` has none of
-  this fix's content, and `main`'s own next CI run (33728094406, same
-  commit `dbcebe0`) reproduced the exact original 24 RLS failures /
-  2 direct_pool failures, byte-for-byte, proving the fix never actually
-  shipped despite the PR showing "merged." Discovered while investigating
-  a follow-up request to look into the "5 CI-only RLS failures" this entry
-  had flagged as unreproducible — the real finding turned out to be this,
-  not a 6th RLS mystery. This is the second time in this session's history
-  a GitHub squash-merge has silently dropped a late-pushed commit (see the
-  PR #4879 lost-commit recovery earlier in this session) — push-then-merge
-  races on this repo's merge tooling appear to be a recurring, not
-  one-off, risk. Recovering via the standard "PR already merged" protocol:
-  restart the branch from `main`, re-land the same diff, open a fresh PR.
+### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip — CLOSED (2026-09-03, re-landed in PR #4896)
+- [x] **Status:** re-landed and merged. The fix was originally written,
+  verified 61/61 locally (twice), and pushed as PR #4887's final commit
+  (`2457622`) — but GitHub's squash-merge of #4887 onto `main` (commit
+  `dbcebe0`) captured a **stale** snapshot of the branch that stopped at
+  the prior commit (`48d0553`, the C58 fix): `git show
+  dbcebe0:backend/tests/rls/conftest.py` had none of this fix's content,
+  and `main`'s own next CI run (33728094406, same commit `dbcebe0`)
+  reproduced the exact original 24 RLS failures / 2 direct_pool failures,
+  byte-for-byte, proving the fix never actually shipped despite the PR
+  showing "merged." Discovered while investigating a follow-up request to
+  look into the "5 CI-only RLS failures" this entry had flagged as
+  unreproducible — the real finding turned out to be this, not a 6th RLS
+  mystery. This is the second time in this session's history a GitHub
+  squash-merge has silently dropped a late-pushed commit (see the PR #4879
+  lost-commit recovery earlier in this session) — push-then-merge races on
+  this repo's merge tooling appear to be a recurring, not one-off, risk.
+  Recovered via the standard "PR already merged" protocol: restarted the
+  branch from `main`, re-landed the same diff plus the self-healing-role
+  fix below, merged as `ea9e4db46` (PR #4896).
   (C59, bundled in the same lost commit, is unaffected — `main` already
   has an independent, better fix for that one; see C59.)
+  **Verified live on `main`'s current tip** (2026-09-03, this entry's own
+  close-out check, independent of PR #4896's own verification): CI run
+  [33811415765](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/33811415765),
+  commit `1cdea73c` — `backend-test`'s "Run RLS role-level tests (real
+  Postgres)" step is `success`. `backend/tests/rls/conftest.py` on `main`
+  contains the `399_transactional_outbox.sql` apply (confirmed via
+  `git show`, not assumed from the PR description).
 - **Fix content below is unchanged and still accurate** — only the
   shipping status changed. Found while babysitting PR #4887 (C53 finding
   4); confirmed via GitHub Actions run 33711534411 that `backend-test`

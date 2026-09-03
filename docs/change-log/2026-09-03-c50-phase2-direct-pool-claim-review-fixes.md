@@ -217,6 +217,31 @@ if _direct_pool_enabled and not _dispatch_pool.is_open():
   `spinr-backend-staging` that nobody in that session set. It will activate on the next
   staging deploy; its origin should be confirmed before merge.
 
+## 11. Post-merge follow-up (2026-09-03, first real-Postgres CI run)
+
+#4883 merged at 03:19Z while its final `backend-test` job was still running. That job, and
+`main`'s post-merge runs, were the first time the direct-pool and RLS steps executed:
+
+- **Direct-pool step: 28 passed, 2 failed.** Every `dispatch_claim_batch` scenario passed
+  against 402→403 on the CI `postgres:15` service (ordered claim, release clamp, argument
+  validation, `ON CONFLICT` release, `insurance_written`, privileges, `prosecdef`, the
+  two-transaction race). The two failures were test-harness bugs, fixed in the follow-up
+  commit on `claude/pgbouncer-pool-migration-plan-jp69bh`: the seed helpers derived
+  `users.phone` from the last four id characters and collided across tests in the shared
+  scratch database (`race-rider-a` vs `lock-rider-a`), which broke the SKIP LOCKED test
+  before it ran; and the psycopg3 test failed at import because the isolated step has no
+  `JWT_SECRET`/`ADMIN_PASSWORD` for `Settings` — the directory's conftest now sets the same
+  defaults `backend/tests/conftest.py` uses.
+- **RLS step: 37 passed, 24 failed — none from this change.** 19 are
+  `tests/rls/test_transactional_outbox.py` (the outbox migrations and
+  `settings.outbox_receipts_enabled` are not in the RLS fixture's migration list, so
+  `outbox_messages`/`outbox_claim_batch` do not exist in its scratch database); 5 are
+  pre-existing fixture expectations (`service_role` bypass on `users`/`saved_addresses`
+  returns no rows, `financial_events` update and `driver_insurance_periods` delete do not
+  raise, `service_role` insert into `driver_insurance_periods` is denied). All of these were
+  invisible until the step conditions fix because the step never ran; they belong to the
+  outbox and RLS-fixture owners, not to the dispatch claim path.
+
 ## Sign-off
 
 - [ ] Reviewer with dispatch ownership has read §4 and §8

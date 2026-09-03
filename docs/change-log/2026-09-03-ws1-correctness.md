@@ -287,6 +287,32 @@ re-checked that the race hadn't already been lost.
 - [x] Blast radius is stated, not assumed (§4, plus the six-kill-switches grep in the ADR).
 - [x] No silent behavior change to an already-shipped flow without the UX field filled in (§5).
 
+## Post-CI addendum (2026-09-03)
+
+CI ran the suite for the first time on head `e1f0995`: **2 failed, 13,781
+passed**. Both failures were this PR's, both are fixed, and one of them
+contradicts a claim made earlier in this log:
+
+1. `test_loguru_call_conventions.py::test_no_exc_info_kwarg_in_loguru_calls` —
+   the `exc_info=True` defect, already found and fixed in the review pass
+   before CI reported it.
+2. `test_corporate_ride_payment.py::test_settle_fails_open_on_settings_lookup_error`
+   — **a pre-existing test that explicitly pinned the fail-open behaviour this
+   PR deliberately inverts** ("A settings-read error must never itself block
+   corporate settlement", asserting `success is True`). It has been updated to
+   assert the new fail-closed contract, renamed
+   `test_settle_fails_closed_on_settings_lookup_error`, and now also asserts
+   that no allowance debit is attempted and that the settlement claim is
+   released — with the inversion and its ADR-011 rationale stated in the
+   docstring so the change is legible rather than silent.
+
+   This corrects §"Why it was not caught earlier" reasoning used while writing
+   this change: a test **did** guard the failure direction of this flag read.
+   The blast-radius grep listed `test_corporate_ride_payment.py` among the
+   files referencing `settle_corporate`, but the file was never opened to see
+   what it asserted. Grepping for callers is not the same as reading them;
+   that gap is what CI caught.
+
 ## What was NOT verified
 
 - **No automated test execution in this session.** This sandbox's network

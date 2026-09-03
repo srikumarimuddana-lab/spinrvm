@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
 import { useRequireSuperAdmin } from "@/hooks/useRequireSuperAdmin";
@@ -287,16 +288,10 @@ export default function CompliancePage() {
 
     return (
         <div className="p-6 space-y-6">
-            <div>
-                <h1 className="text-2xl font-semibold">Compliance & Tax Reporting</h1>
-                <p className="text-muted-foreground">
-                    Spinr-branded regulatory and tax exports — GST/PST remittance, per-insurer usage-based
-                    billing, and driver roster. Every export here is logged with the requesting admin, date
-                    range, and row count for a future privacy/regulatory audit. Fixed-format regulator
-                    documents (SGI D00032/D00033) live under Data Transfer instead — this module never
-                    re-styles those into Spinr branding.
-                </p>
-            </div>
+            <PageHeader
+                title="Compliance & Tax Reporting"
+                description="Spinr-branded regulatory and tax exports — GST/PST remittance, per-insurer usage-based billing, and driver roster. Every export here is logged with the requesting admin, date range, and row count for a future privacy/regulatory audit. Fixed-format regulator documents (SGI D00032/D00033) live under Data Transfer instead — this module never re-styles those into Spinr branding."
+            />
 
             {/* Page-level scope, not per-tab: it applies to every report on
                 this page except T4A, and one control makes it obvious that

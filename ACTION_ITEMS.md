@@ -20249,6 +20249,82 @@ how much they de-risk a public launch._
   tracked here for a follow-up fix.
 - **Acceptance:** `pytest tests/test_referral_analytics.py -q` passes.
 
+### C62. Repo-wide sweep for other squash-merge "fix never shipped" incidents (per C57/C52 precedent) — CLOSED, clean result (2026-09-03)
+
+- [x] **Status:** closed — audit performed, no new instances found beyond
+  the 2 already known and already fixed (#4879 → C52,
+  #4887 → C57/C59). Requested directly: "sweep and check through the repo
+  and identify the PR's whose fix never actually shipped."
+- **Method:** for every non-trivial (excluding `chore(deps)` dependency
+  bumps and pure `docs:` commits) squash-merge commit in `origin/main`'s
+  last ~400 commits (119 PRs, spanning 2026-08-27 → 2026-09-03 — this
+  repo's commit velocity is high enough that this window is ~1 week), fetched
+  each PR's frozen `refs/pull/<N>/head` ref (persists after branch deletion)
+  and compared its diff against `origin/main` — via `git patch-id --stable`
+  on `git diff <merge-base> <pr-head>` vs `git diff <squash-commit>^
+  <squash-commit>` — to the diff the squash-merge commit actually landed.
+  A patch-id mismatch flags a candidate; each candidate was then
+  hand-verified with a per-file content diff (`git show <sha>:<file>`)
+  before concluding anything, since a `.md`/`ACTION_ITEMS.md`-only
+  divergence or an unusual branch-rebase history produces false positives
+  (see below) that a bare patch-id mismatch can't distinguish from a real
+  drop.
+- **Result:** 115/119 matched cleanly. 4 flagged, all 4 investigated and
+  confirmed **not** lost fixes:
+  - **#4784** (`5e15c28`, "Broaden pre-launch flag driver scope..."): the
+    squash-merge commit itself is a **no-op** — empty diff against its own
+    parent, product code included. Root cause: PR #4785 (`bb37f54`,
+    "Migration Checklist status panel...") branched from on top of #4784's
+    branch and **merged first** (chronologically earlier in `main`'s
+    history despite the higher PR number), so its own squash-merge already
+    carried #4784's `pre_launch_flag_service.py` changes as part of its
+    total diff. By the time #4784 later merged, `main` already had the
+    content, so GitHub computed (and merged) an empty commit. Confirmed
+    live: `backend/services/pre_launch_flag_service.py` on `main` has the
+    `LAUNCH_DATE`-gate-drop and `mongo_driver_history` marker described in
+    #4784's own commit message. **Fix genuinely shipped** — just credited
+    to a different commit than its own PR's squash-merge.
+  - **#4880, #4759, #4734:** all 3 flagged only because their PR branches'
+    topology (non-linear history — earlier feature work merged separately
+    before these PRs' own merge, or in #4734's case a deliberate
+    "no-ops-once-the-real-PR-merges" ported test-fix commit per its own
+    commit message) made `<squash-commit>^` a poor stand-in for the
+    branch's true fork point, so `git merge-base` picked up unrelated
+    already-on-`main` files as if they were part of this PR's diff. Per-file
+    diff on the files the squash-merge commit *did* touch showed **zero
+    byte differences** against the PR head in all 3 cases — every actual
+    changed file matched exactly. Confirmed the extra files present-only-on
+    the PR-head side (e.g. `backend/ai/mcp_server.py` for #4759,
+    `backend/routes/rides/cancellation.py` for #4734) are already live on
+    `main` via the separate PRs that actually own them.
+- **Known blind spot (not closed by this sweep):** `refs/pull/<N>/head`
+  itself can lag behind the true last push before merge — this is the
+  exact mechanism that caused #4887's fix to be lost (confirmed directly:
+  `refs/pull/4887/head` stops at `48d0553`, the commit *before* the
+  C57/C59 fix `2457622` that was pushed and then dropped by the
+  squash-merge; the sweep's own comparison of `dbcebe0` against
+  `refs/pull/4887/head` reports a clean match, i.e. **this method cannot
+  detect that specific incident** — it was only found and fixed because
+  this session had the lost commit's SHA from its own earlier work).
+  There is no read-only way to reconstruct "what was actually pushed
+  immediately before the merge button was clicked" once that state is only
+  reachable via a deleted branch ref and GitHub's own ref hasn't caught up
+  — a real gap, not just a methodology nitpick. Mitigation is process, not
+  audit: watch every PR's CI status on its actual last-pushed commit before
+  merging (already this repo's standing PR-babysitting practice) rather
+  than trusting a post-hoc sweep to catch it.
+- **Scope not covered:** `chore(deps)` bumps and pure `docs:` commits were
+  excluded (low fix-loss risk, and dependency-bump content is trivially
+  re-derivable from `package.json`/`requirements.txt` diffs if ever in
+  doubt); history older than ~2026-08-27 was not swept (cost/time
+  trade-off — this window already covers both known incidents). Re-run
+  periodically or widen the window if squash-merge content loss is
+  suspected again.
+- **Acceptance:** no code change; this is an audit record. Re-running the
+  sweep script (see this session's transcript for the exact `git fetch` /
+  `git patch-id` commands) against a wider commit window is the way to
+  extend coverage.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

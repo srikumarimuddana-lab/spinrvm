@@ -42,6 +42,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.parse
 import time
 from pathlib import Path
 
@@ -53,7 +54,9 @@ DEFAULT_RATE_PER_MIN = float(os.environ.get("LOADTEST_PREAUTH_RATE", "4"))
 
 
 def _login_one(base_url: str, session: requests.Session, phone: str) -> dict:
-    r = session.post(f"{base_url}{API}/auth/send-otp", json={"phone": phone}, timeout=15)
+    r = session.post(
+        f"{base_url}{API}/auth/send-otp", json={"phone": phone}, timeout=15
+    )
     r.raise_for_status()
     r = session.post(
         f"{base_url}{API}/auth/verify-otp",
@@ -68,6 +71,11 @@ def _login_one(base_url: str, session: requests.Session, phone: str) -> dict:
         "refresh_token": body.get("refresh_token"),
         "user": body.get("user") or {},
     }
+
+
+_PRODUCTION_HOSTS = frozenset(
+    {"api-spinr.spinr.ca", "api.spinr.ca", "spinr.ca", "www.spinr.ca"}
+)
 
 
 def main() -> int:
@@ -85,6 +93,19 @@ def main() -> int:
         default=os.environ.get("LOADTEST_BASE_URL", "http://localhost:8000"),
     )
     args = parser.parse_args()
+
+    # Review fix (2026-09-03): never against production. The server refuses
+    # the dev OTP there anyway, but this script should not even try -- it
+    # hammers verify-otp with 60 accounts.
+    host = (urllib.parse.urlsplit(args.base_url).hostname or "").lower()
+    if host in _PRODUCTION_HOSTS or (
+        host.endswith("spinr.ca") and "staging" not in host
+    ):
+        print(
+            f"REFUSING: --base-url host {host!r} looks like production.",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.rate_per_min >= 5:
         print(
@@ -107,13 +128,18 @@ def main() -> int:
     drivers: list[dict] = []
     session = requests.Session()
 
-    plan = [("rider", i) for i in range(args.riders)] + [("driver", i) for i in range(args.drivers)]
+    plan = [("rider", i) for i in range(args.riders)] + [
+        ("driver", i) for i in range(args.drivers)
+    ]
     for idx, (kind, _) in enumerate(plan):
         phone = next_phone(kind)
         try:
             record = _login_one(args.base_url, session, phone)
         except requests.HTTPError as exc:
-            print(f"  [{idx + 1}/{total}] FAILED login for {kind} {phone}: {exc}", file=sys.stderr)
+            print(
+                f"  [{idx + 1}/{total}] FAILED login for {kind} {phone}: {exc}",
+                file=sys.stderr,
+            )
             raise
         (riders if kind == "rider" else drivers).append(record)
         print(f"  [{idx + 1}/{total}] {kind} {phone} -> token cached")
@@ -123,7 +149,11 @@ def main() -> int:
     cache_path = Path(TOKEN_CACHE_PATH)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = cache_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps({"riders": riders, "drivers": drivers, "base_url": args.base_url}, indent=2))
+    tmp_path.write_text(
+        json.dumps(
+            {"riders": riders, "drivers": drivers, "base_url": args.base_url}, indent=2
+        )
+    )
     tmp_path.replace(cache_path)
     print(f"Wrote {len(riders)} rider + {len(drivers)} driver tokens to {cache_path}")
     return 0

@@ -33,7 +33,7 @@ the running container beyond uploading the seed script under
   healthy traffic on this same release throughout, confirmed by `/health`
   returning `{"status":"healthy","db":{"status":"ok"}}` before, during, and
   after this session's load test). Deployed 2026-08-29 03:48 by
-  `spinryoutube@gmail.com`. It is the **only release this app has ever had**
+  `<Play Console account — redacted>`. It is the **only release this app has ever had**
   — staging has never been redeployed since initial setup. The Fly image
   itself carries no embedded git SHA, so the commit below is inferred from
   file-inventory evidence, not read directly off the image.

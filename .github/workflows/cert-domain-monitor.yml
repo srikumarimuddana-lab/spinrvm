@@ -188,10 +188,11 @@ jobs:
         id: existing
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           existing=$(gh issue list \
-            --repo "${{ github.repository }}" \
+            --repo "${REPO}" \
             --state open \
             --label "${ISSUE_LABEL}" \
             --json number \
@@ -202,10 +203,16 @@ jobs:
         if: steps.certs.outputs.any_critical == 'true' || steps.certs.outputs.any_warn == 'true' || steps.domains.outputs.any_critical == 'true' || steps.domains.outputs.any_warn == 'true' || github.event.inputs.force_open_issue == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          CERTS_ANY_CRITICAL: ${{ steps.certs.outputs.any_critical }}
+          DOMAINS_ANY_CRITICAL: ${{ steps.domains.outputs.any_critical }}
+          CERTS_FINDINGS: ${{ steps.certs.outputs.findings }}
+          DOMAINS_FINDINGS: ${{ steps.domains.outputs.findings }}
+          EXISTING_ISSUE: ${{ steps.existing.outputs.existing }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           severity="WARN"
-          if [ "${{ steps.certs.outputs.any_critical }}" = "true" ] || [ "${{ steps.domains.outputs.any_critical }}" = "true" ]; then
+          if [ "${CERTS_ANY_CRITICAL}" = "true" ] || [ "${DOMAINS_ANY_CRITICAL}" = "true" ]; then
             severity="CRITICAL"
           fi
 
@@ -219,10 +226,10 @@ jobs:
           probes in \`monitoring/synthetic-checks.yaml\` / ACTION_ITEMS.md E4).
 
           ## TLS certificates
-          ${{ steps.certs.outputs.findings }}
+          ${CERTS_FINDINGS}
 
           ## Domain registration
-          ${{ steps.domains.outputs.findings }}
+          ${DOMAINS_FINDINGS}
 
           ## Next step
           - 🔴 CRITICAL: page/act now — see \`docs/runbooks/railway-fly-failover.md\`
@@ -240,13 +247,12 @@ jobs:
           EOF
           )
 
-          existing="${{ steps.existing.outputs.existing }}"
-          if [ -n "$existing" ]; then
-            gh issue edit "$existing" --repo "${{ github.repository }}" --body "$body" --title "[${severity}] Certificate/domain expiry finding — $(date -u +%Y-%m-%d)"
-            echo "Updated existing issue #${existing}"
+          if [ -n "$EXISTING_ISSUE" ]; then
+            gh issue edit "$EXISTING_ISSUE" --repo "${REPO}" --body "$body" --title "[${severity}] Certificate/domain expiry finding — $(date -u +%Y-%m-%d)"
+            echo "Updated existing issue #${EXISTING_ISSUE}"
           else
             gh issue create \
-              --repo "${{ github.repository }}" \
+              --repo "${REPO}" \
               --title "[${severity}] Certificate/domain expiry finding — $(date -u +%Y-%m-%d)" \
               --body "$body" \
               --label "${ISSUE_LABEL}"
@@ -254,7 +260,10 @@ jobs:
 
       - name: No-op summary
         if: steps.certs.outputs.any_critical != 'true' && steps.certs.outputs.any_warn != 'true' && steps.domains.outputs.any_critical != 'true' && steps.domains.outputs.any_warn != 'true' && github.event.inputs.force_open_issue != 'true'
+        env:
+          CERTS_FINDINGS: ${{ steps.certs.outputs.findings }}
+          DOMAINS_FINDINGS: ${{ steps.domains.outputs.findings }}
         run: |
           echo "✅ All certificates and domains healthy."
-          echo "${{ steps.certs.outputs.findings }}"
-          echo "${{ steps.domains.outputs.findings }}"
+          echo "${CERTS_FINDINGS}"
+          echo "${DOMAINS_FINDINGS}"

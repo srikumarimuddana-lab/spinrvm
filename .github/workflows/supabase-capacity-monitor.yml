@@ -56,8 +56,11 @@ jobs:
     steps:
       - name: Check whether Supabase Management API access is configured
         id: gate
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          if [ -z "${{ secrets.SUPABASE_ACCESS_TOKEN }}" ] || [ -z "${{ secrets.SUPABASE_PROJECT_REF }}" ]; then
+          if [ -z "${SUPABASE_ACCESS_TOKEN}" ] || [ -z "${SUPABASE_PROJECT_REF}" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "⏭️  SUPABASE_ACCESS_TOKEN and/or SUPABASE_PROJECT_REF not set — skipping."
             echo "   This is expected until a human creates a Supabase Management API token."
@@ -100,10 +103,11 @@ jobs:
         if: steps.gate.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           existing=$(gh issue list \
-            --repo "${{ github.repository }}" \
+            --repo "${REPO}" \
             --state open \
             --label "${ISSUE_LABEL}" \
             --json number \
@@ -114,10 +118,16 @@ jobs:
         if: steps.gate.outputs.configured == 'true' && (steps.query.outputs.query_failed == 'true' || (steps.query.outputs.percent != '' && steps.query.outputs.percent != '0') )
         env:
           GH_TOKEN: ${{ github.token }}
+          PCT: ${{ steps.query.outputs.percent }}
+          FAILED: ${{ steps.query.outputs.query_failed }}
+          SIZE_GB: ${{ steps.query.outputs.size_gb }}
+          FORCE_OPEN_ISSUE: ${{ github.event.inputs.force_open_issue }}
+          EXISTING_ISSUE: ${{ steps.existing.outputs.existing }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          pct="${{ steps.query.outputs.percent }}"
-          failed="${{ steps.query.outputs.query_failed }}"
+          pct="${PCT}"
+          failed="${FAILED}"
 
           if [ "$failed" = "true" ]; then
             severity="UNKNOWN"
@@ -132,10 +142,10 @@ jobs:
             else
               severity=""
             fi
-            finding="Database size: ${{ steps.query.outputs.size_gb }} GB — approximately ${pct}% of the ${DISK_CEILING_GB} GB ceiling maintained in this workflow's DISK_CEILING_GB env var. **Confirm the real ceiling and current usage against Supabase Dashboard → Settings → Compute and Disk before acting** — this workflow's percentage is an approximation, not a direct read of Supabase's own limit (see the workflow file's HONEST LIMITATION comment)."
+            finding="Database size: ${SIZE_GB} GB — approximately ${pct}% of the ${DISK_CEILING_GB} GB ceiling maintained in this workflow's DISK_CEILING_GB env var. **Confirm the real ceiling and current usage against Supabase Dashboard → Settings → Compute and Disk before acting** — this workflow's percentage is an approximation, not a direct read of Supabase's own limit (see the workflow file's HONEST LIMITATION comment)."
           fi
 
-          if [ -z "$severity" ] && [ "${{ github.event.inputs.force_open_issue }}" != "true" ]; then
+          if [ -z "$severity" ] && [ "${FORCE_OPEN_ISSUE}" != "true" ]; then
             echo "Below warn threshold, no issue needed."
             exit 0
           fi
@@ -161,12 +171,11 @@ jobs:
           EOF
           )
 
-          existing="${{ steps.existing.outputs.existing }}"
-          if [ -n "$existing" ]; then
-            gh issue edit "$existing" --repo "${{ github.repository }}" --body "$body" --title "[${severity}] Supabase capacity — $(date -u +%Y-%m-%d)"
+          if [ -n "$EXISTING_ISSUE" ]; then
+            gh issue edit "$EXISTING_ISSUE" --repo "${REPO}" --body "$body" --title "[${severity}] Supabase capacity — $(date -u +%Y-%m-%d)"
           else
             gh issue create \
-              --repo "${{ github.repository }}" \
+              --repo "${REPO}" \
               --title "[${severity}] Supabase capacity — $(date -u +%Y-%m-%d)" \
               --body "$body" \
               --label "${ISSUE_LABEL}"

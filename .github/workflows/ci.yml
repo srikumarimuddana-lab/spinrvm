@@ -153,6 +153,13 @@ jobs:
       # suite. Also runs test_claim_batch_psycopg3.py, the only test that
       # drives the RPC through the production psycopg3 pool.
       - name: Run direct-pool real-Postgres tests (C50 Phase 1, T11)
+        # `!cancelled()`: without a condition this step is skipped whenever
+        # the mocked-suite step above fails, which silently dropped this
+        # suite (and the RLS one below) from CI every time main's mocked
+        # suite was red -- found 2026-09-03 on #4883 and on main itself.
+        # The job still fails on any failing step; this only guarantees the
+        # real-Postgres suites execute and report.
+        if: ${{ !cancelled() }}
         working-directory: backend
         env:
           PGHOST: localhost
@@ -180,6 +187,8 @@ jobs:
       # auth-boundary suite out of CI altogether. This step is that
       # replacement, using the isolated invocation CLAUDE.md documents for it.
       - name: Run RLS role-level tests (real Postgres)
+        # Same `!cancelled()` reasoning as the direct-pool step above.
+        if: ${{ !cancelled() }}
         working-directory: backend
         env:
           PGHOST: localhost

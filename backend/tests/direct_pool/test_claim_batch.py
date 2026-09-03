@@ -25,6 +25,7 @@ Run with (same harness as T11/the fixture smoke test):
 from __future__ import annotations
 
 import concurrent.futures
+import itertools
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -40,9 +41,22 @@ except ImportError:  # pragma: no cover - self-skip handled by conftest
 _NOW = datetime(2026, 9, 2, 12, 0, 0, tzinfo=timezone.utc)
 _EXPIRES = _NOW + timedelta(seconds=15)
 
+# `users.phone` is UNIQUE and the scratch database is shared by every test in
+# the session (`pg_conn` is session-scoped and autocommit), so seeded rows
+# persist across tests. Phones were derived from the last four characters of
+# the id, which collided across tests ("race-rider-a" and "lock-rider-a" both
+# became +1306555er-a -- the first CI run of this suite, 2026-09-03, failed
+# the SKIP LOCKED test on exactly that UniqueViolation). A process-wide
+# counter makes every seeded phone unique regardless of the id chosen.
+_PHONE_SEQ = itertools.count(1)
+
+
+def _next_phone(prefix: str = "+1306555") -> str:
+    return f"{prefix}{next(_PHONE_SEQ):04d}"
+
 
 def _insert_user(cur, uid: str):
-    cur.execute("INSERT INTO users (id, phone) VALUES (%s, %s)", (uid, f"+1306555{uid[-4:]}"))
+    cur.execute("INSERT INTO users (id, phone) VALUES (%s, %s)", (uid, _next_phone()))
 
 
 def _insert_driver(cur, did: str, uid: str, **overrides):
@@ -60,7 +74,7 @@ def _insert_driver(cur, did: str, uid: str, **overrides):
             did,
             uid,
             f"Driver {did}",
-            f"+1306555{did[-4:]}",
+            _next_phone("+1306556"),
             cols["is_online"],
             cols["is_available"],
             cols["is_verified"],

@@ -96,6 +96,9 @@ plan doc has to change with it.
 
 from __future__ import annotations
 
+import asyncio
+import re
+import time as _time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional
 
@@ -131,6 +134,50 @@ except ImportError:  # pragma: no cover - exercised only when psycopg3 isn't ins
 # DSN unset, or import-time failure) — every helper below treats that as
 # "the direct pool is not available" rather than crashing.
 _pool: Optional["AsyncConnectionPool"] = None
+
+# Server-side statement timeout applied to every transaction this module
+# opens (review fix, 2026-09-03). The client deadline in `acquire()` bounds
+# connection ACQUISITION only; without a statement timeout a stalled
+# Postgres/Supavisor could park every pooled connection indefinitely and
+# every later acquire would burn its whole deadline waiting. Applied with
+# set_config(..., is_local => true), i.e. transaction-scoped — the only GUC
+# form allowed under transaction-mode pooling (see the no-bare-SET rule in
+# the module docstring). The budget is the remaining client deadline capped
+# at this default.
+DEFAULT_STATEMENT_TIMEOUT_S = 10.0
+_MIN_STATEMENT_TIMEOUT_MS = 100
+# Client-side backstop on top of the server timeout: the server should win
+# first, so the margin only exists for the case where the server never
+# answers at all.
+_CLIENT_TIMEOUT_MARGIN_S = 2.0
+
+_DSN_CREDENTIALS_RE = re.compile(r"://[^@\s/]+@")
+
+
+def _redact_dsn(text: str) -> str:
+    """Mask `scheme://user:password@` fragments.
+
+    libpq repeats conninfo fragments in malformed-DSN errors (`invalid
+    connection option`, `missing "=" after ... in connection info string`),
+    so an open failure caused by an unescaped '@' or quote in the password
+    would otherwise put the live credential into ERROR logs and Sentry.
+    `_redact_pg_error` covers row/key values, not connection strings.
+    """
+    return _DSN_CREDENTIALS_RE.sub("://<redacted>@", text)
+
+
+def _statement_budget_s() -> float:
+    """Seconds this transaction may run: remaining client deadline, capped."""
+    remaining = _remaining_seconds()
+    if remaining is None or remaining <= 0:
+        return DEFAULT_STATEMENT_TIMEOUT_S
+    return min(float(remaining), DEFAULT_STATEMENT_TIMEOUT_S)
+
+
+async def _apply_statement_timeout(cur, budget_s: float) -> None:
+    """First statement of every transaction: a transaction-local statement_timeout."""
+    ms = max(int(budget_s * 1000), _MIN_STATEMENT_TIMEOUT_MS)
+    await cur.execute("SELECT set_config('statement_timeout', %s, true)", (str(ms),))
 
 
 def is_open() -> bool:
@@ -199,6 +246,7 @@ async def init_pool(dispatch_direct_pool_enabled: bool) -> Optional["AsyncConnec
             raise RuntimeError(msg)
         return None
 
+    pool = None
     try:
         pool = AsyncConnectionPool(
             conninfo=dsn,
@@ -209,6 +257,13 @@ async def init_pool(dispatch_direct_pool_enabled: bool) -> Optional["AsyncConnec
             # transactions, so we must never let psycopg cache a server-side
             # PREPARE against it.
             kwargs={"prepare_threshold": None, "autocommit": False},
+            # Liveness probe on checkout (review fix, 2026-09-03): Supavisor
+            # recycles/idles out server connections independently of this
+            # pool's max_idle/max_lifetime, so without a check a dead
+            # connection can be handed to a dispatch attempt and fail on its
+            # first execute — which, per D2, is a hard dispatch failure, not
+            # a silent PostgREST fallback.
+            check=AsyncConnectionPool.check_connection,
             open=False,
         )
         await pool.open(wait=True, timeout=10.0)
@@ -220,10 +275,23 @@ async def init_pool(dispatch_direct_pool_enabled: bool) -> Optional["AsyncConnec
         _metric_gauge("spinr_db_direct_pool_in_use", 0.0)
         return _pool
     except Exception as exc:
-        redacted = _redact_pg_error(str(exc))
-        logger.error(f"[dispatch_pool] failed to open direct pool: {redacted}")
+        # Review fix (2026-09-03): never echo the DSN. libpq repeats conninfo
+        # fragments in malformed-DSN errors, and the previous message also
+        # put that text into the production RuntimeError (Fly crash log +
+        # Sentry). Log the exception type plus a doubly-redacted message,
+        # and keep the raised message fixed.
+        redacted = _redact_dsn(_redact_pg_error(str(exc)))
+        logger.error(f"[dispatch_pool] failed to open direct pool ({type(exc).__name__}): {redacted}")
+        if pool is not None:
+            # A pool that failed after construction may still own worker
+            # tasks/sockets — release them rather than leak on the
+            # non-production continue path.
+            try:
+                await pool.close()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                logger.debug("[dispatch_pool] close after failed open raised", exc_info=True)
         if settings.ENV.lower() == "production":
-            raise RuntimeError(f"dispatch direct pool failed to open: {redacted}") from exc
+            raise RuntimeError("dispatch direct pool failed to open") from exc
         return None
 
 
@@ -240,7 +308,7 @@ async def close_pool() -> None:
         await _pool.close()
         logger.info("[dispatch_pool] direct pool closed")
     except Exception as exc:
-        redacted = _redact_pg_error(str(exc))
+        redacted = _redact_dsn(_redact_pg_error(str(exc)))
         logger.error(f"[dispatch_pool] error closing direct pool: {redacted}")
     finally:
         _pool = None
@@ -275,16 +343,30 @@ async def acquire() -> AsyncIterator["psycopg.AsyncConnection"]:
         )
         raise TimeoutError("dispatch direct pool: client deadline already expired")
 
-    import time as _time
-
     _wait_start = _time.monotonic()
     remaining = _remaining_seconds()
+    _acquired = False
     try:
         async with _pool.connection(timeout=remaining if remaining is not None else None) as conn:
-            _metric_observe("spinr_db_direct_pool_wait_ms", (_time.monotonic() - _wait_start) * 1000.0)
+            _acquired = True
+            _metric_observe(
+                "spinr_db_direct_pool_wait_ms",
+                (_time.monotonic() - _wait_start) * 1000.0,
+                labels={"outcome": "ok"},
+            )
             _metric_gauge("spinr_db_direct_pool_in_use", _in_use(_pool))
             yield conn
     finally:
+        if not _acquired:
+            # Review fix (2026-09-03): a PoolTimeout raised by connection()
+            # used to skip the observe entirely, so the wait histogram was
+            # blind exactly when the pool was saturated — the one condition
+            # it exists to show.
+            _metric_observe(
+                "spinr_db_direct_pool_wait_ms",
+                (_time.monotonic() - _wait_start) * 1000.0,
+                labels={"outcome": "timeout"},
+            )
         _metric_gauge("spinr_db_direct_pool_in_use", _in_use(_pool))
 
 
@@ -297,14 +379,14 @@ async def run_query(sql: str, params: tuple = (), *, fetch: str = "all") -> Any:
     this repeatedly and expect state (a `SET`, a temp table, an advisory
     lock) to persist across calls.
     """
-    import time as _time
-
     _t0 = _time.monotonic()
+    budget = _statement_budget_s()
     async with acquire() as conn:
         try:
             async with conn.transaction():
                 async with conn.cursor() as cur:
-                    await cur.execute(sql, params)
+                    await _apply_statement_timeout(cur, budget)
+                    await asyncio.wait_for(cur.execute(sql, params), timeout=budget + _CLIENT_TIMEOUT_MARGIN_S)
                     if fetch == "all":
                         result = await cur.fetchall()
                     elif fetch == "one":
@@ -345,7 +427,10 @@ async def claim_batch(
     Returns a list of dicts, one per driver dispatch_claim_batch actually
     attempted (not just successes) — each has keys `driver_id`, `claimed`
     (bool), `driver_row` (dict, present only when claimed), `ride_offer_id`
-    (str, present only when claimed). See migration 402's header for why
+    (str, present only when claimed) and `insurance_written` (bool when
+    claimed, else None — False means the best-effort Period-2 write failed
+    inside the RPC and the caller must log/count it). An empty `driver_ids`
+    returns [] without touching the pool. See migration 402's header for why
     unclaimed attempts are included: the caller needs the full attempted
     set to invalidate_driver_cache for every one of them, matching what
     claim_driver_atomic already does today on the PostgREST path.
@@ -357,25 +442,41 @@ async def claim_batch(
     existing retry-chain re-arms exactly as today's offer-insert failure
     path does.
     """
-    import time as _time
-
     from psycopg.rows import dict_row  # type: ignore
 
+    if not driver_ids:
+        # Review fix (2026-09-03): an empty list adapts to an element-less
+        # array Postgres cannot resolve against text[]; the RPC would return
+        # nothing anyway.
+        return []
+
     _t0 = _time.monotonic()
+    budget = _statement_budget_s()
     async with acquire() as conn:
         try:
             async with conn.transaction():
                 async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute(
-                        "SELECT * FROM dispatch_claim_batch(%s, %s, %s, %s, %s, %s)",
-                        (
-                            ride_id,
-                            list(driver_ids),
-                            list(eta_seconds),
-                            int(max_offers),
-                            offered_at,
-                            expires_at,
+                    await _apply_statement_timeout(cur, budget)
+                    # Explicit casts (review fix, 2026-09-03): psycopg3 binds
+                    # typed parameters, and a Python list[int] is not
+                    # guaranteed to resolve to int4[] (unbounded ints), so
+                    # without casts function resolution can fail with
+                    # "function dispatch_claim_batch(text, text[], numeric[],
+                    # ...) does not exist". Same for the id list and timestamps.
+                    await asyncio.wait_for(
+                        cur.execute(
+                            "SELECT * FROM public.dispatch_claim_batch("
+                            "%s::text, %s::text[], %s::int[], %s::int, %s::timestamptz, %s::timestamptz)",
+                            (
+                                ride_id,
+                                [str(d) for d in driver_ids],
+                                [int(e) for e in eta_seconds],
+                                int(max_offers),
+                                offered_at,
+                                expires_at,
+                            ),
                         ),
+                        timeout=budget + _CLIENT_TIMEOUT_MARGIN_S,
                     )
                     rows = await cur.fetchall()
             return list(rows)

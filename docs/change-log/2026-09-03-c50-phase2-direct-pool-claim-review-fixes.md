@@ -170,7 +170,13 @@ if _direct_pool_enabled and not _dispatch_pool.is_open():
       insurance-write failure reporting `insurance_written = false` with claim and offer
       intact, `has_function_privilege` false for `anon`/`authenticated`, and the two-session
       `SKIP LOCKED` check (an uncommitted claim in session A; session B's batch returns
-      immediately with that driver unclaimed). Results are in the review posted on #4873.
+      immediately with that driver unclaimed, 39 ms) plus a negative control: the pre-fix
+      function body installed under another name blocked on the same locked row until the
+      2.5 s statement timeout, so the check detects the regression it was written for.
+      This run also caught a defect in the first cut of the fix — inside plpgsql
+      `ON CONFLICT (ride_id, driver_id)` is ambiguous because `driver_id` is an output
+      variable — corrected to `ON CONFLICT ON CONSTRAINT ride_offers_ride_driver_uq`.
+      Results are in the review posted on #4873.
 - [x] Pre-commit hook (secret scan, forbidden files, PII-in-logs, money arithmetic,
       doc-cited paths) on every commit.
 - [ ] `pytest` — **not run here**; unavailable in this environment (no PyPI access). CI runs

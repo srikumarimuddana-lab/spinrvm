@@ -22,7 +22,7 @@ produce:
   2. Identical ``ride_offers`` row payloads (built via the same
      ``_build_offer_rows`` helper on both sides — the PostgREST path calls
      it directly; the direct-pool path's SQL insert is asserted separately
-     in ``migrations/401_dispatch_claim_batch.sql`` and
+     in ``migrations/402_dispatch_claim_batch.sql`` and
      ``tests/direct_pool/test_claim_batch.py`` to build the SAME columns,
      so this test constructs the equivalent structure from the mocked RPC
      response and diffs it against the PostgREST path's actual insert
@@ -32,7 +32,7 @@ produce:
      ``record_period_transition`` call args vs. the direct-pool mocked
      RPC's ``claimed=True`` driver set (the RPC's SQL body is what
      performs this write for real on the direct-pool path — verified in
-     migration 401 and the real-Postgres suite, not re-verified here).
+     migration 402 and the real-Postgres suite, not re-verified here).
   4. Identical ``spinr_dispatch_offer_sent_total`` increment count.
 
 Also asserts the two paths are mutually exclusive at the call-site level:
@@ -116,7 +116,7 @@ async def _run_postgrest_path(scenario, mock_db):
     mock_db.get_rows = AsyncMock(return_value=scenario["candidates"])
     mock_db.find_one = AsyncMock(return_value=None)
     # d2 loses the race -> claim_driver_atomic returns falsy, matching
-    # migration 401's "0 rows / NOT FOUND -> skip" semantics.
+    # migration 402's "0 rows / NOT FOUND -> skip" semantics.
     mock_db.claim_driver_atomic = AsyncMock(side_effect=[d1, None, d3])
     mock_db.set_driver_available = AsyncMock()
     mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Rider", "rating": 4.9})
@@ -202,7 +202,7 @@ async def _run_direct_pool_path(scenario, mock_db):
     mock_db.run_sync = AsyncMock(side_effect=lambda fn: fn())
     mock_db.supabase = MagicMock()
 
-    # The RPC's return shape per migration 401: one row per ATTEMPTED
+    # The RPC's return shape per migration 402: one row per ATTEMPTED
     # driver (claimed True/False), matching the header's documented
     # rationale (Python needs the full attempted set to invalidate cache
     # for each one).
@@ -326,7 +326,7 @@ async def test_insurance_write_target_set_is_identical_across_paths(scenario):
 
     The PostgREST path's ACTUAL record_period_transition call args are the
     ground truth for "who gets an insurance-period-2 write". The
-    direct-pool path performs this write inside migration 401's SQL, not
+    direct-pool path performs this write inside migration 402's SQL, not
     in Python -- so parity here means the driver ids the RPC reports as
     claimed=True are exactly the ids the PostgREST path separately, really
     called record_period_transition for.

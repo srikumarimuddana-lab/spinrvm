@@ -215,8 +215,9 @@ export default function PolicyPage() {
                             </div>
 
                             <div>
-                                <Label>Max fare per ride (CAD)</Label>
+                                <Label htmlFor="max-fare-per-ride">Max fare per ride (CAD)</Label>
                                 <Input
+                                    id="max-fare-per-ride"
                                     type="number"
                                     placeholder="No cap"
                                     value={draft.max_fare_per_ride}
@@ -227,14 +228,14 @@ export default function PolicyPage() {
                             </div>
 
                             <div>
-                                <Label>Payment source</Label>
+                                <Label htmlFor="payment-source">Payment source</Label>
                                 <Select
                                     value={draft.allowed_payment_source}
                                     onValueChange={(v) =>
                                         setDraft({ ...draft, allowed_payment_source: v as PaymentSourcePolicy })
                                     }
                                 >
-                                    <SelectTrigger>
+                                    <SelectTrigger id="payment-source">
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -301,6 +302,7 @@ export default function PolicyPage() {
                                         size="icon"
                                         variant="ghost"
                                         onClick={() => removeWindow(i)}
+                                        aria-label="Remove time window"
                                     >
                                         <Trash2 className="h-4 w-4" />
                                     </Button>

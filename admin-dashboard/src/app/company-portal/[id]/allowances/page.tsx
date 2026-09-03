@@ -116,9 +116,9 @@ export default function AllowancesPage() {
                 <CardContent className="space-y-4 p-4">
                     <div className="grid gap-3 md:grid-cols-2">
                         <div>
-                            <Label>Member</Label>
+                            <Label htmlFor="allowance-member">Member</Label>
                             <Select value={selectedMemberId} onValueChange={setSelectedMemberId}>
-                                <SelectTrigger>
+                                <SelectTrigger id="allowance-member">
                                     <SelectValue placeholder="Select active member…" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -131,12 +131,12 @@ export default function AllowancesPage() {
                             </Select>
                         </div>
                         <div>
-                            <Label>Type</Label>
+                            <Label htmlFor="allowance-type">Type</Label>
                             <Select
                                 value={draft.type}
                                 onValueChange={(v) => setDraft({ ...draft, type: v as AllowanceTypeValue })}
                             >
-                                <SelectTrigger>
+                                <SelectTrigger id="allowance-type">
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -150,8 +150,9 @@ export default function AllowancesPage() {
 
                     {draft.type !== "unlimited" && (
                         <div>
-                            <Label>Amount (CAD)</Label>
+                            <Label htmlFor="allowance-amount">Amount (CAD)</Label>
                             <Input
+                                id="allowance-amount"
                                 type="number"
                                 min={1}
                                 value={draft.amount}
@@ -163,8 +164,9 @@ export default function AllowancesPage() {
                     {draft.type === "fixed_recurring" && (
                         <div className="grid gap-3 md:grid-cols-2">
                             <div>
-                                <Label>Period start</Label>
+                                <Label htmlFor="allowance-period-start">Period start</Label>
                                 <Input
+                                    id="allowance-period-start"
                                     type="date"
                                     value={draft.period_start}
                                     onChange={(e) =>
@@ -173,8 +175,9 @@ export default function AllowancesPage() {
                                 />
                             </div>
                             <div>
-                                <Label>Period end</Label>
+                                <Label htmlFor="allowance-period-end">Period end</Label>
                                 <Input
+                                    id="allowance-period-end"
                                     type="date"
                                     value={draft.period_end}
                                     onChange={(e) =>

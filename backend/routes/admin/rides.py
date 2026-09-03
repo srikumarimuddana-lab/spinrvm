@@ -471,7 +471,11 @@ async def admin_get_held_for_review_rides(
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
 
     ride_ids = [r["id"] for r in rides]
-    route_rows = await db.get_rows("ride_routes", {"ride_id": {"$in": ride_ids}}, columns="ride_id,route_quality") if ride_ids else []
+    route_rows = (
+        await db.get_rows("ride_routes", {"ride_id": {"$in": ride_ids}}, columns="ride_id,route_quality")
+        if ride_ids
+        else []
+    )
     validation_by_ride = {
         row["ride_id"]: (row.get("route_quality") or {}).get("gps_route_validation")
         for row in route_rows
@@ -577,26 +581,42 @@ class AdminCancelRideRequest(BaseModel):
     reason: Optional[str] = None
 
 
+_ADMIN_CANCELLABLE_STATUSES = (
+    "scheduled",
+    "searching",
+    "driver_assigned",
+    "driver_accepted",
+    "driver_arrived",
+)
+
+
 @router.post("/rides/{ride_id}/cancel")
 async def admin_cancel_ride(
     ride_id: str,
     body: AdminCancelRideRequest,
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Admin force-cancels an in-flight ride from the live monitoring page.
+    """Admin force-cancels a pre-trip ride from the live monitoring page.
 
-    Terminal states are rejected. Driver (if assigned) is freed so they
-    can immediately accept new requests. Rider + driver both receive a
-    ws ride_cancelled push so their apps reset out of the active-ride
-    flow — the rider's "Finding driver" screen was otherwise stuck
-    showing forever because the UI had no cancel signal.
+    Only pre-trip states are cancellable (see _ADMIN_CANCELLABLE_STATUSES) —
+    an in_progress ride must go through admin_complete_ride instead, so its
+    insurance Period 3 is closed correctly rather than left dangling by a
+    cancel. Driver (if assigned) is freed so they can immediately accept new
+    requests. Rider + driver both receive a ws ride_cancelled push so their
+    apps reset out of the active-ride flow — the rider's "Finding driver"
+    screen was otherwise stuck showing forever because the UI had no cancel
+    signal.
     """
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") in ("completed", "cancelled"):
-        raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
+    status_from = ride.get("status")
+    if status_from not in _ADMIN_CANCELLABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel ride from state '{status_from}'",
+        )
 
     reason = (body.reason or "Cancelled by admin").strip()[:500]
     now = datetime.now(timezone.utc)
@@ -615,8 +635,15 @@ async def admin_cancel_ride(
         "cancelled_by_admin_id": admin_user.get("id"),
     }
     with_38 = {**with_37, "cancelled_by": "admin", "cancellation_type": "admin_cancel"}
+
+    # Conditional update scoped to the status just read — the same
+    # optimistic-lock pattern routes/drivers/ride_flow.py:331 uses for
+    # driver-side accept. 0 rows means the ride changed state (e.g. the
+    # driver accepted/arrived) between our read and this write; blind-writing
+    # `cancelled` over that would silently discard a real state transition.
+    cancel_filter = {"id": ride_id, "status": status_from}
     try:
-        await db_supabase.update_ride(ride_id, with_38)
+        updated = await db_supabase.update_one("rides", cancel_filter, with_38)
     except Exception:
         # DB write fallback path — first attempt failed (mig-38 columns may not
         # exist yet on this DB). Surface to Sentry so we know when/where the
@@ -626,7 +653,7 @@ async def admin_cancel_ride(
             exc_info=True,
         )
         try:
-            await db_supabase.update_ride(ride_id, with_37)
+            updated = await db_supabase.update_one("rides", cancel_filter, with_37)
         except Exception as e37:
             original = getattr(e37, "details", {}).get("original") if hasattr(e37, "details") else None
             logger.error(
@@ -635,12 +662,14 @@ async def admin_cancel_ride(
             )
             raise
 
-    verify = await db_supabase.get_ride(ride_id)
-    if not verify or verify.get("status") != "cancelled":
-        logger.error(f"admin_cancel_ride: silent no-op on {ride_id}")
+    if updated is None:
+        logger.info(
+            f"admin_cancel_ride: ride_state_changed ride_id={ride_id} "
+            f"admin_id={admin_user.get('id')} expected_status={status_from}"
+        )
         raise HTTPException(
-            status_code=500,
-            detail="Cancel did not persist — see backend logs.",
+            status_code=409,
+            detail="Ride state changed before the cancel could be applied — refresh and retry",
         )
 
     driver_user_id: str | None = None
@@ -648,6 +677,7 @@ async def admin_cancel_ride(
     if driver_id:
         try:
             await db_supabase.set_driver_available(driver_id, True)
+            await record_period_transition(driver_id, 1)
         except Exception as e:
             logger.error(
                 f"admin_cancel_ride: could not free driver {driver_id}: {e}",
@@ -714,7 +744,7 @@ async def admin_cancel_ride(
         "ride_cancelled_by_admin",
         "rides",
         ride_id,
-        {"reason": reason, "prior_status": ride.get("status")},
+        {"reason": reason, "prior_status": status_from},
     )
     return {"success": True, "ride_id": ride_id, "status": "cancelled"}
 

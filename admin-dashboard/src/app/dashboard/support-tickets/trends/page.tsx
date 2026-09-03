@@ -22,6 +22,7 @@ import { getDeskTrends, getDeskAgents, ZohoTrends } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import {
     Select,
     SelectContent,
@@ -89,39 +90,41 @@ export default function TrendsPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="flex items-center gap-2 text-2xl font-bold">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         <BarChart3 className="h-6 w-6" /> Ticket Trends
-                    </h1>
-                    <p className="text-sm text-muted-foreground">Volume and breakdowns over time</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <Select value={assignee} onValueChange={setAssignee}>
-                        <SelectTrigger className="w-44"><SelectValue placeholder="Assignee" /></SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All assignees</SelectItem>
-                            {agents.map((a) => (
-                                <SelectItem key={a.id} value={a.id}>
-                                    {`${a.firstName || ""} ${a.lastName || ""}`.trim() || a.emailId || a.id}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                    <Select value={days} onValueChange={setDays}>
-                        <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="7">Last 7 days</SelectItem>
-                            <SelectItem value="14">Last 14 days</SelectItem>
-                            <SelectItem value="30">Last 30 days</SelectItem>
-                            <SelectItem value="90">Last 90 days</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <Button asChild variant="outline">
-                        <Link href="/dashboard/support-tickets"><ArrowLeft className="mr-2 h-4 w-4" /> Back</Link>
-                    </Button>
-                </div>
-            </div>
+                    </span>
+                }
+                description="Volume and breakdowns over time"
+                actions={
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Select value={assignee} onValueChange={setAssignee}>
+                            <SelectTrigger className="w-44"><SelectValue placeholder="Assignee" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All assignees</SelectItem>
+                                {agents.map((a) => (
+                                    <SelectItem key={a.id} value={a.id}>
+                                        {`${a.firstName || ""} ${a.lastName || ""}`.trim() || a.emailId || a.id}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <Select value={days} onValueChange={setDays}>
+                            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="7">Last 7 days</SelectItem>
+                                <SelectItem value="14">Last 14 days</SelectItem>
+                                <SelectItem value="30">Last 30 days</SelectItem>
+                                <SelectItem value="90">Last 90 days</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Button asChild variant="outline">
+                            <Link href="/dashboard/support-tickets"><ArrowLeft className="mr-2 h-4 w-4" /> Back</Link>
+                        </Button>
+                    </div>
+                }
+            />
 
             {loading && <Card><CardContent className="p-6 text-muted-foreground">Loading…</CardContent></Card>}
             {!loading && error && <Card><CardContent className="p-4 text-sm text-destructive">{error}</CardContent></Card>}

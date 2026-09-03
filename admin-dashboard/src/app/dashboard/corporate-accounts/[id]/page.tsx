@@ -22,6 +22,7 @@ import {
     isAdjustmentAmountWithinLimit,
     isAdjustmentNoteValid,
 } from "@/lib/walletAdjustmentSchema";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -323,15 +324,16 @@ export default function CompanyDetailPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                    <Link
-                        href="/dashboard/corporate-accounts"
-                        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-                    >
-                        <ArrowLeft className="h-3 w-3" /> All corporate accounts
-                    </Link>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
+            <PageHeader
+                className="flex items-start justify-between gap-4"
+                title={
+                    <span className="inline-flex items-center gap-3">
+                        <Link
+                            href="/dashboard/corporate-accounts"
+                            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+                        >
+                            <ArrowLeft className="h-3 w-3" /> All corporate accounts
+                        </Link>
                         <Building2 className="h-7 w-7 text-muted-foreground" />
                         {company.legal_name ?? company.name}
                         <Badge
@@ -340,59 +342,62 @@ export default function CompanyDetailPage() {
                         >
                             {company.status.replace("_", " ")}
                         </Badge>
-                    </h1>
-                    {company.legal_name && company.legal_name !== company.name && (
-                        <p className="text-sm text-muted-foreground">
+                    </span>
+                }
+                description={
+                    company.legal_name && company.legal_name !== company.name ? (
+                        <>
                             Trading as <b>{company.name}</b>
-                        </p>
-                    )}
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                    <Link href={`/dashboard/corporate-accounts/${id}/members`}>
-                        <Button variant="outline">
-                            <Users className="mr-2 h-4 w-4" /> Members
-                        </Button>
-                    </Link>
-                    <Link href={`/dashboard/corporate-accounts/${id}/policy`}>
-                        <Button variant="outline">
-                            <ShieldCheck className="mr-2 h-4 w-4" /> Policy
-                        </Button>
-                    </Link>
-                    <Link href={`/dashboard/corporate-accounts/${id}/subscription`}>
-                        <Button variant="outline">
-                            <CreditCard className="mr-2 h-4 w-4" /> Subscription
-                        </Button>
-                    </Link>
-                    {company.status !== "suspended" && company.status !== "closed" && (
-                        <Button
-                            variant="outline"
-                            onClick={() => openTransition("suspend")}
-                            className="text-destructive"
-                        >
-                            <PauseCircle className="mr-2 h-4 w-4" /> Suspend
-                        </Button>
-                    )}
-                    {company.status === "suspended" && (
-                        <Button
-                            onClick={() => openTransition("reactivate")}
-                            // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
-                            className="bg-emerald-600 hover:bg-emerald-700"
-                        >
-                            <PlayCircle className="mr-2 h-4 w-4" /> Reactivate
-                        </Button>
-                    )}
-                    {company.status !== "closed" && (
-                        <Button
-                            variant="outline"
-                            onClick={() => openTransition("close")}
-                            className="text-destructive"
-                        >
-                            <XCircle className="mr-2 h-4 w-4" /> Close
-                        </Button>
-                    )}
-                </div>
-            </div>
+                        </>
+                    ) : undefined
+                }
+                actions={
+                    <div className="flex flex-wrap gap-2">
+                        <Link href={`/dashboard/corporate-accounts/${id}/members`}>
+                            <Button variant="outline">
+                                <Users className="mr-2 h-4 w-4" /> Members
+                            </Button>
+                        </Link>
+                        <Link href={`/dashboard/corporate-accounts/${id}/policy`}>
+                            <Button variant="outline">
+                                <ShieldCheck className="mr-2 h-4 w-4" /> Policy
+                            </Button>
+                        </Link>
+                        <Link href={`/dashboard/corporate-accounts/${id}/subscription`}>
+                            <Button variant="outline">
+                                <CreditCard className="mr-2 h-4 w-4" /> Subscription
+                            </Button>
+                        </Link>
+                        {company.status !== "suspended" && company.status !== "closed" && (
+                            <Button
+                                variant="outline"
+                                onClick={() => openTransition("suspend")}
+                                className="text-destructive"
+                            >
+                                <PauseCircle className="mr-2 h-4 w-4" /> Suspend
+                            </Button>
+                        )}
+                        {company.status === "suspended" && (
+                            <Button
+                                onClick={() => openTransition("reactivate")}
+                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text button; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
+                                className="bg-emerald-600 hover:bg-emerald-700"
+                            >
+                                <PlayCircle className="mr-2 h-4 w-4" /> Reactivate
+                            </Button>
+                        )}
+                        {company.status !== "closed" && (
+                            <Button
+                                variant="outline"
+                                onClick={() => openTransition("close")}
+                                className="text-destructive"
+                            >
+                                <XCircle className="mr-2 h-4 w-4" /> Close
+                            </Button>
+                        )}
+                    </div>
+                }
+            />
 
             <Card>
                 <CardContent className="p-6 space-y-4">

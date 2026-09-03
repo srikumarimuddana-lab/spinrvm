@@ -18,6 +18,7 @@ import {
     type ExpiringDocItem,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import {
     Select,
     SelectContent,
@@ -105,18 +106,17 @@ export default function ExpiringDocsPage() {
 
     return (
         <div className="space-y-4">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                    <h1 className="text-xl font-bold tracking-tight">Expiring Documents</h1>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                        Drivers whose licence, insurance, inspection, or background check expires soon. Nudge them before they get blocked at go-online.
-                    </p>
-                </div>
-                <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
-                    <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
-                    Refresh
-                </Button>
-            </div>
+            <PageHeader
+                className="flex items-start justify-between gap-3 flex-wrap"
+                title="Expiring Documents"
+                description="Drivers whose licence, insurance, inspection, or background check expires soon. Nudge them before they get blocked at go-online."
+                actions={
+                    <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
+                        <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
+                }
+            />
 
             <div className="flex items-center gap-3 flex-wrap">
                 <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card p-1">

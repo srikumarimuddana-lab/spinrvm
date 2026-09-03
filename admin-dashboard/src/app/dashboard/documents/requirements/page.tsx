@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -266,29 +267,30 @@ export default function DocumentRequirementsPage() {
 
     return (
         <div className="space-y-6 p-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <Link href="/dashboard/documents" className="text-muted-foreground hover:text-foreground">
-                        <ArrowLeft className="h-5 w-5" />
-                    </Link>
-                    <FileCheck className="h-6 w-6 text-primary" />
-                    <div>
-                        <h1 className="text-2xl font-bold">Document Requirements</h1>
-                        <p className="text-sm text-muted-foreground">Configure which documents drivers must upload to go online</p>
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-3">
+                        <Link href="/dashboard/documents" className="text-muted-foreground hover:text-foreground">
+                            <ArrowLeft className="h-5 w-5" />
+                        </Link>
+                        <FileCheck className="h-6 w-6 text-primary" />
+                        Document Requirements
+                    </span>
+                }
+                description="Configure which documents drivers must upload to go online"
+                actions={
+                    <div className="flex gap-2">
+                        <Button variant="outline" onClick={load} disabled={loading}>
+                            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                        <Button onClick={openCreate}>
+                            <Plus className="h-4 w-4 mr-2" />
+                            Add Requirement
+                        </Button>
                     </div>
-                </div>
-                <div className="flex gap-2">
-                    <Button variant="outline" onClick={load} disabled={loading}>
-                        <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                    <Button onClick={openCreate}>
-                        <Plus className="h-4 w-4 mr-2" />
-                        Add Requirement
-                    </Button>
-                </div>
-            </div>
+                }
+            />
 
             {/* Stats */}
             <div className="grid grid-cols-3 gap-4">

@@ -20,6 +20,7 @@ import {
     type OrphanedDriverBackfillResult,
     type DriverCreatedAtBackfillResult,
 } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -286,30 +287,32 @@ export default function LegacyDriverImportPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
-            <div>
-                <h1 className="text-2xl font-semibold">Legacy Driver Import (Mongo export)</h1>
-                <p className="text-sm text-muted-foreground">
-                    Import driver profiles from the previous app&apos;s raw MongoDB export
-                    (<span className="font-mono">drivers.csv</span>). A separate population from
-                    the Saskatoon recruitment sheet — see{" "}
-                    <Link href="/dashboard/drivers/import" className="underline">
-                        Bulk Driver Import
-                    </Link>{" "}
-                    for that one. Every newly-created driver here is forced{" "}
-                    <span className="font-mono">needs_review</span>, unverified, and offline
-                    regardless of what the export says — no document files are imported (the
-                    export only has filenames, no images). Once a driver exists here, backfill
-                    their{" "}
-                    <Link href="/dashboard/drivers/legacy-sin-dob-backfill" className="underline">
-                        SIN/DOB
-                    </Link>{" "}
-                    or{" "}
-                    <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
-                        vehicle history
-                    </Link>{" "}
-                    from the same export.
-                </p>
-            </div>
+            <PageHeader
+                title="Legacy Driver Import (Mongo export)"
+                description={
+                    <>
+                        Import driver profiles from the previous app&apos;s raw MongoDB export
+                        (<span className="font-mono">drivers.csv</span>). A separate population from
+                        the Saskatoon recruitment sheet — see{" "}
+                        <Link href="/dashboard/drivers/import" className="underline">
+                            Bulk Driver Import
+                        </Link>{" "}
+                        for that one. Every newly-created driver here is forced{" "}
+                        <span className="font-mono">needs_review</span>, unverified, and offline
+                        regardless of what the export says — no document files are imported (the
+                        export only has filenames, no images). Once a driver exists here, backfill
+                        their{" "}
+                        <Link href="/dashboard/drivers/legacy-sin-dob-backfill" className="underline">
+                            SIN/DOB
+                        </Link>{" "}
+                        or{" "}
+                        <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
+                            vehicle history
+                        </Link>{" "}
+                        from the same export.
+                    </>
+                }
+            />
 
             <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

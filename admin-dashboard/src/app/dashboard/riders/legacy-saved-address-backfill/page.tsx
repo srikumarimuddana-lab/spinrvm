@@ -34,6 +34,7 @@ import {
     type SavedAddressBackfillReportItem,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -258,19 +259,21 @@ export default function LegacySavedAddressBackfillPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
-            <div>
-                <h1 className="text-2xl font-semibold">Legacy Saved-Address Backfill</h1>
-                <p className="text-sm text-muted-foreground">
-                    Backfill rider <span className="font-mono">saved_addresses</span> — the same
-                    self-service &quot;home&quot;/&quot;work&quot; address book riders already use — from
-                    the previous app&apos;s raw Mongo export, for riders already in{" "}
-                    <Link href="/dashboard/records?tab=bulk-operations" className="underline">
-                        Bulk Rider Import
-                    </Link>
-                    . Only rows within a Saskatchewan bounding box are considered; every other row
-                    is excluded automatically, not imported and flagged for review.
-                </p>
-            </div>
+            <PageHeader
+                title="Legacy Saved-Address Backfill"
+                description={
+                    <>
+                        Backfill rider <span className="font-mono">saved_addresses</span> — the same
+                        self-service &quot;home&quot;/&quot;work&quot; address book riders already use — from
+                        the previous app&apos;s raw Mongo export, for riders already in{" "}
+                        <Link href="/dashboard/records?tab=bulk-operations" className="underline">
+                            Bulk Rider Import
+                        </Link>
+                        . Only rows within a Saskatchewan bounding box are considered; every other row
+                        is excluded automatically, not imported and flagged for review.
+                    </>
+                }
+            />
 
             <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

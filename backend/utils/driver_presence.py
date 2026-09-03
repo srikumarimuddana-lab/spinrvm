@@ -87,13 +87,28 @@ async def is_present(driver_id: str) -> bool:
 
 
 async def clear_presence(driver_id: str) -> None:
-    """Delete this driver's presence key — call on explicit sign-out / go-offline."""
+    """Delete this driver's presence key — call on explicit sign-out / go-offline.
+
+    Also purges the driver from the H3 dispatch index (``on_driver_offline``)
+    — presence and the geo index must agree on who's reachable, and a driver
+    leaving presence must not leave a stale index hit behind. This is the
+    single choke point every explicit sign-out/go-offline/force-offline path
+    already calls, so wiring it here covers all of them. Harmless no-op
+    while the H3 feature is dark (writes never populated a record for this
+    driver in the first place); safe to call even for a driver never
+    written to the index.
+    """
     if not driver_id:
         return
     try:
         await redis_delete(_key(driver_id))
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(f"[presence] clear_presence({driver_id}) failed: {exc}", exc_info=True)
+    try:
+        from .h3_location_index import on_driver_offline
+    except ImportError:  # pragma: no cover
+        from utils.h3_location_index import on_driver_offline  # type: ignore
+    await on_driver_offline(driver_id)
 
 
 async def present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, bool]:

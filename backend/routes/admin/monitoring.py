@@ -633,6 +633,52 @@ async def flush_redis_prefix(
     }
 
 
+@router.post("/dispatch-geo/rebuild")
+async def rebuild_dispatch_geo_index(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Force-rebuild the Redis H3 dispatch geo-index from Postgres.
+
+    Bypasses the reconciler's leader lock — an operator explicitly asked for
+    this rebuild, so it must run on this replica now rather than possibly
+    lose the race to whichever replica currently holds the 2-minute
+    background lock (see `utils/h3_index_reconciler.py`, ``_tick(force=True)``).
+    Safe to call anytime: the reconciler only ever upserts current online/
+    available drivers and marks readiness — it never deletes cell keys, so a
+    concurrent live GPS write can't be clobbered by a rebuild in flight.
+    """
+    try:
+        from ...utils.h3_index_reconciler import _tick
+    except ImportError:
+        from utils.h3_index_reconciler import _tick  # type: ignore
+
+    try:
+        result = await _tick(force=True)
+    except Exception as exc:
+        logger.error(
+            "dispatch-geo index rebuild failed",
+            exc_info=True,
+            extra={"domain": "dispatch", "admin_id": current_admin.get("id")},
+        )
+        await log_admin_action(
+            current_admin,
+            "dispatch_geo_rebuild",
+            "h3_index",
+            "rebuild",
+            {"outcome": "failure", "error": str(exc)},
+        )
+        raise HTTPException(status_code=503, detail="Dispatch geo-index rebuild failed; retry.") from exc
+
+    await log_admin_action(
+        current_admin,
+        "dispatch_geo_rebuild",
+        "h3_index",
+        "rebuild",
+        {"outcome": "success", **result},
+    )
+    return {"admin_id": current_admin.get("id"), **result}
+
+
 @router.get("/websockets")
 async def get_websocket_health(
     current_admin: dict = Depends(get_admin_user),

@@ -5,7 +5,7 @@ import { MonitoringRide } from "./types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Car, CheckCircle, ChevronRight, Copy, Loader2, MapPin, Phone, XCircle } from "lucide-react";
+import { Car, CheckCircle, ChevronRight, Copy, Loader2, MapPin, Phone, X, XCircle } from "lucide-react";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 
 interface RidePanelProps {
@@ -13,6 +13,10 @@ interface RidePanelProps {
     onDriverClick: (driverId: string) => void;
     onCancelRide: (rideId: string) => void;
     onCompleteRide?: (rideId: string) => Promise<void>;
+    /** Renders an inline header close button when provided — matches the
+     *  Drivers/Safety Sheet panels' convention (Button ghost icon-sm in the
+     *  header row) rather than a floating absolute-positioned X. */
+    onClose?: () => void;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -45,7 +49,7 @@ const STATUS_QUIET_VARIANTS: Record<string, "outline-warning" | "outline" | "out
     in_progress: "outline-success",
 };
 
-export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }: RidePanelProps) {
+export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide, onClose }: RidePanelProps) {
     const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
     const currentStepIdx = STATUS_STEPS.indexOf(ride.status);
     const elapsed = Math.floor(
@@ -85,9 +89,16 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                         </Badge>
                     )}
                 </div>
-                {ride.is_corporate && (
-                    <Badge variant="outline" className="text-xs">Corporate</Badge>
-                )}
+                <div className="flex items-center gap-2">
+                    {ride.is_corporate && (
+                        <Badge variant="outline" className="text-xs">Corporate</Badge>
+                    )}
+                    {onClose && (
+                        <Button variant="ghost" size="icon-sm" aria-label="Close ride panel" onClick={onClose}>
+                            <X className="h-4 w-4" />
+                        </Button>
+                    )}
+                </div>
             </div>
 
             <div className="space-y-4 p-4">

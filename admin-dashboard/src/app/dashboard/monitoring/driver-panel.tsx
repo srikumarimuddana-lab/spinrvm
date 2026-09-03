@@ -8,16 +8,20 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ExternalLink, Flag, Phone, Star } from "lucide-react";
+import { ExternalLink, Flag, Phone, Star, X } from "lucide-react";
 import Link from "next/link";
 import { getDriverRides, getDriverDocuments } from "@/lib/api";
 
 interface DriverPanelProps {
     driver: MonitoringDriver;
     onRideClick: (rideId: string) => void;
+    /** Renders an inline header close button when provided — matches the
+     *  Drivers/Safety Sheet panels' convention (Button ghost icon-sm in the
+     *  header row) rather than a floating absolute-positioned X. */
+    onClose?: () => void;
 }
 
-export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
+export function DriverPanel({ driver, onRideClick, onClose }: DriverPanelProps) {
     const { toast } = useToast();
     const [rides, setRides] = useState<any[]>([]);
     const [docs, setDocs] = useState<any[]>([]);
@@ -76,6 +80,11 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                         </Badge>
                     )}
                 </div>
+                {onClose && (
+                    <Button variant="ghost" size="icon-sm" aria-label="Close driver panel" onClick={onClose}>
+                        <X className="h-4 w-4" />
+                    </Button>
+                )}
             </div>
 
             <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden">

@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
-import { Radio, X } from "lucide-react";
+import { Radio } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -13,6 +13,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -793,41 +794,47 @@ export default function MonitoringPage() {
           )}
         </div>
 
-        {/* ── Right: Detail panel ──────────────────────────────────── */}
-        <div className="w-72 shrink-0 overflow-hidden border-l border-border">
-          {selected === null ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-              <p className="text-sm font-medium">No selection</p>
-              <p className="text-xs text-muted-foreground">
-                Click a driver marker or a ride in the list to view live details.
-              </p>
-            </div>
-          ) : selected.type === "driver" && selectedDriver ? (
-            <div className="relative h-full">
-              <button
-                onClick={() => { setSelected(null); setSelectedDriver(null); }}
-                className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
-                aria-label="Close driver panel"
-              >
-                <X className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
+      </div>
+
+      {/* ── Detail panel (slide-over) ───────────────────────────────
+          Was a permanently-reserved 3rd column (w-72, always taking up
+          screen width whether or not anything was selected, with its own
+          "No selection" filler state). Converted to the same Sheet
+          slide-over pattern already used by Drivers/Safety: the map now
+          gets the full width by default, and the panel only appears —
+          overlaying the map — once something is actually selected. */}
+      <Sheet
+        open={selected !== null}
+        onOpenChange={(open) => {
+          if (open) return;
+          setSelected(null);
+          setSelectedDriver(null);
+          setSelectedRide(null);
+        }}
+      >
+        <SheetContent
+          side="right"
+          showCloseButton={false}
+          className="flex w-full flex-col overflow-hidden p-0 sm:w-[420px] sm:max-w-none"
+          aria-describedby={undefined}
+        >
+          <SheetTitle className="sr-only">
+            {selected?.type === "driver" ? "Driver details" : "Ride details"}
+          </SheetTitle>
+          <SheetDescription className="sr-only">
+            Live details for the selected {selected?.type === "driver" ? "driver" : "ride"}.
+          </SheetDescription>
+          {selected?.type === "driver" && selectedDriver ? (
               <DriverPanel
                 driver={selectedDriver}
                 onRideClick={handleSelectRide}
+                onClose={() => { setSelected(null); setSelectedDriver(null); }}
               />
-            </div>
-          ) : selected.type === "ride" && selectedRide ? (
-            <div className="relative h-full">
-              <button
-                onClick={() => { setSelected(null); setSelectedRide(null); }}
-                className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
-                aria-label="Close ride panel"
-              >
-                <X className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
+          ) : selected?.type === "ride" && selectedRide ? (
               <RidePanel
                 ride={selectedRide}
                 onDriverClick={handleSelectDriver}
+                onClose={() => { setSelected(null); setSelectedRide(null); }}
                 onCancelRide={(id) => {
                   setPendingCancelId(id);
                   setCancelReason("Cancelled by admin");
@@ -847,10 +854,9 @@ export default function MonitoringPage() {
                   }
                 }}
               />
-            </div>
           ) : null}
-        </div>
-      </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Cancel ride dialog */}
       <Dialog open={cancelDialogOpen} onOpenChange={(open) => { if (!open) setCancelDialogOpen(false); }}>

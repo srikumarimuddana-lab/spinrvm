@@ -128,8 +128,8 @@ export default function ComplaintsTab() {
                             <TableCell><Badge className={`text-[10px] ${(S_CFG[c.status] || S_CFG.open).c}`}>{(S_CFG[c.status] || S_CFG.open).l}</Badge></TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(c.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(c); setResolution(""); }}><Eye className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(c.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="View complaint" onClick={(e) => { e.stopPropagation(); setSelected(c); setResolution(""); }}><Eye className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Delete complaint" onClick={(e) => { e.stopPropagation(); setDeleteTarget(c.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
@@ -150,7 +150,7 @@ export default function ComplaintsTab() {
                         <div><Label className="text-[10px] text-muted-foreground">Description</Label><div className="rounded-lg bg-muted/50 p-2.5 text-xs mt-1">{selected.description}</div></div>
                         {selected.resolution && <div><Label className="text-[10px] text-muted-foreground">Resolution</Label><div className="rounded-lg bg-primary/5 border border-primary/10 p-2.5 text-xs mt-1">{selected.resolution}</div></div>}
                         {(selected.status === "open" || selected.status === "investigating") && (<>
-                            <div className="space-y-1.5"><Label className="text-xs">Resolution Notes</Label><Textarea placeholder="Notes..." value={resolution} onChange={(e) => setResolution(e.target.value)} rows={2} /></div>
+                            <div className="space-y-1.5"><Label htmlFor="complaint-resolution-notes" className="text-xs">Resolution Notes</Label><Textarea id="complaint-resolution-notes" placeholder="Notes..." value={resolution} onChange={(e) => setResolution(e.target.value)} rows={2} /></div>
                             <div className="flex gap-2">
                                 {/* eslint-disable-next-line no-restricted-syntax -- solid-fill success button with white text; --success fails WCAG AA contrast in dark mode (#2816) */}
                                 <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleResolve("resolved")}><CheckCircle className="h-3.5 w-3.5 mr-1.5" />Resolve</Button>
@@ -165,12 +165,12 @@ export default function ComplaintsTab() {
             <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) setDialogOpen(false); }}>
                 <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">File Complaint</DialogTitle></DialogHeader>
                     <div className="space-y-3">
-                        <div className="space-y-1.5"><Label className="text-xs">Ride ID *</Label><Input placeholder="Enter ride ID" value={form.ride_id} onChange={(e) => setForm({ ...form, ride_id: e.target.value })} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="complaint-ride-id" className="text-xs">Ride ID *</Label><Input id="complaint-ride-id" placeholder="Enter ride ID" value={form.ride_id} onChange={(e) => setForm({ ...form, ride_id: e.target.value })} /></div>
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1.5"><Label className="text-xs">Against</Label><Select value={form.against_type} onValueChange={(v) => setForm({ ...form, against_type: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="driver">Driver</SelectItem><SelectItem value="rider">Rider</SelectItem></SelectContent></Select></div>
-                            <div className="space-y-1.5"><Label className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{CATS.map((c) => <SelectItem key={c} value={c} className="capitalize">{c.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
+                            <div className="space-y-1.5"><Label htmlFor="complaint-against" className="text-xs">Against</Label><Select value={form.against_type} onValueChange={(v) => setForm({ ...form, against_type: v })}><SelectTrigger id="complaint-against"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="driver">Driver</SelectItem><SelectItem value="rider">Rider</SelectItem></SelectContent></Select></div>
+                            <div className="space-y-1.5"><Label htmlFor="complaint-category" className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger id="complaint-category"><SelectValue /></SelectTrigger><SelectContent>{CATS.map((c) => <SelectItem key={c} value={c} className="capitalize">{c.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
                         </div>
-                        <div className="space-y-1.5"><Label className="text-xs">Description *</Label><Textarea placeholder="Describe..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="complaint-description" className="text-xs">Description *</Label><Textarea id="complaint-description" placeholder="Describe..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} /></div>
                         <ServiceAreaSelect value={form.service_area_id} onChange={(v) => setForm({ ...form, service_area_id: v })} areas={areas} />
                         <Button className="w-full" size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Filing..." : "File Complaint"}</Button>
                     </div>

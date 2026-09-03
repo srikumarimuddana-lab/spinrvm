@@ -17,10 +17,12 @@
 ### T1: Admin force-cancel doesn't guard ride state or close the insurance period
 **Finding:** `update_ride`'s admin force-cancel path has no status predicate — only `completed`/`cancelled` are rejected. An admin can force-cancel a ride that's `in_progress`. `record_period_transition` only fires on force-*complete*, never on force-*cancel*, so an insurance-period row started at `driver_assigned`/`in_progress` never gets its `ended_at` set when the ride is force-cancelled admin-side. Test suite has zero coverage of the `in_progress` force-cancel case.
 **Why P0:** direct violation of AGENTS.md's insurance-period rules — "every period transition is logged... append-only" implies transitions must actually close, and per CLAUDE.md's ride state machine, `in_progress` should never legally reach `cancelled` at all (only `completed`). This finding suggests the admin path bypasses that invariant entirely.
+**Product decision (confirmed by Kiran 2026-09-03):** admin force-cancel of an `in_progress` ride is a legitimate emergency path (e.g. safety incident, driver going dark mid-trip) and stays allowed. Do NOT block it with a state-machine guard. The fix is entirely about making sure the insurance period actually closes when it happens — right now it silently doesn't, which is the real compliance gap.
+
 **Scope:**
-1. Add a `_require_ride_in_state()` guard (per CLAUDE.md convention) to the admin force-cancel handler — reject `in_progress` outright, matching the documented state machine (`in_progress` → `completed` only).
-2. If product intent is that admin force-cancel of an in-progress ride is a legitimate emergency path (verify with Pandi/Lakshmi before assuming either way — this is a real product question, not just a bug), then instead: wire `record_period_transition` into the force-cancel handler so the open insurance period always closes, with `ended_at` and a reason code.
-3. Add test coverage for both the `in_progress` guard-rejection case and (if applicable) the force-cancel-closes-period case, in `test_ride_state_machine.py` per CLAUDE.md's testing conventions.
+1. Wire `record_period_transition` into the admin force-cancel handler so ANY force-cancel — regardless of ride state, but especially `in_progress` — always closes the currently-open insurance period, with `ended_at` set and a reason code (e.g. `admin_force_cancel`) distinct from a normal completion close. Append-only per AGENTS.md's insurance-period rules — never mutate an existing period row, only close it.
+2. Confirm this doesn't silently create a second "close" if force-cancel is called on a ride whose period is already closed (e.g. double-submit) — the RPC/handler should be idempotent, not throw or double-write.
+3. Add test coverage in `test_ride_state_machine.py` for: force-cancel on `in_progress` correctly closes the open period; force-cancel on a ride with no open period is a safe no-op; the reason code is recorded correctly.
 **Owner suggestion:** Surya (backend) implements, Divya (Security & Compliance) reviews — this is exactly her charter.
 
 ---

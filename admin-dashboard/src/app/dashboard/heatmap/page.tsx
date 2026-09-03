@@ -381,9 +381,9 @@ export default function HeatMapPage() {
 
                         {/* Date Range */}
                         <div className="space-y-2">
-                            <Label>Date Range</Label>
+                            <Label htmlFor="heatmap-date-range">Date Range</Label>
                             <Select value={dateRange} onValueChange={setDateRange}>
-                                <SelectTrigger>
+                                <SelectTrigger id="heatmap-date-range">
                                     <SelectValue placeholder="Select range" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -398,9 +398,9 @@ export default function HeatMapPage() {
 
                         {/* Service Area */}
                         <div className="space-y-2">
-                            <Label>Service Area</Label>
+                            <Label htmlFor="heatmap-service-area">Service Area</Label>
                             <Select value={serviceAreaId} onValueChange={setServiceAreaId}>
-                                <SelectTrigger>
+                                <SelectTrigger id="heatmap-service-area">
                                     <SelectValue placeholder="All Areas" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -416,9 +416,9 @@ export default function HeatMapPage() {
 
                         {/* Group By */}
                         <div className="space-y-2">
-                            <Label>Show</Label>
+                            <Label htmlFor="heatmap-group-by">Show</Label>
                             <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
-                                <SelectTrigger>
+                                <SelectTrigger id="heatmap-group-by">
                                     <SelectValue placeholder="Select" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -433,16 +433,18 @@ export default function HeatMapPage() {
                     {/* Custom Date Range */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                         <div className="space-y-2">
-                            <Label>Start Date (Custom)</Label>
+                            <Label htmlFor="heatmap-start-date">Start Date (Custom)</Label>
                             <Input
+                                id="heatmap-start-date"
                                 type="date"
                                 value={startDate}
                                 onChange={(e) => setStartDate(e.target.value)}
                             />
                         </div>
                         <div className="space-y-2">
-                            <Label>End Date (Custom)</Label>
+                            <Label htmlFor="heatmap-end-date">End Date (Custom)</Label>
                             <Input
+                                id="heatmap-end-date"
                                 type="date"
                                 value={endDate}
                                 onChange={(e) => setEndDate(e.target.value)}

@@ -482,9 +482,9 @@ export default function QuestsPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Type</Label>
+                <Label htmlFor="quest-type">Type</Label>
                 <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="quest-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {CREATABLE_QUEST_TYPES.map((t) => (
                       <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
@@ -503,9 +503,9 @@ export default function QuestsPage() {
                 <Input id="reward" type="number" value={form.reward_amount} onChange={(e) => setForm({ ...form, reward_amount: Number(e.target.value) })} />
               </div>
               <div>
-                <Label>Reward Type</Label>
+                <Label htmlFor="quest-reward-type">Reward Type</Label>
                 <Select value={form.reward_type} onValueChange={(v) => setForm({ ...form, reward_type: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="quest-reward-type"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="wallet_credit">Wallet Credit</SelectItem>
                     <SelectItem value="cash">Cash</SelectItem>
@@ -534,9 +534,9 @@ export default function QuestsPage() {
               </div>
             </div>
             <div>
-              <Label>Service Area</Label>
+              <Label htmlFor="quest-service-area">Service Area</Label>
               <Select value={form.service_area_id} onValueChange={(v) => setForm({ ...form, service_area_id: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id="quest-service-area"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL_AREAS}>All areas</SelectItem>
                   {serviceAreas.map((a) => (

@@ -102,7 +102,7 @@ fpdf2>=2.8.8
 #   D00033 vehicle details) rather than fpdf2's from-scratch generation —
 #   fpdf2 cannot fill an existing government-issued fillable form.
 openpyxl>=3.1.5
-pypdf>=6.0.0
+pypdf>=6.16.1
 
 # Compliance & Tax Reporting module (backend/utils/report_branding.py):
 # python-docx generates Spinr-branded Word reports for compliance/regulatory

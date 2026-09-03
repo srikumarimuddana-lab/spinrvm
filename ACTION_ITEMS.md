@@ -17352,6 +17352,53 @@ how much they de-risk a public launch._
   is real monitoring: a human picks a vendor, creates the account, wires the
   actual checks, and creates a real PagerDuty service (the integration key in
   the YAML is a placeholder string, never a real credential).
+- [ ] **E13. Leading-indicator ops monitoring (certs, domain, renewals, secret
+  rotation, capacity)** — found via a 2026-09-03 gap sweep after
+  `api-spinr.spinr.ca` went unreachable in production: its Fly-managed TLS
+  certificate was never provisioned as its own hostname (only an orphaned
+  `*.spinr.ca` wildcard existed, stuck "Pending validation" for weeks,
+  nobody watching it) — confirmed by repo-wide grep that **nothing** checked
+  cert expiry, domain registration expiry, vendor/plan renewal dates, or
+  secret rotation age anywhere in this repo before this entry. Landed
+  2026-09-03 (see `docs/change-log/2026-09-03-e5-leading-indicator-monitoring.md`
+  for the full Change Impact Log):
+  - `.github/workflows/cert-domain-monitor.yml` — daily, checks live TLS
+    cert expiry (openssl, all production hostnames) + domain WHOIS expiry
+    for `spinr.ca`; idempotent tracked GitHub issue, same pattern as
+    `subprocessor-monitor.yml`. **Known limitation, stated in the workflow's
+    own comments**: this catches an issued-but-expiring cert, not a cert
+    stuck un-issued like the one that actually caused the outage — that
+    failure mode needs E4's live-reachability probes, still not live.
+  - `docs/runbooks/renewal-calendar.md` + `.github/workflows/renewal-calendar-monitor.yml`
+    — vendor/plan renewal-date tracker (Fly, Railway, Supabase, Cloudflare,
+    domain registrar, Vercel, Expo, Sentry, GitHub, etc.) + weekly lead-time
+    alert. **All dates are TBD placeholders** — no vendor account access
+    existed to fill in real dates; a human must audit and fill these in
+    before the check covers anything.
+  - `docs/runbooks/secret-rotation.md` + `.github/workflows/secret-rotation-monitor.yml`
+    — rotation-cadence tracker for every credential found in
+    `backend/core/config.py`'s `Settings` and the deploy workflows'
+    `secrets.*` usage (JWT_SECRET, ADMIN_PASSWORD, SUPABASE_SERVICE_ROLE_KEY,
+    FIREBASE_SERVICE_ACCOUNT_JSON, Stripe/Twilio/Maps keys, FLY_API_TOKEN,
+    RAILWAY_TOKEN, VERCEL_TOKEN, EXPO_TOKEN) + monthly overdue-rotation
+    alert. Metadata only (dates/cadence) — never a secret value. **All
+    "Last rotated" dates are TBD** — same caveat as the renewal calendar.
+  - `.github/workflows/supabase-capacity-monitor.yml` — optional, gated
+    behind `SUPABASE_ACCESS_TOKEN`/`SUPABASE_PROJECT_REF` (unset today, so
+    currently a no-op every run); once configured, polls DB size via the
+    Supabase Management API as an approximation of disk-usage percentage.
+    Explicitly documented as an *approximation*, not a direct read of
+    Supabase's real disk ceiling (see the workflow's own limitation
+    comment and `capacity-scaling.md` §9).
+  - `docs/runbooks/synthetic-monitoring.md` extended with a stack-wide
+    health-check coverage audit table (admin-dashboard, mobile apps, Redis,
+    Supabase, Fly/Railway) and a flag that `capacity_watchdog`'s
+    `ALERT_WEBHOOK_URL`/`ALERT_EMAIL_TO` wiring could not be confirmed from
+    this session (no Fly access) — needs a human check.
+  **Still open after this entry**: every TBD date in the two new trackers,
+  confirming `capacity_watchdog`'s alert secrets are actually set, deciding
+  whether to activate the optional Supabase capacity check, and E4 itself
+  (still no live external synthetic monitor).
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated

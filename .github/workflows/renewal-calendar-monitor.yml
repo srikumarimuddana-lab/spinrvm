@@ -1,0 +1,183 @@
+name: Renewal calendar monitor
+
+# Weekly check over docs/runbooks/renewal-calendar.md's "Renewal calendar"
+# table. Complements subprocessor-monitor.yml (which only enforces that the
+# vendor *compliance* doc gets reviewed every 90 days) — this checks actual
+# renewal DATES for approaching lapses, a different failure mode from a
+# stale review.
+#
+# Pattern mirrors subprocessor-monitor.yml: scheduled, idempotent single
+# tracked issue, no external service required.
+
+on:
+  schedule:
+    # Weekly Monday 13:30 UTC — 30 min after subprocessor-monitor.yml so
+    # the two don't race on issue-list API calls; otherwise unrelated.
+    - cron: "30 13 * * 1"
+  workflow_dispatch:
+    inputs:
+      force_open_issue:
+        description: "Open/update the tracked issue even if nothing is due (manual override, for testing)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  CALENDAR_FILE: "docs/runbooks/renewal-calendar.md"
+  WARN_DAYS: "30"
+  ISSUE_LABEL: "renewal-calendar-monitor"
+
+jobs:
+  check-and-notify:
+    name: Renewal calendar check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Parse renewal calendar table
+        id: parse
+        run: |
+          python3 <<'PYEOF'
+          import re, os, datetime
+
+          calendar_file = os.environ["CALENDAR_FILE"]
+          warn_days = int(os.environ["WARN_DAYS"])
+          today = datetime.date.today()
+
+          with open(calendar_file) as f:
+              lines = f.readlines()
+
+          # Find the "## Renewal calendar" table specifically (there may be
+          # other tables in the doc — e.g. none today, but don't assume).
+          in_table = False
+          header_seen = False
+          due = []      # (vendor, date, days_left)
+          overdue = []  # same shape, days_left < 0
+          tbd = []      # vendor names with no parseable date
+
+          for line in lines:
+              if line.strip() == "## Renewal calendar":
+                  in_table = True
+                  continue
+              if in_table and line.startswith("## "):
+                  break  # left the section
+              if not in_table or not line.strip().startswith("|"):
+                  continue
+              cells = [c.strip() for c in line.strip().strip("|").split("|")]
+              if len(cells) < 3:
+                  continue
+              if cells[0] == "Vendor":
+                  header_seen = True
+                  continue
+              if not header_seen or set(cells[0]) <= {"-", " "}:
+                  continue  # separator row or stray line
+
+              vendor, service, renewal_date = cells[0], cells[1], cells[2]
+              if renewal_date in ("TBD", "N/A", "") or renewal_date.startswith("N/A"):
+                  if renewal_date == "TBD":
+                      tbd.append(f"{vendor} ({service})")
+                  continue
+
+              parsed = None
+              for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y"):
+                  try:
+                      parsed = datetime.datetime.strptime(renewal_date, fmt).date()
+                      break
+                  except ValueError:
+                      continue
+              if parsed is None:
+                  tbd.append(f"{vendor} ({service}) — unparseable date '{renewal_date}'")
+                  continue
+
+              days_left = (parsed - today).days
+              if days_left < 0:
+                  overdue.append((vendor, service, parsed, days_left))
+              elif days_left <= warn_days:
+                  due.append((vendor, service, parsed, days_left))
+
+          def fmt_rows(rows):
+              return "\n".join(f"- **{v}** ({s}): {d.isoformat()} ({dl} days)" for v, s, d, dl in rows)
+
+          findings = []
+          if overdue:
+              findings.append("### 🔴 OVERDUE\n" + fmt_rows(overdue))
+          if due:
+              findings.append(f"### 🟡 Due within {warn_days} days\n" + fmt_rows(due))
+          if tbd:
+              findings.append("### ⚪ Not yet tracked (TBD/unparseable — audit gap, not a confirmed problem)\n" + "\n".join(f"- {t}" for t in tbd))
+
+          summary = "\n\n".join(findings) if findings else "All tracked renewal dates are more than the warn threshold away."
+
+          any_alert = "true" if (overdue or due) else "false"
+
+          gh_output = os.environ["GITHUB_OUTPUT"]
+          with open(gh_output, "a") as f:
+              f.write("findings<<EOF\n")
+              f.write(summary + "\n")
+              f.write("EOF\n")
+              f.write(f"any_alert={any_alert}\n")
+          PYEOF
+
+      - name: Check for existing open tracked issue
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --label "${ISSUE_LABEL}" \
+            --json number \
+            --jq '.[0].number // empty')
+          echo "existing=${existing}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update tracked issue
+        if: steps.parse.outputs.any_alert == 'true' || github.event.inputs.force_open_issue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          # Vendor/service renewal calendar — action needed
+
+          Automated weekly check (\`.github/workflows/renewal-calendar-monitor.yml\`)
+          over \`docs/runbooks/renewal-calendar.md\`.
+
+          ${{ steps.parse.outputs.findings }}
+
+          ## Next step
+          Confirm the renewal with the vendor/contract owner listed in the
+          calendar row and update the date in \`docs/runbooks/renewal-calendar.md\`
+          once handled — this issue re-opens/updates on the next scheduled run
+          until the date in the doc moves past the warn threshold.
+
+          ---
+          *Auto-generated by \`.github/workflows/renewal-calendar-monitor.yml\`.*
+          EOF
+          )
+
+          existing="${{ steps.existing.outputs.existing }}"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "${{ github.repository }}" --body "$body" --title "Renewal calendar — action needed ($(date -u +%Y-%m-%d))"
+            echo "Updated existing issue #${existing}"
+          else
+            gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "Renewal calendar — action needed ($(date -u +%Y-%m-%d))" \
+              --body "$body" \
+              --label "${ISSUE_LABEL}"
+          fi
+
+      - name: No-op summary
+        if: steps.parse.outputs.any_alert != 'true' && github.event.inputs.force_open_issue != 'true'
+        run: |
+          echo "✅ No renewals due within ${WARN_DAYS} days."
+          echo "${{ steps.parse.outputs.findings }}"

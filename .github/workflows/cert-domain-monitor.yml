@@ -1,0 +1,260 @@
+name: Certificate + domain expiry monitor
+
+# Leading-indicator check for the class of outage documented in
+# docs/change-log/2026-09-03-e5-leading-indicator-monitoring.md: on
+# 2026-09-02 api-spinr.spinr.ca went unreachable (SSLHandshakeException on
+# mobile clients) because its Fly-managed TLS certificate was never
+# provisioned as its own hostname — only an orphaned *.spinr.ca wildcard
+# existed, stuck "Pending validation" for weeks with nobody watching it.
+#
+# Nothing in this repo previously checked certificate or domain expiry at
+# all (confirmed by repo-wide grep — see the change-log above). This
+# workflow closes that gap using only tools already on the ubuntu-latest
+# runner (openssl, whois) — no new vendor account, no new paid service.
+#
+# What this DOES catch: a certificate that is issued and live but
+# approaching (or past) its expiry date, and a domain registration
+# approaching (or past) its expiry date.
+# What this does NOT catch: a certificate stuck in "Pending validation"
+# that was never issued at all (exactly what caused the 2026-09-02
+# outage) — openssl can only inspect a cert that is actually being served.
+# That failure mode is a TLS *handshake* failure, not an expiry date, and
+# needs a live reachability probe (ACTION_ITEMS.md E4 / synthetic-checks.yaml)
+# to catch — this workflow is a complement to E4, not a replacement.
+#
+# Pattern mirrors .github/workflows/subprocessor-monitor.yml: scheduled,
+# idempotent (one open tracked issue at a time, updated in place rather
+# than spammed), no external service required to function.
+
+on:
+  schedule:
+    # Daily 12:00 UTC (~06:00 CST / 07:00 CDT) — well before business hours
+    # so a finding is actionable same-day, not discovered overnight.
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+    inputs:
+      force_open_issue:
+        description: "Open/update the tracked issue even if everything is healthy (manual override, for testing)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  # Hostnames whose *live, currently-served* TLS certificate is checked.
+  # Space-separated; each must actually be resolvable and serving TLS today
+  # — add a new production hostname here the same day it starts serving
+  # traffic, not after. Sourced from the Cloudflare DNS zone for spinr.ca
+  # (confirmed 2026-09-03): the two CNAMEs that front live services
+  # (Fly backend, Vercel admin dashboard) plus the two apex/legacy A
+  # records that still resolve independently.
+  TLS_HOSTS: "api-spinr.spinr.ca admin-spinr.spinr.ca api.spinr.ca admin.spinr.ca spinr.ca"
+  # Domain registration(s) to WHOIS-check. Just the one registered domain —
+  # subdomains don't have independent registration expiry.
+  WHOIS_DOMAINS: "spinr.ca"
+  # Alert thresholds, in days. CERT_WARN_DAYS intentionally starts wide
+  # (30d) because Let's Encrypt certs (see Fly's issuer in the cert we just
+  # debugged) are only valid 90 days and auto-renew around day 60 — a
+  # healthy cert should never actually reach 30 days out. Seeing this
+  # alert fire means auto-renewal already failed, not "reminder to plan."
+  CERT_WARN_DAYS: "30"
+  CERT_CRITICAL_DAYS: "7"
+  DOMAIN_WARN_DAYS: "60"
+  DOMAIN_CRITICAL_DAYS: "14"
+  ISSUE_LABEL: "cert-domain-monitor"
+
+jobs:
+  check-and-notify:
+    name: Certificate + domain expiry check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install whois
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq whois
+
+      - name: Check TLS certificate expiry for each host
+        id: certs
+        run: |
+          set -uo pipefail  # not -e: one host's failure must not abort the rest
+          findings=""
+          any_critical="false"
+          any_warn="false"
+
+          for host in ${TLS_HOSTS}; do
+            echo "--- ${host} ---"
+            # -servername sets SNI so a host fronted by a shared IP (Cloudflare,
+            # Vercel) gets the cert for THIS hostname, not whatever cert happens
+            # to answer first on that IP.
+            cert_dates=$(echo | timeout 10 openssl s_client -connect "${host}:443" -servername "${host}" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null || true)
+
+            if [ -z "$cert_dates" ]; then
+              echo "  ⚠️  Could not retrieve certificate (handshake failed, timeout, or connection refused)"
+              findings="${findings}\n- **${host}**: 🔴 CRITICAL — TLS handshake failed entirely (no certificate retrieved). This is the exact failure mode from the 2026-09-02 outage — check the Fly/Cloudflare certificate dashboard immediately."
+              any_critical="true"
+              continue
+            fi
+
+            end_date=$(echo "$cert_dates" | sed 's/notAfter=//')
+            end_epoch=$(date -d "$end_date" +%s 2>/dev/null || echo "0")
+            now_epoch=$(date +%s)
+            days_left=$(( (end_epoch - now_epoch) / 86400 ))
+
+            echo "  Expires: ${end_date} (${days_left} days)"
+
+            if [ "$days_left" -lt 0 ]; then
+              findings="${findings}\n- **${host}**: 🔴 CRITICAL — certificate EXPIRED ${end_date} (${days_left} days)"
+              any_critical="true"
+            elif [ "$days_left" -le "${CERT_CRITICAL_DAYS}" ]; then
+              findings="${findings}\n- **${host}**: 🔴 CRITICAL — certificate expires in ${days_left} days (${end_date})"
+              any_critical="true"
+            elif [ "$days_left" -le "${CERT_WARN_DAYS}" ]; then
+              findings="${findings}\n- **${host}**: 🟡 WARN — certificate expires in ${days_left} days (${end_date}); healthy Let's Encrypt certs auto-renew well before this point, so this is worth checking, not just noting"
+              any_warn="true"
+            else
+              findings="${findings}\n- **${host}**: 🟢 OK — certificate expires in ${days_left} days (${end_date})"
+            fi
+          done
+
+          {
+            echo "findings<<EOF"
+            echo -e "$findings"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "any_critical=${any_critical}" >> "$GITHUB_OUTPUT"
+          echo "any_warn=${any_warn}" >> "$GITHUB_OUTPUT"
+
+      - name: Check domain registration expiry
+        id: domains
+        run: |
+          set -uo pipefail
+          findings=""
+          any_critical="false"
+          any_warn="false"
+
+          for domain in ${WHOIS_DOMAINS}; do
+            echo "--- ${domain} ---"
+            whois_out=$(timeout 15 whois "${domain}" 2>/dev/null || true)
+            # .ca WHOIS output uses "Expiry date:"; fall back to the more common
+            # "Registry Expiry Date:" / "Expiration Date:" seen on gTLDs, in case
+            # this domain or its registrar's format ever changes.
+            expiry_line=$(echo "$whois_out" | grep -iE "^(Expiry date|Registry Expiry Date|Expiration Date|paid-till):" | head -1)
+
+            if [ -z "$expiry_line" ]; then
+              echo "  ⚠️  Could not parse expiry date from WHOIS output — registrar format may have changed, or WHOIS is rate-limiting this runner"
+              findings="${findings}\n- **${domain}**: ⚠️ UNKNOWN — could not parse an expiry date from WHOIS output. Verify manually; this is a monitoring gap, not a confirmed problem."
+              continue
+            fi
+
+            expiry_raw=$(echo "$expiry_line" | sed -E 's/^[^:]+:\s*//')
+            expiry_epoch=$(date -d "$expiry_raw" +%s 2>/dev/null || echo "0")
+            now_epoch=$(date +%s)
+
+            if [ "$expiry_epoch" = "0" ]; then
+              findings="${findings}\n- **${domain}**: ⚠️ UNKNOWN — found an expiry field (\`${expiry_line}\`) but could not parse it as a date. Verify manually."
+              continue
+            fi
+
+            days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+            echo "  Expires: ${expiry_raw} (${days_left} days)"
+
+            if [ "$days_left" -lt 0 ]; then
+              findings="${findings}\n- **${domain}**: 🔴 CRITICAL — domain registration EXPIRED ${expiry_raw} (${days_left} days). If this is real, the domain can be seized/dropped — treat as P0."
+              any_critical="true"
+            elif [ "$days_left" -le "${DOMAIN_CRITICAL_DAYS}" ]; then
+              findings="${findings}\n- **${domain}**: 🔴 CRITICAL — domain registration expires in ${days_left} days (${expiry_raw})"
+              any_critical="true"
+            elif [ "$days_left" -le "${DOMAIN_WARN_DAYS}" ]; then
+              findings="${findings}\n- **${domain}**: 🟡 WARN — domain registration expires in ${days_left} days (${expiry_raw})"
+              any_warn="true"
+            else
+              findings="${findings}\n- **${domain}**: 🟢 OK — domain registration expires in ${days_left} days (${expiry_raw})"
+            fi
+          done
+
+          {
+            echo "findings<<EOF"
+            echo -e "$findings"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "any_critical=${any_critical}" >> "$GITHUB_OUTPUT"
+          echo "any_warn=${any_warn}" >> "$GITHUB_OUTPUT"
+
+      - name: Check for existing open tracked issue
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --label "${ISSUE_LABEL}" \
+            --json number \
+            --jq '.[0].number // empty')
+          echo "existing=${existing}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update tracked issue
+        if: steps.certs.outputs.any_critical == 'true' || steps.certs.outputs.any_warn == 'true' || steps.domains.outputs.any_critical == 'true' || steps.domains.outputs.any_warn == 'true' || github.event.inputs.force_open_issue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          severity="WARN"
+          if [ "${{ steps.certs.outputs.any_critical }}" = "true" ] || [ "${{ steps.domains.outputs.any_critical }}" = "true" ]; then
+            severity="CRITICAL"
+          fi
+
+          body=$(cat <<EOF
+          # Certificate + domain expiry — ${severity}
+
+          Automated daily check (\`.github/workflows/cert-domain-monitor.yml\`). This
+          checks certificates and domains **currently being served** — it cannot
+          detect a certificate stuck un-issued (see the 2026-09-02 incident this
+          workflow was built in response to; that needs the live-reachability
+          probes in \`monitoring/synthetic-checks.yaml\` / ACTION_ITEMS.md E4).
+
+          ## TLS certificates
+          ${{ steps.certs.outputs.findings }}
+
+          ## Domain registration
+          ${{ steps.domains.outputs.findings }}
+
+          ## Next step
+          - 🔴 CRITICAL: page/act now — see \`docs/runbooks/railway-fly-failover.md\`
+            for the Fly certificate provisioning steps if a TLS finding, or contact
+            the registrar immediately if a domain finding.
+          - 🟡 WARN: investigate same-day; a healthy auto-renewing cert should
+            never reach this threshold.
+
+          This issue is updated in place on each run while the condition
+          persists (same open issue, edited body) — closing it does not
+          silence tomorrow's check if the underlying problem isn't fixed.
+
+          ---
+          *Auto-generated by \`.github/workflows/cert-domain-monitor.yml\`.*
+          EOF
+          )
+
+          existing="${{ steps.existing.outputs.existing }}"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "${{ github.repository }}" --body "$body" --title "[${severity}] Certificate/domain expiry finding — $(date -u +%Y-%m-%d)"
+            echo "Updated existing issue #${existing}"
+          else
+            gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "[${severity}] Certificate/domain expiry finding — $(date -u +%Y-%m-%d)" \
+              --body "$body" \
+              --label "${ISSUE_LABEL}"
+          fi
+
+      - name: No-op summary
+        if: steps.certs.outputs.any_critical != 'true' && steps.certs.outputs.any_warn != 'true' && steps.domains.outputs.any_critical != 'true' && steps.domains.outputs.any_warn != 'true' && github.event.inputs.force_open_issue != 'true'
+        run: |
+          echo "✅ All certificates and domains healthy."
+          echo "${{ steps.certs.outputs.findings }}"
+          echo "${{ steps.domains.outputs.findings }}"

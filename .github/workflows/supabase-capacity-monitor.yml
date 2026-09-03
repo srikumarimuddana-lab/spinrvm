@@ -1,0 +1,177 @@
+name: Supabase capacity monitor (optional)
+
+# Polls Supabase's Management API for database size, as a leading
+# indicator for the disk-usage gap documented in
+# docs/runbooks/capacity-scaling.md §9. Gated behind two OPTIONAL secrets
+# (SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF) — skips cleanly with a
+# no-op if either is unset, same pattern as deploy-fly.yml's
+# FLY_HEALTH_URL. No secret is created by this change; a human must create
+# a Supabase Management API token before this does anything.
+#
+# HONEST LIMITATION (do not remove this comment when editing): the
+# Management API's documented "database query" endpoint
+# (POST /v1/projects/{ref}/database/query) lets us run
+# `SELECT pg_database_size(current_database())`, which measures actual
+# database bytes used — it does NOT directly return "percent of Supabase's
+# allocated disk ceiling," because that ceiling is a dashboard-side value
+# this workflow has no confirmed API to read. DISK_CEILING_GB below is a
+# manually-maintained approximation of the current Supabase plan's
+# provisioned disk size; keep it in sync with Settings → Compute and Disk
+# in the Supabase dashboard, or this check silently drifts from reality.
+# This is a known/documented gap, not a hidden one — see capacity-scaling.md
+# §9 for the manual-check fallback this doesn't replace.
+
+on:
+  schedule:
+    # Daily 11:00 UTC.
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+    inputs:
+      force_open_issue:
+        description: "Open/update the tracked issue even if healthy (manual override, for testing)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  # Manually-maintained approximation of the Supabase project's provisioned
+  # disk size in GB — see the HONEST LIMITATION comment above. Update this
+  # whenever the plan/disk size changes in the Supabase dashboard.
+  DISK_CEILING_GB: "8"
+  WARN_PERCENT: "70"
+  CRITICAL_PERCENT: "85"
+  ISSUE_LABEL: "supabase-capacity-monitor"
+
+jobs:
+  check-and-notify:
+    name: Supabase disk-usage check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check whether Supabase Management API access is configured
+        id: gate
+        run: |
+          if [ -z "${{ secrets.SUPABASE_ACCESS_TOKEN }}" ] || [ -z "${{ secrets.SUPABASE_PROJECT_REF }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "⏭️  SUPABASE_ACCESS_TOKEN and/or SUPABASE_PROJECT_REF not set — skipping."
+            echo "   This is expected until a human creates a Supabase Management API token."
+            echo "   See docs/runbooks/capacity-scaling.md §9 for setup steps."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Query database size via Supabase Management API
+        id: query
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -uo pipefail
+          response=$(curl -sS --max-time 15 \
+            -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"SELECT pg_database_size(current_database()) AS bytes;"}' \
+            "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/database/query")
+
+          bytes=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['bytes'] if isinstance(d, list) and d else '')" 2>/dev/null || echo "")
+
+          if [ -z "$bytes" ]; then
+            echo "query_failed=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️  Could not parse database size from Management API response:"
+            echo "$response"
+          else
+            gb=$(python3 -c "print(round(${bytes} / (1024**3), 2))")
+            pct=$(python3 -c "print(round((${bytes} / (1024**3)) / ${DISK_CEILING_GB} * 100, 1))")
+            echo "query_failed=false" >> "$GITHUB_OUTPUT"
+            echo "size_gb=${gb}" >> "$GITHUB_OUTPUT"
+            echo "percent=${pct}" >> "$GITHUB_OUTPUT"
+            echo "Database size: ${gb} GB (${pct}% of ${DISK_CEILING_GB} GB approximated ceiling)"
+          fi
+
+      - name: Check for existing open tracked issue
+        id: existing
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --label "${ISSUE_LABEL}" \
+            --json number \
+            --jq '.[0].number // empty')
+          echo "existing=${existing}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update tracked issue
+        if: steps.gate.outputs.configured == 'true' && (steps.query.outputs.query_failed == 'true' || (steps.query.outputs.percent != '' && steps.query.outputs.percent != '0') )
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pct="${{ steps.query.outputs.percent }}"
+          failed="${{ steps.query.outputs.query_failed }}"
+
+          if [ "$failed" = "true" ]; then
+            severity="UNKNOWN"
+            finding="Could not query database size from the Supabase Management API — check the API token's validity and scope."
+          else
+            over_critical=$(python3 -c "print('true' if ${pct} >= ${CRITICAL_PERCENT} else 'false')")
+            over_warn=$(python3 -c "print('true' if ${pct} >= ${WARN_PERCENT} else 'false')")
+            if [ "$over_critical" = "true" ]; then
+              severity="CRITICAL"
+            elif [ "$over_warn" = "true" ]; then
+              severity="WARN"
+            else
+              severity=""
+            fi
+            finding="Database size: ${{ steps.query.outputs.size_gb }} GB — approximately ${pct}% of the ${DISK_CEILING_GB} GB ceiling maintained in this workflow's DISK_CEILING_GB env var. **Confirm the real ceiling and current usage against Supabase Dashboard → Settings → Compute and Disk before acting** — this workflow's percentage is an approximation, not a direct read of Supabase's own limit (see the workflow file's HONEST LIMITATION comment)."
+          fi
+
+          if [ -z "$severity" ] && [ "${{ github.event.inputs.force_open_issue }}" != "true" ]; then
+            echo "Below warn threshold, no issue needed."
+            exit 0
+          fi
+          [ -z "$severity" ] && severity="INFO"
+
+          body=$(cat <<EOF
+          # Supabase capacity — ${severity}
+
+          Automated daily check (\`.github/workflows/supabase-capacity-monitor.yml\`).
+
+          ${finding}
+
+          ## Next step
+          If usage is genuinely approaching the plan ceiling, see
+          \`docs/runbooks/capacity-scaling.md\` §5 for the tier-upgrade
+          procedure (Supabase Dashboard → Settings → Compute and Disk).
+          Disk size auto-grows on Supabase but costs money as it does — this
+          is not a hard stop the way compute saturation is, but should not
+          be ignored either.
+
+          ---
+          *Auto-generated by \`.github/workflows/supabase-capacity-monitor.yml\`.*
+          EOF
+          )
+
+          existing="${{ steps.existing.outputs.existing }}"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --repo "${{ github.repository }}" --body "$body" --title "[${severity}] Supabase capacity — $(date -u +%Y-%m-%d)"
+          else
+            gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "[${severity}] Supabase capacity — $(date -u +%Y-%m-%d)" \
+              --body "$body" \
+              --label "${ISSUE_LABEL}"
+          fi
+
+      - name: No-op summary (not configured)
+        if: steps.gate.outputs.configured != 'true'
+        run: echo "Supabase Management API secrets not configured — see docs/runbooks/capacity-scaling.md §9."

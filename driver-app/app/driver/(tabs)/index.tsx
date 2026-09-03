@@ -942,6 +942,17 @@ function DriverDashboard() {
         }}
         showsUserLocation={false}
         showsMyLocationButton={false}
+        // Never explicitly set before. react-native-maps' native compass is
+        // adaptive — Google Maps/Apple MapKit show it automatically once the
+        // camera bearing leaves north, which course-up follow mode (the
+        // animateCamera({heading}) calls below) does continuously while
+        // driving. With this app's own deliberate compass/course-up toggle
+        // already in MapControls (bottom-right), the native one was a
+        // second, redundant control popping up in the SDK's own default
+        // corner — reported live as a misplaced top-left compass icon.
+        // Matches the same "disable native chrome, use our own" pattern
+        // already applied to showsUserLocation/showsMyLocationButton above.
+        showsCompass={false}
         onRegionChange={(region) => {
           currentRegionRef.current = {
             latitudeDelta: region.latitudeDelta,

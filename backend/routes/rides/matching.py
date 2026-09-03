@@ -793,11 +793,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         if _sub_required and _casc_pool:
                             try:
                                 _casc_cand_ids = [d["id"] for d in _casc_pool]
-                                _casc_subs = await _deps.db_supabase.get_rows(
-                                    "driver_subscriptions",
-                                    {"driver_id": {"$in": _casc_cand_ids}, "status": "active"},
-                                    columns="driver_id,expires_at,plan_id",
-                                    limit=len(_casc_cand_ids),
+                                # Batched — see _get_active_subscriptions_batched's docstring
+                                # (2026-09-03 incident). This block fails CLOSED on any
+                                # exception (below), so an unbatched $in here doesn't just
+                                # skip a filter — it can strand and auto-cancel the ride.
+                                _casc_subs = await _get_active_subscriptions_batched(
+                                    _casc_cand_ids, "driver_id,expires_at,plan_id"
                                 )
                                 _casc_now = datetime.now(timezone.utc)
                                 _casc_valid_subs = []

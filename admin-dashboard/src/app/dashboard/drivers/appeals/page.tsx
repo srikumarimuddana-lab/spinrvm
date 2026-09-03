@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -97,21 +98,21 @@ export default function DriverAppealsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
             <Gavel className="h-6 w-6 text-warning" />
             Driver Appeals
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Review driver appeals of a suspension, ban, or account hold — see docs/legal/driver-deactivation-appeals-policy.md
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
-      </div>
+          </span>
+        }
+        description="Review driver appeals of a suspension, ban, or account hold — see docs/legal/driver-deactivation-appeals-policy.md"
+        actions={
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        }
+      />
 
       <div className="grid grid-cols-3 gap-4">
         <Card><CardContent className="pt-4">

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { getDrivers, getServiceAreas, generateDecalPdf } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -256,32 +257,33 @@ export default function WelcomeLettersPage() {
 
     return (
         <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <PageHeader
+                className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+                title={
+                    <span className="inline-flex items-center gap-2">
                         <Mail className="h-6 w-6 text-primary" />
                         Welcome Letters
-                    </h1>
-                    <p className="text-sm text-muted-foreground mt-1">
-                        Generate and track welcome letters for drivers
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
-                        {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                        Refresh
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
-                        <Download className="h-4 w-4" /> Export
-                    </Button>
-                    {selectedIds.size > 0 && (
-                        <Button size="sm" onClick={handleBulkGenerate} disabled={!!generatingId}>
-                            {generatingId === "bulk" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                            Download PDF ({selectedIds.size})
+                    </span>
+                }
+                description="Generate and track welcome letters for drivers"
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
+                            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                            Refresh
                         </Button>
-                    )}
-                </div>
-            </div>
+                        <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
+                            <Download className="h-4 w-4" /> Export
+                        </Button>
+                        {selectedIds.size > 0 && (
+                            <Button size="sm" onClick={handleBulkGenerate} disabled={!!generatingId}>
+                                {generatingId === "bulk" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                Download PDF ({selectedIds.size})
+                            </Button>
+                        )}
+                    </div>
+                }
+            />
 
             {/* Summary cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

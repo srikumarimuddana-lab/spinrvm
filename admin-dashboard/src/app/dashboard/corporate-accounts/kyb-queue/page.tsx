@@ -8,6 +8,7 @@ import {
     listCorporateAccounts,
     reviewKyb,
 } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -122,9 +123,9 @@ export default function KybQueuePage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <div className="flex items-center gap-2">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         <Link
                             href="/dashboard/corporate-accounts"
                             className="text-muted-foreground hover:text-foreground"
@@ -132,19 +133,16 @@ export default function KybQueuePage() {
                         >
                             <ArrowLeft className="h-4 w-4" />
                         </Link>
-                        <h1 className="text-3xl font-bold tracking-tight">
-                            KYB Verification Queue
-                        </h1>
-                    </div>
-                    <p className="text-muted-foreground mt-1">
-                        Review pending corporate signups and approve or reject their KYB
-                        documents.
-                    </p>
-                </div>
-                <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
-                    <RefreshCw className="h-4 w-4" />
-                </Button>
-            </div>
+                        KYB Verification Queue
+                    </span>
+                }
+                description="Review pending corporate signups and approve or reject their KYB documents."
+                actions={
+                    <Button variant="outline" size="icon" onClick={load} aria-label="Refresh">
+                        <RefreshCw className="h-4 w-4" />
+                    </Button>
+                }
+            />
 
             {error && (
                 <div className="rounded-md border border-destructive/40 bg-destructive/5 px-4 py-2 text-sm text-destructive">

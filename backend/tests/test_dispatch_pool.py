@@ -51,8 +51,12 @@ class TestLifespanByteIdenticalWhenFlagOff:
 
     @pytest.mark.anyio
     async def test_init_database_does_not_import_dispatch_pool_when_dsn_unset(self, monkeypatch):
-        """No pool import attempted at all — proves the branch is a true
-        no-op, not just "imports but doesn't open"."""
+        """init_pool() is never called when the DSN is unset. (Review note,
+        2026-09-03: the patch below imports dispatch_pool itself, so this
+        test cannot prove the module is never imported — only that the pool
+        is never opened. The lifespan branch's local import sits behind the
+        DSN check, so the import is skipped too, but that is not what is
+        asserted here.)"""
         from backend.core import lifespan
 
         fake_supabase = MagicMock()
@@ -121,6 +125,40 @@ class TestLifespanByteIdenticalWhenFlagOff:
 
 
 class TestLifespanDsnSetBranch:
+    @pytest.mark.anyio
+    async def test_dsn_set_app_settings_read_is_bounded_and_timeout_fails_closed(self, monkeypatch):
+        """Review fix (2026-09-03): the boot-time flag read runs before any
+        deadline middleware exists, so it must carry its own timeout; a
+        timeout is treated like any other read failure (flag off, ERROR)."""
+        import asyncio
+
+        from backend.core import lifespan
+
+        monkeypatch.setattr(lifespan, "supabase", MagicMock())
+        monkeypatch.setattr(lifespan, "settings", _settings_mock(env="test", DISPATCH_POOL_DSN="postgresql://x"))
+        monkeypatch.setattr(lifespan, "run_sync", AsyncMock(return_value=MagicMock()))
+
+        captured = {}
+        real_wait_for = asyncio.wait_for
+
+        async def _spy_wait_for(aw, timeout=None):
+            captured["timeout"] = timeout
+            aw.close()
+            raise asyncio.TimeoutError()
+
+        monkeypatch.setattr(lifespan.asyncio, "wait_for", _spy_wait_for)
+        with (
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.repositories.dispatch_pool.init_pool", AsyncMock()) as mock_init_pool,
+            patch.object(lifespan.logger, "error") as mock_error,
+        ):
+            await lifespan.init_database()
+        monkeypatch.setattr(lifespan.asyncio, "wait_for", real_wait_for)
+
+        assert captured["timeout"] == 10.0
+        mock_init_pool.assert_not_called()
+        assert any("dispatch_direct_pool_enabled" in str(c.args[0]) for c in mock_error.call_args_list)
+
     @pytest.mark.anyio
     async def test_dsn_set_flag_true_calls_init_pool(self, monkeypatch):
         from backend.core import lifespan
@@ -336,6 +374,59 @@ class TestInitPool:
         assert "psycopg[binary,pool] is not installed" in mock_error.call_args.args[0]
 
     @pytest.mark.anyio
+    async def test_open_failure_never_echoes_dsn_credentials(self, monkeypatch):
+        """Review fix (2026-09-03): libpq repeats conninfo fragments in
+        malformed-DSN errors; the log line and the production RuntimeError
+        must never carry the password."""
+        from backend.repositories import dispatch_pool
+
+        monkeypatch.setattr(dispatch_pool, "_pool", None)
+        monkeypatch.setattr(
+            dispatch_pool.settings, "DISPATCH_POOL_DSN", "postgresql://spinr:s3cr3t@db.example/postgres", raising=False
+        )
+        monkeypatch.setattr(dispatch_pool.settings, "ENV", "production", raising=False)
+        monkeypatch.setattr(dispatch_pool, "_PSYCOPG_AVAILABLE", True)
+
+        broken = MagicMock()
+        broken.open = AsyncMock(
+            side_effect=RuntimeError('invalid connection option in "postgresql://spinr:s3cr3t@db.example/postgres"')
+        )
+        broken.close = AsyncMock()
+        monkeypatch.setattr(dispatch_pool, "AsyncConnectionPool", MagicMock(return_value=broken))
+
+        with patch.object(dispatch_pool.logger, "error") as mock_error:
+            with pytest.raises(RuntimeError) as excinfo:
+                await dispatch_pool.init_pool(dispatch_direct_pool_enabled=True)
+
+        assert str(excinfo.value) == "dispatch direct pool failed to open"
+        logged = " ".join(str(c.args[0]) for c in mock_error.call_args_list)
+        assert "s3cr3t" not in logged and "spinr:" not in logged
+        assert "<redacted>@" in logged
+        broken.close.assert_awaited_once()  # no leaked pool on the failure path
+
+    @pytest.mark.anyio
+    async def test_open_passes_liveness_check_and_prepare_threshold(self, monkeypatch):
+        from backend.repositories import dispatch_pool
+
+        monkeypatch.setattr(dispatch_pool, "_pool", None)
+        monkeypatch.setattr(dispatch_pool.settings, "DISPATCH_POOL_DSN", "postgresql://x", raising=False)
+        monkeypatch.setattr(dispatch_pool.settings, "ENV", "test", raising=False)
+        monkeypatch.setattr(dispatch_pool, "_PSYCOPG_AVAILABLE", True)
+        fake_pool_instance = MagicMock()
+        fake_pool_instance.open = AsyncMock()
+        pool_cls = MagicMock(return_value=fake_pool_instance)
+        monkeypatch.setattr(dispatch_pool, "AsyncConnectionPool", pool_cls)
+
+        with patch("backend.repositories.dispatch_pool._metric_gauge"):
+            await dispatch_pool.init_pool(dispatch_direct_pool_enabled=True)
+
+        kwargs = pool_cls.call_args.kwargs
+        # Supavisor recycles server connections; probe on checkout.
+        assert kwargs["check"] is pool_cls.check_connection
+        assert kwargs["kwargs"]["prepare_threshold"] is None
+        monkeypatch.setattr(dispatch_pool, "_pool", None)
+
+    @pytest.mark.anyio
     async def test_successful_open_sets_pool_and_gauge(self, monkeypatch):
         from backend.repositories import dispatch_pool
 
@@ -532,6 +623,129 @@ class TestAcquireSuccessPath:
         fake_pool.connection.assert_called_once_with(timeout=None)
 
 
+class TestAcquireTimeoutPath:
+    @pytest.mark.anyio
+    async def test_timed_out_wait_is_still_observed(self, monkeypatch):
+        """Review fix (2026-09-03): a PoolTimeout raised by connection() used
+        to skip the wait-time observe entirely, so the saturation histogram
+        was blind exactly when the pool was saturated."""
+        from backend.repositories import dispatch_pool
+
+        class _RaisingCM:
+            async def __aenter__(self):
+                raise TimeoutError("couldn't get a connection after 5.0 sec")
+
+            async def __aexit__(self, *exc_info):  # pragma: no cover - never reached
+                return False
+
+        fake_pool = MagicMock()
+        fake_pool.connection = MagicMock(return_value=_RaisingCM())
+        fake_pool.get_stats = MagicMock(return_value={"pool_size": 8, "pool_available": 0})
+        monkeypatch.setattr(dispatch_pool, "_pool", fake_pool)
+        monkeypatch.setattr(dispatch_pool, "_deadline_exhausted", lambda: False)
+        monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: 5.0)
+
+        with (
+            patch("backend.repositories.dispatch_pool._metric_observe") as mock_observe,
+            patch("backend.repositories.dispatch_pool._metric_gauge"),
+        ):
+            with pytest.raises(TimeoutError):
+                async with dispatch_pool.acquire():
+                    pass  # pragma: no cover
+
+        waits = [c for c in mock_observe.call_args_list if c.args[0] == "spinr_db_direct_pool_wait_ms"]
+        assert len(waits) == 1
+        assert waits[0].kwargs.get("labels") == {"outcome": "timeout"}
+
+
+class TestRedactDsn:
+    def test_masks_user_and_password(self):
+        from backend.repositories.dispatch_pool import _redact_dsn
+
+        msg = 'invalid connection option in "postgresql://spinr:s3cr3t@db.example:6543/postgres?sslmode=require"'
+        out = _redact_dsn(msg)
+        assert "s3cr3t" not in out and "spinr:" not in out
+        assert "postgresql://<redacted>@db.example:6543/postgres?sslmode=require" in out
+
+    def test_leaves_credential_free_text_alone(self):
+        from backend.repositories.dispatch_pool import _redact_dsn
+
+        assert _redact_dsn("connection refused") == "connection refused"
+
+
+class TestStatementBudget:
+    def test_defaults_when_no_deadline(self, monkeypatch):
+        from backend.repositories import dispatch_pool
+
+        monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: None)
+        assert dispatch_pool._statement_budget_s() == dispatch_pool.DEFAULT_STATEMENT_TIMEOUT_S
+
+    def test_uses_remaining_when_smaller(self, monkeypatch):
+        from backend.repositories import dispatch_pool
+
+        monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: 1.25)
+        assert dispatch_pool._statement_budget_s() == 1.25
+
+    def test_caps_at_default(self, monkeypatch):
+        from backend.repositories import dispatch_pool
+
+        monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: 99.0)
+        assert dispatch_pool._statement_budget_s() == dispatch_pool.DEFAULT_STATEMENT_TIMEOUT_S
+
+
+class TestClaimBatchWrapper:
+    """The psycopg3 binding of the RPC (previously untested at the Python
+    level — the real-Postgres suite drives the SQL through psycopg2 and the
+    parity test mocks claim_batch outright)."""
+
+    @pytest.mark.anyio
+    async def test_empty_driver_list_returns_without_touching_pool(self, monkeypatch):
+        from backend.repositories import dispatch_pool
+
+        monkeypatch.setattr(dispatch_pool, "_pool", None)  # acquire() would raise
+        assert await dispatch_pool.claim_batch("r1", [], [], 3, None, None) == []
+
+    @pytest.mark.anyio
+    async def test_rpc_call_casts_every_parameter_and_sets_statement_timeout(self, monkeypatch):
+        import sys
+        import types
+
+        from backend.repositories import dispatch_pool
+
+        # psycopg may not be installed where the mocked suite runs; the
+        # wrapper only needs `psycopg.rows.dict_row` as a row_factory token.
+        if "psycopg" not in sys.modules:
+            monkeypatch.setitem(sys.modules, "psycopg", types.ModuleType("psycopg"))
+        fake_rows = types.ModuleType("psycopg.rows")
+        fake_rows.dict_row = object()
+        monkeypatch.setitem(sys.modules, "psycopg.rows", fake_rows)
+
+        fake_cur = MagicMock()
+        fake_cur.execute = AsyncMock()
+        fake_cur.fetchall = AsyncMock(return_value=[{"driver_id": "d1", "claimed": True}])
+        fake_conn = MagicMock()
+        fake_conn.transaction = MagicMock(return_value=_FakeAsyncCM(None))
+        fake_conn.cursor = MagicMock(return_value=_FakeAsyncCM(fake_cur))
+        fake_pool = MagicMock()
+        fake_pool.connection = MagicMock(return_value=_FakeAsyncCM(fake_conn))
+        fake_pool.get_stats = MagicMock(return_value={"pool_size": 1, "pool_available": 0})
+        monkeypatch.setattr(dispatch_pool, "_pool", fake_pool)
+        monkeypatch.setattr(dispatch_pool, "_deadline_exhausted", lambda: False)
+        monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: None)
+
+        rows = await dispatch_pool.claim_batch("r1", ("d1", "d2"), (100.0, 200), "2", "t0", "t1")
+
+        assert rows == [{"driver_id": "d1", "claimed": True}]
+        awaited = [c.args for c in fake_cur.execute.await_args_list]
+        assert awaited[0][0] == "SELECT set_config('statement_timeout', %s, true)"
+        sql, params = awaited[-1]
+        # Explicit casts: psycopg3 binds typed parameters and a Python
+        # list[int] is not guaranteed to resolve to int4[].
+        assert "%s::text, %s::text[], %s::int[], %s::int, %s::timestamptz, %s::timestamptz" in sql
+        assert params == ("r1", ["d1", "d2"], [100, 200], 2, "t0", "t1")
+        assert all(isinstance(e, int) for e in params[2])
+
+
 class TestInUseGauge:
     """_in_use() must report connections actually checked out.
 
@@ -617,9 +831,31 @@ class TestRunQuery:
         result = await dispatch_pool.run_query("SELECT 1", ("p1",), fetch="all")
 
         assert result == [("row1",), ("row2",)]
-        fake_cur.execute.assert_awaited_once_with("SELECT 1", ("p1",))
+        # Review fix (2026-09-03): every transaction opens with a
+        # transaction-local statement_timeout before the query itself.
+        awaited = [c.args for c in fake_cur.execute.await_args_list]
+        assert awaited[0][0] == "SELECT set_config('statement_timeout', %s, true)"
+        assert awaited[0][1] == ("10000",)  # no client deadline -> default 10 s cap
+        assert awaited[-1] == ("SELECT 1", ("p1",))
         fake_cur.fetchall.assert_awaited_once()
         fake_cur.fetchone.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_statement_timeout_follows_remaining_client_deadline(self, monkeypatch):
+        """The server-side budget is the remaining client deadline, capped at
+        DEFAULT_STATEMENT_TIMEOUT_S — the fix for the unbounded-execute
+        finding (client deadline used to bound acquisition only)."""
+        from backend.repositories import dispatch_pool
+
+        fake_cur = self._fake_pool_and_cursor(monkeypatch)
+        monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: 2.5)
+        await dispatch_pool.run_query("SELECT 1", fetch="none")
+        assert fake_cur.execute.await_args_list[0].args[1] == ("2500",)
+
+        fake_cur = self._fake_pool_and_cursor(monkeypatch)
+        monkeypatch.setattr(dispatch_pool, "_remaining_seconds", lambda: 60.0)
+        await dispatch_pool.run_query("SELECT 1", fetch="none")
+        assert fake_cur.execute.await_args_list[0].args[1] == ("10000",)
 
     @pytest.mark.anyio
     async def test_fetch_one_returns_fetchone_result(self, monkeypatch):
@@ -682,3 +918,33 @@ def test_dispatch_pool_reuses_base_redact_pg_error():
     from backend.repositories import _base, dispatch_pool
 
     assert dispatch_pool._redact_pg_error is _base._redact_pg_error
+
+
+class TestPoolSizeConfig:
+    """Review fix (2026-09-03): pool size bounds are validated at config load
+    in every environment, not discovered at open time in production only."""
+
+    def test_min_greater_than_max_is_rejected(self):
+        from types import SimpleNamespace
+
+        from backend.core.config import Settings
+
+        bad = SimpleNamespace(DISPATCH_POOL_MIN_SIZE=10, DISPATCH_POOL_MAX_SIZE=8)
+        with pytest.raises(ValueError, match="DISPATCH_POOL_MIN_SIZE must be <= DISPATCH_POOL_MAX_SIZE"):
+            Settings._validate_dispatch_pool_sizes(bad)
+
+    def test_valid_bounds_pass_through(self):
+        from types import SimpleNamespace
+
+        from backend.core.config import Settings
+
+        ok = SimpleNamespace(DISPATCH_POOL_MIN_SIZE=1, DISPATCH_POOL_MAX_SIZE=8)
+        assert Settings._validate_dispatch_pool_sizes(ok) is ok
+
+    def test_field_constraints_are_declared(self):
+        from backend.core.config import Settings
+
+        min_meta = Settings.model_fields["DISPATCH_POOL_MIN_SIZE"].metadata
+        max_meta = Settings.model_fields["DISPATCH_POOL_MAX_SIZE"].metadata
+        assert any(getattr(m, "ge", None) == 0 for m in min_meta)
+        assert any(getattr(m, "ge", None) == 1 for m in max_meta)

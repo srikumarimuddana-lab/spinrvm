@@ -181,7 +181,7 @@ async def _run_postgrest_path(scenario, mock_db):
     }
 
 
-async def _run_direct_pool_path(scenario, mock_db):
+async def _run_direct_pool_path(scenario, mock_db, rpc_result=None, pool_open=True):
     """Flag ON: drives the same attempt through the mocked
     dispatch_pool.claim_batch RPC wrapper."""
     from backend.routes.rides.matching import _build_offer_rows, _match_driver_to_ride_attempt
@@ -206,12 +206,38 @@ async def _run_direct_pool_path(scenario, mock_db):
     # driver (claimed True/False), matching the header's documented
     # rationale (Python needs the full attempted set to invalidate cache
     # for each one).
-    rpc_result = [
-        {"driver_id": "drv-1", "claimed": True, "driver_row": d1, "ride_offer_id": "offer-uuid-1"},
-        {"driver_id": "drv-2", "claimed": False, "driver_row": None, "ride_offer_id": None},
-        {"driver_id": "drv-3", "claimed": True, "driver_row": d3, "ride_offer_id": "offer-uuid-2"},
-    ]
+    if rpc_result is None:
+        rpc_result = [
+            {
+                "driver_id": "drv-1",
+                "claimed": True,
+                "driver_row": d1,
+                "ride_offer_id": "offer-uuid-1",
+                "insurance_written": True,
+            },
+            {
+                "driver_id": "drv-2",
+                "claimed": False,
+                "driver_row": None,
+                "ride_offer_id": None,
+                "insurance_written": None,
+            },
+            {
+                "driver_id": "drv-3",
+                "claimed": True,
+                "driver_row": d3,
+                "ride_offer_id": "offer-uuid-2",
+                "insurance_written": True,
+            },
+        ]
     mock_claim_batch = AsyncMock(return_value=rpc_result)
+    # The PostgREST claim must be untouched on this path too (the pool-closed
+    # fallback test flips pool_open to prove the opposite).
+    mock_db.claim_driver_atomic = AsyncMock(side_effect=[d1, None, d3])
+    record_period_calls = []
+
+    async def _record_period(driver_id, period, ride_id=None):
+        record_period_calls.append((driver_id, period, ride_id))
 
     with (
         patch("backend.routes.rides.matching._deps.db_supabase", mock_db),
@@ -219,7 +245,15 @@ async def _run_direct_pool_path(scenario, mock_db):
             "backend.routes.rides.matching._deps.get_app_settings",
             AsyncMock(return_value={"dispatch_direct_pool_enabled": True}),
         ),
+        # Review fix (2026-09-03): the gate now checks the pool is actually
+        # open before routing to it; the parity harness never opens a real
+        # pool, so report it open explicitly.
+        patch("backend.routes.rides.matching._dispatch_pool.is_open", return_value=pool_open),
         patch("backend.routes.rides.matching._dispatch_pool.claim_batch", mock_claim_batch),
+        patch("backend.routes.rides.matching._deps.record_period_transition", _record_period),
+        patch.object(
+            __import__("backend.routes.rides.matching", fromlist=["logger"]).logger, "error"
+        ) as mock_log_error,
         patch("backend.routes.rides.matching.match_ride_incentives", AsyncMock(return_value=[])),
         patch("backend.routes.rides.matching.incentive_display_payload", return_value=([], 0.0)),
         patch("backend.routes.rides.matching.get_service_area_polygon", return_value=None),
@@ -249,24 +283,33 @@ async def _run_direct_pool_path(scenario, mock_db):
 
     claim_batch_call = mock_claim_batch.await_args
     claimed_rows = [r for r in rpc_result if r["claimed"]]
-    now_iso = _FIXED_NOW.isoformat()
-    expires_iso = (_FIXED_NOW + timedelta(seconds=_OFFER_TIMEOUT)).isoformat()
-    # Reconstruct what the RPC's SQL insert produced, using the SAME
-    # helper the PostgREST path calls directly -- this is the parity
-    # anchor for assertion 2 in the module docstring.
-    equivalent_offer_rows = _build_offer_rows(
-        [(r["driver_row"], scenario["eta_by_id"][r["driver_id"]]) for r in claimed_rows],
-        _RIDE_ID,
-        now_iso,
-        expires_iso,
-    )
+    equivalent_offer_rows = None
+    if claim_batch_call is not None:
+        # Reconstruct what the RPC's SQL insert produced FROM THE ARGUMENTS
+        # matching.py actually passed (review fix, 2026-09-03: this used to
+        # be rebuilt from _FIXED_NOW, i.e. _build_offer_rows(X) compared to
+        # _build_offer_rows(X)). The offered_at/expires_at the RPC persists
+        # are args[4]/args[5]; eta_seconds per driver is args[2] aligned to
+        # args[1].
+        _, arg_ids, arg_etas, _max, arg_offered_at, arg_expires_at = claim_batch_call.args
+        eta_by_arg = dict(zip(arg_ids, arg_etas))
+        equivalent_offer_rows = _build_offer_rows(
+            [(r["driver_row"], eta_by_arg[r["driver_id"]]) for r in claimed_rows],
+            _RIDE_ID,
+            arg_offered_at.isoformat(),
+            arg_expires_at.isoformat(),
+        )
 
     return {
         "claim_driver_atomic_called": mock_db.claim_driver_atomic.await_count > 0,
+        "claim_driver_atomic_order": [c.args[0] for c in mock_db.claim_driver_atomic.await_args_list],
         "claim_batch_call_args": claim_batch_call,
         "claimed_ids_in_order": [r["driver_id"] for r in claimed_rows],
         "equivalent_offer_rows": equivalent_offer_rows,
         "metric_inc_calls": mock_metric_inc.call_args_list,
+        "invalidate_calls": mock_db.invalidate_driver_cache.await_args_list,
+        "insurance_calls": record_period_calls,
+        "log_error_calls": mock_log_error.call_args_list,
     }
 
 
@@ -358,3 +401,75 @@ async def test_offer_sent_metric_count_is_identical_across_paths(scenario):
     direct_path = _find_call(direct_result["metric_inc_calls"], "spinr_dispatch_claim_path_total")
     assert len(pg_path) == 1 and pg_path[0].kwargs.get("labels") == {"path": "postgrest"}
     assert len(direct_path) == 1 and direct_path[0].kwargs.get("labels") == {"path": "direct"}
+
+
+async def test_direct_pool_rpc_receives_ranked_ids_aligned_etas_and_the_offer_window(scenario):
+    """Review fix (2026-09-03): the RPC's positional contract was captured
+    but never asserted, so a swapped argument or a misaligned eta list would
+    have passed every parity test."""
+    direct_result = await _run_direct_pool_path(scenario, MagicMock())
+
+    args = direct_result["claim_batch_call_args"].args
+    assert args[0] == _RIDE_ID
+    assert args[1] == ["drv-1", "drv-2", "drv-3"]
+    assert args[2] == [scenario["eta_by_id"][d] for d in args[1]]  # index-aligned
+    assert args[3] == 2  # max_offers from resolve_matching_config
+    assert args[4] == _FIXED_NOW
+    assert args[5] == _FIXED_NOW + timedelta(seconds=_OFFER_TIMEOUT)
+
+
+async def test_flag_on_with_pool_closed_falls_back_to_postgrest_loudly(scenario):
+    """Review fix (2026-09-03): flag on + pool never opened (DSN unset, flag
+    flipped on against a running process, non-production open failure)
+    must NOT raise on every attempt — that stalled 100% of rides. It logs at
+    ERROR, counts the mismatch, and takes the PostgREST claim path."""
+    direct_result = await _run_direct_pool_path(scenario, MagicMock(), pool_open=False)
+
+    assert direct_result["claim_batch_call_args"] is None
+    assert direct_result["claim_driver_atomic_order"] == ["drv-1", "drv-2", "drv-3"]
+    assert [c[0] for c in direct_result["insurance_calls"]] == scenario["claimed_ids_expected"]
+
+    path_calls = [
+        c for c in direct_result["metric_inc_calls"] if c.args and c.args[0] == "spinr_dispatch_claim_path_total"
+    ]
+    assert [c.kwargs.get("labels") for c in path_calls] == [
+        {"path": "postgrest_pool_unavailable"},
+        {"path": "postgrest"},
+    ]
+    assert any("direct pool is not open" in str(c.args[0]) for c in direct_result["log_error_calls"])
+
+
+async def test_direct_pool_insurance_write_failure_is_logged_and_counted(scenario):
+    """Review fix (2026-09-03): a failed Period-2 write inside the RPC used
+    to be a Postgres-side RAISE WARNING only. The flag-on path must emit the
+    same ERROR log + metric the PostgREST path emits."""
+    d1, d2, d3 = scenario["candidates"]
+    rpc_result = [
+        {"driver_id": "drv-1", "claimed": True, "driver_row": d1, "ride_offer_id": "o1", "insurance_written": False},
+        {"driver_id": "drv-2", "claimed": False, "driver_row": None, "ride_offer_id": None, "insurance_written": None},
+        {"driver_id": "drv-3", "claimed": True, "driver_row": d3, "ride_offer_id": "o2", "insurance_written": True},
+    ]
+    direct_result = await _run_direct_pool_path(scenario, MagicMock(), rpc_result=rpc_result)
+
+    assert direct_result["claimed_ids_in_order"] == ["drv-1", "drv-3"]
+    failed = [
+        c
+        for c in direct_result["metric_inc_calls"]
+        if c.args and c.args[0] == "spinr_insurance_period_write_failed_total"
+    ]
+    assert len(failed) == 1
+    assert failed[0].args[1] == {"reason": "direct_pool", "period": "2"}
+    assert any("Period 2" in str(c.args[0]) and "drv-1" in str(c.args[0]) for c in direct_result["log_error_calls"])
+
+
+async def test_direct_pool_cache_invalidation_is_bounded_and_carries_user_id(scenario):
+    """Review fix (2026-09-03): pre-claim invalidation is bounded to the
+    first max_offers candidates (not the whole ranked list), the post-call
+    loop covers the exact attempted set the RPC reports, and both evict the
+    by-user key."""
+    direct_result = await _run_direct_pool_path(scenario, MagicMock())
+
+    calls = [(c.kwargs.get("driver_id"), c.kwargs.get("user_id")) for c in direct_result["invalidate_calls"]]
+    # pre-claim: max_offers=2 -> drv-1, drv-2; post-call: all three attempted.
+    assert sorted(calls[:2]) == [("drv-1", "user-drv-1"), ("drv-2", "user-drv-2")]
+    assert sorted(calls[2:]) == [("drv-1", "user-drv-1"), ("drv-2", "user-drv-2"), ("drv-3", "user-drv-3")]

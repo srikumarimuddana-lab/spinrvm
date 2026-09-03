@@ -20033,8 +20033,8 @@ how much they de-risk a public launch._
   WS-12 §3 spec (kill the RPC mid-transition → reconciler restores the open
   period on next tick) — whichever the team decides is the actual bar.
 
-### C56. `claim_driver_atomic`'s `run_sync` call uses the default read retry policy, not an explicit write policy
-- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+### C56. `claim_driver_atomic`'s `run_sync` call uses the default read retry policy, not an explicit write policy — CLOSED (2026-09-03)
+- [x] **Status:** closed. Found during C50's T2 retro `spinr-dispatch-reviewer`
   pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
 - **Issue/gap:** `backend/repositories/_base.py`'s `run_sync(func,
   retry_policy: RetryPolicy = "read")` gates retry behavior by policy:
@@ -20064,12 +20064,19 @@ how much they de-risk a public launch._
   likely too generous for a claim sitting inside the offer-latency SLA).
   Add a comment explaining the choice, consistent with this file's existing
   convention.
+- **Fix:** `claim_driver_atomic`'s `run_sync(_claim)` call now passes
+  `retry_policy="idempotent_write"` explicitly, with a comment stating the
+  same safety analysis from this entry (the `.eq("is_available", True)`
+  guard makes a retry-after-success a safe no-op, not a double-claim).
 - **Files:** `backend/repositories/driver_repo.py` (`claim_driver_atomic`).
 - **Acceptance:** an explicit `retry_policy` argument is passed with a
   one-line rationale comment; existing `claim_driver_atomic` tests in
   `test_driver_repo_coverage.py` still pass unmodified (the policy choice
   must not change claim-won/claim-lost semantics, only retry count/timing
-  on a genuine transient failure).
+  on a genuine transient failure). Verified: `pytest
+  tests/test_driver_repo_coverage.py tests/test_dispatch_db_errors.py
+  tests/test_dispatch_match_attempt_branches.py -q` → 61/61 passed,
+  unmodified. `ruff check backend/repositories/driver_repo.py` clean.
 
 ### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip — CLOSED (2026-09-03, re-landed in PR #4896)
 - [x] **Status:** re-landed and merged. The fix was originally written,

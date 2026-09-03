@@ -16,3 +16,4 @@ ADRs capture the context, decision, and consequences of significant technical ch
 | [ADR-008](008-report-branding-fixed-vs-branded.md) | Two report modes — Spinr-branded vs. fixed regulator format | Accepted |
 | [ADR-009](009-data-transfer-background-export-and-unredacted-scope.md) | Data Transfer export runs as a background job, and is deliberately unredacted | Accepted |
 | [ADR-010](010-metrics-aggregation-and-alerting.md) | Cross-replica metrics aggregation and production alerting | Accepted |
+| [ADR-011](011-flag-read-failure-semantics.md) | Flag read failure semantics on money paths (per-flag fail-open vs. fail-closed) | Accepted |

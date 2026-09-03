@@ -15,8 +15,8 @@ before either was attempted:**
 1. **Migration parity — hard blocker, confirmed, not worked around.** Staging's
    `schema_migrations` table tops out at migration **371**
    (`371_route_gap_latest_captures_fn.sql`); migrations 372–401 (including
-   `400_settings_dispatch_direct_pool_enabled.sql` and
-   `401_dispatch_claim_batch.sql`) are **absent**. No `DATABASE_URL` (direct
+   `401_settings_dispatch_direct_pool_enabled.sql` and
+   `402_dispatch_claim_batch.sql`) are **absent**. No `DATABASE_URL` (direct
    Postgres/pooler connection string) exists anywhere accessible this session —
    not in Fly secrets, not in the repo, not in any runbook (every migration
    runbook in `docs/runbooks/` shows `DATABASE_URL` as a placeholder a human
@@ -186,7 +186,7 @@ flagging to Kiran directly:
 Correctly, per the task's own stop condition: migrations 372–401 are
 pending on staging and no safe way to apply them was found this session.
 Deploying `feat/c50-phase0-dispatch-metrics`'s code (which reads/writes
-`dispatch_direct_pool_enabled` via `app_settings`, added in migration 400)
+`dispatch_direct_pool_enabled` via `app_settings`, added in migration 401)
 against a schema missing that migration would 500 on any settings
 read/write touching that column, per AGENTS.md's own migration convention.
 **No `flyctl deploy` command was run against `spinr-backend-staging` this

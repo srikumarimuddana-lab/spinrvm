@@ -48,8 +48,8 @@ the running container beyond uploading the seed script under
      this field; absent means Phase 1 never landed here).
   2. `/app/requirements.txt` pins `psycopg2-binary==2.9.12` only — no
      `psycopg[binary,pool]` (C50 T8's new dependency).
-  3. `/app/migrations/` has no `400_settings_dispatch_direct_pool_enabled.sql`
-     or `401_dispatch_claim_batch.sql` (C50 T10/T12).
+  3. `/app/migrations/` has no `401_settings_dispatch_direct_pool_enabled.sql`
+     or `402_dispatch_claim_batch.sql` (C50 T10/T12).
 - **Conclusion:** staging is running a build from **~2026-08-29**, roughly
   **5 days and the entire C50 Phase 0–2 commit range (all dated
   2026-09-02) behind** `feat/c50-phase0-dispatch-metrics`. This matches

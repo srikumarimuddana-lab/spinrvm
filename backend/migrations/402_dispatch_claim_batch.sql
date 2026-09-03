@@ -1,8 +1,8 @@
--- 401_dispatch_claim_batch.sql
+-- 402_dispatch_claim_batch.sql
 --
 -- C50 Phase 2 (T12) — batch driver-claim + offer-insert + insurance-period
 -- RPC for the direct-pool dispatch path (dispatch_direct_pool_enabled,
--- flag OFF by default — see migration 400). Nothing calls this function
+-- flag OFF by default — see migration 401). Nothing calls this function
 -- until Phase 2's T13 wires backend/repositories/dispatch_pool.py's
 -- claim_batch() to it, and T13 only calls it when the flag is on. This
 -- migration changes zero production behavior by itself.
@@ -347,9 +347,9 @@ COMMENT ON FUNCTION dispatch_claim_batch IS
     'Returns one row per ATTEMPTED driver (claimed=true/false), not just '
     'successes, so the Python caller can invalidate_driver_cache for every '
     'attempted driver (see the migration header for why). Dark until '
-    'dispatch_direct_pool_enabled (migration 400) is true AND matching.py '
+    'dispatch_direct_pool_enabled (migration 401) is true AND matching.py '
     '(T13) calls it. Supersedes dead code match_and_claim_driver '
-    '(migrations 77/80). Created in migration 401.';
+    '(migrations 77/80). Created in migration 402.';
 
 -- Lock down EXECUTE the same way 354's sweep locks down every other
 -- SECURITY DEFINER function in public: only service_role may call this.

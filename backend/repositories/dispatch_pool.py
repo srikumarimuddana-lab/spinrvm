@@ -328,7 +328,7 @@ async def claim_batch(
     offered_at,
     expires_at,
 ) -> list[dict]:
-    """Call the `dispatch_claim_batch` RPC (migration 401) over the direct pool.
+    """Call the `dispatch_claim_batch` RPC (migration 402) over the direct pool.
 
     C50 Phase 2 (T12/T13) — the first real caller of this pool. Wraps the
     single-statement RPC call in the same one-transaction-per-call
@@ -345,7 +345,7 @@ async def claim_batch(
     Returns a list of dicts, one per driver dispatch_claim_batch actually
     attempted (not just successes) — each has keys `driver_id`, `claimed`
     (bool), `driver_row` (dict, present only when claimed), `ride_offer_id`
-    (str, present only when claimed). See migration 401's header for why
+    (str, present only when claimed). See migration 402's header for why
     unclaimed attempts are included: the caller needs the full attempted
     set to invalidate_driver_cache for every one of them, matching what
     claim_driver_atomic already does today on the PostgREST path.

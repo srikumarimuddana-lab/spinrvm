@@ -109,7 +109,7 @@ def test_flag_is_not_masked_as_a_credential():
     assert _FLAG not in _SUPER_ADMIN_ONLY_FIELDS
 
 
-def test_migration_400_adds_the_column_with_false_default():
+def test_migration_401_adds_the_column_with_false_default():
     """See test_settings_column_parity.py's module docstring: any field
     SettingsUpdateRequest accepts without a matching `settings` column 500s
     the WHOLE save (PGRST204) on first use, not just this field."""

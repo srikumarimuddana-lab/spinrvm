@@ -209,9 +209,20 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                 if (data.type === "error") {
                     clearAuthAckTimer();
                     setStatus("error");
+                    // Every backend `{type: "error"}` message used to be labeled
+                    // "auth error" regardless of cause — misleading for the many
+                    // non-auth codes this same message type carries post-auth
+                    // (e.g. "snapshot_failed" when the drivers/rides DB query
+                    // itself throws, "not_ride_participant", "message_too_large").
+                    // Only the codes in FATAL_ERROR_MESSAGES are actually
+                    // auth-related (and the only ones that stop reconnection
+                    // below); everything else is a generic backend error.
+                    const isAuthError = data.message ? FATAL_ERROR_MESSAGES.has(data.message) : false;
                     setLastError(
                         data.message
-                            ? `Backend WebSocket auth error: ${data.message}`
+                            ? isAuthError
+                                ? `Backend WebSocket auth error: ${data.message}`
+                                : `Backend WebSocket error: ${data.message}`
                             : "Backend WebSocket returned an error.",
                     );
                     if (data.message && FATAL_ERROR_MESSAGES.has(data.message)) {

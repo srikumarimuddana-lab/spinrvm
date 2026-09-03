@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Pagination } from "@/components/ui/pagination";
+import { PageHeader } from "@/components/page-header";
 import {
     Ticket, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Search, Download,
     RefreshCw, Tag, Users, Lock, Globe,
@@ -495,17 +496,21 @@ export default function PromotionsPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon tint, not a status signal (#2816) */}
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2"><Ticket className="h-8 w-8 text-violet-500" /> Promotions</h1>
-                    <p className="text-muted-foreground mt-1">Manage promo codes, private coupons, and track usage.</p>
-                </div>
-                <Button variant="outline" size="sm" onClick={() => { fetchAll(); fetchUsage(); }} disabled={loading}>
-                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-                </Button>
-            </div>
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
+                        {/* eslint-disable-next-line no-restricted-syntax -- decorative brand icon tint (#2816) */}
+                        <Ticket className="h-8 w-8 text-violet-500" />
+                        Promotions
+                    </span>
+                }
+                description="Manage promo codes, private coupons, and track usage."
+                actions={
+                    <Button variant="outline" size="sm" onClick={() => { fetchAll(); fetchUsage(); }} disabled={loading}>
+                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+                    </Button>
+                }
+            />
 
             {/* Summary Stats */}
             {stats && (

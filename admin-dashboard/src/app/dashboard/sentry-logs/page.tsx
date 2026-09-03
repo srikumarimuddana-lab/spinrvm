@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -316,24 +317,24 @@ export default function SentryLogsPage() {
     return (
         <div className="flex flex-col gap-4 p-6">
             {/* Header */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <h1 className="flex items-center gap-2 text-2xl font-semibold">
+            <PageHeader
+                className="flex flex-wrap items-center justify-between gap-3"
+                title={
+                    <span className="inline-flex items-center gap-2">
                         <Bug className="h-6 w-6" />
                         Sentry Issues
-                    </h1>
-                    <p className="text-sm text-muted-foreground">
-                        Live production errors across every Spinr surface. Data is fetched fresh on
-                        each load — nothing is stored. Refresh clears the view and pulls the latest.
-                    </p>
-                </div>
-                {config?.configured && (
-                    <Button variant="outline" onClick={handleRefresh} disabled={refreshing} className="gap-2">
-                        <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                )}
-            </div>
+                    </span>
+                }
+                description="Live production errors across every Spinr surface. Data is fetched fresh on each load — nothing is stored. Refresh clears the view and pulls the latest."
+                actions={
+                    config?.configured && (
+                        <Button variant="outline" onClick={handleRefresh} disabled={refreshing} className="gap-2">
+                            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    )
+                }
+            />
 
             {/* Errors render at top level, NOT inside the `configured` branch
                 below: a failed /config call leaves `config` null, so an error

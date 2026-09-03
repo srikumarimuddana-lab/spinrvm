@@ -20060,19 +20060,47 @@ how much they de-risk a public launch._
      to `FALSE` (the flag and audit rows aren't per-test-isolated data like
      the other 6 tables, but `_enable_producer()`-style tests mutate them
      and would otherwise leak state into whichever test runs next).
-- **On the "separate, unrelated ~5 CI failures" flagged when C57 was
-  opened** (`test_core_tables_rls.py`/`test_money_and_safety_rls.py`/
-  `test_saved_addresses_rls.py` service-role-bypass/permission mismatches):
-  **did not reproduce** on a fresh local Postgres 16 — ran the full `tests/rls`
-  suite twice locally, both times 61/61 passed with zero failures outside
-  `test_transactional_outbox.py` (before this fix) or zero failures at all
-  (after). This means the extra ~5 CI failures are environment/ordering
-  -specific to CI's `postgres:15` service container (shared across 3
-  same-job steps: "Run backend tests", "Run direct-pool...", "Run RLS...")
-  rather than a deterministic conftest bug reproducible from a clean DB —
-  left unfixed since it can't be diagnosed without CI access to actually
-  reproduce it; flag for a maintainer with CI access to re-run and inspect
-  if it recurs.
+- **The "separate, unrelated ~5 CI failures" flagged when C57 was
+  opened — root-caused and fixed 2026-09-03, same PR (#4896).**
+  (`test_core_tables_rls.py::test_service_role_bypasses_rls_on_users`,
+  `test_money_and_safety_rls.py::test_no_role_can_update_financial_event`/
+  `test_service_role_can_insert_insurance_period`/
+  `test_no_role_can_delete_insurance_period`,
+  `test_saved_addresses_rls.py::test_service_role_bypasses_rls_on_saved_addresses`.)
+  Confirmed live via PR #4896's own CI run (33773016060) once the migration-399
+  fix above landed and stopped masking these under 19 other failures: RLS
+  went from 24 failed straight to exactly these 5 — never reproduced on a
+  *fresh* local Postgres, which was the tell.
+  - **Root cause:** these `anon`/`authenticated`/`service_role` roles are
+    Postgres-**cluster-level**, not per-database, and CI's `backend-test`
+    job runs 3 pytest sessions back-to-back against the **same**
+    `postgres:15` service container: "Run backend tests" (nominally
+    mocked, but `tests/test_phase_distance_parity.py`'s `pg` fixture
+    connects to the same real `DATABASE_URL` and creates
+    `anon`/`authenticated`/`service_role` with a bare `CREATE ROLE ...
+    NOLOGIN` — **no `BYPASSRLS`**), then "Run direct-pool...", then "Run
+    RLS...". Role creation across all 3 is the same idempotent
+    `CREATE ROLE ... EXCEPTION WHEN duplicate_object THEN NULL` pattern —
+    first writer wins, everyone after silently accepts whatever attributes
+    that first writer left. `test_phase_distance_parity.py` runs first in
+    step order and has no reason to know or care that RLS's tests later
+    depend on `service_role` actually bypassing RLS, so it "poisons" the
+    role for the rest of the job. Reproduced deterministically on a local
+    Postgres 16 by manually dropping and recreating `service_role` as bare
+    `NOLOGIN` (simulating the CI ordering) immediately before running
+    `tests/rls` — all 5 failures reproduced byte-for-byte, confirming the
+    mechanism precisely (not just plausible).
+  - **Fix:** `tests/rls/conftest.py`'s `_ROLE_SETUP_SQL` now `ALTER ROLE`s
+    on the `duplicate_object` exception path instead of a bare `NULL`, so
+    this file is authoritative over `anon`/`authenticated`/`service_role`'s
+    attributes regardless of what any earlier same-job pytest session left
+    them as. Verified by re-poisoning `service_role` (and separately
+    `anon`) to bare `NOLOGIN` immediately before each run — self-heals to
+    61/61 both times, plus a further clean 61/61 re-run and an unaffected
+    `tests/direct_pool` 30/30. `test_phase_distance_parity.py` itself is
+    untouched (out of scope — its own role creation is fine for its own
+    purposes; the bug was in RLS's conftest trusting a shared, mutable
+    cluster resource it doesn't own).
 - **Fix:** `tests/rls/conftest.py` now applies `399_transactional_outbox.sql`
   verbatim (same pattern as 58/64/70/290/378) as the last statement in the
   session-scoped schema setup — after the blanket `GRANT ... ON ALL TABLES`

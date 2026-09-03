@@ -146,18 +146,42 @@ CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb
     $$;
 """
 
+# CREATE ... EXCEPTION duplicate_object THEN ALTER (not a bare NULL): these
+# roles are cluster-level, not per-database, and CI's backend-test job runs
+# 3 pytest sessions back-to-back against the SAME postgres:15 service
+# container -- "Run backend tests" (mocked, but tests/test_phase_distance_parity.py
+# connects to the same real DATABASE_URL and creates anon/authenticated/
+# service_role with a bare `NOLOGIN`, no BYPASSRLS), then this repo's own
+# tests/direct_pool, then this file. Whichever session's CREATE ROLE runs
+# first wins the idempotent race; a later session's "EXCEPTION THEN NULL"
+# used to silently accept whatever attributes the first creator left behind
+# -- which meant `service_role` sometimes reached these tests WITHOUT
+# BYPASSRLS, and every "service_role bypasses RLS" test failed with an
+# empty result set or a false RLS-violation error instead of exercising the
+# real production access path (found via the exact repro above: 5 CI-only
+# failures across test_core_tables_rls.py/test_money_and_safety_rls.py/
+# test_saved_addresses_rls.py that never reproduced locally on a *fresh*
+# Postgres -- because a fresh Postgres never has the poisoned role). The
+# ALTER on the exception path makes this file authoritative over these
+# roles' attributes regardless of creation order.
 _ROLE_SETUP_SQL = """
 DO $$ BEGIN
     CREATE ROLE anon NOLOGIN NOINHERIT;
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+EXCEPTION WHEN duplicate_object THEN
+    ALTER ROLE anon NOLOGIN NOINHERIT;
+END $$;
 
 DO $$ BEGIN
     CREATE ROLE authenticated NOLOGIN NOINHERIT;
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+EXCEPTION WHEN duplicate_object THEN
+    ALTER ROLE authenticated NOLOGIN NOINHERIT;
+END $$;
 
 DO $$ BEGIN
     CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+EXCEPTION WHEN duplicate_object THEN
+    ALTER ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
+END $$;
 """
 
 # Minimal stub tables for the other backend/supabase_rls.sql targets, so the

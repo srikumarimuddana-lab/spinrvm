@@ -1090,7 +1090,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 # Insurance Period 2 transitions were already written by
                 # dispatch_claim_batch, in the same transaction as the claim and
                 # the ride_offers insert (T12) — nothing to do here. See
-                # migration 402's RESOLVED note: batching all claims for
+                # migration 402's OPEN QUESTION note: batching all claims for
                 # this attempt into one transaction means every driver claimed
                 # here shares an IDENTICAL started_at (Postgres now() is
                 # transaction-start time), a real granularity change from the

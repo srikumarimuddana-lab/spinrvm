@@ -1,0 +1,422 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    :root {
+      --background:#09090b; --foreground:#fafafa;
+      --card:#0a0a0c; --card-foreground:#fafafa;
+      --secondary:#18181b; --secondary-foreground:#fafafa;
+      --muted:#18181b; --muted-foreground:#a1a1aa;
+      --accent:#18181b; --accent-foreground:#fafafa;
+      --primary:#d32f2f; --primary-foreground:#ffffff;
+      --border:#27272a; --input:#27272a; --ring:#ff453a;
+      --topbar-bg:#0a0a0c;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin:0; font-family:"Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif; background:var(--background); color:var(--foreground); }
+    a { color: var(--primary); } a:hover { color:#ef5350; }
+    .app { width:390px; min-height:1060px; background:var(--background); display:flex; flex-direction:column; }
+    .icon { display:block; flex-shrink:0; }
+
+    .appbar { height:52px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 12px; border-bottom:1px solid var(--border); background:var(--topbar-bg); }
+    .icon-btn { display:flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:8px; background:transparent; border:none; color:var(--foreground); flex-shrink:0; }
+    .icon-btn svg { width:20px; height:20px; }
+    .appbar-logo { height:20px; width:auto; }
+    .avatar { width:30px; height:30px; border-radius:999px; background:var(--secondary); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:var(--foreground); flex-shrink:0; }
+
+    .main { padding:16px; flex:1; }
+
+    .page-title-row { display:flex; align-items:center; gap:8px; margin-bottom:2px; }
+    .page-title { font-size:22px; font-weight:800; letter-spacing:-0.01em; margin:0; color:var(--foreground); }
+    .count-pill { display:inline-flex; align-items:center; border-radius:999px; background:var(--secondary); color:var(--muted-foreground); font-size:11px; font-weight:600; padding:2px 8px; }
+    .page-sub { color:var(--muted-foreground); margin:2px 0 16px; font-size:12.5px; line-height:1.4; }
+
+    .search-wrap { position:relative; margin-bottom:10px; }
+    .search-wrap svg { position:absolute; left:11px; top:50%; transform:translateY(-50%); width:15px; height:15px; color:var(--muted-foreground); }
+    .search-wrap input { width:100%; height:40px; border-radius:9px; border:1px solid var(--input); background:transparent; color:var(--foreground); font-size:14px; padding:0 12px 0 34px; outline:none; font-family:inherit; }
+
+    .field-row { display:flex; gap:8px; margin-bottom:8px; }
+    .field { flex:1; min-width:0; position:relative; }
+    .field select { appearance:none; width:100%; height:38px; border-radius:9px; border:1px solid var(--input); background:transparent; color:var(--foreground); font-size:12.5px; padding:0 26px 0 10px; outline:none; font-family:inherit; }
+    .field svg { position:absolute; right:8px; top:50%; transform:translateY(-50%); width:13px; height:13px; color:var(--muted-foreground); pointer-events:none; }
+    .field input[type="date"] { width:100%; height:38px; border-radius:9px; border:1px solid var(--input); background:transparent; color:var(--foreground); font-size:12.5px; padding:0 8px; outline:none; font-family:inherit; }
+
+    .clear-row { display:flex; justify-content:flex-end; margin-bottom:4px; }
+    .btn-ghost-sm { display:inline-flex; align-items:center; gap:4px; background:none; border:none; color:var(--muted-foreground); font-size:12px; font-weight:600; padding:4px 6px; font-family:inherit; }
+    .btn-ghost-sm svg { width:12px; height:12px; }
+
+    .actors-scroll { display:flex; gap:8px; overflow-x:auto; margin:14px 0 16px; padding-bottom:2px; }
+    .actors-scroll::-webkit-scrollbar { display:none; }
+    .actor-chip { flex-shrink:0; display:flex; align-items:center; gap:6px; border-radius:999px; border:1px solid var(--border); background:var(--card); padding:6px 12px; font-size:12px; color:var(--foreground); white-space:nowrap; }
+    .actor-chip.selected { border-color:var(--primary); background:rgba(211,47,47,0.12); }
+    .actor-chip .aid { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; }
+    .actor-chip .cnt { color:var(--muted-foreground); }
+
+    .cards { display:flex; flex-direction:column; gap:10px; }
+    .log-card { border:1px solid var(--border); border-radius:12px; background:var(--card); padding:12px; }
+    .log-card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; margin-bottom:6px; }
+    .log-when { font-size:11.5px; color:var(--muted-foreground); }
+    .log-when b { color:var(--foreground); font-weight:600; }
+    .badge { display:inline-flex; align-items:center; border-radius:999px; padding:2px 9px; font-size:11px; font-weight:600; white-space:nowrap; }
+    .log-actor-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+    .actor-id { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:var(--foreground); }
+    .actor-role { color:var(--muted-foreground); font-size:11.5px; }
+    .log-target { font-size:13px; color:var(--foreground); line-height:1.4; }
+    .domain-tag { display:inline-flex; border:1px solid var(--border); border-radius:5px; color:var(--muted-foreground); font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.03em; padding:1px 5px; margin-top:6px; }
+    .expand-row { display:flex; align-items:center; justify-content:center; margin-top:8px; padding-top:8px; border-top:1px solid var(--border); color:var(--muted-foreground); }
+    .chev { width:14px; height:14px; transition:transform .15s ease; }
+    .chev.open { transform:rotate(180deg); }
+    .detail-box { margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); }
+    .detail-text { color:var(--foreground); font-size:12.5px; line-height:1.55; }
+    .detail-meta { display:flex; flex-direction:column; gap:2px; margin-top:6px; font-size:11px; color:var(--muted-foreground); }
+
+    .empty { text-align:center; padding:48px 0; }
+    .empty svg { width:34px; height:34px; color:rgba(161,161,170,0.25); margin:0 auto 10px; }
+    .empty-title { font-size:14px; font-weight:600; color:var(--foreground); }
+    .empty-sub { color:var(--muted-foreground); margin-top:4px; font-size:12.5px; }
+
+    .pagination { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:16px; }
+    .pagination-label { font-size:12px; color:var(--muted-foreground); }
+    .pagination-right { display:flex; gap:8px; }
+    .btn { display:inline-flex; align-items:center; gap:6px; border-radius:8px; font-size:13px; font-weight:600; height:36px; padding:0 12px; cursor:pointer; border:1px solid var(--border); background:transparent; color:var(--foreground); font-family:inherit; }
+    .btn svg { width:14px; height:14px; }
+    .btn:disabled, .btn[disabled] { opacity:0.5; pointer-events:none; cursor:not-allowed; }
+
+    .footer-hint { display:flex; align-items:flex-start; gap:6px; color:var(--muted-foreground); font-size:11px; line-height:1.4; margin-top:18px; }
+    .footer-hint svg { width:12px; height:12px; flex-shrink:0; margin-top:1px; }
+  </style>
+</helmet>
+
+<div class="app" style="{{rootStyle}}">
+  <div class="appbar">
+    <button class="icon-btn" aria-label="Menu">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+    <img class="appbar-logo" src="{{logoFile}}" alt="Spinr" />
+    <div class="avatar">PK</div>
+  </div>
+
+  <div class="main">
+    <div class="page-title-row">
+      <h1 class="page-title">Audit Logs</h1>
+      <span class="count-pill">{{resultCount}}</span>
+    </div>
+    <p class="page-sub">Every admin action, keyed to an actor and a timestamp.</p>
+
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <input type="text" placeholder="Search target or detail…" value="{{search}}" onChange="{{setSearch}}" />
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <select value="{{actionFilter}}" onChange="{{setActionFilter}}">
+          <option value="all">All actions</option>
+          <sc-for list="{{actionOptions}}" as="opt" hint-placeholder-count="7">
+            <option value="{{opt.value}}">{{opt.label}}</option>
+          </sc-for>
+        </select>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+      <div class="field">
+        <select value="{{actorFilter}}" onChange="{{setActorFilter}}">
+          <option value="all">All actors</option>
+          <sc-for list="{{actorOptions}}" as="opt" hint-placeholder-count="5">
+            <option value="{{opt.value}}">{{opt.label}}</option>
+          </sc-for>
+        </select>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field"><input type="date" value="{{dateFrom}}" onChange="{{setDateFrom}}" /></div>
+      <div class="field"><input type="date" value="{{dateTo}}" onChange="{{setDateTo}}" /></div>
+    </div>
+
+    <sc-if value="{{hasFilters}}" hint-placeholder-val="{{false}}">
+      <div class="clear-row">
+        <button class="btn-ghost-sm" onClick="{{clearFilters}}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          Clear filters
+        </button>
+      </div>
+    </sc-if>
+
+    <div class="actors-scroll">
+      <sc-for list="{{topActors}}" as="actor" hint-placeholder-count="5">
+        <button class="{{actor.chipClass}}" onClick="{{actor.select}}">
+          <span class="aid">{{actor.id}}</span>
+          <span class="cnt">{{actor.count}}</span>
+        </button>
+      </sc-for>
+    </div>
+
+    <div class="cards">
+      <sc-for list="{{pageRows}}" as="row" hint-placeholder-count="6">
+        <div class="log-card" onClick="{{row.toggle}}">
+          <div class="log-card-top">
+            <span class="log-when"><b>{{row.dateLabel}}</b> · {{row.timeLabel}}</span>
+            <span class="badge" style="background:{{row.badgeBg}};color:{{row.badgeText}};">{{row.actionLabel}}</span>
+          </div>
+          <div class="log-actor-row">
+            <span class="actor-id">{{row.actorId}}</span>
+            <span class="actor-role">· {{row.actorRole}}</span>
+          </div>
+          <div class="log-target">{{row.target}}</div>
+          <div><span class="domain-tag">{{row.domain}}</span></div>
+          <div class="expand-row">
+            <svg class="{{row.chevClass}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+          <sc-if value="{{row.isExpanded}}" hint-placeholder-val="{{false}}">
+            <div class="detail-box">
+              <div class="detail-text">{{row.detail}}</div>
+              <div class="detail-meta">
+                <span>Location: {{row.location}}</span>
+                <span>Record ID: audit_{{row.id}}</span>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <sc-if value="{{isEmpty}}" hint-placeholder-val="{{false}}">
+        <div class="empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <div class="empty-title">No matching records</div>
+          <div class="empty-sub">Try clearing a filter.</div>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="pagination">
+      <div class="pagination-label">{{rangeStart}}–{{rangeEnd}} of {{resultCount}}</div>
+      <div class="pagination-right">
+        <button class="btn" onClick="{{prevPage}}" disabled="{{isFirstPage}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>Prev</button>
+        <button class="btn" onClick="{{nextPage}}" disabled="{{isLastPage}}">Next<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+    </div>
+
+    <div class="footer-hint">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Append-only — admin actions are never edited or deleted, only superseded.
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","default":"dark","options":["dark","light"],"section":"Theme"}}'>
+/* Text colors are theme-specific: -400 shades (dark) and -700 shades (light)
+   both clear WCAG AA (4.5:1) against their card background — computed, not
+   guessed. The real audit-logs page hardcodes -600 regardless of theme,
+   which only clears ~4.1:1 on a dark card (fails AA) — don't copy that. */
+var TYPE_META = {
+  create:   { label: 'Create',   bg: 'rgba(168,85,247,0.15)', textDark: '#c084fc', textLight: '#7e22ce' },
+  update:   { label: 'Update',   bg: 'rgba(245,158,11,0.15)', textDark: '#fbbf24', textLight: '#b45309' },
+  delete:   { label: 'Delete',   bg: 'rgba(239,68,68,0.15)',  textDark: '#f87171', textLight: '#b91c1c' },
+  override: { label: 'Override', bg: 'rgba(249,115,22,0.15)', textDark: '#fb923c', textLight: '#c2410c' },
+  approve:  { label: 'Approve',  bg: 'rgba(16,185,129,0.15)', textDark: '#34d399', textLight: '#047857' },
+  login:    { label: 'Login',    bg: 'rgba(59,130,246,0.15)', textDark: '#60a5fa', textLight: '#1d4ed8' },
+  export:   { label: 'Export',   bg: 'rgba(6,182,212,0.15)',  textDark: '#22d3ee', textLight: '#0e7490' }
+};
+
+var ACTOR_META = {
+  adm_2891: 'Super Admin',
+  adm_1044: 'Support',
+  adm_3390: 'Trust & Safety',
+  adm_0532: 'Finance',
+  sys_scheduler: 'System'
+};
+
+var ALL_LOGS = [
+  { id:1,  ts:'2026-09-01 09:14:02', actor:'adm_2891',      type:'override', domain:'payments',  target:'service_areas · Saskatoon Downtown', detail:'Manual surge override set to 3.2x (justification: SGA Roughriders game, 42k attendance). Auto-clamped to 2.5x at fare-calc per SURGE_CAP.', location:'Saskatoon, SK' },
+  { id:2,  ts:'2026-09-01 08:51:47', actor:'sys_scheduler', type:'update',   domain:'corporate',  target:'corporate_wallet · acc_0092', detail:"Auto-topup triggered: balance $184.20 below $500 threshold. Charged default card, wallet credited $1,000.00.", location:'—' },
+  { id:3,  ts:'2026-08-31 22:03:15', actor:'adm_1044',      type:'approve',  domain:'drivers',    target:'drivers · drv_5521 (document)', detail:'Approved renewed SGI insurance endorsement. Expiry updated to 2027-08-31.', location:'Regina, SK' },
+  { id:4,  ts:'2026-08-31 21:40:09', actor:'adm_3390',      type:'delete',   domain:'safety',     target:'sos_incidents · inc_1187', detail:'Closed and archived after investigation — false trigger, rider confirmed accidental tap.', location:'Moose Jaw, SK' },
+  { id:5,  ts:'2026-08-31 19:12:51', actor:'adm_0532',      type:'export',   domain:'admin',      target:'rides · CSV export (312 rows)', detail:'Weekly reconciliation export, service area = all, date range 2026-08-24 to 2026-08-30.', location:'—' },
+  { id:6,  ts:'2026-08-31 17:28:40', actor:'adm_2891',      type:'login',    domain:'auth',       target:'auth · admin session', detail:'Signed in from a new device. MFA challenge passed.', location:'Saskatoon, SK' },
+  { id:7,  ts:'2026-08-31 15:05:22', actor:'adm_1044',      type:'update',   domain:'corporate',  target:'corporate_policies · pol_0044', detail:'Raised per-ride allowance cap from $35 to $45 for Nutrien Corp policy.', location:'Regina, SK' },
+  { id:8,  ts:'2026-08-31 13:47:03', actor:'adm_3390',      type:'delete',   domain:'drivers',    target:'drivers · drv_2210', detail:'Deactivated — abstract check flagged a major violation inside the 3-year window.', location:'Prince Albert, SK' },
+  { id:9,  ts:'2026-08-31 11:30:58', actor:'sys_scheduler', type:'update',   domain:'payments',   target:'stripe_events · evt_3P8k9fA1', detail:"Reconciliation loop resolved a stuck 'processing' charge to 'succeeded' after webhook replay.", location:'—' },
+  { id:10, ts:'2026-08-31 10:02:14', actor:'adm_0532',      type:'approve',  domain:'corporate',  target:'corporate_accounts · acc_0141 (KYB)', detail:'KYB re-verification approved — business registration renewed.', location:'—' },
+  { id:11, ts:'2026-08-30 20:55:37', actor:'adm_2891',      type:'create',   domain:'admin',      target:'staff · staff_0067', detail:'Created new admin account, role preset: Support (modules: rides, support-tickets, drivers-read).', location:'Saskatoon, SK' },
+  { id:12, ts:'2026-08-30 18:20:11', actor:'adm_1044',      type:'update',   domain:'rides',      target:'rides · ride_88213', detail:'Manually reassigned driver after a stuck dispatch — offer timeout exceeded the 15s SLA four times.', location:'Saskatoon, SK' },
+  { id:13, ts:'2026-08-30 16:44:29', actor:'adm_3390',      type:'override', domain:'safety',     target:'drivers · drv_4407 (go_online)', detail:'Temporarily blocked go_online — vehicle inspection document expired 2026-08-29.', location:'Yorkton, SK' },
+  { id:14, ts:'2026-08-30 14:09:52', actor:'adm_0532',      type:'export',   domain:'admin',      target:'driver_earnings · T4A batch (2026)', detail:'Generated year-to-date T4A-compatible earnings summary for 412 drivers.', location:'—' },
+  { id:15, ts:'2026-08-30 12:33:07', actor:'sys_scheduler', type:'delete',   domain:'corporate',  target:'corporate_wallet · acc_0058', detail:'Low-balance nudge escalated to auto-suspend — three failed auto-topup attempts.', location:'—' },
+  { id:16, ts:'2026-08-30 09:58:44', actor:'adm_2891',      type:'update',   domain:'payments',   target:'app_settings · surge_engine', detail:'Rotated Google Maps API key (stored in app_settings, no redeploy required).', location:'Saskatoon, SK' },
+  { id:17, ts:'2026-08-29 22:15:30', actor:'adm_1044',      type:'approve',  domain:'drivers',    target:'drivers · drv_6091 (document)', detail:'Approved Vulnerable Sector Check — renewed, on file.', location:'Regina, SK' },
+  { id:18, ts:'2026-08-29 20:02:18', actor:'adm_3390',      type:'login',    domain:'auth',       target:'auth · admin session', detail:'Signed in — MFA challenge passed.', location:'Moose Jaw, SK' },
+  { id:19, ts:'2026-08-29 17:41:05', actor:'adm_0532',      type:'delete',   domain:'payments',   target:'promo_codes · WELCOME25', detail:'Deactivated promo — redemption cap of 5,000 reached.', location:'—' },
+  { id:20, ts:'2026-08-29 15:26:49', actor:'adm_2891',      type:'create',   domain:'corporate',  target:'corporate_accounts · acc_0203', detail:'Onboarded new corporate account — 3-seat billing admin group.', location:'Saskatoon, SK' }
+];
+
+var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function fmtDate(dateStr) {
+  var p = dateStr.split('-');
+  return MONTHS[parseInt(p[1], 10) - 1] + ' ' + parseInt(p[2], 10);
+}
+
+var PAGE_SIZE = 6;
+
+var THEMES = {
+  dark: {
+    background: '#09090b', foreground: '#fafafa',
+    card: '#0a0a0c', cardForeground: '#fafafa',
+    secondary: '#18181b', secondaryForeground: '#fafafa',
+    muted: '#18181b', mutedForeground: '#a1a1aa',
+    accent: '#18181b', accentForeground: '#fafafa',
+    border: '#27272a', input: '#27272a', ring: '#ff453a',
+    topbarBg: '#0a0a0c',
+    logo: 'spinr-logo-dark.png'
+  },
+  light: {
+    background: '#f9fafb', foreground: '#111827',
+    card: '#ffffff', cardForeground: '#111827',
+    secondary: '#f3f4f6', secondaryForeground: '#1f2937',
+    muted: '#f3f4f6', mutedForeground: '#6b7280',
+    accent: '#f3f4f6', accentForeground: '#1f2937',
+    border: '#e5e7eb', input: '#e5e7eb', ring: '#ff3b30',
+    topbarBg: '#ffffff',
+    logo: 'spinr-logo-light.png'
+  }
+};
+
+function buildRootStyle(t) {
+  return '--background:' + t.background + ';--foreground:' + t.foreground +
+    ';--card:' + t.card + ';--card-foreground:' + t.cardForeground +
+    ';--secondary:' + t.secondary + ';--secondary-foreground:' + t.secondaryForeground +
+    ';--muted:' + t.muted + ';--muted-foreground:' + t.mutedForeground +
+    ';--accent:' + t.accent + ';--accent-foreground:' + t.accentForeground +
+    ';--border:' + t.border + ';--input:' + t.input + ';--ring:' + t.ring +
+    ';--topbar-bg:' + t.topbarBg;
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      search: '', actionFilter: 'all', actorFilter: 'all',
+      dateFrom: '', dateTo: '', page: 1, expandedId: null
+    };
+  }
+
+  renderVals() {
+    var self = this;
+    var st = this.state;
+    var themeKey = this.props.theme === 'light' ? 'light' : 'dark';
+    var theme = THEMES[themeKey];
+
+    var filtered = ALL_LOGS.filter(function (r) {
+      if (st.actionFilter !== 'all' && r.type !== st.actionFilter) return false;
+      if (st.actorFilter !== 'all' && r.actor !== st.actorFilter) return false;
+      if (st.dateFrom && r.ts.slice(0, 10) < st.dateFrom) return false;
+      if (st.dateTo && r.ts.slice(0, 10) > st.dateTo) return false;
+      if (st.search) {
+        var q = st.search.toLowerCase();
+        var hay = (r.target + ' ' + r.detail + ' ' + r.actor).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    var totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    var page = Math.min(st.page, totalPages);
+    var startIdx = (page - 1) * PAGE_SIZE;
+    var pageSlice = filtered.slice(startIdx, startIdx + PAGE_SIZE);
+
+    var pageRows = pageSlice.map(function (r) {
+      var meta = TYPE_META[r.type];
+      var expanded = st.expandedId === r.id;
+      return {
+        id: r.id,
+        dateLabel: fmtDate(r.ts),
+        timeLabel: r.ts.slice(11),
+        actorId: r.actor,
+        actorRole: ACTOR_META[r.actor] || '',
+        actionLabel: meta.label,
+        badgeBg: meta.bg,
+        badgeText: themeKey === 'light' ? meta.textLight : meta.textDark,
+        domain: r.domain,
+        target: r.target,
+        detail: r.detail,
+        location: r.location,
+        isExpanded: expanded,
+        chevClass: expanded ? 'chev open' : 'chev',
+        toggle: function () {
+          self.setState({ expandedId: expanded ? null : r.id });
+        }
+      };
+    });
+
+    var actionCounts = {};
+    ALL_LOGS.forEach(function (r) { actionCounts[r.type] = (actionCounts[r.type] || 0) + 1; });
+    var actionOptions = Object.keys(TYPE_META).map(function (k) {
+      return { value: k, label: TYPE_META[k].label + ' (' + (actionCounts[k] || 0) + ')' };
+    });
+
+    var actorOptions = Object.keys(ACTOR_META).map(function (id) {
+      return { value: id, label: id + ' — ' + ACTOR_META[id] };
+    });
+
+    var actorCounts = {};
+    ALL_LOGS.forEach(function (r) { actorCounts[r.actor] = (actorCounts[r.actor] || 0) + 1; });
+    var topActors = Object.keys(actorCounts)
+      .sort(function (a, b) { return actorCounts[b] - actorCounts[a]; })
+      .slice(0, 5)
+      .map(function (id) {
+        var selected = st.actorFilter === id;
+        return {
+          id: id,
+          count: actorCounts[id],
+          chipClass: selected ? 'actor-chip selected' : 'actor-chip',
+          select: function () {
+            self.setState({ actorFilter: selected ? 'all' : id, page: 1 });
+          }
+        };
+      });
+
+    var hasFilters = !!(st.search || st.actionFilter !== 'all' || st.actorFilter !== 'all' || st.dateFrom || st.dateTo);
+
+    return {
+      rootStyle: buildRootStyle(theme),
+      logoFile: theme.logo,
+      search: st.search,
+      setSearch: function (e) { self.setState({ search: e.target.value, page: 1 }); },
+      actionFilter: st.actionFilter,
+      setActionFilter: function (e) { self.setState({ actionFilter: e.target.value, page: 1 }); },
+      actorFilter: st.actorFilter,
+      setActorFilter: function (e) { self.setState({ actorFilter: e.target.value, page: 1 }); },
+      dateFrom: st.dateFrom,
+      setDateFrom: function (e) { self.setState({ dateFrom: e.target.value, page: 1 }); },
+      dateTo: st.dateTo,
+      setDateTo: function (e) { self.setState({ dateTo: e.target.value, page: 1 }); },
+      hasFilters: hasFilters,
+      clearFilters: function () {
+        self.setState({ search: '', actionFilter: 'all', actorFilter: 'all', dateFrom: '', dateTo: '', page: 1 });
+      },
+      actionOptions: actionOptions,
+      actorOptions: actorOptions,
+      topActors: topActors,
+      pageRows: pageRows,
+      isEmpty: filtered.length === 0,
+      resultCount: filtered.length,
+      rangeStart: filtered.length === 0 ? 0 : startIdx + 1,
+      rangeEnd: Math.min(startIdx + PAGE_SIZE, filtered.length),
+      isFirstPage: page <= 1,
+      isLastPage: page >= totalPages,
+      prevPage: function () { self.setState({ page: Math.max(1, page - 1) }); },
+      nextPage: function () { self.setState({ page: Math.min(totalPages, page + 1) }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

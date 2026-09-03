@@ -19869,7 +19869,23 @@ how much they de-risk a public launch._
   `test_email_deliverability.py` failure (item 7 above).
 
 ### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle
-- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+- [x] **Status:** closed (2026-09-03) — fixed as WS-1 subtask 3 of
+  `plans/2026-09-03-path-to-a-implementation-plan.md`. The postgrest claim
+  loop in `_match_driver_to_ride_attempt` (`backend/routes/rides/
+  matching.py`) is now wrapped in `try/except Exception`: on any exception,
+  every driver already appended to `claimed_drivers` is released via
+  `set_driver_available(d["id"], True)` before the exception is logged
+  (`error`, `exc_info=True`) and re-raised, mirroring the existing
+  `ride_offers` insert failure handler's pattern exactly. Regression test
+  `test_postgrest_claim_loop_releases_prior_claims_and_reraises` in
+  `backend/tests/test_dispatch_db_errors.py` (not
+  `test_dispatch_match_attempt_branches.py` as originally suggested below —
+  same effective coverage, grouped with this repo's other dispatch-DB-error
+  regression tests per the implementation plan) claims 2 of 3 candidates,
+  raises on the 3rd, and asserts both earlier claims are released and the
+  exception still propagates. See
+  `docs/change-log/2026-09-03-ws1-correctness.md`.
+  Originally — found during C50's T2 retro `spinr-dispatch-reviewer`
   pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
 - **Issue/gap:** `_match_driver_to_ride_attempt`'s batch-claim loop
   (`backend/routes/rides/matching.py:822-842`) calls

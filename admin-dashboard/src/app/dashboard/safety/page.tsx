@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PageHeader } from "@/components/page-header";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
@@ -310,34 +311,34 @@ export default function SafetyPage() {
 
     return (
         <div className="space-y-4">
-            {/* Header */}
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                    <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
+            <PageHeader
+                className="flex items-start justify-between gap-3 flex-wrap"
+                title={
+                    <span className="inline-flex items-center gap-2">
                         <Shield className="h-5 w-5 text-destructive" />
                         Safety queue
-                    </h1>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                        Rider SOS, driver safety reports, and auto-escalations from the in-trip check-in loop.
-                    </p>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                    {openCount != null && (
-                        <span className="inline-flex items-center gap-1.5">
-                            <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
-                            <span className="font-semibold text-foreground">{openCount}</span> open
-                        </span>
-                    )}
-                    <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
-                        <Plus className="h-4 w-4 mr-1.5" />
-                        Log Incident
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
-                        <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+                    </span>
+                }
+                description="Rider SOS, driver safety reports, and auto-escalations from the in-trip check-in loop."
+                actions={
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        {openCount != null && (
+                            <span className="inline-flex items-center gap-1.5">
+                                <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                                <span className="font-semibold text-foreground">{openCount}</span> open
+                            </span>
+                        )}
+                        <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)}>
+                            <Plus className="h-4 w-4 mr-1.5" />
+                            Log Incident
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={load} disabled={refreshing}>
+                            <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshing ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                }
+            />
 
             {/* Filters */}
             <div className="flex items-center gap-2 flex-wrap">

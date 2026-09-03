@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { PageHeader } from "@/components/page-header";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -406,20 +407,21 @@ export default function CloudMessagingPage() {
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                         <Cloud className="h-8 w-8 text-violet-500" />
                         Notifications
-                    </h1>
-                    <p className="text-muted-foreground mt-1">Send push, email, and SMS — service notices or consent-gated marketing — to customers and drivers.</p>
-                </div>
-                <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
-                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-                </Button>
-            </div>
+                    </span>
+                }
+                description="Send push, email, and SMS — service notices or consent-gated marketing — to customers and drivers."
+                actions={
+                    <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
+                        <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+                    </Button>
+                }
+            />
 
             {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">

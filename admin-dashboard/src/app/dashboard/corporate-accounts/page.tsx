@@ -494,10 +494,10 @@ export default function CorporateAccountsPage() {
                                         </TableCell>
                                         <TableCell className="text-right">
                                             <div className="flex justify-end gap-2">
-                                                <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(account)}>
+                                                <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(account)} aria-label="Edit account">
                                                     <Pencil className="h-4 w-4 text-muted-foreground" />
                                                 </Button>
-                                                <Button variant="ghost" size="icon" onClick={() => handleOpenDelete(account)}>
+                                                <Button variant="ghost" size="icon" onClick={() => handleOpenDelete(account)} aria-label="Delete account">
                                                     <Trash2 className="h-4 w-4 text-destructive" />
                                                 </Button>
                                             </div>

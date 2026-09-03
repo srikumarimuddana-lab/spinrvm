@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -194,34 +195,34 @@ export default function StripeEventsPage() {
 
     return (
         <div className="space-y-6 p-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold flex items-center gap-2">
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
                         <Zap className="h-6 w-6" />
                         Stripe Webhook Events
-                    </h1>
-                    <p className="text-muted-foreground mt-1">
-                        Events stuck at processed_at=NULL that need manual resolution
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setAutoRefresh(!autoRefresh)}
-                    >
-                        {autoRefresh ? "Pause Auto-refresh" : "Resume Auto-refresh"}
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => { setLoading(true); fetchEvents(); }}
-                    >
-                        <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+                    </span>
+                }
+                description="Events stuck at processed_at=NULL that need manual resolution"
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setAutoRefresh(!autoRefresh)}
+                        >
+                            {autoRefresh ? "Pause Auto-refresh" : "Resume Auto-refresh"}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { setLoading(true); fetchEvents(); }}
+                        >
+                            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                }
+            />
 
             {error && (
                 <Card className="border-destructive">

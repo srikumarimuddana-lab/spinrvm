@@ -1115,7 +1115,7 @@ export default function UsersPage() {
 
                     <div className="space-y-3 py-1">
                         <div className="space-y-1.5">
-                            <Label className="text-xs">Reason <span className="text-destructive">*</span></Label>
+                            <Label htmlFor="moderation-reason" className="text-xs">Reason <span className="text-destructive">*</span></Label>
                             <div className="flex flex-wrap gap-1.5">
                                 {["Payment / chargeback", "Safety report", "Policy violation", "Fraud / abuse"].map((r) => (
                                     <button
@@ -1129,6 +1129,7 @@ export default function UsersPage() {
                                 ))}
                             </div>
                             <Textarea
+                                id="moderation-reason"
                                 value={moderationReason}
                                 onChange={(e) => setModerationReason(e.target.value)}
                                 placeholder="Shown to the rider and recorded in the audit log."
@@ -1137,9 +1138,9 @@ export default function UsersPage() {
                         </div>
                         {pendingStatusChange?.status === "suspended" && (
                             <div className="space-y-1.5">
-                                <Label className="text-xs">Duration</Label>
+                                <Label htmlFor="moderation-duration" className="text-xs">Duration</Label>
                                 <Select value={moderationDays || "0"} onValueChange={(v) => setModerationDays(v === "0" ? "" : v)}>
-                                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="moderation-duration" className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="0">Indefinite (until reactivated)</SelectItem>
                                         <SelectItem value="1">24 hours</SelectItem>

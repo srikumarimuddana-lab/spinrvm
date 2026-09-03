@@ -134,9 +134,9 @@ export default function LostAndFoundTab() {
                             <TableCell><Badge className={`text-[10px] ${(S_CFG[item.status] || S_CFG.reported).c}`}>{(S_CFG[item.status] || S_CFG.reported).l}</Badge></TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(item.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                {item.status !== "resolved" && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleResolve(item.id, "resolved")} title="Resolve"><CheckCircle className="h-3.5 w-3.5 text-success" /></Button>}
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(item); setEditForm({ item_description: item.item_description || "", admin_notes: item.admin_notes || "", status: item.status || "reported" }); setEditDialog(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setDeleteTarget(item.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                {item.status !== "resolved" && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleResolve(item.id, "resolved")} title="Resolve" aria-label="Resolve"><CheckCircle className="h-3.5 w-3.5 text-success" /></Button>}
+                                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit item" onClick={() => { setEditing(item); setEditForm({ item_description: item.item_description || "", admin_notes: item.admin_notes || "", status: item.status || "reported" }); setEditDialog(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Delete item" onClick={() => setDeleteTarget(item.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
@@ -148,8 +148,8 @@ export default function LostAndFoundTab() {
             <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) setDialogOpen(false); }}>
                 <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">Report Lost Item</DialogTitle></DialogHeader>
                     <div className="space-y-3">
-                        <div className="space-y-1.5"><Label className="text-xs">Ride ID *</Label><Input placeholder="Enter ride ID" value={form.ride_id} onChange={(e) => setForm({ ...form, ride_id: e.target.value })} /></div>
-                        <div className="space-y-1.5"><Label className="text-xs">Item Description *</Label><Textarea placeholder="Describe the item..." value={form.item_description} onChange={(e) => setForm({ ...form, item_description: e.target.value })} rows={3} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="lf-ride-id" className="text-xs">Ride ID *</Label><Input id="lf-ride-id" placeholder="Enter ride ID" value={form.ride_id} onChange={(e) => setForm({ ...form, ride_id: e.target.value })} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="lf-item-description" className="text-xs">Item Description *</Label><Textarea id="lf-item-description" placeholder="Describe the item..." value={form.item_description} onChange={(e) => setForm({ ...form, item_description: e.target.value })} rows={3} /></div>
                         <ServiceAreaSelect value={form.service_area_id} onChange={(v) => setForm({ ...form, service_area_id: v })} areas={areas} />
                         <Button className="w-full" size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Reporting..." : "Report Item"}</Button>
                     </div>
@@ -160,9 +160,9 @@ export default function LostAndFoundTab() {
             <Dialog open={editDialog} onOpenChange={(o) => { if (!o) { setEditDialog(false); setEditing(null); } }}>
                 <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">Edit Lost Item</DialogTitle></DialogHeader>
                     <div className="space-y-3">
-                        <div className="space-y-1.5"><Label className="text-xs">Item Description</Label><Textarea value={editForm.item_description} onChange={(e) => setEditForm({ ...editForm, item_description: e.target.value })} rows={2} /></div>
-                        <div className="space-y-1.5"><Label className="text-xs">Admin Notes</Label><Textarea value={editForm.admin_notes} onChange={(e) => setEditForm({ ...editForm, admin_notes: e.target.value })} rows={2} /></div>
-                        <div className="space-y-1.5"><Label className="text-xs">Status</Label><Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="reported">Reported</SelectItem><SelectItem value="driver_notified">Driver Notified</SelectItem><SelectItem value="resolved">Resolved</SelectItem><SelectItem value="unresolved">Unresolved</SelectItem></SelectContent></Select></div>
+                        <div className="space-y-1.5"><Label htmlFor="lf-edit-item-description" className="text-xs">Item Description</Label><Textarea id="lf-edit-item-description" value={editForm.item_description} onChange={(e) => setEditForm({ ...editForm, item_description: e.target.value })} rows={2} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="lf-admin-notes" className="text-xs">Admin Notes</Label><Textarea id="lf-admin-notes" value={editForm.admin_notes} onChange={(e) => setEditForm({ ...editForm, admin_notes: e.target.value })} rows={2} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="lf-status" className="text-xs">Status</Label><Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}><SelectTrigger id="lf-status"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="reported">Reported</SelectItem><SelectItem value="driver_notified">Driver Notified</SelectItem><SelectItem value="resolved">Resolved</SelectItem><SelectItem value="unresolved">Unresolved</SelectItem></SelectContent></Select></div>
                         <Button className="w-full" size="sm" onClick={handleUpdate} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</Button>
                     </div>
                 </DialogContent>

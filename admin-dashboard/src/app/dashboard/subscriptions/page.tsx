@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { PageHeader } from "@/components/page-header";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -402,8 +403,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                         <Label>Tax collection enabled</Label>
                     </div>
                     <div className="space-y-1">
-                        <Label>Province code</Label>
+                        <Label htmlFor="tax-province">Province code</Label>
                         <Input
+                            id="tax-province"
                             value={form.province}
                             maxLength={3}
                             placeholder="SK"
@@ -412,8 +414,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                         <div className="space-y-1">
-                            <Label>GST rate (%)</Label>
+                            <Label htmlFor="tax-gst-rate">GST rate (%)</Label>
                             <Input
+                                id="tax-gst-rate"
                                 type="number"
                                 min={0}
                                 max={25}
@@ -423,8 +426,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                             />
                         </div>
                         <div className="space-y-1">
-                            <Label>PST rate (%)</Label>
+                            <Label htmlFor="tax-pst-rate">PST rate (%)</Label>
                             <Input
+                                id="tax-pst-rate"
                                 type="number"
                                 min={0}
                                 max={25}
@@ -434,8 +438,9 @@ function TaxConfigModal({ open, area, onClose, onSave }: TaxConfigModalProps) {
                             />
                         </div>
                         <div className="space-y-1">
-                            <Label>HST rate (%)</Label>
+                            <Label htmlFor="tax-hst-rate">HST rate (%)</Label>
                             <Input
+                                id="tax-hst-rate"
                                 type="number"
                                 min={0}
                                 max={25}
@@ -615,20 +620,21 @@ export default function SubscriptionsPage() {
 
     return (
         <div className="space-y-6 p-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <CreditCard className="h-6 w-6 text-primary" />
-                    <div>
-                        <h1 className="text-2xl font-bold">Spinr Pass Subscriptions</h1>
-                        <p className="text-sm text-muted-foreground">Manage plans, subscriptions, transactions, and tax rates</p>
-                    </div>
-                </div>
-                <Button onClick={load} variant="outline" disabled={loading}>
-                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-                    Refresh
-                </Button>
-            </div>
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-2">
+                        <CreditCard className="h-6 w-6 text-primary" />
+                        Spinr Pass Subscriptions
+                    </span>
+                }
+                description="Manage plans, subscriptions, transactions, and tax rates"
+                actions={
+                    <Button onClick={load} variant="outline" disabled={loading}>
+                        <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
+                }
+            />
 
             {/* Stats */}
             {stats && (

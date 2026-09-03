@@ -161,8 +161,8 @@ function TicketsList() {
                                 <TableCell><Badge variant="secondary" className={`text-[10px] ${statusColor(t.status)}`}>{t.status?.replace(/_/g, " ")}</Badge></TableCell>
                                 <TableCell className="text-[10px] text-muted-foreground">{formatDate(t.created_at)}</TableCell>
                                 <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "", service_area_id: t.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(t.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit ticket" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "", service_area_id: t.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Delete ticket" onClick={(e) => { e.stopPropagation(); setDeleteTarget(t.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                                 </div></TableCell>
                             </TableRow>
                         ))}</TableBody></Table>}
@@ -206,18 +206,18 @@ function TicketsList() {
             <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) { setDialogOpen(false); reset(); } }}>
                 <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">{editing ? "Edit Ticket" : "Create Ticket"}</DialogTitle></DialogHeader>
                     <div className="space-y-3">
-                        <div className="space-y-1.5"><Label className="text-xs">Subject *</Label><Input placeholder="Issue title" value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></div>
+                        <div className="space-y-1.5"><Label htmlFor="ticket-subject" className="text-xs">Subject *</Label><Input id="ticket-subject" placeholder="Issue title" value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></div>
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1.5"><Label className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}</SelectContent></Select></div>
-                            <div className="space-y-1.5"><Label className="text-xs">Priority</Label><Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{PRIORITIES.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}</SelectContent></Select></div>
+                            <div className="space-y-1.5"><Label htmlFor="ticket-category" className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger id="ticket-category"><SelectValue /></SelectTrigger><SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}</SelectContent></Select></div>
+                            <div className="space-y-1.5"><Label htmlFor="ticket-priority" className="text-xs">Priority</Label><Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}><SelectTrigger id="ticket-priority"><SelectValue /></SelectTrigger><SelectContent>{PRIORITIES.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}</SelectContent></Select></div>
                         </div>
                         <ServiceAreaSelect value={form.service_area_id} onChange={(v) => setForm({ ...form, service_area_id: v })} areas={areas} />
                         {!editing && (<>
                             <div className="grid grid-cols-2 gap-3">
-                                <div className="space-y-1.5"><Label className="text-xs">User Name</Label><Input placeholder="Optional" value={form.user_name} onChange={(e) => setForm({ ...form, user_name: e.target.value })} /></div>
-                                <div className="space-y-1.5"><Label className="text-xs">User Email</Label><Input placeholder="Optional" value={form.user_email} onChange={(e) => setForm({ ...form, user_email: e.target.value })} /></div>
+                                <div className="space-y-1.5"><Label htmlFor="ticket-user-name" className="text-xs">User Name</Label><Input id="ticket-user-name" placeholder="Optional" value={form.user_name} onChange={(e) => setForm({ ...form, user_name: e.target.value })} /></div>
+                                <div className="space-y-1.5"><Label htmlFor="ticket-user-email" className="text-xs">User Email</Label><Input id="ticket-user-email" placeholder="Optional" value={form.user_email} onChange={(e) => setForm({ ...form, user_email: e.target.value })} /></div>
                             </div>
-                            <div className="space-y-1.5"><Label className="text-xs">Message</Label><Textarea placeholder="Describe the issue..." value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} rows={3} /></div>
+                            <div className="space-y-1.5"><Label htmlFor="ticket-message" className="text-xs">Message</Label><Textarea id="ticket-message" placeholder="Describe the issue..." value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} rows={3} /></div>
                         </>)}
                         <Button className="w-full" size="sm" onClick={handleSave} disabled={saving}>{saving ? "Saving..." : editing ? "Update" : "Create"}</Button>
                     </div>

@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
 import { approveExportRequest, denyExportRequest, getPendingExportApprovals, type ExportApprovalRequest } from "@/lib/api";
@@ -84,14 +85,10 @@ export default function ExportApprovalsPage() {
 
     return (
         <div className="p-6 space-y-6">
-            <div>
-                <h1 className="text-2xl font-semibold">Export Approvals</h1>
-                <p className="text-muted-foreground">
-                    Large PII exports (Compliance reports, Data Transfer bundles) generated while the
-                    dual-approval gate is on wait here for a different admin to approve or deny before the
-                    file is produced.
-                </p>
-            </div>
+            <PageHeader
+                title="Export Approvals"
+                description="Large PII exports (Compliance reports, Data Transfer bundles) generated while the dual-approval gate is on wait here for a different admin to approve or deny before the file is produced."
+            />
 
             <Card>
                 <CardHeader>

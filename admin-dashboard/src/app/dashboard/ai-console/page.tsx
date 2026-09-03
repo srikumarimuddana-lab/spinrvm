@@ -18,6 +18,7 @@ import {
     getUsers,
 } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -416,13 +417,15 @@ export default function AiConsolePage() {
 
     return (
         <div className="space-y-4">
-            <div>
-                <h1 className="text-xl font-semibold">AI Console</h1>
-                <p className="text-sm text-muted-foreground">
-                    Test the assistant as a rider or driver. Conversations are real — they appear in
-                    the user&apos;s app and are stamped + audited as admin-initiated.
-                </p>
-            </div>
+            <PageHeader
+                title="AI Console"
+                description={
+                    <>
+                        Test the assistant as a rider or driver. Conversations are real — they appear in
+                        the user&apos;s app and are stamped + audited as admin-initiated.
+                    </>
+                }
+            />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 {/* Target picker + their threads */}
@@ -434,7 +437,7 @@ export default function AiConsolePage() {
                     <CardContent className="pt-4 space-y-3">
                         <div className="grid grid-cols-2 gap-2">
                             <div className="space-y-1">
-                                <Label>Audience</Label>
+                                <Label htmlFor="ai-console-audience">Audience</Label>
                                 <Select
                                     value={roleFilter}
                                     onValueChange={(v: "rider" | "driver") => {
@@ -442,7 +445,7 @@ export default function AiConsolePage() {
                                         selectUser("");
                                     }}
                                 >
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectTrigger id="ai-console-audience"><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="rider">Rider</SelectItem>
                                         <SelectItem value="driver">Driver</SelectItem>
@@ -450,8 +453,9 @@ export default function AiConsolePage() {
                                 </Select>
                             </div>
                             <div className="space-y-1">
-                                <Label>Search</Label>
+                                <Label htmlFor="ai-console-search">Search</Label>
                                 <Input
+                                    id="ai-console-search"
                                     value={search}
                                     onChange={(e) => setSearch(e.target.value)}
                                     placeholder="name / phone / id"
@@ -459,9 +463,9 @@ export default function AiConsolePage() {
                             </div>
                         </div>
                         <div className="space-y-1">
-                            <Label>User</Label>
+                            <Label htmlFor="ai-console-user">User</Label>
                             <Select value={targetId} onValueChange={selectUser}>
-                                <SelectTrigger>
+                                <SelectTrigger id="ai-console-user">
                                     <SelectValue placeholder={`Select a ${roleFilter}…`} />
                                 </SelectTrigger>
                                 <SelectContent>

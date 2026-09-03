@@ -272,9 +272,9 @@ export default function DriverRegistrationPage() {
             case 3: return (
                 <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                        <Label>Vehicle Type</Label>
+                        <Label htmlFor="vehicle_type_id">Vehicle Type</Label>
                         <Select onValueChange={v => handleChange("vehicle_type_id", v)}>
-                            <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
+                            <SelectTrigger id="vehicle_type_id"><SelectValue placeholder="Select type" /></SelectTrigger>
                             <SelectContent>
                                 {vehicleTypes.map(vt => (
                                     <SelectItem key={vt.id} value={vt.id}>{vt.name}</SelectItem>

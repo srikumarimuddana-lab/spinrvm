@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/select";
 import { MultiSelect, type MultiSelectOption } from "@/components/ui/multi-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/page-header";
 import { useToast } from "@/components/ui/use-toast";
 import { InfoHint as Hint } from "@/components/info-hint";
 import { useRequireSuperAdmin } from "@/hooks/useRequireSuperAdmin";
@@ -287,16 +288,10 @@ export default function CompliancePage() {
 
     return (
         <div className="p-6 space-y-6">
-            <div>
-                <h1 className="text-2xl font-semibold">Compliance & Tax Reporting</h1>
-                <p className="text-muted-foreground">
-                    Spinr-branded regulatory and tax exports — GST/PST remittance, per-insurer usage-based
-                    billing, and driver roster. Every export here is logged with the requesting admin, date
-                    range, and row count for a future privacy/regulatory audit. Fixed-format regulator
-                    documents (SGI D00032/D00033) live under Data Transfer instead — this module never
-                    re-styles those into Spinr branding.
-                </p>
-            </div>
+            <PageHeader
+                title="Compliance & Tax Reporting"
+                description="Spinr-branded regulatory and tax exports — GST/PST remittance, per-insurer usage-based billing, and driver roster. Every export here is logged with the requesting admin, date range, and row count for a future privacy/regulatory audit. Fixed-format regulator documents (SGI D00032/D00033) live under Data Transfer instead — this module never re-styles those into Spinr branding."
+            />
 
             {/* Page-level scope, not per-tab: it applies to every report on
                 this page except T4A, and one control makes it obvious that
@@ -372,12 +367,12 @@ export default function CompliancePage() {
                                     onToChange={setGstPstTo}
                                 />
                                 <div className="space-y-1.5">
-                                    <Label>Format</Label>
+                                    <Label htmlFor="gst-pst-format">Format</Label>
                                     <Select
                                         value={gstPstFormat}
                                         onValueChange={(v) => setGstPstFormat(v as ComplianceReportFormat)}
                                     >
-                                        <SelectTrigger className="w-32" aria-label="Format">
+                                        <SelectTrigger id="gst-pst-format" className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -427,9 +422,9 @@ export default function CompliancePage() {
                                     onToChange={setSgiTo}
                                 />
                                 <div className="space-y-1.5">
-                                    <Label>Format</Label>
+                                    <Label htmlFor="sgi-format">Format</Label>
                                     <Select value={sgiFormat} onValueChange={(v) => setSgiFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32" aria-label="Format">
+                                        <SelectTrigger id="sgi-format" className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -472,9 +467,9 @@ export default function CompliancePage() {
                             <div className="flex flex-wrap items-end gap-4">
                                 <DateRangeFields idPrefix="ka" from={kaFrom} to={kaTo} onFromChange={setKaFrom} onToChange={setKaTo} />
                                 <div className="space-y-1.5">
-                                    <Label>Format</Label>
+                                    <Label htmlFor="ka-format">Format</Label>
                                     <Select value={kaFormat} onValueChange={(v) => setKaFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32" aria-label="Format">
+                                        <SelectTrigger id="ka-format" className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -517,9 +512,9 @@ export default function CompliancePage() {
                         <CardContent className="space-y-4">
                             <div className="flex flex-wrap items-end gap-4">
                                 <div className="space-y-1.5">
-                                    <Label>Status</Label>
+                                    <Label htmlFor="roster-status">Status</Label>
                                     <Select value={rosterStatus} onValueChange={setRosterStatus}>
-                                        <SelectTrigger className="w-44" aria-label="Status">
+                                        <SelectTrigger id="roster-status" className="w-44" aria-label="Status">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -531,12 +526,12 @@ export default function CompliancePage() {
                                     </Select>
                                 </div>
                                 <div className="space-y-1.5">
-                                    <Label>Format</Label>
+                                    <Label htmlFor="roster-format">Format</Label>
                                     <Select
                                         value={rosterFormat}
                                         onValueChange={(v) => setRosterFormat(v as ComplianceReportFormat)}
                                     >
-                                        <SelectTrigger className="w-32" aria-label="Format">
+                                        <SelectTrigger id="roster-format" className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -594,9 +589,9 @@ export default function CompliancePage() {
                                         />
                                     </div>
                                     <div className="space-y-1.5">
-                                        <Label>Format</Label>
+                                        <Label htmlFor="t4a-format">Format</Label>
                                         <Select value={t4aFormat} onValueChange={(v) => setT4aFormat(v as ComplianceReportFormat)}>
-                                            <SelectTrigger className="w-32" aria-label="Format">
+                                            <SelectTrigger id="t4a-format" className="w-32" aria-label="Format">
                                                 <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
@@ -660,9 +655,9 @@ export default function CompliancePage() {
                                     onToChange={setAirportTo}
                                 />
                                 <div className="space-y-1.5">
-                                    <Label>Format</Label>
+                                    <Label htmlFor="airport-format">Format</Label>
                                     <Select value={airportFormat} onValueChange={(v) => setAirportFormat(v as ComplianceReportFormat)}>
-                                        <SelectTrigger className="w-32" aria-label="Format">
+                                        <SelectTrigger id="airport-format" className="w-32" aria-label="Format">
                                             <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>

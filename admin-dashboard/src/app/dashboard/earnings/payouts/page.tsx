@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/page-header";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
@@ -205,23 +206,24 @@ export default function PayoutsPage() {
 
     return (
         <div className="space-y-6 p-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <Link href="/dashboard/earnings" className="text-muted-foreground hover:text-foreground">
-                        <ArrowLeft className="h-5 w-5" />
-                    </Link>
-                    <Wallet className="h-6 w-6 text-primary" />
-                    <div>
-                        <h1 className="text-2xl font-bold">Payout Management</h1>
-                        <p className="text-sm text-muted-foreground">Review, filter, and retry driver payouts</p>
-                    </div>
-                </div>
-                <Button variant="outline" onClick={load} disabled={loading}>
-                    <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-                    Refresh
-                </Button>
-            </div>
+            <PageHeader
+                title={
+                    <span className="inline-flex items-center gap-3">
+                        <Link href="/dashboard/earnings" className="text-muted-foreground hover:text-foreground">
+                            <ArrowLeft className="h-5 w-5" />
+                        </Link>
+                        <Wallet className="h-6 w-6 text-primary" />
+                        Payout Management
+                    </span>
+                }
+                description="Review, filter, and retry driver payouts"
+                actions={
+                    <Button variant="outline" onClick={load} disabled={loading}>
+                        <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
+                }
+            />
 
             {/* Toast */}
             {toast && (
@@ -297,9 +299,9 @@ export default function PayoutsPage() {
             {/* Filters */}
             <div className="flex flex-wrap gap-3 items-end">
                 <div className="space-y-1">
-                    <Label className="text-xs">Status</Label>
+                    <Label htmlFor="payout-status-filter" className="text-xs">Status</Label>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
-                        <SelectTrigger className="w-36" aria-label="Status">
+                        <SelectTrigger id="payout-status-filter" className="w-36" aria-label="Status">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -313,10 +315,11 @@ export default function PayoutsPage() {
                     </Select>
                 </div>
                 <div className="space-y-1">
-                    <Label className="text-xs">Search</Label>
+                    <Label htmlFor="payout-search" className="text-xs">Search</Label>
                     <div className="relative">
                         <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
+                            id="payout-search"
                             className="pl-8 w-56"
                             placeholder="Driver, payout ID, Stripe ID"
                             value={search}
@@ -325,12 +328,12 @@ export default function PayoutsPage() {
                     </div>
                 </div>
                 <div className="space-y-1">
-                    <Label className="text-xs">From</Label>
-                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" aria-label="Start date" />
+                    <Label htmlFor="payout-date-from" className="text-xs">From</Label>
+                    <Input id="payout-date-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" aria-label="Start date" />
                 </div>
                 <div className="space-y-1">
-                    <Label className="text-xs">To</Label>
-                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" aria-label="End date" />
+                    <Label htmlFor="payout-date-to" className="text-xs">To</Label>
+                    <Input id="payout-date-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" aria-label="End date" />
                 </div>
                 {(search || dateFrom || dateTo || statusFilter !== "all") && (
                     <Button

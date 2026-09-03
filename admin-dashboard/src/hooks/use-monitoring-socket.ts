@@ -255,6 +255,23 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                     setStatus("error");
                     return;
                 }
+                // Backend keys admin WS connections by admin_{user_id}, not per
+                // tab (routes/websocket.py, socket_manager.py's
+                // WS_CLOSE_REPLACED_BY_NEW_CONNECTION = 4409) — opening this
+                // page in a second tab/window closes the first with this exact
+                // code. Reconnecting here would just evict the second tab
+                // right back, and that tab's own reconnect would evict this
+                // one again — an infinite eviction ping-pong between the two,
+                // each showing a flickering "reconnecting…" banner. Stop
+                // trying and say what actually happened instead.
+                if (event?.code === 4409) {
+                    shouldReconnectRef.current = false;
+                    setStatus("error");
+                    setLastError(
+                        "This session was opened in another tab or window. Close that one, or reload this page to take over here.",
+                    );
+                    return;
+                }
                 setStatus("disconnected");
                 const code = typeof event?.code === "number" ? event.code : null;
                 const reason =

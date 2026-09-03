@@ -25,6 +25,8 @@ omit =
     tests_smoke_supabase.py
     # Migration runners (tested by migration-safety CI gate, not pytest)
     scripts/run_migrations.py
+    # Staging-only load-test seeding (C50 T16) -- no importer in the suite
+    scripts/seed_loadtest_bots.py
     # Test files themselves
     tests/*
 

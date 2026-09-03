@@ -20032,6 +20032,45 @@ how much they de-risk a public launch._
   /dev/null --confcutdir=tests/rls -v` — `test_transactional_outbox.py`
   passes in full; no other RLS file regresses.
 
+### C58. `test_email_deliverability.py` never updated for migration 392's server-side aggregation — CLOSED (2026-09-03)
+- [x] **Status:** resolved 2026-09-03. Flagged as C53 finding 4 item 7
+  ("unrelated to this feature... not fixed, out of scope"); a follow-up
+  task was queued and then actioned the same session.
+- **Issue/gap:** `test_deliverability_aggregates_and_omits_pii` asserted
+  `out["total"] == 4` but got `0` — not caused by C53 finding 4's outbox
+  work (confirmed via `git stash` before that work even started).
+- **Root cause:** `routes/admin/monitoring.py::get_email_deliverability`
+  was refactored under `migrations/392_admin_email_log_stats_fn.sql`
+  ("Replace Python-side fetch of 5k email_send_log rows + three Counter()
+  aggregations... with server-side GROUP BY") to compute
+  `total`/`by_status`/`by_provider`/`by_type` via a single
+  `db_supabase.rpc("admin_email_log_stats", {"p_since": since})` call,
+  with `get_rows` now used only for the two *list* payloads the RPC
+  doesn't return (the 25 most-recent already-failed rows, and the 25
+  most-recent suppression rows). The test was never updated for that
+  refactor: it still fed a 4-row fixture through `get_rows`'s first
+  call expecting the endpoint to Counter() it in Python. The test never
+  mocked `db_supabase.rpc` at all, so the real (unconfigured-in-tests)
+  client's `rpc()` silently returned `None` (`repositories/_base.py::rpc`'s
+  documented no-op-when-unconfigured behavior) — `st = {}`, so
+  `total`/`by_status`/`by_provider` all read empty. The endpoint was
+  correct and current; the test was stale. (The other two tests in the
+  file, `test_deliverability_empty_window`/`test_deliverability_days_clamped`,
+  happened to still pass — they only assert the all-zero/empty case,
+  which is exactly what `rpc()`'s silent-`None` fallback produces by
+  accident, not because they were correctly mocking it.)
+- **Fix:** patched `routes.admin.monitoring.db_supabase.rpc` in all 3
+  tests to return the RPC's actual jsonb shape (a dict, matching what
+  `admin_email_log_stats` returns for the fixture data); re-scoped the
+  `get_rows` first-call fixture from the full unfiltered send-log to just
+  the failed subset (matching `recent_fail_rows`'s real
+  `{"status": "failed"}` filter). Left `get_email_deliverability` itself
+  untouched — it needed no fix, only its test did.
+- **Files:** `backend/tests/test_email_deliverability.py`.
+- **Acceptance:** `pytest tests/test_email_deliverability.py` — 5/5 pass.
+  Broader sweep (`-k "monitoring or deliverability"`, 37 tests) green, no
+  regressions.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

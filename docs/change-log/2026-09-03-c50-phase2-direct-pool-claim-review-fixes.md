@@ -36,6 +36,17 @@ found ten High and fourteen Medium findings. The ones that change behaviour:
   `--ignore=tests/rls` dropping the RLS suite from CI, the DB-call metric undercounting
   gathered children, live staging tokens written into a committed directory, and the
   seed script's environment guard being a production denylist rather than an allowlist.
+- **`tests/direct_pool/conftest.py` skipped the entire backend suite whenever no DSN was
+  set** (found 2026-09-03 driving #4883's first CI run). `pytest_collection_modifyitems`
+  receives every item pytest collected, and the hook marked all of them, not just the
+  directory's own. ci.yml's backend-test was unaffected only because it always exports
+  `DATABASE_URL` and `--ignore`s the directory; ci-guardrails' `shared-coverage-run` has
+  neither, so since #4873 merged it had been uploading a coverage.json of an all-skipped
+  suite (13.8k skipped in ~70 s, ~21 % total) — the money-path floor gate then read
+  `routes/rides/` at 12.2 % against an 80 % floor for any PR touching it, and a local
+  `pytest` with `DATABASE_URL` unset silently reported everything skipped. The hook is now
+  scoped to items under its own directory; regression test
+  `tests/test_direct_pool_conftest_scope.py`.
 
 Full list with file:line evidence: the review posted on #4873.
 
@@ -103,7 +114,8 @@ Not visible mid-session to anyone already using the app.
 | `backend/repositories/dispatch_pool.py` | statement timeout, liveness check, timeout metric, DSN redaction, leak close, casts | unbounded execution, blind saturation signal, credential leak, binding risk |
 | `backend/repositories/_base.py` | docstring numbers, queue-wait buckets | wrong derived ceilings; unusable histogram |
 | `backend/core/config.py`, `backend/core/lifespan.py` | size validation; bounded boot read | fail at load, not in production; no boot hang |
-| `backend/tests/**` (5 files + 1 new) | see commit | coverage of every fix |
+| `backend/tests/**` (5 files + 2 new) | see commit | coverage of every fix |
+| `backend/tests/direct_pool/conftest.py`, `backend/tests/test_direct_pool_conftest_scope.py` | skip hook scoped to its own directory; regression test | the hook was skipping the whole suite in any DSN-less run |
 | `.github/workflows/ci.yml`, `.gitignore`, `backend/.coveragerc` | DSN composition, token cache ignore, omit | see §3 |
 | `backend/scripts/seed_loadtest_bots.py`, `loadtest/preauth_bots.py`, T16 doc | guards, cleanup, redaction | production safety, PII |
 | `ACTION_ITEMS.md`, retro doc, `requirements.txt` | merge resolution | numbering collision, lockfile drift |
@@ -190,8 +202,12 @@ if _direct_pool_enabled and not _dispatch_pool.is_open():
   Supabase project remain unconfirmed (C50 plan gate G5).
 - `pip-compile` was not run; `requirements.txt` was hand-resolved in `main`'s style and
   `pip-compile-check.yml` must confirm it.
-- CI has never triggered on this PR (zero check runs on every head so far); if the next push
-  also produces none, the workflow trigger, not the code, needs attention.
+- CI does run on #4883. `backend-test` there carries the same 60 failures + 6 errors `main`'s
+  own run shows (outbox worker/receipts, worker app, H3 index, admin coverage suites,
+  email deliverability, referral analytics, receipt delivery, the loguru-convention test
+  naming `services/outbox.py` and `utils/outbox_worker.py`) — none in files this PR touches.
+  The conftest scoping fix above is the first run in which the guard-rail coverage gates
+  measure a suite that actually executed; their numbers before it are meaningless.
 - The T16 round-2 report records a `DISPATCH_POOL_DSN` Fly secret already staged on
   `spinr-backend-staging` that nobody in that session set. It will activate on the next
   staging deploy; its origin should be confirmed before merge.

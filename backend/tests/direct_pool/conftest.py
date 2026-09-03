@@ -130,9 +130,20 @@ _SKIP_REASON = (
 _SKIP_CONDITION = psycopg2 is None or not _DSN
 
 
+_HERE = Path(__file__).resolve().parent
+
+
+def _is_under_this_directory(item) -> bool:
+    """True when a collected item's source file lives under tests/direct_pool/."""
+    try:
+        return Path(str(item.path)).resolve().is_relative_to(_HERE)
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 def pytest_collection_modifyitems(config, items):
-    """Skip every test collected under this directory when the pre-flight
-    condition isn't met.
+    """Skip every test collected under THIS directory when the pre-flight
+    condition isn't met -- and only those.
 
     A bare module-level `pytestmark = pytest.mark.skipif(...)` in a
     conftest.py (the pattern this file was first written with, matching
@@ -147,12 +158,25 @@ def pytest_collection_modifyitems(config, items):
     (its `pytestmark` also silently does nothing) -- out of scope to fix
     here since tests/rls is pre-existing and untouched by this task, but
     worth flagging in the PR description.
+
+    Scoping (2026-09-03, PR #4883): `items` is the WHOLE session's
+    collection, not just this directory's -- pytest calls every loaded
+    conftest's hook with the full list. The first cut marked every item,
+    which skipped the entire backend suite (13.8k tests, ~70 s) whenever
+    pytest ran from backend/ without a DSN: ci-guardrails'
+    shared-coverage-run had been uploading a ~21 % coverage.json of an
+    all-skipped suite since #4873 merged, failing the money-path floor
+    gate for any PR touching routes/rides/, and a local `pytest` with
+    DATABASE_URL unset silently reported everything as skipped. The marker
+    is now applied only to items whose source file lives under this
+    directory. Regression test: tests/test_direct_pool_conftest_scope.py.
     """
     if not _SKIP_CONDITION:
         return
     skip_marker = pytest.mark.skip(reason=_SKIP_REASON)
     for item in items:
-        item.add_marker(skip_marker)
+        if _is_under_this_directory(item):
+            item.add_marker(skip_marker)
 
 
 # Migrations applied, in dependency order. See the module docstring for why

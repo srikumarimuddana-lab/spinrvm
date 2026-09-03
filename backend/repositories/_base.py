@@ -304,6 +304,8 @@ def _jittered(delay: float) -> float:
 # unrelated call sites would accumulate into each other forever. With None,
 # run_sync increments outside any reset window are simply not counted —
 # correct, since no unit of work is being measured then.
+_QUEUE_WAIT_BUCKETS = (0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0)
+
 _db_call_count: _ContextVar[Optional[list]] = _ContextVar("_db_call_count", default=None)
 
 
@@ -413,21 +415,31 @@ async def run_sync(
                   * with 64 threads (DB_THREAD_POOL_SIZE default) doing
                     nothing but observe(), the lock saturates at ~69k
                     observe/s process-wide
-                  * run_sync now takes 6 metrics locks per call (4 pre-existing
-                    gauges + these 2), so that ceiling implies ~11k run_sync/s
-                    per process, down from ~17k
+                  * run_sync now takes 8 metrics locks per call (6 pre-existing:
+                    the spinr_db_calls_total inc, two queue-depth gauge writes
+                    and three thread-pool gauges, plus these 2), so that
+                    ceiling implies ~8.6k run_sync/s per process, down from
+                    ~11.5k
                   * realistic case — 64 threads each doing a 5 ms I/O-bound
                     call then these 2 observes: +7.9 us per DB call, i.e.
                     +0.15%
 
                 Negligible against a millisecond-scale DB call and ~100x above
                 any load this backend sees, so no mitigation is warranted. If
-                DB throughput ever approaches the ~11k/s figure, the fix is to
+                DB throughput ever approaches the ~8.6k/s figure, the fix is to
                 shrink metrics.observe()'s critical section (the cumulative
                 bucket loop runs inside the lock), not to drop instrumentation.
                 """
                 _thread_start = _time.monotonic()
-                _metric_observe("spinr_db_run_sync_queue_wait_ms", (_thread_start - _submit_time) * 1000.0)
+                # Queue wait on a healthy pool is sub-millisecond; the default
+                # 5 ms-floor buckets would collapse every healthy sample into
+                # the first bucket. Sub-ms buckets keep p50/p95 meaningful
+                # (first observation pins the layout — keep this constant).
+                _metric_observe(
+                    "spinr_db_run_sync_queue_wait_ms",
+                    (_thread_start - _submit_time) * 1000.0,
+                    buckets=_QUEUE_WAIT_BUCKETS,
+                )
                 try:
                     return _func()
                 finally:

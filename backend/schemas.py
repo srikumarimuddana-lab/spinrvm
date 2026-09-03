@@ -583,10 +583,15 @@ class AppSettings(BaseModel):
     apns_bundle_id: str = ""  # rider bundle id; topic = this + ".push-type.liveactivity"
     apns_p8_key: str = ""  # full PEM of the .p8 private key (multi-line)
     # ── admin-dashboard visual refresh (epic #2785 Phase 3+) ─────────────
-    # Gates the shared shell/typography/radius restyle behind a canary-able
-    # flag rather than a big-bang release, given the blast radius is all 34
-    # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
-    # via GET /api/admin/settings; effective within the 60s settings TTL.
+    # Gates the shared shell/typography/radius restyle behind a flag rather
+    # than a big-bang release, given the blast radius is all 34 admin-
+    # dashboard routes — but this is a single global on/off switch, not a
+    # canary: there is no per-user or per-role targeting anywhere in this
+    # settings system, so flipping it affects every admin/staff account at
+    # once (confirmed 2026-09-03; the field's earlier "canary-able" wording
+    # was aspirational, not what actually shipped). Read by the frontend's
+    # useFeatureFlag() hook via GET /api/admin/settings; effective within
+    # the 60s settings TTL.
     admin_theme_v2_enabled: bool = False
     # ── Admin command palette (Cmd+K/Ctrl+K route jumper) ────────────────
     # Same shape as admin_theme_v2_enabled above — dark-launched, no other
@@ -662,6 +667,37 @@ class AppSettings(BaseModel):
     heatmap_cell_lng_deg: float = 0.006
     heatmap_decay_half_life_days: float = 3.0
     heatmap_refresh_seconds: int = 90
+    # ── C50 Phase 1: direct-pool dispatch rollback switch ────────────────
+    # THIS IS THE ROLLBACK SWITCH for the PostgREST -> direct-pool
+    # (Supavisor/pgbouncer) dispatch migration, ACTION_ITEMS.md C50 —
+    # docs/audit/2026-09-02-pgbouncer-direct-pool-migration-plan.md (T10).
+    # Default False = current PostgREST dispatch claim path, unchanged.
+    # True (Phase 2 only, T12/T13 — not yet built) would route the dispatch
+    # claim/offer/insurance-period write batch through
+    # backend/repositories/dispatch_pool.py's direct AsyncConnectionPool
+    # instead of supabase-py. Also requires DISPATCH_POOL_DSN
+    # (backend/core/config.py) to be set — see that field's comment.
+    #
+    # THE SWITCH IS NOT SYMMETRIC — read this before relying on it:
+    #
+    #   OFF -> ON  requires a restart. core/lifespan.init_database reads this
+    #     flag exactly once, at startup, and only then opens the pool. Turning
+    #     it on against a running process changes nothing: there is no pool to
+    #     use, and no watcher re-reads the flag.
+    #   ON -> OFF  is the fast path, and only because Phase 2's call sites are
+    #     REQUIRED to re-read this flag per dispatch attempt (via
+    #     settings_loader.get_app_settings, ≤60s cache TTL) and fall back to
+    #     the PostgREST claim path when it is false. That re-read is what makes
+    #     rollback a no-redeploy operation; the pool itself stays open until
+    #     the next restart, which is harmless (an idle pool holds min_size
+    #     connections and serves nobody).
+    #
+    # So: rolling BACK is ≤60s and needs no deploy. Rolling FORWARD is a
+    # deploy/restart. If T12/T13 ever stops re-reading the flag per attempt
+    # and caches "use the direct pool" at startup instead, this stops being a
+    # rollback switch at all and becomes a boot-time setting — do not make
+    # that change without replacing the rollback procedure documented here.
+    dispatch_direct_pool_enabled: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

@@ -6,9 +6,9 @@ Covers utils.email_receipt.send_receipt_email's recipient_email parameter:
 - a missing destination (no override, no rider email) returns False
 
 Patching notes:
-  send_receipt_email imports the provider inline as
-  `from .email_provider import send_transactional_email` (or the top-level
-  `utils.email_provider` fallback), so we patch it on the email_provider module.
+  send_receipt_email delegates to send_receipt_email_result, which calls
+  utils.email_provider.send_transactional_email_result (imported at module
+  scope in utils.email_receipt), so we patch it there.
 """
 
 from __future__ import annotations
@@ -18,8 +18,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 try:
+    from utils.email_provider import EmailDeliveryResult, EmailDeliveryStatus
     from utils.email_receipt import send_receipt_email
 except ImportError:
+    from backend.utils.email_provider import EmailDeliveryResult, EmailDeliveryStatus  # type: ignore[no-redef]
     from backend.utils.email_receipt import send_receipt_email  # type: ignore[no-redef]
 
 _RIDE = {
@@ -44,9 +46,9 @@ _RIDER = {"id": "rider-xyz", "email": "rider@example.com", "first_name": "Alice"
 def _patch_provider(captured: dict):
     async def _capture(**kwargs):
         captured.update(kwargs)
-        return True
+        return EmailDeliveryResult(status=EmailDeliveryStatus.accepted, provider="ses", message_id="msg-1")
 
-    return patch("utils.email_provider.send_transactional_email", AsyncMock(side_effect=_capture))
+    return patch("utils.email_receipt.send_transactional_email_result", AsyncMock(side_effect=_capture))
 
 
 @pytest.mark.anyio

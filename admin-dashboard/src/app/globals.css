@@ -312,3 +312,31 @@ html:not(.dark) .theme-v2 {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
+
+/* ── MapLibre attribution control ──
+   The library ships its own fixed light-chip/dark-text styling, which reads
+   fine on a light basemap but not sitting inside a dark admin UI — token-
+   driven instead, so it matches whichever map/page theme it's rendered in
+   across every admin map (monitoring, driver, geofence, venue, ride route/
+   live-tracking). The required-attribution text itself (OpenFreeMap /
+   OpenStreetMap contributors) stays — it's a licensing condition of the
+   free tile data, not just styling — only its chip is retheming. */
+.maplibregl-ctrl-attrib {
+  background-color: color-mix(in srgb, var(--card) 88%, transparent);
+  color: var(--muted-foreground);
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--muted-foreground);
+}
+.maplibregl-ctrl-attrib a:hover {
+  color: var(--foreground);
+}
+.maplibregl-ctrl-attrib-button {
+  background-color: color-mix(in srgb, var(--card) 88%, transparent);
+}
+/* MapLibre's (i) icon is baked into a fixed-color background-image SVG;
+   inverting it in dark mode is the low-risk way to keep it legible without
+   forking the library's icon asset. */
+.dark .maplibregl-ctrl-attrib-button {
+  filter: invert(1) brightness(1.3);
+}

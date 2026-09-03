@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { useToast } from "@/components/ui/use-toast";
@@ -49,6 +50,12 @@ export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");
   const { toast } = useToast();
   const themeV2Enabled = useFeatureFlag("admin_theme_v2_enabled");
+  // MonitoringMap picks its OpenFreeMap style once at mount (MapLibre's
+  // setStyle() would drop the runtime-added service-area/ride-line sources),
+  // so it's keyed by resolvedTheme below — flipping light/dark cleanly
+  // remounts the map with the matching basemap instead of leaving a light
+  // basemap stuck under a dark UI (or vice versa) until next navigation.
+  const { resolvedTheme } = useTheme();
   // ── Refs: source-of-truth maps (never trigger re-renders) ──────────
   const driversMapRef = useRef<Map<string, MonitoringDriver>>(new Map());
   const ridesMapRef = useRef<Map<string, MonitoringRide>>(new Map());
@@ -747,6 +754,7 @@ export default function MonitoringPage() {
         {/* ── Centre: Map ─────────────────────────────────────────── */}
         <div className="relative flex-1">
           <MonitoringMap
+            key={resolvedTheme}
             driversMap={driversMapRef}
             ridesMap={ridesMapRef}
             filters={filters}
@@ -765,14 +773,18 @@ export default function MonitoringPage() {
             }}
           />
 
-          {/* Service-area jump buttons */}
+          {/* Service-area jump buttons — bottom-12 (not bottom-4) so this row
+              clears the MapLibre attribution control, which lives right at
+              the map's bottom edge; the two used to overlap. bg-white/90 was
+              also hardcoded regardless of theme — swapped for the same
+              background/border tokens the rest of the admin UI uses. */}
           {serviceAreas.length > 0 && (
-            <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-2">
+            <div className="absolute bottom-12 left-1/2 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap justify-center gap-2">
               {serviceAreas.filter((a) => a.geojson || a.fallbackCenter).slice(0, 5).map((a) => (
                 <button
                   key={a.id}
                   onClick={() => handleAreaFit(a.id)}
-                  className="rounded-full bg-white/90 px-3 py-1 text-xs font-medium shadow ring-1 ring-black/10 backdrop-blur hover:bg-white"
+                  className="rounded-full border border-border bg-background/90 px-3 py-1 text-xs font-medium text-foreground shadow backdrop-blur hover:bg-accent"
                 >
                   {a.name}
                 </button>

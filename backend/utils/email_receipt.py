@@ -47,6 +47,7 @@ try:
     from ..utils.email_layout import BRAND_RED as _LAYOUT_BRAND_RED
     from ..utils.email_layout import footer_html as _layout_footer_html
     from ..utils.email_layout import header_html as _layout_header_html
+    from ..utils.email_provider import EmailDeliveryResult, EmailDeliveryStatus, send_transactional_email_result
     from .datetime_utils import parse_iso_utc
 except ImportError:
     from repositories.ride_repo import create_route_snapshot_signed_url  # type: ignore
@@ -55,6 +56,11 @@ except ImportError:
     from utils.email_layout import BRAND_RED as _LAYOUT_BRAND_RED  # type: ignore
     from utils.email_layout import footer_html as _layout_footer_html  # type: ignore
     from utils.email_layout import header_html as _layout_header_html  # type: ignore
+    from utils.email_provider import (  # type: ignore
+        EmailDeliveryResult,
+        EmailDeliveryStatus,
+        send_transactional_email_result,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -643,14 +649,17 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
     return _q(fare + fees + tax + tip_d)
 
 
-async def send_receipt_email(
+async def send_receipt_email_result(
     ride: dict, rider: dict, driver: dict = None, tip: float = 0, recipient_email: Optional[str] = None
 ):
-    """Send an HTML receipt email: AWS SES primary, Resend guardrail.
+    """Send an HTML receipt email, returning a typed EmailDeliveryResult.
 
-    Delegates to utils.email_provider.send_transactional_email, which tries
-    AWS SES first and falls back to Resend when SES is unconfigured or fails.
-    Returns True if either provider accepted the message, False otherwise.
+    Same body/attachment construction as :func:`send_receipt_email` (which
+    now delegates here), but returns
+    :class:`utils.email_provider.EmailDeliveryResult` instead of a bare bool
+    — the distinction the transactional outbox worker needs between a
+    terminal skip (no recipient — discard, never retry) and a retryable
+    provider failure (retry with backoff).
 
     ``recipient_email`` overrides the destination address (admin "send to a
     different email"). When omitted, the receipt goes to the rider on file.
@@ -660,7 +669,7 @@ async def send_receipt_email(
     email = (recipient_email or rider.get("email") or "").strip()
     if not email:
         logger.warning(f"No email for rider {rider.get('id')} — skipping receipt")
-        return False
+        return EmailDeliveryResult(status=EmailDeliveryStatus.terminal_skip, error_code="no_recipient")
 
     snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
     snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
@@ -697,11 +706,6 @@ async def send_receipt_email(
     # multipart/alternative, which helps inbox placement.
     text = generate_receipt_text(ride, rider, driver, tip, company=company)
 
-    try:
-        from .email_provider import send_transactional_email
-    except ImportError:
-        from utils.email_provider import send_transactional_email  # type: ignore
-
     # Attach a PDF copy of the receipt. Best-effort: a PDF-generation failure
     # must never block the receipt email itself.
     attachments = []
@@ -733,7 +737,7 @@ async def send_receipt_email(
         attachments.append({"filename": f"Spinr-route-{ref}.png", "content": snapshot_bytes, "mime": "image/png"})
 
     recipient_user_id = rider.get("id") or ride.get("rider_id")
-    return await send_transactional_email(
+    return await send_transactional_email_result(
         to=email,
         subject=f"Your Spinr ride receipt — ${total:.2f}",
         html=html,
@@ -744,3 +748,18 @@ async def send_receipt_email(
         recipient_user_id=str(recipient_user_id) if recipient_user_id else None,
         attachments=attachments or None,
     )
+
+
+async def send_receipt_email(
+    ride: dict, rider: dict, driver: dict = None, tip: float = 0, recipient_email: Optional[str] = None
+) -> bool:
+    """Send an HTML receipt email: AWS SES primary, Resend guardrail.
+
+    Thin bool wrapper over :func:`send_receipt_email_result`, kept for the
+    existing manual-resend and direct-send call sites that only need "was it
+    sent" — see that function's docstring for the full delivery description.
+
+    Returns True if either provider accepted the message, False otherwise.
+    """
+    result = await send_receipt_email_result(ride, rider, driver, tip, recipient_email)
+    return result.status == EmailDeliveryStatus.accepted

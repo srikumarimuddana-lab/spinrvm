@@ -93,6 +93,11 @@ jest.mock('@stripe/stripe-react-native', () => ({
 const mockAttemptRidePayment = jest.fn();
 jest.mock('../utils/attemptRidePayment', () => ({
   attemptRidePayment: (...a: any[]) => mockAttemptRidePayment(...a),
+  HELD_FOR_REVIEW_ALERT: (message: string) => ({
+    title: 'Receipt pending verification',
+    message: message || "We're verifying your trip before finalizing your receipt. We'll notify you once it's ready.",
+    variant: 'info',
+  }),
 }));
 
 const mockPresentSheet = jest.fn();
@@ -191,6 +196,30 @@ describe('RideCompletedScreen', () => {
     await renderScreen();
     expect(mockClearRide).toHaveBeenCalled();
     expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+  });
+
+  it('auto-dismisses with an info alert once, when the ride is already held_for_review on first load', async () => {
+    mockRideState.currentRide = { ...CURRENT_RIDE, payment_status: 'held_for_review' };
+    const r = await renderScreen();
+    expect(mockClearRide).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+    expect(allText(r)).toMatch(/Receipt pending verification/);
+  });
+
+  it('shows the held alert and routes home (without retry) when process-payment holds the charge', async () => {
+    mockAttemptRidePayment.mockResolvedValue({
+      ok: false,
+      heldForReview: true,
+      alert: { title: 'Receipt pending verification', message: 'Hold message.', variant: 'info' },
+    });
+    const r = await renderScreen();
+    const submitBtn = r.root.findByProps({ accessibilityLabel: 'Pay and finish' });
+    await act(async () => { await submitBtn.props.onPress(); await flush(); });
+    expect(mockClearRide).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/(tabs)');
+    expect(allText(r)).toMatch(/Receipt pending verification/);
+    // Not treated as a payment success — no completion analytics fired.
+    expect(mockAnalyticsPaymentCompleted).not.toHaveBeenCalled();
   });
 
   it('fully blocks the hardware back button', async () => {

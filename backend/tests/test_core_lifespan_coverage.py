@@ -44,6 +44,15 @@ def _settings_mock(env="test", **overrides):
     s.RATE_LIMIT_REDIS_URL = overrides.get("RATE_LIMIT_REDIS_URL", "")
     s.WS_REDIS_URL = overrides.get("WS_REDIS_URL", "")
     s.SUPABASE_REGION = overrides.get("SUPABASE_REGION", "ca-central-1")
+    # C50 Phase 1 (T9): real Settings.DISPATCH_POOL_DSN defaults to "" (falsy).
+    # A bare MagicMock() auto-vivifies unset attributes as truthy child mocks,
+    # so without this explicit "", every test using this helper would
+    # spuriously enter init_database()'s new `if settings.DISPATCH_POOL_DSN:`
+    # branch and attempt to import/init the direct dispatch pool — exactly
+    # the byte-identical-startup regression T9 exists to prevent. See
+    # test_dispatch_pool.py for the dedicated test proving the real (non-
+    # mocked) Settings default keeps this branch closed.
+    s.DISPATCH_POOL_DSN = overrides.get("DISPATCH_POOL_DSN", "")
     return s
 
 
@@ -86,9 +95,7 @@ class TestInitDatabase:
 
         fake_supabase = MagicMock()
         monkeypatch.setattr(lifespan, "supabase", fake_supabase)
-        monkeypatch.setattr(
-            lifespan, "settings", _settings_mock(env="production", SUPABASE_REGION="us-east-1")
-        )
+        monkeypatch.setattr(lifespan, "settings", _settings_mock(env="production", SUPABASE_REGION="us-east-1"))
         monkeypatch.setattr(lifespan, "run_sync", AsyncMock(return_value=MagicMock()))
         result = await lifespan.init_database()
         assert result is fake_supabase
@@ -99,9 +106,7 @@ class TestInitDatabase:
 
         fake_supabase = MagicMock()
         monkeypatch.setattr(lifespan, "supabase", fake_supabase)
-        monkeypatch.setattr(
-            lifespan, "settings", _settings_mock(env="production", SUPABASE_REGION="ca-central-1")
-        )
+        monkeypatch.setattr(lifespan, "settings", _settings_mock(env="production", SUPABASE_REGION="ca-central-1"))
         monkeypatch.setattr(lifespan, "run_sync", AsyncMock(return_value=MagicMock()))
         result = await lifespan.init_database()
         assert result is fake_supabase
@@ -280,6 +285,8 @@ class TestSpawnGuardLogsInsteadOfSpawning:
                 pass
 
         skip_messages = [
-            call.args[0] for call in mock_log_info.call_args_list if call.args and "Skipped background task" in call.args[0]
+            call.args[0]
+            for call in mock_log_info.call_args_list
+            if call.args and "Skipped background task" in call.args[0]
         ]
         assert skip_messages, "expected at least one 'Skipped background task in ENV=test' log line"

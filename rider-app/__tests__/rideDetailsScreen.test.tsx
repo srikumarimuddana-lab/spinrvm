@@ -637,6 +637,15 @@ describe('payment badge variants', () => {
     expect(allText(r)).toContain('Failed');
   });
 
+  it('shows "Under review" (not "Pending") for a completed ride held by the GPS-spoof gate', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { ...RIDE_COMPLETED, payment_method: 'card', card_last4: undefined, payment_status: 'held_for_review' },
+    });
+    const r = await renderScreen();
+    expect(allText(r)).toContain('Under review');
+    expect(allText(r)).not.toContain('"Pending"');
+  });
+
   it('falls back to plain "Card" / "Pending" for a cancelled ride paid by a card with no last4', async () => {
     mockApiGet.mockResolvedValue({
       data: { ...RIDE_CANCELLED, payment_method: 'card', card_last4: undefined, payment_status: 'pending' },

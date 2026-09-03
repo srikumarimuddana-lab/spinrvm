@@ -14,7 +14,7 @@ Enforced at signup, again on every `go_online` call, and audited monthly:
 | Minimum 3 years licensed driving experience | License history from SGI | Once at onboarding |
 | Clean driver abstract — no major violations in past 3 years | SGI abstract | Annually |
 | No Criminal Code driving offences ever | Criminal record check | Annually |
-| Criminal Record Check (CRC) + Vulnerable Sector Check (VSC) | Third-party attestation | Annually |
+| Criminal Record Check (CRC) + Vulnerable Sector Check (VSC) | Police-service-issued document (Regina/Saskatoon Police Service, or RCMP where no local force applies) submitted by the driver — no third-party background-check vendor is involved; see `docs/legal/background-check-consent.md` | Annually |
 | Vehicle < 10 model years old | Registration + VIN decode | On vehicle change |
 | Vehicle passes annual safety inspection | Inspection certificate | Annually |
 | Ride-share endorsement on auto insurance | SGI Auto Fund confirmation | On renewal |

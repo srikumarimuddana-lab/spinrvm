@@ -3,15 +3,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
     DEFAULT_CENTER,
-    MAP_STYLE_URL,
     addStandardControls,
     fitBoundsToGeoJSON,
     makeCircleMarkerEl,
     makeRoutePinEl,
+    themedMapStyle,
 } from "@/lib/map/maplibre-base";
 import {
     buildPathGradient,
@@ -154,10 +155,14 @@ function rideLineLayerId(rideId: string): string {
 
 const MAP_CONTAINER_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
 
-/** Pre-overlay appearance — unchanged from before the demand feature existed,
- *  so toggling the overlay off is pixel-identical to the original map. */
+/** Pre-overlay appearance — toggling the demand overlay off always falls
+ *  back to this fill. Raised from 0.08 to 0.14 (2026-09-03): at 0.08 the
+ *  service-area fill was effectively invisible against the light basemap,
+ *  which read as "the map isn't showing service areas" even though the
+ *  polygon was rendering. The dashed border line carries most of the
+ *  legibility now; the fill just needs to be perceptible, not loud. */
 const DEFAULT_AREA_FILL = "#8b5cf6";
-const DEFAULT_AREA_OPACITY = 0.08;
+const DEFAULT_AREA_OPACITY = 0.14;
 
 /** Fill colour for a service-area polygon when the demand overlay is on.
  *
@@ -199,6 +204,7 @@ export function MonitoringMap({
     onSelectRide,
     onReady,
 }: MonitoringMapProps) {
+    const { resolvedTheme } = useTheme();
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
     const [isLoaded, setIsLoaded] = useState(false);
@@ -422,7 +428,7 @@ export function MonitoringMap({
         try {
             const map = new maplibregl.Map({
                 container: containerRef.current,
-                style: MAP_STYLE_URL,
+                style: themedMapStyle(resolvedTheme),
                 center: DEFAULT_CENTER,
                 zoom: DEFAULT_ZOOM,
                 attributionControl: { compact: true },
@@ -452,7 +458,7 @@ export function MonitoringMap({
                     source: AREAS_SOURCE_ID,
                     paint: {
                         "line-color": "#8b5cf6",
-                        "line-width": 2,
+                        "line-width": 2.5,
                         "line-dasharray": ["literal", [3, 2]],
                     },
                 });

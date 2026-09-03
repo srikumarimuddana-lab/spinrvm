@@ -12630,6 +12630,14 @@ record of what was assumed vs. what was actually true</summary>
   end, not just that it deploys.
 - **Owner / follow-up:** none assigned yet — flag in the next planning sync so this
   doesn't become a permanently-forgotten "temporary" gap.
+- **Update (2026-09-02):** reviewed with the user as part of a broader latency/
+  architecture audit session. **Consciously deferred, not forgotten** — the
+  team is focused on go-live prep and device testing; this is a backup-path
+  risk (only matters if Fly has an outage before it's fixed), not a
+  go-live blocker, so it's explicitly being carried forward rather than
+  actioned now. Recorded here specifically so this doesn't repeat the same
+  "temporary, no owner, no expiry" pattern that caused the original drift —
+  re-surface this item once device testing / go-live work winds down.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here
@@ -19496,6 +19504,572 @@ how much they de-risk a public launch._
   larger fraction of the 207/127 policies has DB-role-level coverage —
   whichever the team decides is the actual bar. Do not mark #29 closed
   off this item alone.
+
+### C50. PostgREST → direct pool (Supavisor) for the dispatch claim path — gated; Phase 0 evidence work open
+- [ ] **Status:** open — plan at `docs/audit/2026-09-02-pgbouncer-direct-pool-migration-plan.md`
+  (rev 2, 2026-09-02, reviewed against the code). Phases 1–3 of that plan are
+  **blocked on its gate G6** (a recorded Go/No-Go, ADR-011). Only Phase 0
+  (evidence gathering) is actionable now.
+- **Issue/gap:** the question "should dispatch bypass PostgREST and talk to the
+  Supabase pooler directly?" has come up repeatedly and was never tracked. Rev 1
+  of the plan said it descended from the Aug 26 audit's P3 — it did not (that
+  audit has no such item; its only pooling item is P2 #21, the httpx pool,
+  shipped). Rev 1's gate was also unexecutable: it needed a 500-driver load
+  test (harness exists at `loadtest/`, never run — blocked on E2 → E1) and a
+  per-phase latency breakdown that no instrumentation produces.
+- **Why it matters:** this is the highest-blast-radius change available in the
+  backend (every dispatch claim, insurance-period write, and `ride_offers`
+  insert). It must not be greenlit on suspicion. The plan's own likely outcome
+  is **No-Go** — the P0–P2 query-optimization work (≈80% shipped, see the plan's
+  §3) may already meet the < 2 s offer→accept and < 300 ms fare-estimate SLAs at
+  500 drivers, and gate G3 exists to find out.
+- **Action (Phase 0, in order):** T2 retro `spinr-dispatch-reviewer` pass on
+  `backend/routes/rides/matching.py:821-886` (self-disclosed as never run in
+  `docs/change-log/2026-08-27-p2-dispatch-loop-optimization.md`) → T3 additive
+  per-phase timing metrics in `repositories/_base.py` `run_sync` and the dispatch
+  attempt → T4 staging (E1 — three human actions) → T5 run
+  `loadtest/locustfile.py` at 600 users against staging and record the numbers
+  → T6 confirm pooler mode/port/pool-size/IPv4 reachability on the real project
+  → T7 write ADR-011 (Accepted or Rejected) and add it to `docs/adr/README.md`.
+  Decisions D1–D6 in the plan's §8 need Kiran.
+- **Files:** none changed yet. Phase 0 targets: `backend/repositories/_base.py`,
+  `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_metrics.py`,
+  `loadtest/README.md`. Phase 1+ files are enumerated per task in the plan.
+- **Acceptance:** ADR-011 exists in `docs/adr/` with a recorded decision. If
+  Rejected, close this item. If Accepted, this item stays open through the
+  plan's Phase 3 (flag `dispatch_direct_pool_enabled` on in production for a
+  7-day validation window with no regression) and closes at its T18.
+- **2026-09-03 review (PR #4873; #4881's fixes already on main):** full Codex-style pass
+  over Phases 0–2 found 10 High / 14 Medium findings; both PRs merged mid-review, so the
+  remaining fixes are their own PR, #4883 —
+  see `docs/change-log/2026-09-03-c50-phase2-direct-pool-claim-review-fixes.md`. Migrations
+  renumbered 400/401 → 401/402 (main took 400). Still open after that pass: pooler facts
+  on the real project (gate G5), and the unattributed `DISPATCH_POOL_DSN` Fly secret the
+  T16 round-2 report found already staged on `spinr-backend-staging`.
+- **Related:** E1/E2 (staging + load test, P4 section above), C5 (stale Railway
+  standby still running loops against prod — the plan's §3a), the untracked
+  `_DEFAULT_ROW_LIMIT` 200-call-site sweep noted in the P0 change-log (§3b).
+
+### C51. `backend-test` fails at pytest collection — `h3` package used but never pinned in requirements
+- [x] **Status:** the `h3` pin itself is fixed (2026-09-02) — `h3>=4,<5` added to
+  `requirements.in`/`requirements.txt`, `requirements-locked.txt` regenerated
+  (h3==4.5.0 + hashes only, additive — see Files below). Verified locally:
+  `pip install "h3>=4,<5"` then `pytest tests/test_h3_cells.py
+  tests/test_h3_heatmap.py` → 22/22 pass. **But 2 of the original 4 broken
+  test files still fail, from a different, newly-exposed cause — see C52.**
+  Fixing the pin let Python get past the `ModuleNotFoundError` and hit the
+  next import in the same chain, which is a real, separate, pre-existing bug
+  this item did not anticipate. Leaving this item's own scope (the pin) done
+  and tracking the new finding separately rather than folding it in here.
+- **Issue/gap:** `backend/utils/h3_cells.py:19` does `import h3` (Uber's H3
+  geospatial-indexing library, PyPI package `h3`/`h3-py`) — used for
+  dispatch-radius lookup (res 8) and heatmap aggregation (res 9), per its own
+  docstring. `backend/utils/h3_location_index.py` imports from it too. Neither
+  `backend/requirements.txt` nor `backend/requirements-locked.txt` pins `h3`
+  anywhere — grepped both files directly, no entry. The only geospatial-hash
+  package present is `mmh3==5.2.1` (MurmurHash, pulled in transitively via
+  `pyiceberg`) — an unrelated, coincidentally-similar name, not a substitute.
+- **Impact:** `pytest` fails at collection (not at runtime) with
+  `ModuleNotFoundError: No module named 'h3'`, taking down 4 test files —
+  `tests/test_dispatch_candidates.py`, `tests/test_h3_cells.py`,
+  `tests/test_h3_heatmap.py`, `tests/test_h3_location_index.py` — and the
+  whole `backend-test` CI job with them. `backend-test` also uploads the
+  `shared-coverage` artifact that `Money-path coverage floor check` and
+  `Admin/utils coverage floor check` both depend on, so both of those gates
+  cascade-fail too even though neither touches H3 code.
+- **Action:** add `h3` to `backend/requirements.txt` (and regenerate
+  `backend/requirements-locked.txt` via the repo's normal lock step). The
+  actual calls in `h3_cells.py` (`h3.latlng_to_cell`, `h3.grid_disk`,
+  `h3.cell_to_latlng`, `h3.cell_to_boundary`, `h3.is_valid_cell`) are all v4
+  API names, so the pin must be `h3>=4,<5` — not v3 (`h3.geo_to_h3`/
+  `h3.k_ring`/... — different function names entirely, would still crash).
+  After adding it, `pytest tests/test_h3_cells.py tests/test_h3_location_index.py
+  tests/test_h3_heatmap.py tests/test_dispatch_candidates.py` should collect
+  and run cleanly — verify locally before pushing, this hasn't been run
+  against a real `h3` install in this session.
+- **Files:** `backend/requirements.txt`, `backend/requirements-locked.txt`.
+  No application code needs to change — `h3_cells.py`/`h3_location_index.py`
+  are already written correctly against v4, they just have no installable
+  dependency backing them in CI.
+- **Acceptance:** `backend-test` collects without error on `main`; the two
+  cascade coverage-floor checks stop failing as a side effect. **Not yet
+  met** — collection still fails for `test_h3_location_index.py`/
+  `test_dispatch_candidates.py` per C52 below.
+
+### C52. `utils/h3_location_index.py` imports 6 Redis helpers that don't exist in `utils/redis_client.py` — module cannot import at all — CLOSED (2026-09-02)
+- [x] **Status:** fixed 2026-09-02. Checked C50's migration plan doc and the
+  `2026-09-01-h3-dispatch-heatmap.md` change-log first, per this item's own
+  note: confirmed H3/the outbox "landed dark on `main` in `fc6f922` behind
+  default-off flags" (`dispatch_geo_provider=legacy`) — this was option (a),
+  a genuine oversight in that dark launch's own verification (the change-log
+  never mentions running `test_h3_location_index.py`), not a deliberate
+  pause. Implemented the 6 missing helpers in `redis_client.py`, matching
+  every existing function's pattern exactly: real-Redis branch + in-process
+  fallback (two new local stores, `_local_hashes`/`_local_zsets`, mirroring
+  the existing `_local` dict's shape/expiry convention) + raise-loudly on a
+  configured-but-erroring Redis, never silent degradation. `redis_eval`
+  raises `RuntimeError` when unconfigured (no local Lua interpreter) — the
+  exact signal `h3_location_index.py`'s `upsert_driver()` already catches to
+  run its pure-Python fallback path, so no caller-side change was needed.
+  Stays flag-gated off (`dispatch_geo_provider=legacy` by default) — this
+  fix makes already-shipped dark code importable/functional again, it does
+  not activate anything.
+  30 new tests in `tests/test_redis_client_coverage.py` (real-client-delegates
+  + local-fallback + configured-but-erroring-raises for each of the 6, mirroring
+  every existing test in that file). Verified: `pytest
+  tests/test_h3_location_index.py tests/test_dispatch_candidates.py
+  tests/test_h3_cells.py tests/test_h3_heatmap.py` → 58/60 pass — the 2
+  remaining failures are a **different**, unrelated pre-existing gap, not
+  fixed here (see C53).
+- **Issue/gap:** `h3_location_index.py` does
+  `from .redis_client import (get_redis_stats, redis_delete, redis_eval,
+  redis_get, redis_hgetall, redis_hset, redis_set, redis_set_nx,
+  redis_zadd, redis_zrangebyscore_many, redis_zrem)`. Checked each name
+  against `utils/redis_client.py` directly (grep for each `def`): only
+  `get_redis_stats`, `redis_get`, `redis_delete`, `redis_set`, and
+  `redis_set_nx` exist. **Six do not**: `redis_eval`, `redis_hgetall`,
+  `redis_hset`, `redis_zadd`, `redis_zrangebyscore_many`, `redis_zrem`.
+  The module cannot import at all, in production or tests — this isn't a
+  test-only gap like C51 was.
+- **Impact:** `pytest tests/test_h3_location_index.py
+  tests/test_dispatch_candidates.py` fails at collection with
+  `ImportError: cannot import name 'redis_eval' from 'utils.redis_client'`.
+  Checked whether this reaches production: grepped `routes/`, `services/`,
+  `core/` for `h3_location_index`/`dispatch_candidates` — the only
+  importers are `services/dispatch_candidates.py` (which itself is never
+  imported by any router or service outside its own file/tests). **Not
+  currently wired into the live dispatch path** — `fetch_dispatch_candidates`
+  has no caller yet — so this is dead code today, not a live incident. It
+  does mean the H3 dispatch-geo-indexing work (commit `fc6f922`, "add
+  dispatch geo indexing and transactional outbox") shipped a module that
+  has never successfully imported, in any environment, since it landed.
+- **Files:** `backend/utils/redis_client.py` (6 new functions + 2 new
+  in-process fallback stores), `backend/tests/test_redis_client_coverage.py`
+  (30 new tests).
+- **Acceptance:** met — `pytest tests/test_h3_location_index.py
+  tests/test_dispatch_candidates.py` collects and 58/60 pass (the 2 that
+  don't are C53, a different gap).
+- **Change log:** `docs/change-log/2026-09-02-c52-redis-helpers-for-h3-index.md`.
+
+### C53. H3/outbox dark launch (`fc6f922`) has 4 more unwired/incomplete pieces, found while fixing C52
+- [x] **Status:** resolved 2026-09-02 — findings 1–4 all fixed. User gave the
+  go-ahead for finding 4 ("start on finding 4") after 1–3 shipped; see the
+  finding-4 action note below for what was built and what was found
+  already-present from the original dark launch. Originally discovered
+  immediately after C52,
+  once `tests/test_h3_location_index.py`/`test_h3_index_reconciler.py`/
+  `test_outbox_worker.py` could finally collect for the first time since
+  `fc6f922` landed.
+  1. **CLOSED.** `tests/test_h3_location_index.py::test_redis_set_helpers_union_members`
+     expected a second, SET-based Redis helper trio (`redis_sadd`/`redis_srem`/
+     `redis_sunion`) that nothing in `h3_location_index.py` ever imported or
+     called (it uses ZSETs via the C52 helpers). Confirmed via `git log
+     --follow` that the whole test file has exactly one commit (`fc6f922`) —
+     no "earlier SET design later replaced by ZSET" history exists, so this
+     was an inconsistency authored in the same commit, not evolution. Worse:
+     the test used the real `spinr:h3:cell:{res}:{cell}` key format, so a SET
+     write to the same key the real ZSET code uses would have been a Redis
+     `WRONGTYPE` collision if this test's functions had ever been built and
+     called for real. Removed the stale test rather than building dead,
+     conflicting functions (CLAUDE.md: simplicity first, no speculative
+     surface area).
+  2. **CLOSED.** Wired `utils/driver_presence.py::clear_presence()` — the
+     single choke point all 7 explicit sign-out/go-offline/force-offline
+     call sites already funnel through (`document_expiry.py`, `spinr_pass.py`,
+     `routes/drivers/status.py`, `routes/websocket.py` disconnect,
+     `routes/rides/matching.py` ×2) — to also call
+     `h3_location_index.on_driver_offline(driver_id)`, matching that
+     function's own docstring ("Always drop the driver — go-offline must not
+     leave a stale index hit"). Harmless no-op today (H3 writes are gated
+     dark, so there's nothing to purge yet) but keeps presence and the geo
+     index from silently diverging once/if the feature activates.
+  3. **CLOSED.** No H3 rebuild endpoint existed anywhere in `routes/admin/`
+     at all (confirmed via grep — `health_snapshot()` from
+     `h3_location_index.py`, purpose-built as "Admin-dashboard payload," had
+     zero callers either). Added `POST /admin/monitoring/dispatch-geo/rebuild`
+     to `routes/admin/monitoring.py` — force-runs
+     `h3_index_reconciler._tick(force=True)` (bypassing the reconciler's
+     leader lock, since an operator explicitly asked), audit-logs
+     success/failure via the existing `log_admin_action` convention, and
+     surfaces a reconciler error as a 503 rather than swallowing it
+     (CLAUDE.md: DB/dispatch errors surface loudly). No GET status/health
+     endpoint was added — `health_snapshot()` still has no admin-dashboard
+     caller; flagged as a natural follow-up, not built here (out of this
+     finding's stated scope).
+  4. **A whole separate, mostly-unbuilt "transactional outbox receipts +
+     dedicated worker process" feature — corrected/expanded 2026-09-02
+     after running the full backend suite (not just the scoped subset
+     used to find items 1–3).** Originally logged as "one missing
+     function"; it is not. Confirmed via full-suite run (13,744 tests,
+     60 failures total — most pre-existing and unrelated, see note below)
+     that the following are **all missing or untested**, each with an
+     existing, already-written test file describing its exact intended
+     contract (a real spec, not speculation — someone designed this
+     feature and wrote its tests before building it):
+     - `utils/email_provider.py`: `EmailDeliveryStatus` enum
+       (`accepted`/`terminal_skip`/`retryable_failure`) + `EmailDeliveryResult`
+       dataclass (`status`, `provider`, `message_id`, `error_code`) +
+       `send_transactional_email_result(...)` — none exist (0 classes
+       defined in the file today).
+     - `utils/email_receipt.py`: `send_receipt_email_result(...)` — doesn't
+       exist (only the existing bool-returning `send_receipt_email`).
+     - `services/payment_service.py`: `send_ride_receipt_result(ride_id)`
+       — doesn't exist. Full contract from
+       `tests/test_ride_receipt_delivery.py` (5 tests): hydrates ride/rider/
+       driver from `ride_id` via `db_supabase`, calls
+       `email_receipt.send_receipt_email_result`, returns its
+       `EmailDeliveryResult` (accepted/terminal_skip/retryable_failure)
+       instead of a bool; a missing ride → `retryable_failure` with
+       `error_code="ride_not_found"`; a missing/empty rider email →
+       `terminal_skip` with `error_code="no_recipient"`, without calling
+       the actual send.
+     - `services/outbox_receipts.py` — **the whole module doesn't exist**.
+       Full contract from `tests/test_outbox_receipts.py` (10 tests, plus
+       `test_manual_resend_is_not_outbox_gated_and_webhooks_use_the_gate`
+       asserting exact call-site wiring): `auto_receipt_is_queued(ride_id)`
+       (delegates to an `is_auto_receipt_queued` outbox-repo lookup) and
+       `maybe_send_auto_receipt(ride, rider_id, tip_amount, spawn=...)`
+       (skip the direct/legacy send when an outbox row is already queued;
+       otherwise fall back to `payment_service.send_ride_receipt`, spawned
+       if a `spawn` callable is given, awaited if not; a lookup failure
+       falls back to the direct/spawned send rather than silently dropping
+       the receipt). The tests expect this to be wired into **4 live
+       payment-settlement call sites**: `routes/rides/payments.py::process_payment`,
+       `routes/webhooks.py::_handle_ride_invoice_paid`,
+       `utils/preauth_capture.py::_capture_one`, and
+       `services/payment_service.py::auto_settle_guest_corporate` — none
+       of which reference `maybe_send_auto_receipt` today.
+     - `worker.py` (repo root, next to `server.py`) — **does not exist at
+       all**. `tests/test_worker_app.py` (10 tests + `worker_client`
+       fixture) describes an entirely separate, dedicated FastAPI process
+       (`/health` + `/metrics` only, explicitly asserted to carry **no**
+       product routers — `/api/v1`, `/rides`, `/admin` all asserted absent)
+       running `run_outbox_worker` plus a `WORKER_WAVE1_LOOP_NAMES` subset
+       of the existing 40 background loops (`push_retry`, `zoho_desk_sync`,
+       `driver_onboarding_reminders` named explicitly), with its own
+       `/health` liveness contract (unhealthy when a supervised task is
+       dead, or a loop hasn't ticked past its grace period) and a
+       Bearer-token-gated `/metrics`. This also implies a new
+       `core/background_loop_registry.py` module
+       (`WORKER_WAVE1_LOOP_NAMES`) that doesn't exist either.
+     - `routes/admin/monitoring.py::get_email_deliverability` — referenced
+       by `tests/test_email_deliverability.py` (aggregates send rows by
+       provider/status/email_type, PII-safe); not confirmed to exist
+       (not read in this pass — flagging as likely-related, not verified).
+     This is an entire planned product/infra feature — a receipts-delivery
+     status model, a new outbox-gated send path wired into 4 live payment
+     call sites, and a second deployable process for background loops —
+     not a bug. **Not started.** ~60 full-suite failures total; most are
+     unrelated pre-existing gaps (admin business-logic/drivers/promo-stats/
+     referral-analytics coverage tests, a loguru-convention check) not
+     re-triaged here — only the ones in this feature's own test files
+     (`test_outbox_worker.py`, `test_outbox_receipts.py`,
+     `test_ride_receipt_delivery.py`, `test_worker_app.py`,
+     `test_email_deliverability.py`) were traced to this cause.
+- **Why finding 4 took a separate go-ahead (historical — now resolved):** it turned out to be a full feature
+  build across 6+ new/changed files touching 4 live payment-settlement
+  paths plus a new deployable process — not "finish importing the module
+  that already has working callers" like 1–3 and C52 were. **Payments/
+  receipts-domain and confirmed large** (CLAUDE.md: "Bias toward caution...
+  on anything touching rides, payments... a wrong assumption there is a
+  regression on a live-tested surface") — this is exactly the "blast radius
+  unclear / touches payments and you're not confident of full impact" case
+  CLAUDE.md's pre-merge gate #9 says to `AskUserQuestion` on rather than
+  build solo, even with tests already written as a spec. Flagged for a real
+  go/no-go and staffing decision, not started unilaterally, despite the
+  tests making it a tractable one to *implement* — the risk here is in
+  wiring 4 live payment call sites and standing up a second deployable
+  process, not in writing the code. Reported to the user 2026-09-02 rather
+  than proceeding silently; user directed "start on findings 1-3 first"
+  same day — 1–3 done, 4 still awaiting a go-ahead.
+- **Action (findings 1–3 — DONE, see per-finding notes above):** removed
+  the stale SET-helper test (1); wired `driver_presence.py::clear_presence()`
+  → `h3_location_index.on_driver_offline` (2); added the admin force-rebuild
+  endpoint to `routes/admin/monitoring.py` (3).
+- **Action (finding 4 — DONE 2026-09-02):** built (a)–(e) from the planned
+  order below; (f) (`worker.py` + `core/background_loop_registry.py`) turned
+  out to **already exist**, fully built, from the original `fc6f922` dark
+  launch — a fact `test_worker_app.py` collecting-but-mostly-passing (10/11)
+  before this session's changes should have surfaced sooner; only its
+  registry cross-check (below) was actually broken.
+  1. `email_provider.py`: added `EmailDeliveryStatus` enum
+     (`accepted`/`terminal_skip`/`retryable_failure`), `EmailDeliveryResult`
+     dataclass, and `send_transactional_email_result(...)`. The existing
+     bool-returning `send_transactional_email` (12 call sites) now delegates
+     to it — pure internal refactor, same bool contract preserved for every
+     existing caller.
+  2. `email_receipt.py`: added `send_receipt_email_result(...)`; the existing
+     bool `send_receipt_email` now delegates to it the same way.
+  3. `payment_service.py`: added `send_ride_receipt_result(ride_id)` —
+     hydrates ride/rider/driver from `ride_id` (mirrors `send_ride_receipt`'s
+     existing hydration), calls `email_receipt.send_receipt_email_result`.
+     A missing ride is treated as `retryable_failure` (not a terminal skip —
+     safer to retry through the outbox's bounded attempts than to discard a
+     real ride's receipt on what could be a replication-lag race).
+  4. `outbox_worker.py`'s import of `EmailDeliveryStatus` now resolves;
+     `test_outbox_worker.py` collects and passes in full.
+  5. `services/outbox_receipts.py` — **found already fully built** (module,
+     `auto_receipt_is_queued`, `maybe_send_auto_receipt`, and
+     `services/outbox.py`'s RPC boundary + `is_auto_receipt_queued`), also
+     from the dark launch. Only the 4 call-site wirings were actually
+     missing; wired all 4, each as its own reviewed diff:
+     `routes/rides/payments.py::process_payment` (awaited, `spawn=_deps.spawn`
+     — same effective behavior as before, just outbox-gated first),
+     `routes/webhooks.py::_handle_ride_invoice_paid` and its second
+     `payment_intent.succeeded` receipt site (both awaited, no spawn —
+     already off the request path), `utils/preauth_capture.py::_capture_one`
+     and `services/payment_service.py::auto_settle_guest_corporate` (both
+     awaited, `send=send_ride_receipt` pinned to each module's own binding so
+     existing test doubles patched on that module still take effect).
+  6. `worker.py` / `core/background_loop_registry.py` — already existed
+     and passed 10/11 `test_worker_app.py` tests; the 1 failure
+     (`test_worker_loop_names_match_registry`) was a real gap: none of the
+     4 worker-owned loop names (`outbox_poller (1-10s)`, `push_retry (30s)`,
+     `zoho_desk_sync (10min)`, `driver_onboarding_reminders (15min)`) were in
+     `utils/loop_monitor.py`'s `LOOP_THRESHOLDS`, so they silently fell back
+     to the 2h default staleness threshold instead of a threshold sized to
+     their actual tick interval. Added all 4. No deploy/process-topology
+     decision was needed here — the process itself was already built and
+     merged dark; this was a monitoring-config gap in already-shipped code,
+     not standing up new infra.
+  7. `routes/admin/monitoring.py::get_email_deliverability` — confirmed to
+     already exist (line 356); its test failure
+     (`test_email_deliverability.py::test_deliverability_aggregates_and_omits_pii`,
+     `total == 0` instead of `4`) is **unrelated to this feature** — confirmed
+     via `git stash` that it fails identically on the pre-finding-4 tree.
+     Left unfixed as out of scope; not re-triaged here beyond confirming it
+     predates this change.
+  8. Two collateral test breaks from step 1–2's refactor, both fixed: (a)
+     `test_all_emails_are_branded.py`'s brand-consistency detector regex
+     widened to also match a `_result`-suffixed send call, and
+     `utils/email_provider.py` added to its `_UNBRANDED_BY_DESIGN` allowlist
+     (the bool wrapper's own internal delegation to
+     `send_transactional_email_result` now self-matches the detector; it
+     renders no body, callers do); (b) `test_admin_send_receipt_email.py`
+     and `test_receipt_route_snapshot.py` re-pointed their provider mock from
+     `send_transactional_email` to `send_transactional_email_result` to match
+     where `email_receipt.py` now actually calls out.
+- **Files (finding 4):** `backend/utils/email_provider.py`,
+  `backend/utils/email_receipt.py`, `backend/services/payment_service.py`,
+  `backend/routes/rides/payments.py`, `backend/routes/webhooks.py`,
+  `backend/utils/preauth_capture.py`, `backend/utils/loop_monitor.py`,
+  `backend/tests/test_all_emails_are_branded.py`,
+  `backend/tests/test_admin_send_receipt_email.py`,
+  `backend/tests/test_receipt_route_snapshot.py`. `services/outbox_receipts.py`,
+  `worker.py`, `core/background_loop_registry.py` were already present —
+  read and verified, not modified.
+- **Acceptance:** `pytest tests/test_h3_location_index.py
+  tests/test_h3_index_reconciler.py tests/test_outbox_worker.py
+  tests/test_outbox_receipts.py tests/test_ride_receipt_delivery.py
+  tests/test_worker_app.py tests/test_admin_send_receipt_email.py
+  tests/test_all_emails_are_branded.py tests/test_receipt_route_snapshot.py`
+  all collect and pass in full. Broader regression sweep (`-k "payment or
+  webhook or preauth or receipt or email or outbox or worker"`, 1,456 tests)
+  green except the one pre-existing, confirmed-unrelated
+  `test_email_deliverability.py` failure (item 7 above).
+
+### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle
+- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+  pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
+- **Issue/gap:** `_match_driver_to_ride_attempt`'s batch-claim loop
+  (`backend/routes/rides/matching.py:822-842`) calls
+  `claim_driver_atomic(driver["id"])` once per ranked candidate, appending
+  each successfully-claimed-and-revalidated driver to `claimed_drivers`. If
+  `claim_driver_atomic` **raises** (not just returns `None`) on a later
+  iteration — e.g. a `DatabaseError` from `run_sync` on a transient Supabase
+  blip, per the same failure class already regression-tested for the sibling
+  `match_and_claim_driver` helper in `test_dispatch_db_errors.py` — the
+  exception propagates straight out of the `for` loop. Every driver claimed
+  in *earlier* iterations of that same loop is left `is_available=false`
+  with `availability_claimed_at` set, but never released, because there is
+  no `try/except` around the loop body. This is asymmetric with the
+  `ride_offers` insert failure a few lines below (matching.py:860-871),
+  which *does* release every claimed driver via `set_driver_available`
+  before re-raising, and is covered by
+  `test_ride_offers_insert_failure_releases_claims_and_reraises`.
+- **Why it matters:** the outer `match_driver_to_ride` recovery shell
+  (matching.py:152-169) catches the re-raised exception and re-arms
+  `_dispatch_retry`, so the *ride* recovers. But the orphaned drivers stay
+  claimed-but-unoffered until `utils/driver_claim_reaper.py`'s 90s age
+  threshold plus its own ~60s tick interval elapse (worst case ~150s) —
+  during which those drivers are silently pulled out of the available pool
+  for every other ride's dispatch, directly hurting match rate (KPI target
+  ≥85%) for that window. The reaper's release-on-timeout is a real
+  mitigation, not a full substitute for the immediate release the
+  `ride_offers` failure path already gets.
+- **Action:** wrap the claim loop body (or at least the
+  `claim_driver_atomic` call) in a `try/except` that releases every driver
+  already appended to `claimed_drivers` via `set_driver_available(d["id"],
+  True)` before re-raising — mirroring the existing `ride_offers` insert
+  failure handler's pattern exactly. Add a regression test parallel to
+  `test_ride_offers_insert_failure_releases_claims_and_reraises` that raises
+  from `claim_driver_atomic` on the 2nd of 2 candidates and asserts the 1st
+  claimed driver is released.
+- **Files:** `backend/routes/rides/matching.py` (the claim loop),
+  `backend/tests/test_dispatch_match_attempt_branches.py` (new test).
+- **Acceptance:** a `claim_driver_atomic` exception on candidate N releases
+  every driver claimed at candidates 1..N-1 before the exception reaches the
+  `match_driver_to_ride` recovery shell; new regression test passes; no
+  behavior change to the successful-claim or `ride_offers`-failure paths.
+
+### C55. Insurance-period write-failure alerting: no confirmed live Grafana/Sentry rule; no Period-2 reconciler (only Period-3 has one)
+- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+  pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
+- **Issue/gap:** `record_period_transition` (`backend/utils/insurance_periods.py`)
+  is a deliberate, documented exception to AGENTS.md's no-silent-swallow
+  rule for compliance-grade audit writes — logs at `ERROR` with `exc_info`
+  and increments `spinr_insurance_period_write_failed_total` on failure
+  rather than raising, so a DB blip during dispatch's Period-2-open loop
+  (`matching.py:885-886`) never blocks offering the ride. That design is
+  sound (see the audit doc's §3 for the full justification) but its safety
+  net has two open threads:
+  1. `docs/runbooks/deploy-migration-64-65.md` documents
+     `spinr_insurance_period_write_failed_total` as "**Alert immediately if
+     non-zero**", but `metrics-agent/grafana/alert-rules.yaml` — the actual
+     shipped alert-rule file, which does contain a rule for the sibling
+     `spinr_dispatch_offer_to_accept_duration_ms` P95 metric — has no rule
+     referencing this metric. The runbook's alerting contract is unconfirmed
+     as live.
+  2. `docs/CRITICAL_BUGS_IMPLEMENTATION_PLAN.md`'s WS-12 (§3) specified a
+     `utils/insurance_period_reconciler.py` background loop that would
+     self-heal a missed period-open by deriving the expected period from
+     ride state every 10 minutes — this was never built. Only the
+     Period-3-specific `utils/stale_p3_closer.py` exists (alert-first,
+     closes stale open Period-3 spans), which has no Period-1/2 equivalent.
+     A dropped Period-2-open write (e.g. from the dispatch claim loop) has
+     no automated detection or correction path today beyond the raw
+     write-failed metric.
+- **Why it matters:** insurance-period misclassification is a regulatory/SGI
+  liability per AGENTS.md's own framing. The write path is correctly
+  fail-safe for the ride state machine, but "logged and forgotten" is only
+  as good as the alert that reads the log — and that alert's existence in
+  the live Grafana config could not be confirmed by this review.
+- **Action:** (a) confirm whether `spinr_insurance_period_write_failed_total`
+  has a live alert rule wired anywhere (Grafana, Sentry, PagerDuty) outside
+  this repo's tracked config, and if not, add one to
+  `metrics-agent/grafana/alert-rules.yaml` mirroring the existing P95
+  dispatch-latency rule's structure; (b) decide whether to build the WS-12
+  §3 reconciler loop as originally scoped, or explicitly close that part of
+  WS-12 as out of scope with a documented reason.
+- **Files:** `metrics-agent/grafana/alert-rules.yaml`;
+  `backend/utils/insurance_period_reconciler.py` (new, if built);
+  `docs/CRITICAL_BUGS_IMPLEMENTATION_PLAN.md` (mark WS-12 §3 done or
+  explicitly deferred).
+- **Acceptance:** either a confirmed live alert screenshot/config diff for
+  the write-failed metric, or a reconciler loop landed with tests per the
+  WS-12 §3 spec (kill the RPC mid-transition → reconciler restores the open
+  period on next tick) — whichever the team decides is the actual bar.
+
+### C56. `claim_driver_atomic`'s `run_sync` call uses the default read retry policy, not an explicit write policy
+- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+  pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
+- **Issue/gap:** `backend/repositories/_base.py`'s `run_sync(func,
+  retry_policy: RetryPolicy = "read")` gates retry behavior by policy:
+  `"read"` (3 attempts, 500ms→1500ms backoff), `"idempotent_write"` (2
+  attempts, 750ms), `"write"` (1 attempt, no retry) — a deliberate
+  convention this file uses elsewhere (e.g.
+  `insurance_periods.py`'s RPC call passes `retry_policy="write"`
+  explicitly). `claim_driver_atomic`'s own `run_sync(_claim)` call
+  (`backend/repositories/driver_repo.py:292`) passes no `retry_policy`
+  argument, so it silently falls back to `"read"` — 3 attempts with backoff
+  — despite the underlying operation being a conditional `UPDATE`.
+- **Why it matters:** this is *not* currently a correctness bug — the
+  `.eq("is_available", True)` guard means a retried call after a prior
+  attempt actually succeeded (e.g. the response was lost but the write
+  landed) simply finds 0 rows matching `is_available=true` and returns
+  `None`, which the caller already treats as "not claimed" and safely moves
+  to the next candidate; no double-claim is possible. But 3 retries at
+  500-1500ms backoff on a write sitting inside a P95 < 2s dispatch offer
+  path is a latency risk under real transient-failure conditions that the
+  file's own policy taxonomy exists to prevent, and the omission reads as
+  accidental rather than a considered choice (unlike the explicit
+  `retry_policy="write"` passed for the insurance RPC).
+- **Action:** decide and pass an explicit `retry_policy` for
+  `claim_driver_atomic`'s `run_sync` call — most likely `"idempotent_write"`
+  (the operation is safe to retry per the analysis above, so `"write"`'s
+  zero-retry may be overly conservative, but `"read"`'s 3-attempt budget is
+  likely too generous for a claim sitting inside the offer-latency SLA).
+  Add a comment explaining the choice, consistent with this file's existing
+  convention.
+- **Files:** `backend/repositories/driver_repo.py` (`claim_driver_atomic`).
+- **Acceptance:** an explicit `retry_policy` argument is passed with a
+  one-line rationale comment; existing `claim_driver_atomic` tests in
+  `test_driver_repo_coverage.py` still pass unmodified (the policy choice
+  must not change claim-won/claim-lost semantics, only retry count/timing
+  on a genuine transient failure).
+
+### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip
+- [ ] **Status:** open — found 2026-09-03 while babysitting PR #4887 (C53
+  finding 4). Confirmed via GitHub Actions run 33711534411 that
+  `backend-test` fails identically on `main`'s own latest commit
+  (`e71760e`), not just on the PR branch — this is base-branch-red, not
+  introduced by #4887's diff.
+- **Issue/gap:** `backend/tests/rls/conftest.py` builds its Postgres RLS
+  test schema from `backend/supabase_schema.sql` plus a hand-picked
+  allowlist of specific migration files applied verbatim (58, 64, 70, 290,
+  378 — for `financial_events`, `driver_insurance_periods`,
+  `saved_addresses`). It was never updated to also apply
+  `backend/migrations/399_transactional_outbox.sql` (merged as part of the
+  `fc6f922` dark launch, well before this gap was found), so every test
+  touching `settings.outbox_receipts_enabled`, `outbox_messages`, or the
+  `outbox_*` RPCs fails with `UndefinedColumn`/`UndefinedTable`/`does not
+  exist`. 19 of 24 current RLS-suite failures are this one root cause
+  (`backend/tests/rls/test_transactional_outbox.py`, almost entirely). The
+  remaining ~5 (`test_core_tables_rls.py::test_service_role_bypasses_rls_on_users`,
+  two `test_money_and_safety_rls.py` cases, and
+  `test_saved_addresses_rls.py::test_service_role_bypasses_rls_on_saved_addresses`)
+  are a **separate, unrelated** pre-existing gap in the same harness —
+  assertion/permission mismatches with nothing to do with the outbox
+  migration; flagged here for visibility, not diagnosed further.
+- **Action:** update `tests/rls/conftest.py`'s schema-setup fixture to also
+  execute `backend/migrations/399_transactional_outbox.sql` verbatim, same
+  pattern as the existing 58/64/70/290/378 calls (`cur.execute((migrations_dir
+  / "NN_....sql").read_text())`, including the existing handling of the
+  trailing `NOTIFY pgrst, 'reload schema';` line those migrations already
+  strip).
+- **Files:** `backend/tests/rls/conftest.py`.
+- **Acceptance:** `TEST_DATABASE_URL=<local pg> pytest tests/rls -c
+  /dev/null --confcutdir=tests/rls -v` — `test_transactional_outbox.py`
+  passes in full; no other RLS file regresses.
+
+### C58. `test_email_deliverability.py` never updated for migration 392's server-side aggregation — CLOSED (2026-09-03)
+- [x] **Status:** resolved 2026-09-03. Flagged as C53 finding 4 item 7
+  ("unrelated to this feature... not fixed, out of scope"); a follow-up
+  task was queued and then actioned the same session.
+- **Issue/gap:** `test_deliverability_aggregates_and_omits_pii` asserted
+  `out["total"] == 4` but got `0` — not caused by C53 finding 4's outbox
+  work (confirmed via `git stash` before that work even started).
+- **Root cause:** `routes/admin/monitoring.py::get_email_deliverability`
+  was refactored under `migrations/392_admin_email_log_stats_fn.sql`
+  ("Replace Python-side fetch of 5k email_send_log rows + three Counter()
+  aggregations... with server-side GROUP BY") to compute
+  `total`/`by_status`/`by_provider`/`by_type` via a single
+  `db_supabase.rpc("admin_email_log_stats", {"p_since": since})` call,
+  with `get_rows` now used only for the two *list* payloads the RPC
+  doesn't return (the 25 most-recent already-failed rows, and the 25
+  most-recent suppression rows). The test was never updated for that
+  refactor: it still fed a 4-row fixture through `get_rows`'s first
+  call expecting the endpoint to Counter() it in Python. The test never
+  mocked `db_supabase.rpc` at all, so the real (unconfigured-in-tests)
+  client's `rpc()` silently returned `None` (`repositories/_base.py::rpc`'s
+  documented no-op-when-unconfigured behavior) — `st = {}`, so
+  `total`/`by_status`/`by_provider` all read empty. The endpoint was
+  correct and current; the test was stale. (The other two tests in the
+  file, `test_deliverability_empty_window`/`test_deliverability_days_clamped`,
+  happened to still pass — they only assert the all-zero/empty case,
+  which is exactly what `rpc()`'s silent-`None` fallback produces by
+  accident, not because they were correctly mocking it.)
+- **Fix:** patched `routes.admin.monitoring.db_supabase.rpc` in all 3
+  tests to return the RPC's actual jsonb shape (a dict, matching what
+  `admin_email_log_stats` returns for the fixture data); re-scoped the
+  `get_rows` first-call fixture from the full unfiltered send-log to just
+  the failed subset (matching `recent_fail_rows`'s real
+  `{"status": "failed"}` filter). Left `get_email_deliverability` itself
+  untouched — it needed no fix, only its test did.
+- **Files:** `backend/tests/test_email_deliverability.py`.
+- **Acceptance:** `pytest tests/test_email_deliverability.py` — 5/5 pass.
+  Broader sweep (`-k "monitoring or deliverability"`, 37 tests) green, no
+  regressions.
 
 ## Recently completed (do not redo)
 

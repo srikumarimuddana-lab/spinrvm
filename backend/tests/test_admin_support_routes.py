@@ -107,17 +107,12 @@ def test_get_disputes_user_enrich_db_error_surfaces_503(client, _set_admin, monk
 
 
 def test_dispute_stats_normal(client, _set_admin, monkeypatch):
-    # NOTE: a resolved row with a non-numeric refund_amount (e.g. "bad") is
-    # NOT exercised here — `Decimal(str("bad"))` raises `decimal.InvalidOperation`,
-    # which the route's `except (TypeError, ValueError)` does not catch, so it
-    # would 500 instead of being tolerated. This is a pre-existing app bug,
-    # left unfixed per this task's TEST-ONLY scope (see PR description).
-    rows = [
-        {"status": "open"},
-        {"status": "resolved", "refund_amount": "10.50"},
-        {"status": "unknown_status"},
-    ]
-    monkeypatch.setattr(m.db_supabase, "get_rows", AsyncMock(return_value=rows))
+    # admin_get_dispute_stats now aggregates server-side via the
+    # admin_dispute_stats_rollup RPC (migration 380) instead of fetching
+    # all disputes rows and looping in Python -- mock db_supabase.rpc with
+    # the migration's jsonb_build_object shape rather than get_rows.
+    rollup = {"open": 1, "under_review": 0, "resolved": 1, "rejected": 0, "total_refunded": "10.50"}
+    monkeypatch.setattr(m.db_supabase, "rpc", AsyncMock(return_value=rollup))
     resp = client.get("/api/admin/disputes/stats")
     assert resp.status_code == 200
     body = resp.json()
@@ -127,7 +122,7 @@ def test_dispute_stats_normal(client, _set_admin, monkeypatch):
 
 
 def test_dispute_stats_table_missing(client, _set_admin, monkeypatch):
-    monkeypatch.setattr(m.db_supabase, "get_rows", AsyncMock(side_effect=Exception("no table")))
+    monkeypatch.setattr(m.db_supabase, "rpc", AsyncMock(side_effect=Exception("no table")))
     resp = client.get("/api/admin/disputes/stats")
     assert resp.status_code == 200
     assert resp.json()["total_refunded"] == 0
@@ -141,8 +136,8 @@ def test_dispute_stats_total_refunded_uses_round_half_up(client, _set_admin, mon
     round(Decimal("10.125"), 2) == 10.12 (HALF_EVEN), while ROUND_HALF_UP
     quantize gives 10.13 — this pins the correct one.
     """
-    rows = [{"status": "resolved", "refund_amount": "10.125"}]
-    monkeypatch.setattr(m.db_supabase, "get_rows", AsyncMock(return_value=rows))
+    rollup = {"open": 0, "under_review": 0, "resolved": 1, "rejected": 0, "total_refunded": "10.125"}
+    monkeypatch.setattr(m.db_supabase, "rpc", AsyncMock(return_value=rollup))
     resp = client.get("/api/admin/disputes/stats")
     assert resp.status_code == 200
     assert resp.json()["total_refunded"] == 10.13

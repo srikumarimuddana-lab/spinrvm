@@ -34,6 +34,9 @@ Variables are loaded by `pydantic-settings` from a `.env` file in the `backend/`
 | `RATE_LIMIT` | Optional | `"10/minute"` | Global API rate limit applied via `slowapi`. Format: `"<count>/<period>"`. | Hard-code per deployment |
 | `STORAGE_BUCKET` | Optional | `"driver-documents"` | Supabase Storage bucket name used for driver document uploads. | Match the bucket name created in Supabase Storage |
 | `USE_SUPABASE` | Optional | `true` | Feature flag — when `true`, the app uses Supabase as the primary database. Disabling routes queries to a legacy path. | Hard-code `true` for all new deployments |
+| `DISPATCH_POOL_DSN` | Optional | `""` | **C50 Phase 1 (2026-09-02 pgbouncer/direct-pool migration plan) — future Phase-2 wiring point, unused until T12/T13 land.** Direct-Postgres connection string for a psycopg v3 `AsyncConnectionPool` talking to Supabase's Supavisor pooler in transaction mode, bypassing PostgREST for the dispatch claim path. Deliberately **not** named `DATABASE_URL` — `backend/scripts/verify_restore.py` refuses to run against a DSN under that name (production guard). Store as a **Fly secret**, never in `app_settings` — it is a credential, and `app_settings` is admin-dashboard-visible. Empty = the pool defined in `backend/repositories/dispatch_pool.py` is never opened. | Supabase Dashboard → Settings → Database → Connection pooling (transaction mode, port 6543) |
+| `DISPATCH_POOL_MIN_SIZE` | Optional | `1` | **C50 Phase 1 — future Phase-2 wiring point, unused until T12/T13 land.** Minimum connections for the direct dispatch pool (`psycopg_pool.AsyncConnectionPool(min_size=...)`). Plain env config, not a secret. No effect while `DISPATCH_POOL_DSN` is unset or `app_settings.dispatch_direct_pool_enabled` is off. | Hard-code per deployment |
+| `DISPATCH_POOL_MAX_SIZE` | Optional | `8` | **C50 Phase 1 — future Phase-2 wiring point, unused until T12/T13 land.** Maximum connections for the direct dispatch pool (`max_size=...`). Plain env config, not a secret. Must fit within Supavisor's per-compute-tier client-connection budget alongside PostgREST's own connections (see plan doc G5, unverified). No effect while `DISPATCH_POOL_DSN` is unset or the flag is off. | Hard-code per deployment |
 
 ### Backend — Secrets stored in `app_settings` (Supabase table, not env vars)
 
@@ -48,6 +51,7 @@ admin dashboard (Settings page). They are **not** set as environment variables.
 | `twilio_auth_token` | Twilio auth token. | Twilio Console → Account Info |
 | `twilio_from_number` | Twilio phone number to send OTP SMS from (E.164 format, e.g. `+15550001234`). | Twilio Console → Phone Numbers → Active Numbers |
 | `google_maps_api_key` | Google Maps API key used by backend for geocoding / distance calculations. | Google Cloud Console → APIs & Services → Credentials |
+| `dispatch_direct_pool_enabled` | **C50 Phase 1 rollback switch** for the PostgREST → direct-pool (Supavisor/pgbouncer) dispatch migration (`docs/audit/2026-09-02-pgbouncer-direct-pool-migration-plan.md`, T10). Boolean, default `false`. Admin-dashboard-editable, 60s cache via `settings_loader.get_app_settings()` — same as every other feature flag in this table, not an env var (`DISPATCH_POOL_DSN` above is the credential half, kept separate as a Fly secret). Has no effect until Phase 2 (T12/T13, not yet built) wires the dispatch claim path to read it. | Admin Dashboard → Settings, or directly against the `settings` table (`id='app_settings'`) |
 
 ### Backend — CI-only secrets (GitHub Actions)
 

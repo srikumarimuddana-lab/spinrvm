@@ -384,6 +384,22 @@ export default function SettingsPage() {
                                                 onCheckedChange={(v) => update("ai_assistant_enabled", v)}
                                             />
                                         </div>
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <Label>Enable public chat (website)</Label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Allows the Spinr website chat widget to use this assistant
+                                                    via <code>/ai/public-chat</code>. Requires the main AI
+                                                    assistant toggle above to also be on.
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                aria-label="Enable public chat (website)"
+                                                checked={!!settings.ai_public_chat_enabled}
+                                                onCheckedChange={(v) => update("ai_public_chat_enabled", v)}
+                                                disabled={!settings.ai_assistant_enabled}
+                                            />
+                                        </div>
                                         {!settings.ai_assistant_enabled && (
                                             <div className="flex items-center justify-between rounded-lg border border-dashed p-3">
                                                 <div>

@@ -6,9 +6,23 @@ import math
 from typing import Any, Dict, Optional
 
 try:
-    from .route_segments import SegmentedRoute
+    from .datetime_utils import parse_iso_utc
+    from .route_segments import ObservedRouteSegment, SegmentedRoute
 except ImportError:
-    from utils.route_segments import SegmentedRoute  # type: ignore
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.route_segments import ObservedRouteSegment, SegmentedRoute  # type: ignore
+
+
+def _segment_captured_at_bounds(segment: ObservedRouteSegment) -> tuple[Any, Any]:
+    """Return (first, last) device capture timestamps for a whole observed
+    segment (not a map-matched chunk within it) — the true evidence bounds
+    on either side of a gap, used to time-gate gap-fill connectors."""
+    if not segment.points:
+        return None, None
+    first_point, last_point = segment.points[0], segment.points[-1]
+    start = parse_iso_utc(first_point.get("captured_at") or first_point.get("timestamp"))
+    end = parse_iso_utc(last_point.get("captured_at") or last_point.get("timestamp"))
+    return start, end
 
 
 def coordinate(value: Any) -> Optional[list[float]]:
@@ -61,6 +75,7 @@ def project_observed_sections(segmented: SegmentedRoute, matched_route: Dict[str
     projected: list[dict] = []
 
     for observed_index, observed_segment in enumerate(segmented.observed_segments):
+        segment_start_at, segment_end_at = _segment_captured_at_bounds(observed_segment)
         matched_segment = matched_by_segment.get(observed_index)
         matchings = (
             matched_segment.get("matched_segments") or []
@@ -83,6 +98,11 @@ def project_observed_sections(segmented: SegmentedRoute, matched_route: Dict[str
                     "gap_reason": None,
                     "distance_km": round(float(matching.get("distance_km") or 0), 3),
                     "coordinates": coordinates,
+                    # Whole-segment (not per-chunk) capture bounds — used only to
+                    # time-gate a gap-fill connector inserted BETWEEN two
+                    # different observed segments, never within one.
+                    "segment_start_captured_at": segment_start_at,
+                    "segment_end_captured_at": segment_end_at,
                 }
             )
         if matchings and any(section["source_segment_index"] == observed_index for section in projected):
@@ -100,6 +120,8 @@ def project_observed_sections(segmented: SegmentedRoute, matched_route: Dict[str
                 "gap_reason": None,
                 "distance_km": _polyline_distance_km(coordinates),
                 "coordinates": coordinates,
+                "segment_start_captured_at": segment_start_at,
+                "segment_end_captured_at": segment_end_at,
             }
         )
     return projected

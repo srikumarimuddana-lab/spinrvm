@@ -8,17 +8,43 @@ from datetime import timedelta
 from typing import Any, Dict
 
 try:
+    from ...repositories._base import get_db_call_count as _get_db_call_count
+    from ...repositories._base import reset_db_call_count as _reset_db_call_count
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
+    from ...utils.metrics import observe as _dispatch_observe
+    from ...utils.metrics import time_ms as _time_ms
     from ...utils.service_area_scope import build_driver_area_filter, resolve_dispatch_area_scope
 except ImportError:  # pragma: no cover - dual-import pattern
+    from repositories._base import get_db_call_count as _get_db_call_count  # type: ignore
+    from repositories._base import reset_db_call_count as _reset_db_call_count  # type: ignore
     from services.incentive_service import (  # type: ignore
         incentive_display_payload,
         match_ride_incentives,
     )
+    from utils.metrics import observe as _dispatch_observe  # type: ignore
+    from utils.metrics import time_ms as _time_ms  # type: ignore
     from utils.service_area_scope import (  # type: ignore
         build_driver_area_filter,
         resolve_dispatch_area_scope,
     )
+
+# C50 Phase 2 (T13) — the direct-pool claim path. Imported unconditionally
+# (cheap, no connections opened at import time — see dispatch_pool.py's own
+# docstring: init_pool() is a no-op until the flag is on) so the flag check
+# at call time is the only branch point, not an import-time one.
+try:
+    from ...repositories import dispatch_pool as _dispatch_pool
+except ImportError:  # pragma: no cover - dual-import pattern
+    from repositories import dispatch_pool as _dispatch_pool  # type: ignore
+
+# Bucket boundaries for spinr_dispatch_attempt_db_calls: a small-integer count
+# metric (typically single digits to low tens of DB calls per attempt), not a
+# millisecond latency, so DEFAULT_MS_BUCKETS' boundaries (5..10000) would put
+# nearly every observation in the same low bucket. Buckets are pinned by the
+# metric name's first observation (see utils/metrics.py observe() docstring),
+# so this must be passed on every call for consistency even though only the
+# first one actually sets the layout.
+_DB_CALLS_BUCKETS = (5, 10, 15, 20, 25, 30, 40, 50, 75, 100)
 
 from . import _deps, _shared
 from ._deps import (  # noqa: F401
@@ -179,931 +205,1067 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     needed by the offer-timeout and scheduled-ride paths that run
     much later and must see the current state.
     """
-    if ride is None:
-        ride = await _deps.db_supabase.get_ride(ride_id)
-    if not ride:
-        logger.error(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
-        return
+    _reset_db_call_count()
+    try:
+        if ride is None:
+            ride = await _deps.db_supabase.get_ride(ride_id)
+        if not ride:
+            logger.error(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
+            return
 
-    # C2: never dispatch a ride that is no longer searching. The offer-timeout
-    # re-dispatch path runs ~15 awaits after its own status check, so a driver
-    # accept can land in that window and flip the ride to driver_accepted;
-    # without this guard we would claim fresh drivers and emit phantom offers on
-    # an already-live ride (ride-state invariant violation) and needlessly pull
-    # available drivers offline. Every caller either passes a fresh searching
-    # ride (booking) or re-fetches after ensuring searching (scheduled flips
-    # scheduled→searching first; offer-timeout / decline re-dispatch re-fetch),
-    # so this only ever skips a genuinely stale (already-accepted) ride.
-    if ride.get("status") != RideStatus.SEARCHING:
-        logger.info(
-            "[DISPATCH] skipping dispatch for ride %s — status is %s, not searching",
-            ride_id,
-            ride.get("status"),
-        )
-        return
-
-    # Refuse to dispatch a ride with missing coordinates — the driver-app
-    # cannot render the map polyline and would either drop the offer or
-    # plot (0,0) (Gulf of Guinea). Surfacing loudly per CLAUDE.md ("Do not
-    # silently swallow errors"); insurance Period 2 also requires a known
-    # origin/destination.
-    _coords = [
-        ride.get("pickup_lat"),
-        ride.get("pickup_lng"),
-        ride.get("dropoff_lat"),
-        ride.get("dropoff_lng"),
-    ]
-    if any(c is None for c in _coords):
-        logger.error(
-            f"[DISPATCH] ride {ride_id} has missing coordinates "
-            f"pickup=({_coords[0]},{_coords[1]}) dropoff=({_coords[2]},{_coords[3]}) — aborting dispatch",
-        )
-        return
-
-    # Single app_settings fetch — used both for matching config (via
-    # DispatchService.resolve_matching_config) and for the offer-timeout
-    # lookup at the end. Previously this loaded twice; the dead
-    # ``get_rows("service_areas", {"id": ...})`` call that followed has
-    # been removed — resolve_matching_config does its own find_one
-    # against the same table.
-    app_settings = await _deps.get_app_settings()
-    # Compute offer timeout early so it can be embedded in dispatch payloads —
-    # driver-app uses this for the per-offer countdown instead of a cached
-    # value, which drifted when admin changed the setting mid-session.
-    offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
-
-    # ── One service_areas read per attempt ────────────────────────
-    # This same row used to be fetched 4-5 times per dispatch attempt, each an
-    # independent `SELECT *` carrying the `polygon` JSONB: once in
-    # resolve_matching_config, again for the subscription gate, again for the
-    # quota timezone, again for the vehicle cascade, and again for the polygon
-    # in the notify phase. They all want the row this ride is dispatching in.
-    #
-    # Fetched here rather than cached with a TTL deliberately: a cached area
-    # would go stale against an admin editing search_radius_km /
-    # subscription_required / vehicle_cascade_map mid-session — the exact drift
-    # the offer-timeout comment above records having been burned by. One read
-    # per attempt keeps every consumer on the same snapshot AND keeps admin
-    # edits landing on the very next attempt or retry.
-    #
-    # Failure semantics are preserved exactly, which is why this is not a bare
-    # await: on error the row is left empty AND `area=None` is passed below, so
-    # resolve_matching_config re-attempts the same read and raises just as it
-    # does today — dispatch must never quietly fall back to the global radius
-    # and rating floor when the area's overrides are unknown. The consumers
-    # further down (cascade, polygon, quota) keep their existing fail-open
-    # behaviour against the empty row for the same reason they had it before:
-    # a missing cascade map means no cascade, not a dead dispatch.
-    _ride_area: Dict[str, Any] = {}
-    _area_lookup_failed = False
-    if ride.get("service_area_id"):
-        try:
-            _ride_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}) or {}
-        except Exception:
-            _area_lookup_failed = True
-            logger.error(
-                "[DISPATCH] service-area lookup failed for ride_id=%s area=%s — "
-                "re-raising via resolve_matching_config rather than dispatching on global defaults",
+        # C2: never dispatch a ride that is no longer searching. The offer-timeout
+        # re-dispatch path runs ~15 awaits after its own status check, so a driver
+        # accept can land in that window and flip the ride to driver_accepted;
+        # without this guard we would claim fresh drivers and emit phantom offers on
+        # an already-live ride (ride-state invariant violation) and needlessly pull
+        # available drivers offline. Every caller either passes a fresh searching
+        # ride (booking) or re-fetches after ensuring searching (scheduled flips
+        # scheduled→searching first; offer-timeout / decline re-dispatch re-fetch),
+        # so this only ever skips a genuinely stale (already-accepted) ride.
+        if ride.get("status") != RideStatus.SEARCHING:
+            logger.info(
+                "[DISPATCH] skipping dispatch for ride %s — status is %s, not searching",
                 ride_id,
-                ride.get("service_area_id"),
-                exc_info=True,
+                ride.get("status"),
             )
+            return
 
-    _parent_area_box: Dict[str, Any] = {}
+        # Refuse to dispatch a ride with missing coordinates — the driver-app
+        # cannot render the map polyline and would either drop the offer or
+        # plot (0,0) (Gulf of Guinea). Surfacing loudly per CLAUDE.md ("Do not
+        # silently swallow errors"); insurance Period 2 also requires a known
+        # origin/destination.
+        _coords = [
+            ride.get("pickup_lat"),
+            ride.get("pickup_lng"),
+            ride.get("dropoff_lat"),
+            ride.get("dropoff_lng"),
+        ]
+        if any(c is None for c in _coords):
+            logger.error(
+                f"[DISPATCH] ride {ride_id} has missing coordinates "
+                f"pickup=({_coords[0]},{_coords[1]}) dropoff=({_coords[2]},{_coords[3]}) — aborting dispatch",
+            )
+            return
 
-    async def _parent_area() -> Dict[str, Any]:
-        """The ride area's parent row, fetched at most once per attempt.
+        # Single app_settings fetch — used both for matching config (via
+        # DispatchService.resolve_matching_config) and for the offer-timeout
+        # lookup at the end. Previously this loaded twice; the dead
+        # ``get_rows("service_areas", {"id": ...})`` call that followed has
+        # been removed — resolve_matching_config does its own find_one
+        # against the same table.
+        app_settings = await _deps.get_app_settings()
+        # Compute offer timeout early so it can be embedded in dispatch payloads —
+        # driver-app uses this for the per-offer countdown instead of a cached
+        # value, which drifted when admin changed the setting mid-session.
+        offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
 
-        Lazy on purpose: the subscription gate only needs the parent when the
-        child row does not already set the flag, so an eager fetch would ADD a
-        query for the common case. Fails open (returns {}) exactly as the two
-        call sites it replaces did.
-        """
-        if "row" in _parent_area_box:
-            return _parent_area_box["row"]
-        _pid = _ride_area.get("parent_service_area_id")
-        row: Dict[str, Any] = {}
-        if _pid:
+        # ── One service_areas read per attempt ────────────────────────
+        # This same row used to be fetched 4-5 times per dispatch attempt, each an
+        # independent `SELECT *` carrying the `polygon` JSONB: once in
+        # resolve_matching_config, again for the subscription gate, again for the
+        # quota timezone, again for the vehicle cascade, and again for the polygon
+        # in the notify phase. They all want the row this ride is dispatching in.
+        #
+        # Fetched here rather than cached with a TTL deliberately: a cached area
+        # would go stale against an admin editing search_radius_km /
+        # subscription_required / vehicle_cascade_map mid-session — the exact drift
+        # the offer-timeout comment above records having been burned by. One read
+        # per attempt keeps every consumer on the same snapshot AND keeps admin
+        # edits landing on the very next attempt or retry.
+        #
+        # Failure semantics are preserved exactly, which is why this is not a bare
+        # await: on error the row is left empty AND `area=None` is passed below, so
+        # resolve_matching_config re-attempts the same read and raises just as it
+        # does today — dispatch must never quietly fall back to the global radius
+        # and rating floor when the area's overrides are unknown. The consumers
+        # further down (cascade, polygon, quota) keep their existing fail-open
+        # behaviour against the empty row for the same reason they had it before:
+        # a missing cascade map means no cascade, not a dead dispatch.
+        _ride_area: Dict[str, Any] = {}
+        _area_lookup_failed = False
+        if ride.get("service_area_id"):
             try:
-                row = await _deps.db_supabase.find_one("service_areas", {"id": _pid}) or {}
+                _ride_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}) or {}
             except Exception:
+                _area_lookup_failed = True
                 logger.error(
-                    "[DISPATCH] parent service-area lookup failed for area=%s — treating as unset",
+                    "[DISPATCH] service-area lookup failed for ride_id=%s area=%s — "
+                    "re-raising via resolve_matching_config rather than dispatching on global defaults",
+                    ride_id,
                     ride.get("service_area_id"),
                     exc_info=True,
                 )
-        _parent_area_box["row"] = row
-        return row
 
-    # Algorithm + radius + rating floor + batch config (area overrides app settings).
-    algorithm, min_rating, search_radius, max_offers, use_eta = await _shared.dispatch.resolve_matching_config(
-        ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
-    )
+        _parent_area_box: Dict[str, Any] = {}
 
-    # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs
-    # (and this line fires on every dispatch). Correlate by ride_id only.
-    logger.info(
-        f"[DISPATCH] match start ride_id={ride_id} "
-        f"vehicle_type_id={ride['vehicle_type_id']} algorithm={algorithm} "
-        f"radius_km={search_radius} batch={max_offers} eta={use_eta}"
-    )
+        async def _parent_area() -> Dict[str, Any]:
+            """The ride area's parent row, fetched at most once per attempt.
 
-    # Find candidate drivers. We read the drivers table directly and filter
-    # in Python using the legacy lat/lng columns — same pattern as /rides/estimate.
-    # We deliberately DO NOT use the find_nearby_drivers RPC because it reads
-    # the PostGIS `location` column, which update_driver_location does not
-    # populate, so the RPC would always return zero drivers.
-    #
-    # We also require user_id IS NOT NULL to skip legacy "demo" driver rows
-    # that lack a real user and can never be notified.
-    # Mirror DispatchService.find_candidate_drivers: is_verified + status='active'
-    # keep unverified / suspended / needs_review drivers out of dispatch even if
-    # their is_online flag was left on (e.g. status flipped server-side after
-    # they toggled online). Without these, accept_ride blocks them at accept time
-    # but they still receive — and can see — offers they can never fulfil.
-    # Bounding-box pre-filter. Without it the LIMIT 500 below is an
-    # *arbitrary* 500 of all online drivers province-wide — above 500
-    # candidates the nearest driver can sit in row 501 and dispatch reports a
-    # false "no drivers". The box is a superset of the search radius;
-    # filter_and_rank_drivers stays the exact haversine gate. Anchored on the
-    # same nav-snapped pickup that filter_and_rank_drivers ranks against.
-    #
-    # No dedicated (lat, lng) index — deliberate (PR #2028 review):
-    # idx_drivers_online_available_recency (migration 138, partial WHERE
-    # is_online AND is_available) already bounds this scan to the online
-    # fleet, so the box predicates only filter within that small walk; and
-    # drivers already carries a trigger-maintained PostGIS location_geog +
-    # partial GiST index (migration 170) — a future radius query should go
-    # through an RPC on that column rather than a second btree that every
-    # location heartbeat would have to maintain.
-    _box_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
-    _box_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
-    _dispatch_filter: dict = {
-        "is_online": True,
-        "is_available": True,
-        "is_verified": True,
-        "status": "active",
-        "vehicle_type_id": ride["vehicle_type_id"],
-        "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
-    }
-    if ride.get("requires_wav"):
-        _dispatch_filter["is_wav"] = True
-    # ── Cross-service-area ride guard ─────────────────────────────
-    # Driver approval is per service area, so a Saskatoon-approved driver must
-    # not be offered a Regina ride merely because they are parked inside its
-    # search radius. Scope resolution (whole area tree, NULL handling, flags)
-    # lives in utils/service_area_scope so this path and DispatchService cannot
-    # drift. Enforced again in Python by filter_and_rank_drivers below and a
-    # third time at accept (routes/drivers/ride_flow.py) — same layering the
-    # subscription gate uses.
-    _area_ids, _allow_unassigned_area = await resolve_dispatch_area_scope(
-        _deps.db_supabase, ride.get("service_area_id"), app_settings
-    )
-    if _area_ids is not None:
-        _dispatch_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
+            Lazy on purpose: the subscription gate only needs the parent when the
+            child row does not already set the flag, so an eager fetch would ADD a
+            query for the common case. Fails open (returns {}) exactly as the two
+            call sites it replaces did.
+            """
+            if "row" in _parent_area_box:
+                return _parent_area_box["row"]
+            _pid = _ride_area.get("parent_service_area_id")
+            row: Dict[str, Any] = {}
+            if _pid:
+                try:
+                    row = await _deps.db_supabase.find_one("service_areas", {"id": _pid}) or {}
+                except Exception:
+                    logger.error(
+                        "[DISPATCH] parent service-area lookup failed for area=%s — treating as unset",
+                        ride.get("service_area_id"),
+                        exc_info=True,
+                    )
+            _parent_area_box["row"] = row
+            return row
+
+        # Algorithm + radius + rating floor + batch config (area overrides app settings).
+        algorithm, min_rating, search_radius, max_offers, use_eta = await _shared.dispatch.resolve_matching_config(
+            ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
+        )
+
+        # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs
+        # (and this line fires on every dispatch). Correlate by ride_id only.
         logger.info(
-            "[DISPATCH] service-area guard: ride area=%s → %d compatible driver area(s), unassigned_allowed=%s",
-            ride.get("service_area_id"),
-            len(_area_ids),
-            _allow_unassigned_area,
-        )
-    # A transient Supabase failure here is NOT "no drivers" — it raises to the
-    # match_driver_to_ride recovery shell, which re-arms the retry chain with
-    # backoff instead of letting the ride strand until the sweeper cancels it.
-    all_drivers = await _deps.db_supabase.get_rows(
-        "drivers",
-        _dispatch_filter,
-        # P1: project only what ranking/filtering reads — NOT "*". The full row
-        # carries encrypted PII (address, licence, vehicle details) that this hot
-        # path (up to 500 rows every dispatch + retry, every replica) never needs;
-        # the offer payload is built from the post-claim get_driver_by_id re-read.
-        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-        limit=500,
-    )
-
-    logger.info(
-        f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
-        f"matching vehicle_type_id + online + available within {search_radius}km box"
-    )
-    if len(all_drivers) >= 500:
-        # Even inside the box the pool is truncated — the dropped rows are
-        # in-radius candidates, so ranking quality degrades. Surface it.
-        logger.warning(
-            f"[DISPATCH] candidate pool hit the 500-row cap inside the "
-            f"{search_radius}km box for ride {ride_id} — pool truncated"
+            f"[DISPATCH] match start ride_id={ride_id} "
+            f"vehicle_type_id={ride['vehicle_type_id']} algorithm={algorithm} "
+            f"radius_km={search_radius} batch={max_offers} eta={use_eta}"
         )
 
-    # Presence filter: only dispatch to drivers whose WebSocket heartbeat is
-    # still alive (Uber/Lyft-style). Matches the filter applied in the rider-
-    # facing /drivers/nearby endpoint so the cars a rider sees on the map are
-    # exactly the drivers who can receive an offer.
-    # Presence filter: prefer dispatching to drivers whose Redis heartbeat key
-    # is alive (Uber/Lyft-style ghost suppression). Semantics mirror
-    # DispatchService.find_candidate_drivers exactly — filter only on a
-    # *non-empty, reachable* present set; fail open otherwise:
-    #   - reachable=False (Redis configured but unavailable) → skip the filter
-    #     so a Redis outage can't empty the pool and strand every ride. A
-    #     liveness probe on the client object is NOT sufficient here — the lazy
-    #     client looks live mid-outage while MGET fails; only the checked
-    #     variant reports whether the presence store actually answered.
-    #   - reachable=True, non-empty set → apply the filter; ghosts among the
-    #     non-present candidates get no offer.
-    #   - reachable=True, empty set → the answer depends on WHERE presence
-    #     lives. A configured, answering Redis is the authoritative multi-
-    #     replica source: an empty set means every candidate's heartbeat has
-    #     expired (all ghosts), so drop them and let the no-drivers / cascade
-    #     retry fire immediately rather than burn 15s offer timeouts on phones
-    #     that can't receive. The in-process dict (no REDIS_URL — dev / single
-    #     replica / tests) is only a single-process view and is empty until a
-    #     heartbeat is recorded, so an empty set there is NOT authoritative →
-    #     fail open and keep DB-online drivers.
-    try:
-        try:
-            from ...utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
-            from ...utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
-        except ImportError:
-            from utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
-            from utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
-        _present_ids_set, _presence_reachable = await _present_ids_checked([d["id"] for d in all_drivers])
-        if not _presence_reachable:
-            logger.warning("[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers")
-            _metric_inc("spinr_dispatch_presence_filter_failed_total")
-        elif _present_ids_set:
-            before_presence = len(all_drivers)
-            all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
-            logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
-        elif await _rc_get_redis() is not None:
-            # Redis is configured and answered with zero live heartbeats — every
-            # candidate is a ghost. Empty the pool so cascade / no-drivers retry
-            # fires instead of offering to phones that can't receive.
+        # Find candidate drivers. We read the drivers table directly and filter
+        # in Python using the legacy lat/lng columns — same pattern as /rides/estimate.
+        # We deliberately DO NOT use the find_nearby_drivers RPC because it reads
+        # the PostGIS `location` column, which update_driver_location does not
+        # populate, so the RPC would always return zero drivers.
+        #
+        # We also require user_id IS NOT NULL to skip legacy "demo" driver rows
+        # that lack a real user and can never be notified.
+        # Mirror DispatchService.find_candidate_drivers: is_verified + status='active'
+        # keep unverified / suspended / needs_review drivers out of dispatch even if
+        # their is_online flag was left on (e.g. status flipped server-side after
+        # they toggled online). Without these, accept_ride blocks them at accept time
+        # but they still receive — and can see — offers they can never fulfil.
+        # Bounding-box pre-filter. Without it the LIMIT 500 below is an
+        # *arbitrary* 500 of all online drivers province-wide — above 500
+        # candidates the nearest driver can sit in row 501 and dispatch reports a
+        # false "no drivers". The box is a superset of the search radius;
+        # filter_and_rank_drivers stays the exact haversine gate. Anchored on the
+        # same nav-snapped pickup that filter_and_rank_drivers ranks against.
+        #
+        # No dedicated (lat, lng) index — deliberate (PR #2028 review):
+        # idx_drivers_online_available_recency (migration 138, partial WHERE
+        # is_online AND is_available) already bounds this scan to the online
+        # fleet, so the box predicates only filter within that small walk; and
+        # drivers already carries a trigger-maintained PostGIS location_geog +
+        # partial GiST index (migration 170) — a future radius query should go
+        # through an RPC on that column rather than a second btree that every
+        # location heartbeat would have to maintain.
+        with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "candidate_read"}):
+            _box_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
+            _box_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
+            _dispatch_filter: dict = {
+                "is_online": True,
+                "is_available": True,
+                "is_verified": True,
+                "status": "active",
+                "vehicle_type_id": ride["vehicle_type_id"],
+                "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
+            }
+            if ride.get("requires_wav"):
+                _dispatch_filter["is_wav"] = True
+            # ── Cross-service-area ride guard ─────────────────────────────
+            # Driver approval is per service area, so a Saskatoon-approved driver must
+            # not be offered a Regina ride merely because they are parked inside its
+            # search radius. Scope resolution (whole area tree, NULL handling, flags)
+            # lives in utils/service_area_scope so this path and DispatchService cannot
+            # drift. Enforced again in Python by filter_and_rank_drivers below and a
+            # third time at accept (routes/drivers/ride_flow.py) — same layering the
+            # subscription gate uses.
+            _area_ids, _allow_unassigned_area = await resolve_dispatch_area_scope(
+                _deps.db_supabase, ride.get("service_area_id"), app_settings
+            )
+            if _area_ids is not None:
+                _dispatch_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
+                logger.info(
+                    "[DISPATCH] service-area guard: ride area=%s → %d compatible driver area(s), unassigned_allowed=%s",
+                    ride.get("service_area_id"),
+                    len(_area_ids),
+                    _allow_unassigned_area,
+                )
+            # A transient Supabase failure here is NOT "no drivers" — it raises to the
+            # match_driver_to_ride recovery shell, which re-arms the retry chain with
+            # backoff instead of letting the ride strand until the sweeper cancels it.
+            all_drivers = await _deps.db_supabase.get_rows(
+                "drivers",
+                _dispatch_filter,
+                # P1: project only what ranking/filtering reads — NOT "*". The full row
+                # carries encrypted PII (address, licence, vehicle details) that this hot
+                # path (up to 500 rows every dispatch + retry, every replica) never needs;
+                # the offer payload is built from the post-claim get_driver_by_id re-read.
+                columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
+                limit=500,
+            )
+
             logger.info(
-                f"[DISPATCH] presence: 0/{len(all_drivers)} live heartbeats "
-                f"(Redis authoritative) — all candidates are ghosts, deferring to cascade/retry"
+                f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
+                f"matching vehicle_type_id + online + available within {search_radius}km box"
             )
-            all_drivers = []
-        else:
-            # In-process presence dict (no REDIS_URL): single-process view, not
-            # authoritative for dispatch. Fail open and keep DB-online drivers.
-            logger.info("[DISPATCH] presence set empty (in-process dict, no Redis) — keeping all DB-online drivers")
-    except Exception as _pres_exc:
-        logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
-        _metric_inc("spinr_dispatch_presence_filter_failed_total")
-
-    # Skip drivers who recently timed out or declined this specific offer
-    # so the same driver is not hammered with repeat notifications. Batch the
-    # lookups into one MGET — the old per-candidate redis_get was an N+1 on the
-    # dispatch hot path (N round-trips per attempt per replica).
-    try:
-        from ...utils.redis_client import redis_mget as _redis_mget  # type: ignore
-    except ImportError:
-        from utils.redis_client import redis_mget as _redis_mget  # type: ignore
-    _skip_keys = [f"spinr:offer_skip:{ride_id}:{_d['id']}" for _d in all_drivers]
-    try:
-        _skip_vals = await _redis_mget(_skip_keys)
-    except Exception as _skip_exc:
-        # Redis configured-but-unavailable: redis_mget re-raises. Fail open
-        # (no skips) so an outage can't halt dispatch here right after the
-        # presence filter already failed open — otherwise every dispatch
-        # attempt throws into the retry shell and the stuck-ride sweeper
-        # cancels the ride fleet-wide (the same C2 cascade). Mirrors the
-        # cascade branch's guarded skip MGET.
-        logger.warning(f"[DISPATCH] offer-skip lookup failed, dispatching without skip filter: {_skip_exc}")
-        _skip_vals = []
-    _skip_ids: set = {_d["id"] for _d, _v in zip(all_drivers, _skip_vals, strict=False) if _v}
-    if _skip_ids:
-        all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
-        logger.info(f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}")
-
-    # Subscription guard: if the ride's service area requires a Spinr Pass,
-    # filter out candidates without an active subscription.  One batch IN
-    # query — no N+1 per driver.  Fails open on DB error so a transient fault
-    # cannot halt dispatch entirely; the accept_ride guard is the backstop.
-    _sub_required: bool = False  # pre-init so cascade block can read it if try block skips
-    # Raw driver_subscriptions rows, when the gate below fetched them. The daily
-    # quota filter further down wants the same rows from the same table with the
-    # same filter, so it reuses these instead of issuing a second identical
-    # query. None (not []) means "the gate did not run", which is a different
-    # thing from "it ran and found nothing" — only the latter lets the quota
-    # filter skip its own read.
-    _gate_subs: Optional[list] = None
-    if all_drivers and ride.get("service_area_id"):
-        try:
-            # Finding F: child areas (airport sub-regions) inherit subscription_required
-            # from their parent so airport pickups in a required city don't bypass the gate.
-            _sub_required = bool(_ride_area.get("subscription_required"))
-            if not _sub_required and _ride_area.get("parent_service_area_id"):
-                _sub_required = bool((await _parent_area()).get("subscription_required"))
-            if _sub_required:
-                _candidate_ids = [d["id"] for d in all_drivers]
-                _active_subs = await _deps.db_supabase.get_rows(
-                    "driver_subscriptions",
-                    {"driver_id": {"$in": _candidate_ids}, "status": "active"},
-                    # started_at/rides_per_day are not read here — they are the
-                    # two extra columns the daily-quota filter needs, carried on
-                    # this query so that filter can skip a second identical read.
-                    columns="driver_id,started_at,expires_at,plan_id,rides_per_day",
-                    limit=len(_candidate_ids),
+            if len(all_drivers) >= 500:
+                # Even inside the box the pool is truncated — the dropped rows are
+                # in-radius candidates, so ranking quality degrades. Surface it.
+                logger.warning(
+                    f"[DISPATCH] candidate pool hit the 500-row cap inside the "
+                    f"{search_radius}km box for ride {ride_id} — pool truncated"
                 )
-                _gate_subs = list(_active_subs or [])
-                _now_utc = datetime.now(timezone.utc)
-                # Filter by expiry; guard None from parse_iso_utc so one malformed
-                # row can't zero out all candidates via TypeError → except → all_drivers=[].
-                _valid_subs = []
-                for _s in _active_subs or []:
-                    if _s.get("expires_at"):
-                        _exp = parse_iso_utc(_s["expires_at"])
-                        if _exp is not None and _exp <= _now_utc:
-                            continue  # expired
-                    _valid_subs.append(_s)
-                # Finding B: also filter by plan service_area scope so drivers with a
-                # pass for another area don't receive offers they'll 402 on acceptance.
-                _plan_ids = {_s["plan_id"] for _s in _valid_subs if _s.get("plan_id")}
-                _plan_areas: dict = {}
-                if _plan_ids:
-                    _plans = await _deps.db_supabase.get_rows(
-                        "subscription_plans",
-                        {"id": {"$in": list(_plan_ids)}},
-                        columns="id,service_areas",
-                        limit=len(_plan_ids),
-                    )
-                    _plan_areas = {p["id"]: p.get("service_areas") for p in (_plans or [])}
-                _ride_service_area = ride["service_area_id"]
-                # A plan scoped to the parent area is valid for child (e.g. airport) areas.
-                _ride_parent_area_id = _ride_area.get("parent_service_area_id")
-                _subscribed_ids = set()
-                for _s in _valid_subs:
-                    _allowed = _plan_areas.get(_s.get("plan_id"))
-                    if _allowed and _ride_service_area not in _allowed:
-                        # Accept if the plan covers the parent area.
-                        if not (_ride_parent_area_id and _ride_parent_area_id in _allowed):
-                            continue
-                    _subscribed_ids.add(_s["driver_id"])
-                _before = len(all_drivers)
-                all_drivers = [d for d in all_drivers if d["id"] in _subscribed_ids]
-                logger.info(
-                    "[DISPATCH] subscription filter: area=%s kept %d/%d drivers",
-                    ride["service_area_id"],
-                    len(all_drivers),
-                    _before,
-                )
-        except Exception:
-            logger.error(
-                "[DISPATCH] subscription filter failed for area=%s — aborting dispatch attempt",
-                ride.get("service_area_id"),
-                exc_info=True,
-            )
-            all_drivers = []  # fail closed; the no-drivers path below schedules a retry
 
-    # Daily Spinr Pass ride-allowance filter (all areas). Mirrors the gate in
-    # DispatchService.find_candidate_drivers, but on the LIVE dispatch path:
-    # drop finite-pass drivers who've used today's rides so they don't receive
-    # an offer they'd 403 on at accept (wasting a dispatch cycle + pinging a
-    # driver who can't take it). Fails OPEN — go-online/accept still gate, so a
-    # transient read error must not drop everyone like the subscription filter.
-    #
-    # Timezone anchor: this filter uses the RIDE's service-area timezone for the
-    # calendar-day window, whereas the per-driver gates (go-online, accept,
-    # force-offline, /subscription/current) use the DRIVER's home service area.
-    # These coincide in a single-timezone deployment (SK today). Across a tz
-    # boundary they can differ by ≤1h only in the window between the two local
-    # midnights; both paths fail open, so the worst case is one extra/fewer offer
-    # near that boundary — never an overcharge or a stranded driver. If Spinr
-    # launches in a second timezone, unify on the driver's home area here.
-    if all_drivers and ride.get("service_area_id"):
-        try:
+        with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "rank"}):
+            # Presence filter: only dispatch to drivers whose WebSocket heartbeat is
+            # still alive (Uber/Lyft-style). Matches the filter applied in the rider-
+            # facing /drivers/nearby endpoint so the cars a rider sees on the map are
+            # exactly the drivers who can receive an offer.
+            # Presence filter: prefer dispatching to drivers whose Redis heartbeat key
+            # is alive (Uber/Lyft-style ghost suppression). Semantics mirror
+            # DispatchService.find_candidate_drivers exactly — filter only on a
+            # *non-empty, reachable* present set; fail open otherwise:
+            #   - reachable=False (Redis configured but unavailable) → skip the filter
+            #     so a Redis outage can't empty the pool and strand every ride. A
+            #     liveness probe on the client object is NOT sufficient here — the lazy
+            #     client looks live mid-outage while MGET fails; only the checked
+            #     variant reports whether the presence store actually answered.
+            #   - reachable=True, non-empty set → apply the filter; ghosts among the
+            #     non-present candidates get no offer.
+            #   - reachable=True, empty set → the answer depends on WHERE presence
+            #     lives. A configured, answering Redis is the authoritative multi-
+            #     replica source: an empty set means every candidate's heartbeat has
+            #     expired (all ghosts), so drop them and let the no-drivers / cascade
+            #     retry fire immediately rather than burn 15s offer timeouts on phones
+            #     that can't receive. The in-process dict (no REDIS_URL — dev / single
+            #     replica / tests) is only a single-process view and is empty until a
+            #     heartbeat is recorded, so an empty set there is NOT authoritative →
+            #     fail open and keep DB-online drivers.
             try:
-                from ...utils.spinr_pass import exhausted_driver_ids
-            except ImportError:
-                from utils.spinr_pass import exhausted_driver_ids  # type: ignore
-
-            _q_ids = [d["id"] for d in all_drivers]
-            if _gate_subs is not None:
-                # The subscription gate already fetched these exact rows — same
-                # table, same {driver_id IN …, status: active} filter — over a
-                # superset of this pool (it ran before the gate narrowed
-                # all_drivers). Narrowing it here is what a fresh query would
-                # return, so re-issuing one is a pure duplicate round-trip on
-                # the P95 < 2 s dispatch path.
-                #
-                # The RAW gate rows are reused, not its expiry-filtered
-                # _valid_subs: the quota query never filtered on expiry either,
-                # because exhausted_driver_ids does its own window handling.
-                _q_id_set = set(_q_ids)
-                _q_subs = [_s for _s in _gate_subs if _s.get("driver_id") in _q_id_set]
-            else:
-                # Free area: the gate never ran, so this is the only read. There
-                # is no area-level "has finite passes" flag to short-circuit on,
-                # and discovering one would cost the very query it would save.
-                _q_subs = await _deps.db_supabase.get_rows(
-                    "driver_subscriptions",
-                    {"driver_id": {"$in": _q_ids}, "status": "active"},
-                    columns="driver_id,started_at,expires_at,rides_per_day",
-                    limit=len(_q_ids),
-                )
-            if _q_subs:
-                # area_timezone() would re-read the row we already hold; it is
-                # a plain `.get("timezone")` on exactly this row.
-                _q_tz = _ride_area.get("timezone")
-                _q_exhausted = await exhausted_driver_ids(_q_subs, tz=_q_tz)
-                if _q_exhausted:
-                    _q_before = len(all_drivers)
-                    all_drivers = [d for d in all_drivers if d["id"] not in _q_exhausted]
-                    logger.info(
-                        "[DISPATCH] quota filter: area=%s kept %d/%d drivers (%d quota-exhausted)",
-                        ride["service_area_id"],
-                        len(all_drivers),
-                        _q_before,
-                        len(_q_exhausted),
-                    )
-        except Exception:
-            logger.error(
-                "[DISPATCH] quota filter failed for area=%s — dispatching unfiltered by quota",
-                ride.get("service_area_id"),
-                exc_info=True,
-            )
-
-    # Pure filter+rank: drops orphan/no-location/low-rated drivers and
-    # attaches per-driver distance. Pure function — no I/O.
-    drivers_with_distance = _deps.filter_and_rank_drivers(
-        ride,
-        all_drivers,
-        algorithm,
-        min_rating,
-        search_radius,
-        allowed_area_ids=_area_ids,
-        allow_unassigned_area=_allow_unassigned_area,
-    )
-    logger.info(
-        f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
-        f"real drivers within {search_radius}km with valid lat/lng and "
-        f"rating>={min_rating if algorithm in ('rating_based', 'combined') else 'n/a'}"
-    )
-
-    if not drivers_with_distance and ride.get("service_area_id") and ride.get("vehicle_type_id"):
-        # Vehicle cascade: the area may define upgrade types to try when no
-        # driver of the exact requested type is available (e.g. SUV → XL).
-        # This runs after all other filters so only genuinely-available
-        # upgrade drivers are offered the ride.
-        try:
-            _casc_map: list = _ride_area.get("vehicle_cascade_map") or []
-            # Fix 6: child areas (airport sub-regions) inherit parent's cascade map
-            # when the child row has none configured — mirrors subscription_required inheritance.
-            if not _casc_map and _ride_area.get("parent_service_area_id"):
-                _casc_map = (await _parent_area()).get("vehicle_cascade_map") or []
-            _casc_to: list = next(
-                (rule.get("to") or [] for rule in _casc_map if rule.get("from") == ride["vehicle_type_id"]),
-                [],
-            )
-            if _casc_to:
-                logger.info(
-                    "[DISPATCH] cascade: ride %s — no %s drivers, trying upgrade types %s",
-                    ride_id,
-                    ride["vehicle_type_id"],
-                    _casc_to,
-                )
-                _casc_filter: dict = {
-                    "is_online": True,
-                    "is_available": True,
-                    "is_verified": True,
-                    "status": "active",
-                    "vehicle_type_id": {"$in": _casc_to},
-                    # Same geo box as the primary pool — an un-bounded LIMIT 500
-                    # here has the identical row-501 false-negative failure mode.
-                    "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
-                }
-                if ride.get("requires_wav"):
-                    _casc_filter["is_wav"] = True
-                if _area_ids is not None:
-                    _casc_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
-                _casc_pool = await _deps.db_supabase.get_rows(
-                    "drivers",
-                    _casc_filter,
-                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-                    limit=500,
-                )
-                # Fix 4: Presence filter using _checked variant so a Redis outage
-                # (configured-but-unavailable) cannot silently empty the cascade pool.
-                # present_driver_ids_checked returns (set, reachable=False) on failure;
-                # we only apply the filter when the presence store was actually reached.
                 try:
-                    try:
-                        from ...utils.driver_presence import (
-                            present_driver_ids_checked as _casc_presence_checked,  # type: ignore
-                        )
-                        from ...utils.redis_client import redis_mget as _casc_mget
-                    except ImportError:
-                        from utils.driver_presence import (
-                            present_driver_ids_checked as _casc_presence_checked,  # type: ignore
-                        )
-                        from utils.redis_client import redis_mget as _casc_mget
-                    _casc_present_set, _casc_reachable = await _casc_presence_checked([d["id"] for d in _casc_pool])
-                    if _casc_reachable:
-                        _casc_pool = [d for d in _casc_pool if d["id"] in _casc_present_set]
-                    else:
-                        logger.warning(
-                            "[DISPATCH] cascade: Redis unavailable — presence filter skipped for ride %s",
-                            ride_id,
-                        )
-                    # Skip drivers who already timed-out / declined this ride
-                    _casc_skip_keys = [f"spinr:offer_skip:{ride_id}:{d['id']}" for d in _casc_pool]
-                    _casc_skip_vals = await _casc_mget(_casc_skip_keys)
-                    _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
-                except Exception as _casc_redis_exc:
-                    logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
-                # Fix 2: apply subscription filter to cascade pool when the service area
-                # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
-                if _sub_required and _casc_pool:
-                    try:
-                        _casc_cand_ids = [d["id"] for d in _casc_pool]
-                        _casc_subs = await _deps.db_supabase.get_rows(
-                            "driver_subscriptions",
-                            {"driver_id": {"$in": _casc_cand_ids}, "status": "active"},
-                            columns="driver_id,expires_at,plan_id",
-                            limit=len(_casc_cand_ids),
-                        )
-                        _casc_now = datetime.now(timezone.utc)
-                        _casc_valid_subs = []
-                        for _cs in _casc_subs or []:
-                            if _cs.get("expires_at"):
-                                _cs_exp = parse_iso_utc(_cs["expires_at"])
-                                if _cs_exp is not None and _cs_exp <= _casc_now:
-                                    continue
-                            _casc_valid_subs.append(_cs)
-                        _casc_plan_ids = {_cs["plan_id"] for _cs in _casc_valid_subs if _cs.get("plan_id")}
-                        _casc_plan_areas: dict = {}
-                        if _casc_plan_ids:
-                            _casc_plans = await _deps.db_supabase.get_rows(
-                                "subscription_plans",
-                                {"id": {"$in": list(_casc_plan_ids)}},
-                                columns="id,service_areas",
-                                limit=len(_casc_plan_ids),
-                            )
-                            _casc_plan_areas = {p["id"]: p.get("service_areas") for p in (_casc_plans or [])}
-                        _casc_sa_id = ride["service_area_id"]
-                        _casc_parent_sa_id = _ride_area.get("parent_service_area_id")
-                        _casc_subscribed: set = set()
-                        for _cs in _casc_valid_subs:
-                            _cs_allowed = _casc_plan_areas.get(_cs.get("plan_id"))
-                            if _cs_allowed and _casc_sa_id not in _cs_allowed:
-                                if not (_casc_parent_sa_id and _casc_parent_sa_id in _cs_allowed):
-                                    continue
-                            _casc_subscribed.add(_cs["driver_id"])
-                        _casc_before_sub = len(_casc_pool)
-                        _casc_pool = [d for d in _casc_pool if d["id"] in _casc_subscribed]
-                        logger.info(
-                            "[DISPATCH] cascade subscription filter: kept %d/%d drivers for ride %s",
-                            len(_casc_pool),
-                            _casc_before_sub,
-                            ride_id,
-                        )
-                    except Exception:
-                        logger.error(
-                            "[DISPATCH] cascade subscription filter failed for area=%s — failing closed",
-                            ride.get("service_area_id"),
-                            exc_info=True,
-                        )
-                        _casc_pool = []  # fail closed; non-subscriber cascade would bypass the gate
-                drivers_with_distance = _deps.filter_and_rank_drivers(
-                    ride,
-                    _casc_pool,
-                    algorithm,
-                    min_rating,
-                    search_radius,
-                    allowed_area_ids=_area_ids,
-                    allow_unassigned_area=_allow_unassigned_area,
-                )
-                if drivers_with_distance:
-                    logger.info(
-                        "[DISPATCH] cascade found %d eligible driver(s) for ride %s",
-                        len(drivers_with_distance),
-                        ride_id,
+                    from ...utils.driver_presence import (
+                        present_driver_ids_checked as _present_ids_checked,  # type: ignore
                     )
+                    from ...utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
+                except ImportError:
+                    from utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
+                    from utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
+                _present_ids_set, _presence_reachable = await _present_ids_checked([d["id"] for d in all_drivers])
+                if not _presence_reachable:
+                    logger.warning(
+                        "[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers"
+                    )
+                    _metric_inc("spinr_dispatch_presence_filter_failed_total")
+                elif _present_ids_set:
+                    before_presence = len(all_drivers)
+                    all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
+                    logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
+                elif await _rc_get_redis() is not None:
+                    # Redis is configured and answered with zero live heartbeats — every
+                    # candidate is a ghost. Empty the pool so cascade / no-drivers retry
+                    # fires instead of offering to phones that can't receive.
+                    logger.info(
+                        f"[DISPATCH] presence: 0/{len(all_drivers)} live heartbeats "
+                        f"(Redis authoritative) — all candidates are ghosts, deferring to cascade/retry"
+                    )
+                    all_drivers = []
                 else:
-                    logger.info("[DISPATCH] cascade also found no eligible drivers for ride %s", ride_id)
-        except Exception:
-            logger.error("[DISPATCH] cascade lookup failed for ride %s", ride_id, exc_info=True)
-
-    if not drivers_with_distance:
-        logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — scheduling retry in 10s (attempt {attempt})")
-        _deps.spawn(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
-        return
-
-    # ── ETA ranking ───────────────────────────────────────────────
-    # Pre-filter to top 15 by haversine, then batch-query Distance
-    # Matrix for real ETAs. Falls back to haversine if API fails.
-    drivers_with_distance.sort(key=lambda x: x[1])
-    pre_filtered = drivers_with_distance[: max(max_offers * 5, 15)]
-
-    if use_eta:
-        try:
-            maps_key = app_settings.get("google_maps_api_key", "")
-            eta_map = await asyncio.wait_for(
-                batch_get_etas(
-                    [d for d, _ in pre_filtered],
-                    # ETA to the road-snapped pickup the driver actually drives to.
-                    ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
-                    ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
-                    maps_key,
-                ),
-                # P3: bound the external Distance-Matrix call to the dispatch
-                # budget — its own _MAPS_TIMEOUT is 3s, too long for the <2s
-                # offer clock. A TimeoutError is caught below → haversine
-                # ranking, so a slow Maps API can't blow the dispatch SLA.
-                timeout=1.2,
-            )
-            ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
-        except Exception as e:
-            logger.error(f"[DISPATCH] ETA ranking failed, falling back to haversine: {e}", exc_info=True)
-            ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
-    else:
-        ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
-
-    # ── Batch claim ───────────────────────────────────────────────
-    claimed_drivers: list[tuple[dict, int]] = []
-    for driver, eta_sec, _ in ranked:
-        if len(claimed_drivers) >= max_offers:
-            break
-        fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
-        if fresh:
-            # The claim's own UPDATE returns the post-claim row, so no follow-up
-            # get_driver_by_id is needed — and that read was guaranteed uncached
-            # anyway, because claim_driver_atomic invalidates the cache entry on
-            # both sides of the update. Up to max_offers of those per attempt.
-            #
-            # Revalidate the FULL eligibility set on the freshly-read row, not
-            # just is_online. claim_driver_atomic only guards id + is_available,
-            # so an admin who suspended the driver or flipped them back to
-            # needs_review between the candidate read and the claim would
-            # otherwise still get offered — the exact stale-status case the
-            # candidate filter (is_verified + status='active') is meant to stop.
-            if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
-                claimed_drivers.append((fresh, eta_sec))
-            else:
-                await _deps.db_supabase.set_driver_available(driver["id"], True)
-
-    if not claimed_drivers:
-        logger.info(f"[DISPATCH] no drivers could be claimed for ride {ride_id}")
-        return
-
-    logger.info(
-        f"[DISPATCH] batch: claimed {len(claimed_drivers)} driver(s) for ride {ride_id}: "
-        f"{[d['id'] for d, _ in claimed_drivers]}"
-    )
-
-    # ── Insert ride_offers rows ───────────────────────────────────
-    now = datetime.now(timezone.utc)
-    # Compute the offer deadline once and reuse it for both the persisted
-    # ride_offers rows (so the durable reaper can find them after a restart) and
-    # the WS/FCM countdown payload below.
-    _offer_expires_at = (now + timedelta(seconds=offer_timeout)).isoformat()
-    offer_rows = _build_offer_rows(claimed_drivers, ride_id, now.isoformat(), _offer_expires_at)
-    try:
-        await _deps.db_supabase.run_sync(
-            lambda: _deps.db_supabase.supabase.table("ride_offers").insert(offer_rows).execute()
-        )
-    except Exception as e:
-        logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
-        for d, _ in claimed_drivers:
-            await _deps.db_supabase.set_driver_available(d["id"], True)
-        # Re-raise after releasing the claims: no offers exist, so the
-        # recovery shell re-arms the retry chain instead of stranding the
-        # ride in `searching` (the old `return` armed nothing).
-        raise
-
-    # Insurance Period 2 (en route to pickup — TNC primary commercial coverage)
-    # opens HERE, at claim/offer time, not at acceptance. The batch-offer model
-    # already makes each claimed driver unavailable for any other ride the
-    # instant claim_driver_atomic succeeds — they're obligated to this ride the
-    # moment the offer is live, exactly as CLAUDE.md's "Period 2 starts on
-    # driver_assigned... because the driver is already obligated" rule requires
-    # for a batch-offer dispatch model with no separate driver_assigned DB write.
-    # If the driver declines/times out, the decline/expiry paths revert them to
-    # Period 1 (or 0). If they accept, ride_flow.py's accept_ride calls this
-    # again with the same period+ride_id as a no-op safety net. record_period_
-    # transition is compliance-grade — logs at ERROR and swallows on failure so
-    # it never blocks dispatch.
-    for d, _ in claimed_drivers:
-        await _deps.record_period_transition(d["id"], 2, ride_id=ride_id)
-
-    _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
-
-    # ── Parallel enrichment (shared across all drivers) ───────────
-    async def _fetch_rider() -> dict | None:
-        try:
-            return await _deps.db_supabase.get_user_by_id(ride["rider_id"])
-        except Exception as e:
-            logger.error(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}", exc_info=True)
-            return None
-
-    async def _fetch_incentives() -> tuple[list, float]:
-        # Shares the settlement matcher so the bonus quoted in the offer is
-        # the bonus completion will actually claim (see services/
-        # incentive_service.py). Still one query, so the offer→phone SLA is
-        # unchanged.
-        try:
-            return incentive_display_payload(
-                await match_ride_incentives(_deps.db_supabase, ride)
-            )
-        except Exception as e:
-            logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
-            return [], 0.0
-
-    async def _fetch_service_area_polygon() -> Optional[list]:
-        # Reads the row already fetched at the top of the attempt rather than
-        # re-issuing a fifth `SELECT *` for it (the polygon JSONB is the
-        # heaviest column on that row, so this was the most expensive repeat).
-        if not ride.get("service_area_id"):
-            return None
-        try:
-            poly = get_service_area_polygon(_ride_area)
-            return poly or None
-        except Exception as e:
-            logger.error("[DISPATCH] service_area polygon parse failed: %s", e, exc_info=True)
-            return None
-
-    rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
-        _fetch_rider(),
-        _fetch_incentives(),
-        _fetch_service_area_polygon(),
-    )
-
-    # PIPEDA (C5): the driver sees the rider's FIRST name only (never the legal
-    # surname), and only via the WebSocket payload below — rider_name is
-    # stripped from the FCM data payload further down.
-    rider_display_name = first_name_only(rider_user) or None
-
-    _surge_mult = float(ride.get("surge_multiplier") or 1.0)
-
-    # Quest progress for every claimed driver, in ONE query.
-    #
-    # This used to be a serial embedded-join query *inside* the notify loop —
-    # up to max_offers (10) round-trips, one per driver, on the dispatch
-    # offer→notification path that carries a P95 < 2 s SLA. The data is a
-    # cosmetic progress banner on the offer card, so it was paying latency on
-    # the most timing-sensitive path in the product for decoration.
-    #
-    # Semantics are unchanged: the per-driver query had `.limit(1)` with no
-    # ORDER BY, i.e. "any one active quest", so first-row-wins per driver here
-    # is the same contract. The batch is bounded by _QUEST_HINT_ROW_CAP because
-    # a driver may hold several active quests at once, so len(uids) could
-    # truncate and silently drop a driver's banner.
-    #
-    # Fails open as one unit rather than per driver: on error nobody gets a
-    # banner and the offer still goes out. That trades N failure points for 1
-    # on data that is decorative by definition.
-    _quest_by_uid: Dict[str, Dict[str, Any]] = {}
-    _quest_uids = [d.get("user_id") for d, _ in claimed_drivers if d.get("user_id")]
-    if _quest_uids:
-        try:
-            _qr = await _deps.db_supabase.run_sync(
-                _deps.db_supabase.supabase.table("quest_progress")
-                .select("driver_id, current_value, status, quest:quests(title, target_value, reward_amount)")
-                .in_("driver_id", _quest_uids)
-                .eq("status", "active")
-                .limit(_QUEST_HINT_ROW_CAP)
-                .execute
-            )
-            for _qp in _qr.data or []:
-                _uid = _qp.get("driver_id")
-                if not _uid or _uid in _quest_by_uid:
-                    continue
-                _q = _qp.get("quest") or {}
-                _tv = float(_q.get("target_value") or 1)
-                _cv = float(_qp.get("current_value") or 0)
-                _quest_by_uid[_uid] = {
-                    "title": _q.get("title", ""),
-                    "current_value": _cv,
-                    "target_value": _tv,
-                    "progress_pct": round(min(_cv / _tv, 1.0) * 100, 1) if _tv else 0,
-                    "reward_amount": float(_q.get("reward_amount") or 0),
-                }
-        except Exception as e:
-            logger.error(f"Failed to fetch quest progress for {len(_quest_uids)} claimed driver(s): {e}", exc_info=True)
-
-    # ── Notify each claimed driver ────────────────────────────────
-    for driver, _eta in claimed_drivers:
-        _quest_hint = _quest_by_uid.get(driver.get("user_id"))
-
-        # Per-driver signed URL for the notification's BigPicture fare banner.
-        # Bound to this ride + driver and short-lived; rendered on demand by
-        # routes/offer_card.py (never here, to keep the dispatch hot path fast).
-        _offer_card_url = None
-        try:
-            _oc_token = sign_offer_card_token(
-                ride_id=ride_id,
-                driver_id=str(driver.get("user_id") or driver.get("id") or ""),
-            )
-            _offer_card_url = (
-                f"{_deps._settings.PUBLIC_API_BASE_URL.rstrip('/')}/api/v1/offer-cards/{ride_id}.png?t={_oc_token}"
-            )
-        except Exception as e:
-            logger.warning("[DISPATCH] offer-card URL build failed for ride %s: %s", ride_id, e)
-
-        dispatch_payload = {
-            "type": "new_ride_assignment",
-            "ride_id": ride_id,
-            "offer_card_url": _offer_card_url,
-            "pickup_address": ride.get("pickup_address"),
-            "dropoff_address": ride.get("dropoff_address"),
-            "pickup_lat": ride.get("pickup_lat"),
-            "pickup_lng": ride.get("pickup_lng"),
-            # Road-snapped pickup for driver navigation (falls back to pickup_*).
-            "pickup_nav_lat": ride.get("pickup_nav_lat"),
-            "pickup_nav_lng": ride.get("pickup_nav_lng"),
-            "dropoff_lat": ride.get("dropoff_lat"),
-            "dropoff_lng": ride.get("dropoff_lng"),
-            "fare": ride.get("driver_earnings"),
-            "distance_km": ride.get("distance_km"),
-            "duration_minutes": ride.get("duration_minutes"),
-            "rider_name": rider_display_name,
-            "rider_rating": (rider_user or {}).get("rating"),
-            "rider_profile_image": (rider_user or {}).get("profile_image"),
-            "requires_wav": bool(ride.get("requires_wav")),
-            # Rider-set preference (migration 62). Surfaced to the driver in the
-            # offer panel so they know a quiet ride was requested before accepting.
-            "quiet_mode": bool(ride.get("quiet_mode")),
-            # C35: surface whether this ride was originally booked in advance —
-            # true even after it has since transitioned to searching (same
-            # "originally scheduled" semantics as ride_cancel.py's
-            # `_was_scheduled = bool((ride or {}).get("is_scheduled"))`). Purely
-            # additive metadata for the driver-app offer panel; no dispatch/
-            # matching behavior change.
-            "is_scheduled": bool(ride.get("is_scheduled")),
-            "countdown_seconds": offer_timeout,
-            "offer_expires_at": _offer_expires_at,
-            "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
-            "incentives": _incentives if _incentives else None,
-            "total_bonus": _total_bonus if _total_bonus > 0 else None,
-            "quest_hint": _quest_hint,
-            "payment_method": ride.get("payment_method"),
-            "planned_route_polyline": ride.get("planned_route_polyline") or None,
-            "service_area_polygon": _service_area_polygon,
-        }
-
-        if driver.get("user_id"):
-            await _deps.manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")
-            try:
-                # Exclude large spatial fields from FCM data payload — FCM
-                # enforces a 4 KB data-message limit and detailed polygons/
-                # polylines can easily blow it. Drivers receive these via the
-                # WebSocket message (dispatch_payload) which has no size cap.
-                # PIPEDA (C5): rider_name is excluded too — no rider name may
-                # ride in an FCM data payload (cleartext in the device tray,
-                # Google/US infra). The driver gets the first name via the WS
-                # message (dispatch_payload) only.
-                _FCM_EXCLUDE = {
-                    "service_area_polygon",
-                    "planned_route_polyline",
-                    "rider_profile_image",
-                    "rider_name",
-                }
-                fcm_data = {
-                    k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
-                    for k, v in dispatch_payload.items()
-                    if k not in _FCM_EXCLUDE
-                }
-                fcm_data["deeplink"] = "/driver/"
-                fcm_data["booking_id"] = str(ride_id)
-
-                pickup_label = ride.get("pickup_address") or "Nearby pickup"
-                dropoff_label = ride.get("dropoff_address") or "destination"
-                try:
-                    # Match the in-app offer panel and the driver-app's own
-                    # local notification (notifeeService.displayRideOfferNotification):
-                    # both show fare + area boost / incentives as one total.
-                    # Showing bare `driver_earnings` here made the push
-                    # under-state what the driver actually earns.
-                    _offer_total = float(ride.get("driver_earnings") or 0) + float(_total_bonus or 0)
-                    earnings_label = f"${_offer_total:.2f}"
-                except (TypeError, ValueError):
-                    earnings_label = "New fare"
-
-                # Fire the push without blocking the per-driver offer loop —
-                # send_push_notification now delivers inline (≈100–300 ms FCM
-                # round-trip), and we don't want N drivers serialized on it.
-                # The WebSocket offer above already reached any foreground app;
-                # this push covers backgrounded / locked / killed devices.
-                _deps.spawn(
-                    _deps.send_push_notification(
-                        driver["user_id"],
-                        f"New ride · {earnings_label}",
-                        f"{pickup_label} → {dropoff_label}",
-                        fcm_data,
-                        priority="dispatch",
-                        target_app="driver",
+                    # In-process presence dict (no REDIS_URL): single-process view, not
+                    # authoritative for dispatch. Fail open and keep DB-online drivers.
+                    logger.info(
+                        "[DISPATCH] presence set empty (in-process dict, no Redis) — keeping all DB-online drivers"
                     )
-                )
-            except Exception as e:
-                logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)
+            except Exception as _pres_exc:
+                logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
+                _metric_inc("spinr_dispatch_presence_filter_failed_total")
 
-    # ── Batch timeout handler (no grace period) ───────────────────
-    _deps.spawn(
-        _batch_offer_timeout_handler(
-            ride_id,
-            rider_id=ride.get("rider_id"),
-            timeout_seconds=offer_timeout,
-        )
-    )
+            # Skip drivers who recently timed out or declined this specific offer
+            # so the same driver is not hammered with repeat notifications. Batch the
+            # lookups into one MGET — the old per-candidate redis_get was an N+1 on the
+            # dispatch hot path (N round-trips per attempt per replica).
+            try:
+                from ...utils.redis_client import redis_mget as _redis_mget  # type: ignore
+            except ImportError:
+                from utils.redis_client import redis_mget as _redis_mget  # type: ignore
+            _skip_keys = [f"spinr:offer_skip:{ride_id}:{_d['id']}" for _d in all_drivers]
+            try:
+                _skip_vals = await _redis_mget(_skip_keys)
+            except Exception as _skip_exc:
+                # Redis configured-but-unavailable: redis_mget re-raises. Fail open
+                # (no skips) so an outage can't halt dispatch here right after the
+                # presence filter already failed open — otherwise every dispatch
+                # attempt throws into the retry shell and the stuck-ride sweeper
+                # cancels the ride fleet-wide (the same C2 cascade). Mirrors the
+                # cascade branch's guarded skip MGET.
+                logger.warning(f"[DISPATCH] offer-skip lookup failed, dispatching without skip filter: {_skip_exc}")
+                _skip_vals = []
+            _skip_ids: set = {_d["id"] for _d, _v in zip(all_drivers, _skip_vals, strict=False) if _v}
+            if _skip_ids:
+                all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
+                logger.info(
+                    f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}"
+                )
+
+            # Subscription guard: if the ride's service area requires a Spinr Pass,
+            # filter out candidates without an active subscription.  One batch IN
+            # query — no N+1 per driver.  Fails open on DB error so a transient fault
+            # cannot halt dispatch entirely; the accept_ride guard is the backstop.
+            _sub_required: bool = False  # pre-init so cascade block can read it if try block skips
+            # Raw driver_subscriptions rows, when the gate below fetched them. The daily
+            # quota filter further down wants the same rows from the same table with the
+            # same filter, so it reuses these instead of issuing a second identical
+            # query. None (not []) means "the gate did not run", which is a different
+            # thing from "it ran and found nothing" — only the latter lets the quota
+            # filter skip its own read.
+            _gate_subs: Optional[list] = None
+            if all_drivers and ride.get("service_area_id"):
+                try:
+                    # Finding F: child areas (airport sub-regions) inherit subscription_required
+                    # from their parent so airport pickups in a required city don't bypass the gate.
+                    _sub_required = bool(_ride_area.get("subscription_required"))
+                    if not _sub_required and _ride_area.get("parent_service_area_id"):
+                        _sub_required = bool((await _parent_area()).get("subscription_required"))
+                    if _sub_required:
+                        _candidate_ids = [d["id"] for d in all_drivers]
+                        _active_subs = await _deps.db_supabase.get_rows(
+                            "driver_subscriptions",
+                            {"driver_id": {"$in": _candidate_ids}, "status": "active"},
+                            # started_at/rides_per_day are not read here — they are the
+                            # two extra columns the daily-quota filter needs, carried on
+                            # this query so that filter can skip a second identical read.
+                            columns="driver_id,started_at,expires_at,plan_id,rides_per_day",
+                            limit=len(_candidate_ids),
+                        )
+                        _gate_subs = list(_active_subs or [])
+                        _now_utc = datetime.now(timezone.utc)
+                        # Filter by expiry; guard None from parse_iso_utc so one malformed
+                        # row can't zero out all candidates via TypeError → except → all_drivers=[].
+                        _valid_subs = []
+                        for _s in _active_subs or []:
+                            if _s.get("expires_at"):
+                                _exp = parse_iso_utc(_s["expires_at"])
+                                if _exp is not None and _exp <= _now_utc:
+                                    continue  # expired
+                            _valid_subs.append(_s)
+                        # Finding B: also filter by plan service_area scope so drivers with a
+                        # pass for another area don't receive offers they'll 402 on acceptance.
+                        _plan_ids = {_s["plan_id"] for _s in _valid_subs if _s.get("plan_id")}
+                        _plan_areas: dict = {}
+                        if _plan_ids:
+                            _plans = await _deps.db_supabase.get_rows(
+                                "subscription_plans",
+                                {"id": {"$in": list(_plan_ids)}},
+                                columns="id,service_areas",
+                                limit=len(_plan_ids),
+                            )
+                            _plan_areas = {p["id"]: p.get("service_areas") for p in (_plans or [])}
+                        _ride_service_area = ride["service_area_id"]
+                        # A plan scoped to the parent area is valid for child (e.g. airport) areas.
+                        _ride_parent_area_id = _ride_area.get("parent_service_area_id")
+                        _subscribed_ids = set()
+                        for _s in _valid_subs:
+                            _allowed = _plan_areas.get(_s.get("plan_id"))
+                            if _allowed and _ride_service_area not in _allowed:
+                                # Accept if the plan covers the parent area.
+                                if not (_ride_parent_area_id and _ride_parent_area_id in _allowed):
+                                    continue
+                            _subscribed_ids.add(_s["driver_id"])
+                        _before = len(all_drivers)
+                        all_drivers = [d for d in all_drivers if d["id"] in _subscribed_ids]
+                        logger.info(
+                            "[DISPATCH] subscription filter: area=%s kept %d/%d drivers",
+                            ride["service_area_id"],
+                            len(all_drivers),
+                            _before,
+                        )
+                except Exception:
+                    logger.error(
+                        "[DISPATCH] subscription filter failed for area=%s — aborting dispatch attempt",
+                        ride.get("service_area_id"),
+                        exc_info=True,
+                    )
+                    all_drivers = []  # fail closed; the no-drivers path below schedules a retry
+
+            # Daily Spinr Pass ride-allowance filter (all areas). Mirrors the gate in
+            # DispatchService.find_candidate_drivers, but on the LIVE dispatch path:
+            # drop finite-pass drivers who've used today's rides so they don't receive
+            # an offer they'd 403 on at accept (wasting a dispatch cycle + pinging a
+            # driver who can't take it). Fails OPEN — go-online/accept still gate, so a
+            # transient read error must not drop everyone like the subscription filter.
+            #
+            # Timezone anchor: this filter uses the RIDE's service-area timezone for the
+            # calendar-day window, whereas the per-driver gates (go-online, accept,
+            # force-offline, /subscription/current) use the DRIVER's home service area.
+            # These coincide in a single-timezone deployment (SK today). Across a tz
+            # boundary they can differ by ≤1h only in the window between the two local
+            # midnights; both paths fail open, so the worst case is one extra/fewer offer
+            # near that boundary — never an overcharge or a stranded driver. If Spinr
+            # launches in a second timezone, unify on the driver's home area here.
+            if all_drivers and ride.get("service_area_id"):
+                try:
+                    try:
+                        from ...utils.spinr_pass import exhausted_driver_ids
+                    except ImportError:
+                        from utils.spinr_pass import exhausted_driver_ids  # type: ignore
+
+                    _q_ids = [d["id"] for d in all_drivers]
+                    if _gate_subs is not None:
+                        # The subscription gate already fetched these exact rows — same
+                        # table, same {driver_id IN …, status: active} filter — over a
+                        # superset of this pool (it ran before the gate narrowed
+                        # all_drivers). Narrowing it here is what a fresh query would
+                        # return, so re-issuing one is a pure duplicate round-trip on
+                        # the P95 < 2 s dispatch path.
+                        #
+                        # The RAW gate rows are reused, not its expiry-filtered
+                        # _valid_subs: the quota query never filtered on expiry either,
+                        # because exhausted_driver_ids does its own window handling.
+                        _q_id_set = set(_q_ids)
+                        _q_subs = [_s for _s in _gate_subs if _s.get("driver_id") in _q_id_set]
+                    else:
+                        # Free area: the gate never ran, so this is the only read. There
+                        # is no area-level "has finite passes" flag to short-circuit on,
+                        # and discovering one would cost the very query it would save.
+                        _q_subs = await _deps.db_supabase.get_rows(
+                            "driver_subscriptions",
+                            {"driver_id": {"$in": _q_ids}, "status": "active"},
+                            columns="driver_id,started_at,expires_at,rides_per_day",
+                            limit=len(_q_ids),
+                        )
+                    if _q_subs:
+                        # area_timezone() would re-read the row we already hold; it is
+                        # a plain `.get("timezone")` on exactly this row.
+                        _q_tz = _ride_area.get("timezone")
+                        _q_exhausted = await exhausted_driver_ids(_q_subs, tz=_q_tz)
+                        if _q_exhausted:
+                            _q_before = len(all_drivers)
+                            all_drivers = [d for d in all_drivers if d["id"] not in _q_exhausted]
+                            logger.info(
+                                "[DISPATCH] quota filter: area=%s kept %d/%d drivers (%d quota-exhausted)",
+                                ride["service_area_id"],
+                                len(all_drivers),
+                                _q_before,
+                                len(_q_exhausted),
+                            )
+                except Exception:
+                    logger.error(
+                        "[DISPATCH] quota filter failed for area=%s — dispatching unfiltered by quota",
+                        ride.get("service_area_id"),
+                        exc_info=True,
+                    )
+
+            # Pure filter+rank: drops orphan/no-location/low-rated drivers and
+            # attaches per-driver distance. Pure function — no I/O.
+            drivers_with_distance = _deps.filter_and_rank_drivers(
+                ride,
+                all_drivers,
+                algorithm,
+                min_rating,
+                search_radius,
+                allowed_area_ids=_area_ids,
+                allow_unassigned_area=_allow_unassigned_area,
+            )
+            logger.info(
+                f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
+                f"real drivers within {search_radius}km with valid lat/lng and "
+                f"rating>={min_rating if algorithm in ('rating_based', 'combined') else 'n/a'}"
+            )
+
+            if not drivers_with_distance and ride.get("service_area_id") and ride.get("vehicle_type_id"):
+                # Vehicle cascade: the area may define upgrade types to try when no
+                # driver of the exact requested type is available (e.g. SUV → XL).
+                # This runs after all other filters so only genuinely-available
+                # upgrade drivers are offered the ride.
+                try:
+                    _casc_map: list = _ride_area.get("vehicle_cascade_map") or []
+                    # Fix 6: child areas (airport sub-regions) inherit parent's cascade map
+                    # when the child row has none configured — mirrors subscription_required inheritance.
+                    if not _casc_map and _ride_area.get("parent_service_area_id"):
+                        _casc_map = (await _parent_area()).get("vehicle_cascade_map") or []
+                    _casc_to: list = next(
+                        (rule.get("to") or [] for rule in _casc_map if rule.get("from") == ride["vehicle_type_id"]),
+                        [],
+                    )
+                    if _casc_to:
+                        logger.info(
+                            "[DISPATCH] cascade: ride %s — no %s drivers, trying upgrade types %s",
+                            ride_id,
+                            ride["vehicle_type_id"],
+                            _casc_to,
+                        )
+                        _casc_filter: dict = {
+                            "is_online": True,
+                            "is_available": True,
+                            "is_verified": True,
+                            "status": "active",
+                            "vehicle_type_id": {"$in": _casc_to},
+                            # Same geo box as the primary pool — an un-bounded LIMIT 500
+                            # here has the identical row-501 false-negative failure mode.
+                            "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
+                        }
+                        if ride.get("requires_wav"):
+                            _casc_filter["is_wav"] = True
+                        if _area_ids is not None:
+                            _casc_filter.update(
+                                build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area)
+                            )
+                        _casc_pool = await _deps.db_supabase.get_rows(
+                            "drivers",
+                            _casc_filter,
+                            columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
+                            limit=500,
+                        )
+                        # Fix 4: Presence filter using _checked variant so a Redis outage
+                        # (configured-but-unavailable) cannot silently empty the cascade pool.
+                        # present_driver_ids_checked returns (set, reachable=False) on failure;
+                        # we only apply the filter when the presence store was actually reached.
+                        try:
+                            try:
+                                from ...utils.driver_presence import (
+                                    present_driver_ids_checked as _casc_presence_checked,  # type: ignore
+                                )
+                                from ...utils.redis_client import redis_mget as _casc_mget
+                            except ImportError:
+                                from utils.driver_presence import (
+                                    present_driver_ids_checked as _casc_presence_checked,  # type: ignore
+                                )
+                                from utils.redis_client import redis_mget as _casc_mget
+                            _casc_present_set, _casc_reachable = await _casc_presence_checked(
+                                [d["id"] for d in _casc_pool]
+                            )
+                            if _casc_reachable:
+                                _casc_pool = [d for d in _casc_pool if d["id"] in _casc_present_set]
+                            else:
+                                logger.warning(
+                                    "[DISPATCH] cascade: Redis unavailable — presence filter skipped for ride %s",
+                                    ride_id,
+                                )
+                            # Skip drivers who already timed-out / declined this ride
+                            _casc_skip_keys = [f"spinr:offer_skip:{ride_id}:{d['id']}" for d in _casc_pool]
+                            _casc_skip_vals = await _casc_mget(_casc_skip_keys)
+                            _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
+                        except Exception as _casc_redis_exc:
+                            logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
+                        # Fix 2: apply subscription filter to cascade pool when the service area
+                        # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
+                        if _sub_required and _casc_pool:
+                            try:
+                                _casc_cand_ids = [d["id"] for d in _casc_pool]
+                                _casc_subs = await _deps.db_supabase.get_rows(
+                                    "driver_subscriptions",
+                                    {"driver_id": {"$in": _casc_cand_ids}, "status": "active"},
+                                    columns="driver_id,expires_at,plan_id",
+                                    limit=len(_casc_cand_ids),
+                                )
+                                _casc_now = datetime.now(timezone.utc)
+                                _casc_valid_subs = []
+                                for _cs in _casc_subs or []:
+                                    if _cs.get("expires_at"):
+                                        _cs_exp = parse_iso_utc(_cs["expires_at"])
+                                        if _cs_exp is not None and _cs_exp <= _casc_now:
+                                            continue
+                                    _casc_valid_subs.append(_cs)
+                                _casc_plan_ids = {_cs["plan_id"] for _cs in _casc_valid_subs if _cs.get("plan_id")}
+                                _casc_plan_areas: dict = {}
+                                if _casc_plan_ids:
+                                    _casc_plans = await _deps.db_supabase.get_rows(
+                                        "subscription_plans",
+                                        {"id": {"$in": list(_casc_plan_ids)}},
+                                        columns="id,service_areas",
+                                        limit=len(_casc_plan_ids),
+                                    )
+                                    _casc_plan_areas = {p["id"]: p.get("service_areas") for p in (_casc_plans or [])}
+                                _casc_sa_id = ride["service_area_id"]
+                                _casc_parent_sa_id = _ride_area.get("parent_service_area_id")
+                                _casc_subscribed: set = set()
+                                for _cs in _casc_valid_subs:
+                                    _cs_allowed = _casc_plan_areas.get(_cs.get("plan_id"))
+                                    if _cs_allowed and _casc_sa_id not in _cs_allowed:
+                                        if not (_casc_parent_sa_id and _casc_parent_sa_id in _cs_allowed):
+                                            continue
+                                    _casc_subscribed.add(_cs["driver_id"])
+                                _casc_before_sub = len(_casc_pool)
+                                _casc_pool = [d for d in _casc_pool if d["id"] in _casc_subscribed]
+                                logger.info(
+                                    "[DISPATCH] cascade subscription filter: kept %d/%d drivers for ride %s",
+                                    len(_casc_pool),
+                                    _casc_before_sub,
+                                    ride_id,
+                                )
+                            except Exception:
+                                logger.error(
+                                    "[DISPATCH] cascade subscription filter failed for area=%s — failing closed",
+                                    ride.get("service_area_id"),
+                                    exc_info=True,
+                                )
+                                _casc_pool = []  # fail closed; non-subscriber cascade would bypass the gate
+                        drivers_with_distance = _deps.filter_and_rank_drivers(
+                            ride,
+                            _casc_pool,
+                            algorithm,
+                            min_rating,
+                            search_radius,
+                            allowed_area_ids=_area_ids,
+                            allow_unassigned_area=_allow_unassigned_area,
+                        )
+                        if drivers_with_distance:
+                            logger.info(
+                                "[DISPATCH] cascade found %d eligible driver(s) for ride %s",
+                                len(drivers_with_distance),
+                                ride_id,
+                            )
+                        else:
+                            logger.info("[DISPATCH] cascade also found no eligible drivers for ride %s", ride_id)
+                except Exception:
+                    logger.error("[DISPATCH] cascade lookup failed for ride %s", ride_id, exc_info=True)
+
+            if not drivers_with_distance:
+                logger.info(
+                    f"[DISPATCH] no eligible drivers for ride {ride_id} — scheduling retry in 10s (attempt {attempt})"
+                )
+                _deps.spawn(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
+                return
+
+            # ── ETA ranking ───────────────────────────────────────────────
+            # Pre-filter to top 15 by haversine, then batch-query Distance
+            # Matrix for real ETAs. Falls back to haversine if API fails.
+            drivers_with_distance.sort(key=lambda x: x[1])
+            pre_filtered = drivers_with_distance[: max(max_offers * 5, 15)]
+
+            if use_eta:
+                try:
+                    maps_key = app_settings.get("google_maps_api_key", "")
+                    eta_map = await asyncio.wait_for(
+                        batch_get_etas(
+                            [d for d, _ in pre_filtered],
+                            # ETA to the road-snapped pickup the driver actually drives to.
+                            ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
+                            ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
+                            maps_key,
+                        ),
+                        # P3: bound the external Distance-Matrix call to the dispatch
+                        # budget — its own _MAPS_TIMEOUT is 3s, too long for the <2s
+                        # offer clock. A TimeoutError is caught below → haversine
+                        # ranking, so a slow Maps API can't blow the dispatch SLA.
+                        timeout=1.2,
+                    )
+                    ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
+                except Exception as e:
+                    logger.error(f"[DISPATCH] ETA ranking failed, falling back to haversine: {e}", exc_info=True)
+                    ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
+            else:
+                ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
+
+        # C50 Phase 2 (T13): dispatch_direct_pool_enabled gates the claim +
+        # ride_offers-insert + insurance-write block onto the direct-Postgres
+        # pool (T12's dispatch_claim_batch RPC) instead of PostgREST. Default
+        # False (migration 401) — when False, every line below in the
+        # `else` branches runs EXACTLY as it did before this change: same
+        # function calls, same order, same queries. Only the new metric
+        # increment (`spinr_dispatch_claim_path_total`, required by T13 so
+        # Phase 3 can see live traffic split by path) is additive on the
+        # flag-off path — see test_dispatch_claim_parity.py's
+        # flag-off-byte-identical assertion.
+        _direct_pool_enabled = bool(app_settings.get("dispatch_direct_pool_enabled", False))
+
+        with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "claim"}):
+            # ── Batch claim ───────────────────────────────────────────────
+            claimed_drivers: list[tuple[dict, int]] = []
+
+            if _direct_pool_enabled:
+                _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "direct"})
+
+                _pool_driver_ids = [d["id"] for d, _eta, _dist in ranked]
+                _pool_eta_by_id = {d["id"]: eta for d, eta, _dist in ranked}
+                _pool_eta_seconds = [eta for _d, eta, _dist in ranked]
+
+                # invalidate_driver_cache for every driver about to be attempted —
+                # kept on the Python side per T13 (Redis side effect; the SQL RPC
+                # must not own it — see dispatch_pool.py's transaction-mode
+                # discipline docstring: no waiting on anything but Postgres while
+                # holding a pooled connection). Mirrors claim_driver_atomic's own
+                # unconditional pre-claim invalidate (driver_repo.py:269).
+                for _did in _pool_driver_ids:
+                    await _deps.db_supabase.invalidate_driver_cache(driver_id=_did)
+
+                # Offer timestamps must exist BEFORE the claim call on this path —
+                # T12's RPC claims, inserts ride_offers, AND writes the insurance
+                # transition in one transaction, so offered_at/expires_at have to
+                # be known at claim time, not after (unlike the PostgREST path,
+                # which computes `now` only once claiming is done). This is the
+                # one deliberate ordering difference from the PostgREST branch,
+                # confined entirely to the flag-on path.
+                #
+                # FIX (Tara, C50 Phase 2 T15 adversarial review, 2026-09-02):
+                # computed HERE — immediately before the claim_batch() call —
+                # rather than before the invalidate_driver_cache loop above.
+                # `now` becomes the ride_offers.offered_at persisted by the RPC
+                # and the WS/FCM offer_expires_at the driver-app's countdown is
+                # keyed to (driver-app index.tsx: remaining = offer_expires_at -
+                # Date.now()); computing it before N Redis round-trips would have
+                # baked that latency into the advertised offer, silently
+                # shortening the real response window and skewing the
+                # offered_at audit value away from when the offer actually went
+                # live. Does not eliminate all skew (the RPC's own network +
+                # transaction time still elapses after this point, exactly as it
+                # does for the PostgREST path's `now = datetime.now(...)` call
+                # at the top of the offer_insert phase further below), but
+                # removes the one avoidable, measured chunk of it.
+                now = datetime.now(timezone.utc)
+                _offer_expires_at_dt = now + timedelta(seconds=offer_timeout)
+                _offer_expires_at = _offer_expires_at_dt.isoformat()
+
+                try:
+                    _pool_results = await _dispatch_pool.claim_batch(
+                        ride_id,
+                        _pool_driver_ids,
+                        _pool_eta_seconds,
+                        max_offers,
+                        now,
+                        _offer_expires_at_dt,
+                    )
+                except Exception:
+                    # Fail loud, no silent fallback to PostgREST (D2 in the plan
+                    # doc). The RPC is one transaction covering claim + offer
+                    # insert + insurance write, so a mid-call failure means
+                    # Postgres already rolled back the WHOLE thing — no driver
+                    # is left claimed, so there is nothing to release here
+                    # (unlike the PostgREST path's two-phase claim-then-insert,
+                    # which DOES need an explicit release-on-failure loop below).
+                    logger.error(
+                        f"[DISPATCH] direct-pool claim_batch failed for ride {ride_id}",
+                        exc_info=True,
+                    )
+                    raise
+
+                # invalidate_driver_cache again for every driver the RPC actually
+                # attempted (claimed or not) — its is_available /
+                # availability_claimed_at changed either way (claimed: set false
+                # then possibly reverted true on failed revalidation; the RPC does
+                # both writes itself). Mirrors claim_driver_atomic's post-claim
+                # invalidate (driver_repo.py:297) and set_driver_available's own
+                # invalidate on release (driver_repo.py:149), both of which
+                # normally run on the Python side but happened inside the RPC
+                # transaction here.
+                for _row in _pool_results:
+                    await _deps.db_supabase.invalidate_driver_cache(driver_id=_row["driver_id"])
+
+                for _row in _pool_results:
+                    if _row.get("claimed"):
+                        claimed_drivers.append((_row["driver_row"], _pool_eta_by_id.get(_row["driver_id"])))
+            else:
+                _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest"})
+                for driver, eta_sec, _ in ranked:
+                    if len(claimed_drivers) >= max_offers:
+                        break
+                    fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+                    if fresh:
+                        # The claim's own UPDATE returns the post-claim row, so no follow-up
+                        # get_driver_by_id is needed — and that read was guaranteed uncached
+                        # anyway, because claim_driver_atomic invalidates the cache entry on
+                        # both sides of the update. Up to max_offers of those per attempt.
+                        #
+                        # Revalidate the FULL eligibility set on the freshly-read row, not
+                        # just is_online. claim_driver_atomic only guards id + is_available,
+                        # so an admin who suspended the driver or flipped them back to
+                        # needs_review between the candidate read and the claim would
+                        # otherwise still get offered — the exact stale-status case the
+                        # candidate filter (is_verified + status='active') is meant to stop.
+                        if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
+                            claimed_drivers.append((fresh, eta_sec))
+                        else:
+                            await _deps.db_supabase.set_driver_available(driver["id"], True)
+
+            if not claimed_drivers:
+                logger.info(f"[DISPATCH] no drivers could be claimed for ride {ride_id}")
+                return
+
+            logger.info(
+                f"[DISPATCH] batch: claimed {len(claimed_drivers)} driver(s) for ride {ride_id}: "
+                f"{[d['id'] for d, _ in claimed_drivers]}"
+            )
+
+        with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "offer_insert"}):
+            if _direct_pool_enabled:
+                # ride_offers rows were already inserted by dispatch_claim_batch,
+                # in the same transaction as the claim (T12) — nothing to do here.
+                # Still a real (near-zero) timed block so the per-phase histogram
+                # gets an observation on every attempt, both paths, per T3.
+                pass
+            else:
+                # ── Insert ride_offers rows ───────────────────────────────────
+                now = datetime.now(timezone.utc)
+                # Compute the offer deadline once and reuse it for both the persisted
+                # ride_offers rows (so the durable reaper can find them after a restart) and
+                # the WS/FCM countdown payload below.
+                _offer_expires_at = (now + timedelta(seconds=offer_timeout)).isoformat()
+                offer_rows = _build_offer_rows(claimed_drivers, ride_id, now.isoformat(), _offer_expires_at)
+                try:
+                    await _deps.db_supabase.run_sync(
+                        lambda: _deps.db_supabase.supabase.table("ride_offers").insert(offer_rows).execute()
+                    )
+                except Exception as e:
+                    logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
+                    for d, _ in claimed_drivers:
+                        await _deps.db_supabase.set_driver_available(d["id"], True)
+                    # Re-raise after releasing the claims: no offers exist, so the
+                    # recovery shell re-arms the retry chain instead of stranding the
+                    # ride in `searching` (the old `return` armed nothing).
+                    raise
+
+        with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "insurance"}):
+            if _direct_pool_enabled:
+                # Insurance Period 2 transitions were already written by
+                # dispatch_claim_batch, in the same transaction as the claim and
+                # the ride_offers insert (T12) — nothing to do here. See
+                # migration 402's OPEN QUESTION note: batching all claims for
+                # this attempt into one transaction means every driver claimed
+                # here shares an IDENTICAL started_at (Postgres now() is
+                # transaction-start time), a real granularity change from the
+                # PostgREST path's per-driver separate-transaction timestamps.
+                pass
+            else:
+                # Insurance Period 2 (en route to pickup — TNC primary commercial coverage)
+                # opens HERE, at claim/offer time, not at acceptance. The batch-offer model
+                # already makes each claimed driver unavailable for any other ride the
+                # instant claim_driver_atomic succeeds — they're obligated to this ride the
+                # moment the offer is live, exactly as CLAUDE.md's "Period 2 starts on
+                # driver_assigned... because the driver is already obligated" rule requires
+                # for a batch-offer dispatch model with no separate driver_assigned DB write.
+                # If the driver declines/times out, the decline/expiry paths revert them to
+                # Period 1 (or 0). If they accept, ride_flow.py's accept_ride calls this
+                # again with the same period+ride_id as a no-op safety net. record_period_
+                # transition is compliance-grade — logs at ERROR and swallows on failure so
+                # it never blocks dispatch.
+                for d, _ in claimed_drivers:
+                    await _deps.record_period_transition(d["id"], 2, ride_id=ride_id)
+
+        _metric_inc("spinr_dispatch_offer_sent_total", by=len(claimed_drivers))
+
+        with _time_ms("spinr_dispatch_attempt_duration_ms", labels={"phase": "notify"}):
+            # ── Parallel enrichment (shared across all drivers) ───────────
+            async def _fetch_rider() -> dict | None:
+                try:
+                    return await _deps.db_supabase.get_user_by_id(ride["rider_id"])
+                except Exception as e:
+                    logger.error(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}", exc_info=True)
+                    return None
+
+            async def _fetch_incentives() -> tuple[list, float]:
+                # Shares the settlement matcher so the bonus quoted in the offer is
+                # the bonus completion will actually claim (see services/
+                # incentive_service.py). Still one query, so the offer→phone SLA is
+                # unchanged.
+                try:
+                    return incentive_display_payload(await match_ride_incentives(_deps.db_supabase, ride))
+                except Exception as e:
+                    logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
+                    return [], 0.0
+
+            async def _fetch_service_area_polygon() -> Optional[list]:
+                # Reads the row already fetched at the top of the attempt rather than
+                # re-issuing a fifth `SELECT *` for it (the polygon JSONB is the
+                # heaviest column on that row, so this was the most expensive repeat).
+                if not ride.get("service_area_id"):
+                    return None
+                try:
+                    poly = get_service_area_polygon(_ride_area)
+                    return poly or None
+                except Exception as e:
+                    logger.error("[DISPATCH] service_area polygon parse failed: %s", e, exc_info=True)
+                    return None
+
+            rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
+                _fetch_rider(),
+                _fetch_incentives(),
+                _fetch_service_area_polygon(),
+            )
+
+            # PIPEDA (C5): the driver sees the rider's FIRST name only (never the legal
+            # surname), and only via the WebSocket payload below — rider_name is
+            # stripped from the FCM data payload further down.
+            rider_display_name = first_name_only(rider_user) or None
+
+            _surge_mult = float(ride.get("surge_multiplier") or 1.0)
+
+            # Quest progress for every claimed driver, in ONE query.
+            #
+            # This used to be a serial embedded-join query *inside* the notify loop —
+            # up to max_offers (10) round-trips, one per driver, on the dispatch
+            # offer→notification path that carries a P95 < 2 s SLA. The data is a
+            # cosmetic progress banner on the offer card, so it was paying latency on
+            # the most timing-sensitive path in the product for decoration.
+            #
+            # Semantics are unchanged: the per-driver query had `.limit(1)` with no
+            # ORDER BY, i.e. "any one active quest", so first-row-wins per driver here
+            # is the same contract. The batch is bounded by _QUEST_HINT_ROW_CAP because
+            # a driver may hold several active quests at once, so len(uids) could
+            # truncate and silently drop a driver's banner.
+            #
+            # Fails open as one unit rather than per driver: on error nobody gets a
+            # banner and the offer still goes out. That trades N failure points for 1
+            # on data that is decorative by definition.
+            _quest_by_uid: Dict[str, Dict[str, Any]] = {}
+            _quest_uids = [d.get("user_id") for d, _ in claimed_drivers if d.get("user_id")]
+            if _quest_uids:
+                try:
+                    _qr = await _deps.db_supabase.run_sync(
+                        _deps.db_supabase.supabase.table("quest_progress")
+                        .select("driver_id, current_value, status, quest:quests(title, target_value, reward_amount)")
+                        .in_("driver_id", _quest_uids)
+                        .eq("status", "active")
+                        .limit(_QUEST_HINT_ROW_CAP)
+                        .execute
+                    )
+                    for _qp in _qr.data or []:
+                        _uid = _qp.get("driver_id")
+                        if not _uid or _uid in _quest_by_uid:
+                            continue
+                        _q = _qp.get("quest") or {}
+                        _tv = float(_q.get("target_value") or 1)
+                        _cv = float(_qp.get("current_value") or 0)
+                        _quest_by_uid[_uid] = {
+                            "title": _q.get("title", ""),
+                            "current_value": _cv,
+                            "target_value": _tv,
+                            "progress_pct": round(min(_cv / _tv, 1.0) * 100, 1) if _tv else 0,
+                            "reward_amount": float(_q.get("reward_amount") or 0),
+                        }
+                except Exception as e:
+                    logger.error(
+                        f"Failed to fetch quest progress for {len(_quest_uids)} claimed driver(s): {e}", exc_info=True
+                    )
+
+            # ── Notify each claimed driver ────────────────────────────────
+            for driver, _eta in claimed_drivers:
+                _quest_hint = _quest_by_uid.get(driver.get("user_id"))
+
+                # Per-driver signed URL for the notification's BigPicture fare banner.
+                # Bound to this ride + driver and short-lived; rendered on demand by
+                # routes/offer_card.py (never here, to keep the dispatch hot path fast).
+                _offer_card_url = None
+                try:
+                    _oc_token = sign_offer_card_token(
+                        ride_id=ride_id,
+                        driver_id=str(driver.get("user_id") or driver.get("id") or ""),
+                    )
+                    _offer_card_url = f"{_deps._settings.PUBLIC_API_BASE_URL.rstrip('/')}/api/v1/offer-cards/{ride_id}.png?t={_oc_token}"
+                except Exception as e:
+                    logger.warning("[DISPATCH] offer-card URL build failed for ride %s: %s", ride_id, e)
+
+                dispatch_payload = {
+                    "type": "new_ride_assignment",
+                    "ride_id": ride_id,
+                    "offer_card_url": _offer_card_url,
+                    "pickup_address": ride.get("pickup_address"),
+                    "dropoff_address": ride.get("dropoff_address"),
+                    "pickup_lat": ride.get("pickup_lat"),
+                    "pickup_lng": ride.get("pickup_lng"),
+                    # Road-snapped pickup for driver navigation (falls back to pickup_*).
+                    "pickup_nav_lat": ride.get("pickup_nav_lat"),
+                    "pickup_nav_lng": ride.get("pickup_nav_lng"),
+                    "dropoff_lat": ride.get("dropoff_lat"),
+                    "dropoff_lng": ride.get("dropoff_lng"),
+                    "fare": ride.get("driver_earnings"),
+                    "distance_km": ride.get("distance_km"),
+                    "duration_minutes": ride.get("duration_minutes"),
+                    "rider_name": rider_display_name,
+                    "rider_rating": (rider_user or {}).get("rating"),
+                    "rider_profile_image": (rider_user or {}).get("profile_image"),
+                    "requires_wav": bool(ride.get("requires_wav")),
+                    # Rider-set preference (migration 62). Surfaced to the driver in the
+                    # offer panel so they know a quiet ride was requested before accepting.
+                    "quiet_mode": bool(ride.get("quiet_mode")),
+                    # C35: surface whether this ride was originally booked in advance —
+                    # true even after it has since transitioned to searching (same
+                    # "originally scheduled" semantics as ride_cancel.py's
+                    # `_was_scheduled = bool((ride or {}).get("is_scheduled"))`). Purely
+                    # additive metadata for the driver-app offer panel; no dispatch/
+                    # matching behavior change.
+                    "is_scheduled": bool(ride.get("is_scheduled")),
+                    "countdown_seconds": offer_timeout,
+                    "offer_expires_at": _offer_expires_at,
+                    "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
+                    "incentives": _incentives if _incentives else None,
+                    "total_bonus": _total_bonus if _total_bonus > 0 else None,
+                    "quest_hint": _quest_hint,
+                    "payment_method": ride.get("payment_method"),
+                    "planned_route_polyline": ride.get("planned_route_polyline") or None,
+                    "service_area_polygon": _service_area_polygon,
+                }
+
+                if driver.get("user_id"):
+                    await _deps.manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")
+                    try:
+                        # Exclude large spatial fields from FCM data payload — FCM
+                        # enforces a 4 KB data-message limit and detailed polygons/
+                        # polylines can easily blow it. Drivers receive these via the
+                        # WebSocket message (dispatch_payload) which has no size cap.
+                        # PIPEDA (C5): rider_name is excluded too — no rider name may
+                        # ride in an FCM data payload (cleartext in the device tray,
+                        # Google/US infra). The driver gets the first name via the WS
+                        # message (dispatch_payload) only.
+                        _FCM_EXCLUDE = {
+                            "service_area_polygon",
+                            "planned_route_polyline",
+                            "rider_profile_image",
+                            "rider_name",
+                        }
+                        fcm_data = {
+                            k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
+                            for k, v in dispatch_payload.items()
+                            if k not in _FCM_EXCLUDE
+                        }
+                        fcm_data["deeplink"] = "/driver/"
+                        fcm_data["booking_id"] = str(ride_id)
+
+                        pickup_label = ride.get("pickup_address") or "Nearby pickup"
+                        dropoff_label = ride.get("dropoff_address") or "destination"
+                        try:
+                            # Match the in-app offer panel and the driver-app's own
+                            # local notification (notifeeService.displayRideOfferNotification):
+                            # both show fare + area boost / incentives as one total.
+                            # Showing bare `driver_earnings` here made the push
+                            # under-state what the driver actually earns.
+                            _offer_total = float(ride.get("driver_earnings") or 0) + float(_total_bonus or 0)
+                            earnings_label = f"${_offer_total:.2f}"
+                        except (TypeError, ValueError):
+                            earnings_label = "New fare"
+
+                        # Fire the push without blocking the per-driver offer loop —
+                        # send_push_notification now delivers inline (≈100–300 ms FCM
+                        # round-trip), and we don't want N drivers serialized on it.
+                        # The WebSocket offer above already reached any foreground app;
+                        # this push covers backgrounded / locked / killed devices.
+                        _deps.spawn(
+                            _deps.send_push_notification(
+                                driver["user_id"],
+                                f"New ride · {earnings_label}",
+                                f"{pickup_label} → {dropoff_label}",
+                                fcm_data,
+                                priority="dispatch",
+                                target_app="driver",
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)
+
+            # ── Batch timeout handler (no grace period) ───────────────────
+            _deps.spawn(
+                _batch_offer_timeout_handler(
+                    ride_id,
+                    rider_id=ride.get("rider_id"),
+                    timeout_seconds=offer_timeout,
+                )
+            )
+    finally:
+        _dispatch_observe("spinr_dispatch_attempt_db_calls", _get_db_call_count(), buckets=_DB_CALLS_BUCKETS)
 
 
 async def _offer_timeout_handler(

@@ -9,12 +9,23 @@
 > standard mitigant, and it also gives Spinr's own safety team a consistent
 > process to point to instead of improvising one per case.
 >
-> **This is a draft, not legal advice.** The specific timeframes below
-> ([BRACKETED]) are placeholders — they should match Spinr's actual safety
-> team SLA, not be invented here, and should be reviewed by counsel before
-> publication. If no such SLA currently exists, that's worth surfacing to
-> the safety team as its own gap before this policy makes a promise nothing
-> enforces yet.
+> **This is a draft, not legal advice**, and should still be reviewed by
+> counsel before publication (see the standing counsel-review gap common to
+> every published-anyway doc in `legal-text-publication-checklist.md`).
+>
+> **Published 2026-09-02 without numeric SLA commitments.** No safety-hold
+> or appeal-response SLA constant exists anywhere in `backend/` — confirmed
+> independently twice (2026-08-20 legal-readiness pass; re-confirmed
+> 2026-09-02 before publication). Rather than invent a number with no
+> backing, or leave literal `[BRACKETED]` placeholders live in a
+> driver-facing legal document, the timeframe language below was rewritten
+> to non-numeric commitments ("as quickly as possible," "keep you updated
+> on status") that match what `appeal.tsx`'s own copy already says ("We'll
+> review it and get back to you," no timeframe). This is a real content
+> difference from the original draft, not a cosmetic one — track a
+> follow-up with the safety team to define real SLAs and tighten this
+> language to a number once one exists; don't let "published" read as
+> "done."
 
 ---
 
@@ -22,7 +33,7 @@
 
 SPINR DRIVER DEACTIVATION AND APPEALS POLICY
 
-Last updated: [INSERT PUBLICATION DATE]
+Last updated: September 2, 2026
 
 This policy explains when Spinr may place a hold on or deactivate a driver
 account, and how to appeal that decision. It applies in addition to the
@@ -39,9 +50,9 @@ complaint from a rider") without necessarily identifying the reporting
 party, to protect their safety.
 
 Spinr aims to complete a safety investigation and resolve a temporary hold
-within [NUMBER, E.G. 5 BUSINESS DAYS], and will tell you if an
-investigation is taking longer because it involves a third party (such as
-police or SGI) whose timeline Spinr does not control.
+as quickly as possible, and will keep you updated on status — including
+telling you if an investigation is taking longer because it involves a
+third party (such as police or SGI) whose timeline Spinr does not control.
 
 DOCUMENT-EXPIRY HOLDS
 
@@ -68,12 +79,12 @@ restricted by law.
 
 HOW TO APPEAL
 
-If your account is deactivated, you may appeal within [NUMBER, E.G. 30
-DAYS] using the Appeal screen in the driver app. Include any information
-you believe is relevant — Spinr's safety team did not have, or may not have
-correctly weighed. A different reviewer than the one who made the original
-decision is expected to review your appeal, which will receive a response
-within [NUMBER, E.G. 10 BUSINESS DAYS]. An appeal outcome is final, but you may raise a legal claim
+If your account is deactivated, you may appeal at any time using the
+Appeal screen in the driver app. Include any information you believe is
+relevant — Spinr's safety team did not have, or may not have correctly
+weighed. A different reviewer than the one who made the original decision
+is expected to review your appeal, which will receive a response as soon
+as possible. An appeal outcome is final, but you may raise a legal claim
 independently of this appeals process where you believe you have one — this
 policy does not waive any right you have under the Independent Contractor
 Agreement or applicable law.
@@ -90,18 +101,19 @@ validity before you can go online again.
 
 ## Pre-publication notes
 
-1. **All bracketed timeframes need a real number from the safety team**, not
-   a guess — check whether an internal SLA already exists for safety-hold
-   investigations before publishing a number here. This is not a
-   theoretical risk: the AALDEF's 2025 driver-deactivation-appeals report
+1. **Resolved 2026-09-02**: the bracketed timeframes were rewritten to
+   non-numeric commitments rather than published as unresolved brackets or
+   invented numbers — see the header note. **This does not close the
+   underlying gap**: the AALDEF's 2025 driver-deactivation-appeals report
    found 70–76% of studied deactivations came with no advance notice, and
    95% of appeals filed against incumbent platforms failed — evidence that
    an appeals process without real SLAs and a genuinely independent
    reviewer functions as a formality rather than a remedy. The
    different-reviewer mechanism noted in item 2 below is the concrete
-   design choice meant to avoid landing in that failure mode; the missing
-   bracketed numbers are the remaining gap between that intent and a
-   process a driver can actually rely on.
+   design choice meant to avoid landing in that failure mode; a real,
+   numeric SLA from the safety team is still the remaining gap between that
+   intent and a process a driver can actually rely on — non-numeric
+   language is an honest interim state, not a substitute for one.
 2. **Fixed 2026-08-19/2026-08-20**: confirmed the in-app appeal channel is
    real and wired (`driver-app/app/appeal.tsx` → `backend/services/
    driver_appeals.py` → `routes/drivers/appeals.py`/`routes/admin/

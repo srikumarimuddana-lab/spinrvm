@@ -583,10 +583,15 @@ class AppSettings(BaseModel):
     apns_bundle_id: str = ""  # rider bundle id; topic = this + ".push-type.liveactivity"
     apns_p8_key: str = ""  # full PEM of the .p8 private key (multi-line)
     # ── admin-dashboard visual refresh (epic #2785 Phase 3+) ─────────────
-    # Gates the shared shell/typography/radius restyle behind a canary-able
-    # flag rather than a big-bang release, given the blast radius is all 34
-    # admin-dashboard routes. Read by the frontend's useFeatureFlag() hook
-    # via GET /api/admin/settings; effective within the 60s settings TTL.
+    # Gates the shared shell/typography/radius restyle behind a flag rather
+    # than a big-bang release, given the blast radius is all 34 admin-
+    # dashboard routes — but this is a single global on/off switch, not a
+    # canary: there is no per-user or per-role targeting anywhere in this
+    # settings system, so flipping it affects every admin/staff account at
+    # once (confirmed 2026-09-03; the field's earlier "canary-able" wording
+    # was aspirational, not what actually shipped). Read by the frontend's
+    # useFeatureFlag() hook via GET /api/admin/settings; effective within
+    # the 60s settings TTL.
     admin_theme_v2_enabled: bool = False
     # ── Admin command palette (Cmd+K/Ctrl+K route jumper) ────────────────
     # Same shape as admin_theme_v2_enabled above — dark-launched, no other

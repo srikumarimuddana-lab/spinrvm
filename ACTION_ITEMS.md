@@ -19998,6 +19998,40 @@ how much they de-risk a public launch._
   must not change claim-won/claim-lost semantics, only retry count/timing
   on a genuine transient failure).
 
+### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip
+- [ ] **Status:** open — found 2026-09-03 while babysitting PR #4887 (C53
+  finding 4). Confirmed via GitHub Actions run 33711534411 that
+  `backend-test` fails identically on `main`'s own latest commit
+  (`e71760e`), not just on the PR branch — this is base-branch-red, not
+  introduced by #4887's diff.
+- **Issue/gap:** `backend/tests/rls/conftest.py` builds its Postgres RLS
+  test schema from `backend/supabase_schema.sql` plus a hand-picked
+  allowlist of specific migration files applied verbatim (58, 64, 70, 290,
+  378 — for `financial_events`, `driver_insurance_periods`,
+  `saved_addresses`). It was never updated to also apply
+  `backend/migrations/399_transactional_outbox.sql` (merged as part of the
+  `fc6f922` dark launch, well before this gap was found), so every test
+  touching `settings.outbox_receipts_enabled`, `outbox_messages`, or the
+  `outbox_*` RPCs fails with `UndefinedColumn`/`UndefinedTable`/`does not
+  exist`. 19 of 24 current RLS-suite failures are this one root cause
+  (`backend/tests/rls/test_transactional_outbox.py`, almost entirely). The
+  remaining ~5 (`test_core_tables_rls.py::test_service_role_bypasses_rls_on_users`,
+  two `test_money_and_safety_rls.py` cases, and
+  `test_saved_addresses_rls.py::test_service_role_bypasses_rls_on_saved_addresses`)
+  are a **separate, unrelated** pre-existing gap in the same harness —
+  assertion/permission mismatches with nothing to do with the outbox
+  migration; flagged here for visibility, not diagnosed further.
+- **Action:** update `tests/rls/conftest.py`'s schema-setup fixture to also
+  execute `backend/migrations/399_transactional_outbox.sql` verbatim, same
+  pattern as the existing 58/64/70/290/378 calls (`cur.execute((migrations_dir
+  / "NN_....sql").read_text())`, including the existing handling of the
+  trailing `NOTIFY pgrst, 'reload schema';` line those migrations already
+  strip).
+- **Files:** `backend/tests/rls/conftest.py`.
+- **Acceptance:** `TEST_DATABASE_URL=<local pg> pytest tests/rls -c
+  /dev/null --confcutdir=tests/rls -v` — `test_transactional_outbox.py`
+  passes in full; no other RLS file regresses.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -944,6 +944,22 @@ async def settle_corporate(
     try:
         settings = await get_app_settings()
         if not settings.get("corporate_billing_enabled", True):
+            # Release the settlement claim before returning, same as the
+            # fail-closed branch below and every other failure branch here.
+            # Without it, deliberately flipping the kill switch off during an
+            # incident strands every in-flight guest-corporate ride at
+            # payment_status='processing' — auto_settle_guest_corporate claims
+            # the ride before calling us, its retry sweep polls only 'pending',
+            # and stripe_reconcile's healer bails without a payment_intent_id,
+            # which a company_allowance ride never has. The rides would then
+            # fail to settle even after the switch was turned back on.
+            try:
+                await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            except Exception:
+                logger.opt(exception=True).error(
+                    "[PAYMENT] could not release settlement claim for ride {} while corporate billing is disabled",
+                    ride_id,
+                )
             return PaymentResult(
                 success=False,
                 error="Corporate billing is temporarily disabled",

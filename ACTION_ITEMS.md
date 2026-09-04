@@ -20632,9 +20632,16 @@ how much they de-risk a public launch._
   `admin_complete_ride`, with a test per gap.
 - **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
 
-### C67. `settle_corporate`'s explicit kill-switch-off branch strands a guest-corporate ride at `payment_status='processing'`
+### C67. `settle_corporate`'s explicit kill-switch-off branch strands a guest-corporate ride at `payment_status='processing'` — CLOSED (2026-09-04)
 
-- [ ] **Status:** open — found 2026-09-03 by `spinr-money-auditor` reviewing
+- [x] **Status:** closed (2026-09-04) — fixed in PR #4909 after a second
+  review pass over that same PR flagged that the fail-closed branch's new
+  comment claimed "every other failure branch in this function does" release
+  the claim while its immediate neighbour, this branch, did not. The explicit
+  kill-switch-off branch now releases `payment_status` back to `pending`
+  (guarded, so a failed release cannot mask the 503), with regression test
+  `test_settle_corporate_explicit_false_503s_and_releases_the_claim`.
+  Originally — found 2026-09-03 by `spinr-money-auditor` reviewing
   PR #4909, which fixed the identical gap in the adjacent fail-closed branch.
 - **Issue/gap:** when `corporate_billing_enabled` is explicitly `False`,
   `settle_corporate` returns a 503 `PaymentResult` **without** resetting
@@ -20658,6 +20665,31 @@ how much they de-risk a public launch._
   the existing suite.
 - **Files:** `backend/services/payment_service.py`,
   `backend/tests/test_guest_auto_settle.py`.
+
+### C68. admin-dashboard cancel buttons don't gate on the backend's pre-trip-only cancel rule
+
+- [ ] **Status:** open — found 2026-09-04 by a review pass over PR #4909, the
+  PR that added the backend guard.
+- **Issue/gap:** `admin_cancel_ride` now rejects any non-pre-trip status with
+  400 (`_ADMIN_CANCELLABLE_STATUSES`), but neither admin-dashboard call site
+  reflects that. `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`
+  renders "Cancel Ride" with no status gate at all, and
+  `admin-dashboard/src/app/dashboard/rides/_components/ride-detail-modal.tsx`
+  gates on `!['completed','cancelled']`, which still admits `in_progress`.
+- **Why it matters:** an admin clicking Cancel on an in-progress ride now gets
+  a 400 error toast instead of the previous (incorrect) success. That is the
+  correct backend behaviour — an in-progress ride must be force-*completed* so
+  its insurance Period 3 closes — but the UI gives no pointer to Force
+  Complete, on a live-tested surface.
+- **Action:** hide or disable Cancel for `in_progress` (and any non-pre-trip
+  status) in both components, and surface Force Complete as the correct action
+  instead. Small, but it is an `admin-dashboard` change, so per CLAUDE.md it
+  needs a real `npm run build` — which is why PR #4909 did not bundle it: that
+  PR's authoring environment has no npm registry access, so the mandated build
+  could not be run and an unverifiable frontend change would have been worse
+  than a tracked follow-up.
+- **Files:** `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`,
+  `admin-dashboard/src/app/dashboard/rides/_components/ride-detail-modal.tsx`.
 
 ## Recently completed (do not redo)
 

@@ -1078,8 +1078,14 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     #      losing the root cause. The reaper stays the backstop for
                     #      any release that genuinely cannot be written here.
                     # The try also spans the whole loop rather than the claim call
-                    # alone, so a failure of the inline revalidation release above is
-                    # covered by the same recovery.
+                    # alone, so a failure of the inline revalidation release above
+                    # still reaches this handler and still releases everything in
+                    # claimed_drivers. Note the precise limit: the driver whose OWN
+                    # inline release raised was claimed but failed revalidation, so
+                    # it was never appended to claimed_drivers and is therefore not
+                    # re-released here — the orphan-claim reaper is its backstop.
+                    # Tracking it would mean appending a driver we deliberately did
+                    # not offer, so the reaper is the right owner for that case.
                     logger.opt(exception=True).error(f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}")
                     for d, _ in claimed_drivers:
                         try:

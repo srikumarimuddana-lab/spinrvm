@@ -118,6 +118,43 @@ class TestAdminCancelRideRaceGuard:
             resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
         assert resp.status_code == 409
 
+    def test_already_cancelled_completes_side_effects_instead_of_409(self, client, as_super_admin):
+        """0 rows + the ride already `cancelled` is SUCCESS, not a race.
+
+        `update_one` runs under `run_sync`'s default "read" retry policy (3
+        attempts), so a write that lands and then loses its response to a
+        dropped H2 connection is retried, and the retry matches 0 rows because
+        the row it just wrote no longer holds `status_from`. 409-ing there
+        would leave the ride cancelled in the DB while skipping the driver
+        release, the ride_cancelled push and the audit row -- driver stuck
+        is_available=False, rider stuck on "Finding driver", which is the exact
+        failure this endpoint exists to prevent (and which the old
+        verify-by-re-read handled correctly).
+        """
+        ride = _ride("driver_assigned", driver_id="drv-1")
+        already_cancelled = {**ride, "status": "cancelled"}
+        set_avail_mock = AsyncMock(return_value={"id": "drv-1", "is_available": True})
+        audit_mock = AsyncMock(return_value="audit-1")
+        with (
+            # 1st read: pre-write. 2nd read: the failure-path re-read.
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[ride, already_cancelled])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("db_supabase.set_driver_available", set_avail_mock),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("routes.admin.rides.record_period_transition", AsyncMock()),
+            patch("routes.admin.rides.log_admin_action", audit_mock),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("socket_manager.manager.broadcast_to_admins", AsyncMock()),
+            patch("routes.admin.rides.send_push_notification", AsyncMock()),
+        ):
+            resp = client.post(f"/api/admin/rides/{ride['id']}/cancel", json={"reason": "test"})
+
+        assert resp.status_code == 200, "an already-cancelled ride must not 409"
+        # The side effects the early return would have skipped:
+        set_avail_mock.assert_awaited_once_with("drv-1", True)
+        audit_mock.assert_awaited_once()
+
     def test_zero_rows_with_unchanged_status_is_a_500_not_a_409(self, client, as_super_admin):
         """0 rows while the ride still holds the filtered status is a silently
         blocked write (RLS / service-role misconfiguration), not concurrency.

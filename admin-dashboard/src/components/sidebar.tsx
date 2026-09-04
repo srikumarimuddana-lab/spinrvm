@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     Flame, Building2, LifeBuoy, HelpCircle,
-    Menu, X,
+    Menu, X, ChevronRight,
     Shield, ShieldAlert, Cloud, Trophy, Activity,
     Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
     PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap, CreditCard,
@@ -281,6 +281,37 @@ function SidebarInner() {
     const [approvalsCount, setApprovalsCount] = useState<number | null>(null);
     const [expiringCount, setExpiringCount] = useState<number | null>(null);
 
+    // Sidebar simplification (design review 2026-09-04): sub-items used to
+    // always render expanded, so Drivers' 5 children + Support & Issues' 7 +
+    // Help Desk's 2 were always on screen even for an admin who never opens
+    // them, pushing the whole nav well past one screen. Collapsed by default
+    // now; a parent auto-expands only while it (or a child) is the active
+    // route, so navigating straight to a nested page never hides where you
+    // are. Per-admin state persists in localStorage, keyed by href, so
+    // whichever groups an admin actually lives in stay open across visits.
+    // Purely a disclosure/rendering change — no route, permission, or data
+    // change; the collapsed icon-rail mode (collapsed store state) already
+    // flattened children as sibling icons and is untouched by this.
+    const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem("spinr-admin-nav-expanded");
+            if (raw) setExpandedGroups(JSON.parse(raw));
+        } catch {
+            // Private-window/blocked storage: falls back to the route-based
+            // default computed at render time (see isOpen below).
+        }
+    }, []);
+    const toggleGroup = (href: string, next: boolean) => {
+        setExpandedGroups((prev) => {
+            const updated = { ...prev, [href]: next };
+            try {
+                localStorage.setItem("spinr-admin-nav-expanded", JSON.stringify(updated));
+            } catch {}
+            return updated;
+        });
+    };
+
     useEffect(() => {
         hydrateSidebar();
     }, [hydrateSidebar]);
@@ -402,47 +433,86 @@ function SidebarInner() {
                                             ? user?.role === "super_admin"
                                             : (isSuperAdmin || userModules.includes(child.module))
                                     );
+                                    const hasChildren = childItems.length > 0;
+                                    const groupHasActiveChild = hasChildren && childItems.some(c => isActiveHref(c.href));
+                                    // Default open while this item (or a child) is the active
+                                    // route, so landing directly on a nested page never hides
+                                    // where you are; otherwise falls back to the admin's last
+                                    // explicit choice, then closed.
+                                    const isOpen = expandedGroups[item.href] ?? (active || groupHasActiveChild);
+                                    const navLinkClassName = cn(
+                                        "flex items-center rounded-lg text-[13px] font-medium transition-colors",
+                                        collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
+                                        active
+                                            ? (themeV2Enabled
+                                                // Quiet Console Stage 2: thin left-edge rule
+                                                // instead of the filled pill. An inset
+                                                // box-shadow (not a border) draws the rule
+                                                // without adding to the box model, so it
+                                                // can't shift the icon/label the way a real
+                                                // border would — no padding compensation
+                                                // needed.
+                                                ? "shadow-[inset_2px_0_0_0_var(--sidebar-primary)] text-sidebar-primary bg-transparent"
+                                                : "bg-sidebar-primary/10 text-sidebar-primary")
+                                            // Was text-sidebar-foreground/60 — computed
+                                            // ~4.0:1 against the light-mode sidebar
+                                            // background, short of the 4.5:1 AA floor for
+                                            // 13px text. --sidebar-foreground-muted is the
+                                            // same solid token already used (and
+                                            // contrast-verified) for the group-title labels
+                                            // just above, at ~4.8:1 on light / ~5.1:1 on
+                                            // dark. Design/UX review 2026-08-28.
+                                            : "text-sidebar-foreground-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                    );
+                                    const navIcon = (
+                                        <item.icon
+                                            className={cn(
+                                                "shrink-0",
+                                                collapsed ? "h-[18px] w-[18px]" : "h-4 w-4",
+                                                item.emphasize && !active && "text-warning",
+                                            )}
+                                        />
+                                    );
                                     return (
                                         <div key={item.href}>
-                                            <Link href={item.href} onClick={() => setMobileOpen(false)}
-                                                title={collapsed ? item.label : undefined}
-                                                aria-label={collapsed ? item.label : undefined}
-                                                className={cn(
-                                                    "flex items-center rounded-lg text-[13px] font-medium transition-colors",
-                                                    collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
-                                                    active
-                                                        ? (themeV2Enabled
-                                                            // Quiet Console Stage 2: thin left-edge rule
-                                                            // instead of the filled pill. An inset
-                                                            // box-shadow (not a border) draws the rule
-                                                            // without adding to the box model, so it
-                                                            // can't shift the icon/label the way a real
-                                                            // border would — no padding compensation
-                                                            // needed.
-                                                            ? "shadow-[inset_2px_0_0_0_var(--sidebar-primary)] text-sidebar-primary bg-transparent"
-                                                            : "bg-sidebar-primary/10 text-sidebar-primary")
-                                                        // Was text-sidebar-foreground/60 — computed
-                                                        // ~4.0:1 against the light-mode sidebar
-                                                        // background, short of the 4.5:1 AA floor for
-                                                        // 13px text. --sidebar-foreground-muted is the
-                                                        // same solid token already used (and
-                                                        // contrast-verified) for the group-title labels
-                                                        // just above, at ~4.8:1 on light / ~5.1:1 on
-                                                        // dark. Design/UX review 2026-08-28.
-                                                        : "text-sidebar-foreground-muted hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                                                )}
-                                            >
-                                                <item.icon
-                                                    className={cn(
-                                                        "shrink-0",
-                                                        collapsed ? "h-[18px] w-[18px]" : "h-4 w-4",
-                                                        item.emphasize && !active && "text-warning",
-                                                    )}
-                                                />
-                                                {!collapsed && item.label}
-                                            </Link>
+                                            {/* Sidebar simplification: a parent with children gets
+                                                a chevron toggle alongside its own Link, sharing the
+                                                same row styling as a plain item — collapsed
+                                                (icon-rail) mode and childless items are completely
+                                                unchanged below. */}
+                                            {!collapsed && hasChildren ? (
+                                                <div className={navLinkClassName}>
+                                                    <Link
+                                                        href={item.href}
+                                                        onClick={() => setMobileOpen(false)}
+                                                        className="flex items-center gap-2.5 flex-1 min-w-0"
+                                                    >
+                                                        {navIcon}
+                                                        <span className="truncate">{item.label}</span>
+                                                    </Link>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => toggleGroup(item.href, !isOpen)}
+                                                        aria-expanded={isOpen}
+                                                        aria-label={`${isOpen ? "Collapse" : "Expand"} ${item.label}`}
+                                                        className="shrink-0 -m-1 p-1 rounded hover:bg-sidebar-accent"
+                                                    >
+                                                        <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", isOpen && "rotate-90")} />
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <Link href={item.href} onClick={() => setMobileOpen(false)}
+                                                    title={collapsed ? item.label : undefined}
+                                                    aria-label={collapsed ? item.label : undefined}
+                                                    className={navLinkClassName}
+                                                >
+                                                    {navIcon}
+                                                    {!collapsed && item.label}
+                                                </Link>
+                                            )}
                                             {/* Children. In expanded mode they're indented under
-                                                the parent with a guide line. In collapsed mode
+                                                the parent with a guide line, and only rendered
+                                                while the parent is toggled open. In collapsed mode
                                                 we flatten them as sibling icons since there's
                                                 no horizontal room to nest visually — tooltip
                                                 still names them. */}
@@ -491,7 +561,7 @@ function SidebarInner() {
                                                             </Link>
                                                         );
                                                     })
-                                                ) : (
+                                                ) : isOpen ? (
                                                     <div className="ml-[18px] pl-3 border-l border-sidebar-border/50 my-0.5">
                                                         {childItems.map(child => {
                                                             const childActive = isActiveHref(child.href);
@@ -529,7 +599,7 @@ function SidebarInner() {
                                                             );
                                                         })}
                                                     </div>
-                                                )
+                                                ) : null
                                             )}
                                         </div>
                                     );

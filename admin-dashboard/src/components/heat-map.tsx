@@ -1,7 +1,7 @@
 /// <reference types="geojson" />
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import type { ExpressionSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -87,11 +87,17 @@ export default function HeatMap({
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
     const isLoadedRef = useRef(false);
+    // Mirrors monitoring-map.tsx's loadError handling: without this, a
+    // failed tile-style fetch left "load" never firing and the container
+    // rendering as a silent blank div -- no basemap, no heat layers, no
+    // indication anything went wrong.
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     // Init map once
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
 
+        let cancelled = false;
         const map = new maplibregl.Map({
             container: containerRef.current,
             style: MAP_STYLE_POSITRON, // grayscale so heat layers pop
@@ -100,6 +106,14 @@ export default function HeatMap({
         });
         addStandardControls(map);
         mapRef.current = map;
+
+        map.on("error", (e) => {
+            if (cancelled) return;
+            const err = e?.error as Error | undefined;
+            if (err && /style/i.test(err.message ?? "")) {
+                setLoadError(err.message);
+            }
+        });
 
         map.on("load", () => {
             isLoadedRef.current = true;
@@ -150,6 +164,7 @@ export default function HeatMap({
         }, 200);
 
         return () => {
+            cancelled = true;
             clearTimeout(resizeTimer);
             map.remove();
             mapRef.current = null;
@@ -187,6 +202,19 @@ export default function HeatMap({
         if (isLoadedRef.current) apply();
         else map.once("load", apply);
     }, [pickupPoints, dropoffPoints, showPickups, showDropoffs, settings]);
+
+    if (loadError) {
+        return (
+            <div
+                className="flex items-center justify-center bg-muted"
+                style={{ height, width: "100%", borderRadius: "8px" }}
+            >
+                <p className="text-sm text-destructive">
+                    Failed to load map style. Check network / tile provider.
+                </p>
+            </div>
+        );
+    }
 
     return (
         <div

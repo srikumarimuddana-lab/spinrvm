@@ -6,9 +6,11 @@ behaviour that routes/support.py relied on before the extraction, plus the
 rider-AI cases (coordinates pasted from the app, postal codes in addresses).
 """
 
+from unittest.mock import patch
+
 import pytest
 
-from backend.ai.pii import ScrubPolicy, filter_tool_leakage, scrub_pii, scrub_pii_deep
+from backend.ai.pii import _POLICY_SKIPS, ScrubPolicy, filter_tool_leakage, scrub_pii, scrub_pii_deep
 
 
 class TestPhoneNumbers:
@@ -150,11 +152,15 @@ class TestCoordinates:
         from pathlib import Path
 
         backend = Path(__file__).resolve().parents[1]
+        # Vendored / generated trees are not source: a local venv would make
+        # this walk read thousands of site-packages files and can hold
+        # non-UTF-8 .py files that would turn the check into a decode error.
+        skip = {"tests", "__pycache__", ".venv", "venv", "site-packages", "node_modules", "htmlcov"}
         opt_in_files = set()
         for path in backend.rglob("*.py"):
-            if "tests" in path.parts or "__pycache__" in path.parts:
+            if skip & set(path.parts):
                 continue
-            if _re.search(r"\bAI_CHAT\b", path.read_text()):
+            if _re.search(r"\bAI_CHAT\b", path.read_text(encoding="utf-8", errors="ignore")):
                 opt_in_files.add(path.relative_to(backend).as_posix())
         assert opt_in_files == {"ai/pii.py", "ai/orchestrator.py", "ai/tools.py"}
 
@@ -214,6 +220,22 @@ class TestScrubPolicy:
             scrub_pii("S7K 3R5", policy=bad)
         with pytest.raises(TypeError):
             scrub_pii_deep({"address": "S7K 3R5"}, policy=bad)
+
+    def test_every_policy_has_a_skip_set_entry(self):
+        # A member added to the enum without a _POLICY_SKIPS row would be
+        # rejected by _check_policy (next test) -- this one makes the
+        # omission itself the visible failure.
+        assert set(_POLICY_SKIPS) == set(ScrubPolicy)
+
+    def test_unmapped_policy_raises_instead_of_returning_unscrubbed(self):
+        # Simulate the "new enum member, no skip-set row" mistake. Without the
+        # membership check the KeyError would be raised inside scrub_pii_deep's
+        # swallow-all guard and the value returned unscrubbed.
+        with patch.dict(_POLICY_SKIPS, {ScrubPolicy.STRICT: frozenset()}, clear=True):
+            with pytest.raises(TypeError):
+                scrub_pii_deep({"address": "S7K 3R5"}, policy=ScrubPolicy.AI_CHAT)
+            with pytest.raises(TypeError):
+                scrub_pii("S7K 3R5", policy=ScrubPolicy.AI_CHAT)
 
     def test_deep_threads_the_policy_through_dicts_and_lists(self):
         # find_place returns candidates as a LIST of dicts — the list branch
@@ -437,6 +459,24 @@ class TestCapResultScrubsToolResults:
         # candidate dicts in its model-facing list; an in-place split would
         # corrupt the card through that alias).
         assert handler_result == {"ok": True, "_client_action": card}
+
+    def test_cap_result_strict_policy_for_the_web_audience(self):
+        """The anonymous web assistant has no booking flow and no
+        authenticated data subject, so its tool results stay STRICT like its
+        message text. The card exemption is unchanged (the web path strips
+        the card anyway)."""
+        from backend.ai.tools import _cap_result, _policy_for_audience
+
+        assert _policy_for_audience("web") is ScrubPolicy.STRICT
+        assert _policy_for_audience("rider") is ScrubPolicy.AI_CHAT
+        assert _policy_for_audience("driver") is ScrubPolicy.AI_CHAT
+        card = {"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7"}
+        result = _cap_result(
+            {"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7", "_client_action": card},
+            policy=ScrubPolicy.STRICT,
+        )
+        assert result["address"] == "2150 Prince of Wales Dr, Regina, SK [POSTAL]"
+        assert result["_client_action"] is card
 
     def test_cap_result_model_portion_keeps_postal_codes(self):
         """ScrubPolicy.AI_CHAT on the model-facing portion: identifiers go,

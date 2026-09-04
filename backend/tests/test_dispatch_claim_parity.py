@@ -152,7 +152,7 @@ async def _run_postgrest_path(scenario, mock_db):
         patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 2, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 2, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -262,7 +262,7 @@ async def _run_direct_pool_path(scenario, mock_db, rpc_result=None, pool_open=Tr
         patch("backend.routes.rides.matching._deps.spawn", side_effect=lambda coro: coro.close()),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 2, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 2, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",

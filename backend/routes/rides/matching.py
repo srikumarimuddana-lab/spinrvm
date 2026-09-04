@@ -11,6 +11,7 @@ try:
     from ...repositories._base import _redact_pg_error
     from ...repositories._base import get_db_call_count as _get_db_call_count
     from ...repositories._base import reset_db_call_count as _reset_db_call_count
+    from ...services.dispatch_candidates import fetch_dispatch_candidates, resolve_provider
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
     from ...utils.metrics import observe as _dispatch_observe
     from ...utils.metrics import time_ms as _time_ms
@@ -19,6 +20,10 @@ except ImportError:  # pragma: no cover - dual-import pattern
     from repositories._base import _redact_pg_error  # type: ignore
     from repositories._base import get_db_call_count as _get_db_call_count  # type: ignore
     from repositories._base import reset_db_call_count as _reset_db_call_count  # type: ignore
+    from services.dispatch_candidates import (  # type: ignore
+        fetch_dispatch_candidates,
+        resolve_provider,
+    )
     from services.incentive_service import (  # type: ignore
         incentive_display_payload,
         match_ride_incentives,
@@ -159,6 +164,44 @@ def _build_offer_rows(claimed_drivers, ride_id, offered_at_iso, expires_at_iso):
         }
         for d, eta in claimed_drivers
     ]
+
+
+# Mirrors repositories._base's _IN_BATCH_SIZE (same edge-proxy URL-length
+# ceiling, same 150 figure) — not imported from there to avoid a new
+# cross-module dependency on a private constant for a single int.
+_SUBSCRIPTION_IN_BATCH_SIZE = 150
+
+
+async def _get_active_subscriptions_batched(driver_ids: list, columns: str) -> list:
+    """Fetch active ``driver_subscriptions`` rows for ``driver_ids``, batched.
+
+    2026-09-03 incident: a bare ``{"driver_id": {"$in": driver_ids}}`` renders
+    as a PostgREST ``col=in.(…)`` URL query parameter. The dispatch candidate
+    pool caps at 500 (see the "pool truncated" log above), and once the id
+    list gets that large the edge proxy in front of PostgREST rejects the
+    oversized URL with a plain-text 400 before PostgREST ever sees it —
+    surfaces as the opaque ``APIError: JSON could not be generated``, exactly
+    the failure class documented on ``repositories._base``'s
+    ``get_rows_batched_in``/``_IN_BATCH_SIZE``.
+
+    Loops ``_deps.db_supabase.get_rows`` in-place (same call every existing
+    caller already makes) rather than switching to that shared helper, so
+    every test mocking ``_deps.db_supabase.get_rows`` keeps working unchanged
+    for the small pools they use — a small pool makes exactly one iteration
+    here, identical to today's single call. Only a real, large candidate pool
+    is actually split across requests.
+    """
+    out: list = []
+    for i in range(0, len(driver_ids), _SUBSCRIPTION_IN_BATCH_SIZE):
+        chunk = driver_ids[i : i + _SUBSCRIPTION_IN_BATCH_SIZE]
+        rows = await _deps.db_supabase.get_rows(
+            "driver_subscriptions",
+            {"driver_id": {"$in": chunk}, "status": "active"},
+            columns=columns,
+            limit=len(chunk),
+        )
+        out.extend(rows or [])
+    return out
 
 
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
@@ -323,9 +366,45 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             return row
 
         # Algorithm + radius + rating floor + batch config (area overrides app settings).
-        algorithm, min_rating, search_radius, max_offers, use_eta = await _shared.dispatch.resolve_matching_config(
+        (
+            algorithm,
+            min_rating,
+            search_radius,
+            max_offers,
+            use_eta,
+            max_candidate_pool,
+        ) = await _shared.dispatch.resolve_matching_config(
             ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
         )
+
+        # Which geo provider actually serves the candidate reads below. Same
+        # resolution the provider framework does internally (area override beats
+        # global) — computed here only so the pool-size guard can see it.
+        _geo_provider = resolve_provider(app_settings, None if _area_lookup_failed else _ride_area)
+        if _geo_provider == "legacy" and max_candidate_pool < 200:
+            # `legacy` is the bounding-box read, and it passes NO `order` to
+            # get_rows — an UNORDERED LIMIT. Postgres returns an arbitrary
+            # max_candidate_pool rows from the box and distance ranking happens
+            # afterwards in Python, over only those rows. Once the in-box count
+            # exceeds the cap, the nearest driver can be one of the rows that was
+            # never returned: dispatch then offers a further driver, or reports a
+            # false "no drivers", with nothing in the logs to show for it.
+            # `postgis` does not have this failure mode (ORDER BY ST_Distance in
+            # the drivers_nearby_location_geog RPC — migration 398 — drops the
+            # FURTHEST rows by construction). Warn, never raise: a shrunken pool
+            # is a degraded dispatch, not a broken one, and refusing to dispatch
+            # would be strictly worse for the rider.
+            logger.warning(
+                "[DISPATCH] unsafe pool config ride_id=%s: provider=legacy with "
+                "max_candidate_pool=%d (<200). legacy uses an UNORDERED LIMIT, so the "
+                "nearest driver is NOT guaranteed to be in the candidate pool once the "
+                "geo box holds more than %d drivers — ranking may silently skip the "
+                "closest driver. Switch dispatch_geo_provider to 'postgis' (true "
+                "nearest-N via ORDER BY ST_Distance) or raise max_candidate_pool.",
+                ride_id,
+                max_candidate_pool,
+                max_candidate_pool,
+            )
 
         # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs
         # (and this line fires on every dispatch). Correlate by ride_id only.
@@ -398,26 +477,42 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             # A transient Supabase failure here is NOT "no drivers" — it raises to the
             # match_driver_to_ride recovery shell, which re-arms the retry chain with
             # backoff instead of letting the ride strand until the sweeper cancels it.
-            all_drivers = await _deps.db_supabase.get_rows(
-                "drivers",
-                _dispatch_filter,
+            #
+            # Routed through the provider framework (services/dispatch_candidates.py)
+            # rather than calling get_rows directly: it resolves
+            # dispatch_geo_provider (area override beats global), and for
+            # `postgis`/`h3` swaps this unordered box read for a true nearest-N
+            # lookup, with automatic failover back to exactly this legacy query on
+            # any error. The `legacy` path IS the get_rows call this replaced, same
+            # filter, same projection, so provider=legacy is byte-for-byte today's
+            # behaviour.
+            all_drivers = await fetch_dispatch_candidates(
+                db=_deps.db_supabase,
+                dispatch_filter=_dispatch_filter,
+                pickup_lat=_box_lat,
+                pickup_lng=_box_lng,
+                search_radius_km=search_radius,
+                app_settings=app_settings,
+                area=None if _area_lookup_failed else _ride_area,
                 # P1: project only what ranking/filtering reads — NOT "*". The full row
                 # carries encrypted PII (address, licence, vehicle details) that this hot
-                # path (up to 500 rows every dispatch + retry, every replica) never needs;
-                # the offer payload is built from the post-claim get_driver_by_id re-read.
+                # path (up to max_candidate_pool rows every dispatch + retry, every
+                # replica) never needs; the offer payload is built from the post-claim
+                # get_driver_by_id re-read.
                 columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-                limit=500,
+                limit=max_candidate_pool,
+                ride_id=ride_id,
             )
 
             logger.info(
                 f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
                 f"matching vehicle_type_id + online + available within {search_radius}km box"
             )
-            if len(all_drivers) >= 500:
+            if len(all_drivers) >= max_candidate_pool:
                 # Even inside the box the pool is truncated — the dropped rows are
                 # in-radius candidates, so ranking quality degrades. Surface it.
                 logger.warning(
-                    f"[DISPATCH] candidate pool hit the 500-row cap inside the "
+                    f"[DISPATCH] candidate pool hit the {max_candidate_pool}-row cap inside the "
                     f"{search_radius}km box for ride {ride_id} — pool truncated"
                 )
 
@@ -532,14 +627,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         _sub_required = bool((await _parent_area()).get("subscription_required"))
                     if _sub_required:
                         _candidate_ids = [d["id"] for d in all_drivers]
-                        _active_subs = await _deps.db_supabase.get_rows(
-                            "driver_subscriptions",
-                            {"driver_id": {"$in": _candidate_ids}, "status": "active"},
-                            # started_at/rides_per_day are not read here — they are the
-                            # two extra columns the daily-quota filter needs, carried on
-                            # this query so that filter can skip a second identical read.
-                            columns="driver_id,started_at,expires_at,plan_id,rides_per_day",
-                            limit=len(_candidate_ids),
+                        # started_at/rides_per_day are not read here — they are the
+                        # two extra columns the daily-quota filter needs, carried on
+                        # this query so that filter can skip a second identical read.
+                        # Batched — see _get_active_subscriptions_batched's docstring.
+                        _active_subs = await _get_active_subscriptions_batched(
+                            _candidate_ids, "driver_id,started_at,expires_at,plan_id,rides_per_day"
                         )
                         _gate_subs = list(_active_subs or [])
                         _now_utc = datetime.now(timezone.utc)
@@ -630,11 +723,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         # Free area: the gate never ran, so this is the only read. There
                         # is no area-level "has finite passes" flag to short-circuit on,
                         # and discovering one would cost the very query it would save.
-                        _q_subs = await _deps.db_supabase.get_rows(
-                            "driver_subscriptions",
-                            {"driver_id": {"$in": _q_ids}, "status": "active"},
-                            columns="driver_id,started_at,expires_at,rides_per_day",
-                            limit=len(_q_ids),
+                        # Batched — see _get_active_subscriptions_batched's docstring.
+                        _q_subs = await _get_active_subscriptions_batched(
+                            _q_ids, "driver_id,started_at,expires_at,rides_per_day"
                         )
                     if _q_subs:
                         # area_timezone() would re-read the row we already hold; it is
@@ -712,11 +803,17 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             _casc_filter.update(
                                 build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area)
                             )
-                        _casc_pool = await _deps.db_supabase.get_rows(
-                            "drivers",
-                            _casc_filter,
+                        _casc_pool = await fetch_dispatch_candidates(
+                            db=_deps.db_supabase,
+                            dispatch_filter=_casc_filter,
+                            pickup_lat=_box_lat,
+                            pickup_lng=_box_lng,
+                            search_radius_km=search_radius,
+                            app_settings=app_settings,
+                            area=None if _area_lookup_failed else _ride_area,
                             columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-                            limit=500,
+                            limit=max_candidate_pool,
+                            ride_id=ride_id,
                         )
                         # Fix 4: Presence filter using _checked variant so a Redis outage
                         # (configured-but-unavailable) cannot silently empty the cascade pool.
@@ -754,11 +851,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         if _sub_required and _casc_pool:
                             try:
                                 _casc_cand_ids = [d["id"] for d in _casc_pool]
-                                _casc_subs = await _deps.db_supabase.get_rows(
-                                    "driver_subscriptions",
-                                    {"driver_id": {"$in": _casc_cand_ids}, "status": "active"},
-                                    columns="driver_id,expires_at,plan_id",
-                                    limit=len(_casc_cand_ids),
+                                # Batched — see _get_active_subscriptions_batched's docstring
+                                # (2026-09-03 incident). This block fails CLOSED on any
+                                # exception (below), so an unbatched $in here doesn't just
+                                # skip a filter — it can strand and auto-cancel the ride.
+                                _casc_subs = await _get_active_subscriptions_batched(
+                                    _casc_cand_ids, "driver_id,expires_at,plan_id"
                                 )
                                 _casc_now = datetime.now(timezone.utc)
                                 _casc_valid_subs = []

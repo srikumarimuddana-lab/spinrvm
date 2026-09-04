@@ -355,6 +355,40 @@ class TestEscalation:
         assert "Assistant: I can see the fare" in transcript
 
     @pytest.mark.anyio
+    async def test_transcript_is_strict_scrubbed_at_the_zoho_boundary(self):
+        """ai_messages rows are persisted under the in-app chat policy, which
+        keeps bracketed trip pins and postal codes for the model. A Zoho
+        ticket is a third-party egress (ADR-012), so the transcript must be
+        re-scrubbed STRICT on its way out — the same posture an ordinary
+        routes/support.py ticket gets. Review-round finding, 2026-09-04."""
+        ticket = AsyncMock(return_value={"ticketNumber": "T-126"})
+        history = AsyncMock(
+            return_value=[
+                {
+                    "role": "user",
+                    "content": "Use 655 Albert St, Regina, SK S4T 1A1 [50.44079,-104.61802] as my dropoff, call 306-555-1234",
+                },
+                {"role": "assistant", "content": "Booked to 655 Albert St, Regina, SK S4T 1A1."},
+            ]
+        )
+        with (
+            _settings(ai_escalation_creates_ticket=True),
+            patch("backend.services.zoho_desk_integration.create_support_ticket", ticket),
+            patch.object(tools_support.conversations, "load_history", history),
+        ):
+            result, ok = await execute_tool(
+                "escalate_to_support",
+                {"reason": "billing dispute", "category": "payment_issue"},
+                user={**RIDER, "_conversation_id": "conv-1"},
+            )
+        assert ok and result["ticket_number"] == "T-126"
+        transcript = ticket.await_args.kwargs["transcript"]
+        assert "655 Albert St" in transcript  # street text is not regex-scrubbable; unchanged
+        assert "[POSTAL]" in transcript and "S4T 1A1" not in transcript
+        assert "[COORDS]" in transcript and "50.44079" not in transcript
+        assert "[PHONE]" in transcript and "555-1234" not in transcript
+
+    @pytest.mark.anyio
     async def test_transcript_failure_never_blocks_ticket(self):
         ticket = AsyncMock(return_value={"ticketNumber": "T-125"})
         with (

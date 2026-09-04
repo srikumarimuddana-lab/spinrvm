@@ -48,8 +48,8 @@ full rule set, summarized here:
 - **Rate limiting and cost controls** on both the rider (`routes/ai.py`) and
   admin (`ai_console.py`) entry points, plus the parallel-tool-call cap
 - **Eval coverage** — flags any new tool shipped with only mocked unit tests
-  and no eval harness as a blocking gap, not a silent pass (no eval harness
-  exists in this repo yet)
+  and no eval case as a blocking gap, not a silent pass (the promptfoo suite
+  in `backend/evals/promptfoo/` is red-team only and not wired into CI)
 - **Money rules inside AI paths** — fare quotes must run through the real
   fare engine, Decimal-only arithmetic, corporate-billing-priority parity
 - **Provider fallback** — `AIConfigError` must surface loudly, never a silent
@@ -64,7 +64,7 @@ SPINR AI GUARDRAIL AUDIT — <scope>
 ===================================
 BLOCKERS ...
 WARNINGS ...
-OPEN BACKLOG TOUCHED  (ACTION_ITEMS.md AI1-AI14 items this diff relates to)
+OPEN BACKLOG TOUCHED  (ACTION_ITEMS.md AI1-AI18 items this diff relates to)
 VERIFIED ...
 VERDICT: SAFE TO MERGE / FIX BLOCKERS / NEEDS PRODUCT+LEGAL REVIEW
 ```
@@ -75,7 +75,7 @@ VERDICT: SAFE TO MERGE / FIX BLOCKERS / NEEDS PRODUCT+LEGAL REVIEW
   console, or the rider AI assistant screen
 - Before a release that adds a new AI tool, changes a provider adapter, or
   touches `pii.py`
-- Whenever `ACTION_ITEMS.md`'s open `AI1`–`AI14` backlog items are relevant to
+- Whenever `ACTION_ITEMS.md`'s open `AI1`–`AI18` backlog items are relevant to
   the change — the agent cross-checks the diff against them
 
 ## See also

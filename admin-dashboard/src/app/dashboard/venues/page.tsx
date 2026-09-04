@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
 import VenueMap from "@/components/venue-map";
@@ -410,13 +411,11 @@ export default function VenuesPage() {
                   </TableHeader>
                   <TableBody>
                     {pageRows.map((v) => (
-                      <TableRow
+                      <ClickableTableRow
                         key={v.id}
-                        onClick={() => startEdit(v)}
-                        className={`cursor-pointer ${editing?.id === v.id ? "bg-muted/60" : ""}`}
-                        tabIndex={0}
-                        aria-label={`${v.name}, ${v.is_active ? "active" : "inactive"}, edit`}
-                        onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEdit(v); } }}
+                        onActivate={() => startEdit(v)}
+                        className={editing?.id === v.id ? "bg-muted/60" : ""}
+                        ariaLabel={`${v.name}, ${v.is_active ? "active" : "inactive"}, edit`}
                       >
                         <TableCell className="font-medium">{v.name}</TableCell>
                         <TableCell>
@@ -446,7 +445,7 @@ export default function VenuesPage() {
                             <button onClick={() => remove(v)} aria-label={`Delete ${v.name}`} className="text-destructive hover:bg-destructive/10 rounded-lg p-2"><Trash2 className="h-4 w-4" /></button>
                           </div>
                         </TableCell>
-                      </TableRow>
+                      </ClickableTableRow>
                     ))}
                   </TableBody>
                 </Table>

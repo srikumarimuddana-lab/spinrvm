@@ -15,6 +15,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 
 export default function ReportSafetyScreen() {
     const router = useRouter();
@@ -98,15 +99,24 @@ export default function ReportSafetyScreen() {
                         editable={!submitting}
                     />
 
-                    <TouchableOpacity
-                        style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
+                    {/* Extracted to shared Button (design-audit follow-up — was
+                        styles.submitButton at 12px radius, one of the three CTA
+                        implementations the audit cited). Same handler; the loading
+                        state now shows the shared spinner instead of a text swap,
+                        and radius matches the shared lg-size token. marginTop:'auto'
+                        preserved directly — see the ScrollView comment above for why
+                        it's load-bearing (keeps the button reachable above the
+                        keyboard on small screens). */}
+                    <Button
+                        variant="primary"
+                        size="lg"
                         onPress={handleSubmit}
-                        disabled={submitting}
+                        loading={submitting}
+                        style={styles.submitButtonSpacing}
+                        testID="report-safety-submit-button"
                     >
-                        <Text style={styles.submitButtonText}>
-                            {submitting ? 'Submitting...' : 'Submit Report'}
-                        </Text>
-                    </TouchableOpacity>
+                        Submit Report
+                    </Button>
                 </ScrollView>
             </KeyboardAvoidingView>
         </SafeAreaView>
@@ -181,20 +191,10 @@ function createStyles(colors: ThemeColors) {
             minHeight: 160,
             marginBottom: 24,
         },
-        submitButton: {
-            backgroundColor: colors.primary,
-            borderRadius: 12,
-            paddingVertical: 16,
-            alignItems: 'center',
+        // Only marginTop survives the Button extraction — see the load-bearing
+        // comment at the call site (keyboard-avoidance on small screens).
+        submitButtonSpacing: {
             marginTop: 'auto',
-        },
-        submitButtonDisabled: {
-            opacity: 0.7,
-        },
-        submitButtonText: {
-            color: '#fff',
-            fontSize: 16,
-            fontWeight: '600',
         },
     });
 }

@@ -25,8 +25,8 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 try:
     from . import conversations, response_cache
     from .guardrails import fallback_over_cap
-    from .pii import filter_tool_leakage, scrub_pii
-    from .prompts import build_system_prompt
+    from .pii import ScrubPolicy, filter_tool_leakage, scrub_pii
+    from .prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
     from .threat import record_security_event, scan_message
@@ -34,8 +34,8 @@ try:
 except ImportError:
     from ai import conversations, response_cache
     from ai.guardrails import fallback_over_cap
-    from ai.pii import filter_tool_leakage, scrub_pii
-    from ai.prompts import build_system_prompt
+    from ai.pii import ScrubPolicy, filter_tool_leakage, scrub_pii
+    from ai.prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
     from ai.threat import record_security_event, scan_message
@@ -108,6 +108,23 @@ async def _pinned_quote_context(conversation_id: str) -> str:
     dropoff_lat, dropoff_lng = _coord(pinned.get("dropoff_lat")), _coord(pinned.get("dropoff_lng"))
     if not all((pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)):
         return ""
+    if pinned.get("no_drivers"):
+        # Pinned by get_fare_quote's no-drivers branch: endpoints only, no
+        # vehicle or total, so this block is a re-quote instruction and must
+        # never read as a bookable trip (rule 6c's booking shortcut keys on
+        # the "LAST QUOTE" wording, which this deliberately does not use).
+        return "\n".join(
+            [
+                f"\n\n{FARE_CHECK_BLOCK_HEADER} (no drivers were available, so nothing was priced):",
+                f"- pickup: {pinned.get('pickup_address') or 'unnamed'} [{pickup_lat},{pickup_lng}]",
+                f"- dropoff: {pinned.get('dropoff_address') or 'unnamed'} [{dropoff_lat},{dropoff_lng}]",
+                "If the rider says yes to re-checking or asks to try again, call get_fare_quote with exactly "
+                "these coordinates and addresses — do NOT re-resolve them, and do NOT call "
+                "propose_ride_booking from this block: there is no priced trip to book. This block replaced "
+                "any earlier priced quote in this conversation — if the rider refers to an earlier trip, "
+                "re-quote it with get_fare_quote before proposing.",
+            ]
+        )
     bits = [
         "\n\nLAST QUOTE IN THIS CONVERSATION (you priced this trip — reuse it, do NOT re-resolve it):",
         f"- pickup: {pinned.get('pickup_address') or 'unnamed'} [{pickup_lat},{pickup_lng}]",
@@ -270,11 +287,12 @@ async def _run_chat_turn(
             source="message",
         )
 
-    # keep_trip_pins: chat messages may carry app-generated bracketed
-    # [lat,lng] trip endpoints (quote-card taps, map-pin confirms) that the
-    # model must see verbatim. Only this path opts in — Sentry and support
-    # scrubbing stay fully strict.
-    scrubbed = scrub_pii(user_message, keep_trip_pins=True)
+    # ScrubPolicy.AI_CHAT: chat messages may carry app-generated bracketed
+    # [lat,lng] trip endpoints (quote-card taps, map-pin confirms) and the
+    # postal code of a tapped address, both of which the model must see
+    # verbatim (ADR 012). Only this path and tools.py's model-facing result
+    # cap opt in — Sentry, support and /mcp scrubbing stay fully strict.
+    scrubbed = scrub_pii(user_message, policy=ScrubPolicy.AI_CHAT)
     user_row = await conversations.append_message(conversation, "user", scrubbed)
     yield "meta", {"conversation_id": conversation["id"], "user_message_id": user_row["id"]}
 
@@ -469,12 +487,12 @@ async def _run_chat_turn(
     # dispatch tool result). Scrub only what's written to ai_messages / the
     # FAQ cache — the raw text has already streamed to the client this turn,
     # so the rider still sees the real reply; only stored/replayed copies
-    # change. keep_trip_pins mirrors the user-side call in case the model
-    # echoes a bracketed trip-endpoint pair back.
+    # change. ScrubPolicy.AI_CHAT mirrors the user-side call in case the
+    # model echoes a bracketed trip-endpoint pair or a postal code back.
     # AI13: also strip snake_case-shaped tool-name/internal-jargon leakage
     # from the persisted/replayed copy -- same live-stream-unchanged
     # convention as the PII scrub immediately above.
-    stored_text = filter_tool_leakage(scrub_pii(final_text, keep_trip_pins=True))
+    stored_text = filter_tool_leakage(scrub_pii(final_text, policy=ScrubPolicy.AI_CHAT))
 
     assistant_row = await conversations.append_message(
         conversation,

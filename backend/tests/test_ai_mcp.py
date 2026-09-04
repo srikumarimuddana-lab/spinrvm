@@ -10,6 +10,8 @@ SDK-independent and fully tested:
 - admin tokens → 403 (trusted-claims tokens don't belong on this surface)
 - valid token → inner app runs with current_ai_user set, reset afterwards
 - booking tools (mcp_exposed=False) are never exposed
+- every response body goes through _serialize_tool_payload, the STRICT
+  PII scrub at this surface's egress (ADR 012)
 """
 
 import importlib.util
@@ -154,6 +156,33 @@ class TestExposureRules:
         exposed = {n for n, s in TOOL_REGISTRY.items() if s.mcp_exposed}
         assert "escalate_to_support" not in exposed
         assert "request_map_pin" not in exposed
+
+
+class TestSerializeToolPayload:
+    """/mcp is a third-party egress. _cap_result no longer scrubs
+    ``_client_action`` (the in-app card is the rider's own data) and keeps
+    postal codes on the model-facing portion, so this surface must re-scrub
+    the WHOLE payload under the default STRICT policy before it leaves the
+    process. This is where the pre-2026-09-04 "scrub the card too" guarantee
+    now lives."""
+
+    def test_scrubs_client_action_and_postal_codes(self):
+        payload = {
+            "ok": True,
+            "address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7",
+            "_client_action": {"contact_email": "jane@example.ca", "address": "655 Albert St, Regina, SK S4T 1A1"},
+        }
+        out = json.loads(mcp_server._serialize_tool_payload(payload))
+        assert out["address"] == "2150 Prince of Wales Dr, Regina, SK [POSTAL]"
+        assert out["_client_action"] == {"contact_email": "[EMAIL]", "address": "655 Albert St, Regina, SK [POSTAL]"}
+        serialized = json.dumps(out)
+        assert "S4V 2Z7" not in serialized
+        assert "jane@example.ca" not in serialized
+
+    def test_error_payloads_pass_through(self):
+        assert json.loads(mcp_server._serialize_tool_payload({"error": "unknown tool: x"})) == {
+            "error": "unknown tool: x"
+        }
 
 
 class TestMcpDailyCap:

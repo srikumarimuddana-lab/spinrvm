@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -237,7 +238,7 @@ export default function DisputesPage() {
                   {sortedDisputes.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No disputes found</TableCell></TableRow>
                   ) : sortedDisputes.map((d: any) => (
-                    <TableRow key={d.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(d)} tabIndex={0} aria-label={`${d.user_name || "Unknown"}, ${REASON_LABELS[d.reason] || d.reason}, ${d.status}`} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(d); } }}>
+                    <ClickableTableRow key={d.id} className="hover:bg-muted/50" onActivate={() => setSelected(d)} ariaLabel={`${d.user_name || "Unknown"}, ${REASON_LABELS[d.reason] || d.reason}, ${d.status}`}>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <User className="h-4 w-4 text-muted-foreground" />
@@ -265,7 +266,7 @@ export default function DisputesPage() {
                           <span className="text-xs text-muted-foreground">{d.resolution || "—"}</span>
                         )}
                       </TableCell>
-                    </TableRow>
+                    </ClickableTableRow>
                   ))}
                 </TableBody>
               </Table>

@@ -1,0 +1,207 @@
+name: Main Branch Guard
+
+# Backstop for ACTION_ITEMS.md C21 (and the closely-related C13): PRs have
+# been observed merging to `main` before their own CI check set completes,
+# or with a bypass of required-status-checks entirely. That is a
+# branch-protection/repo-settings gap this workflow cannot fix (no
+# engineering session has had that access — see C21). What this workflow
+# *can* do without any special access: react to the same-named "CI/CD
+# Pipeline" workflow's own `push`-triggered run against `main` (which fires
+# on every merge commit regardless of whether the PR-level gate was
+# respected) and make a red result impossible to miss.
+#
+# Concretely demonstrated necessary on 2026-09-04: `main` carried a genuine
+# backend-test failure (2 stale mocks + one real loguru bug in
+# routes/rides/matching.py) across 14 consecutive merges for ~2.5 hours
+# before a fix landed — see ACTION_ITEMS.md C21's 2026-09-04 update. The
+# existing `notify-failure` job in ci.yml depends on the SLACK_WEBHOOK
+# secret being configured; if it isn't, its only visible trace is a
+# `::warning::` annotation on that one run, which nobody saw.
+#
+# Relationship to `.github/workflows/ci-error-audit.yml` (read before
+# changing this file): that workflow is the primary, much richer system —
+# root-cause classification, severity, fix recommendations — and per CR
+# #4612 it already deliberately scopes issue creation to `head_branch ==
+# 'main'` for exactly this reason. It was NOT redundant to add this file:
+# checked, and no `[CI Audit]`-labeled issue exists for the 2026-09-04
+# 16:08-18:31 incident above despite 14 main-branch pushes actually being
+# red across that window — a real gap in the existing system, not fully
+# root-caused by this session (see ACTION_ITEMS.md C21's 2026-09-04
+# update for what was checked). This workflow is deliberately simpler,
+# depends on no secret, and maintains a single persistent issue (updated
+# in place, not one per red push) rather than duplicating that system's
+# per-run issue volume. On firing, it cross-references any open
+# `ci-audit`-labeled issue rather than ignoring that system's output.
+#
+# This is a detection backstop, not a merge gate — it cannot block the next
+# merge from landing on a red `main` (only branch protection can do that,
+# see C21's acceptance criteria). It exists to shrink "red and unnoticed"
+# down to "red and flagged within one CI run.”
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  # ci.yml has no concurrency group of its own, so consecutive pushes to
+  # main (the exact scenario that motivated this file) can produce
+  # workflow_run `completed` events firing close together. Never skip a
+  # real red->green transition (cancel-in-progress: false) -- just
+  # serialize so two near-simultaneous runs can't both miss the other's
+  # freshly-created issue and duplicate it.
+  group: main-branch-guard
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    # Only react to the push-triggered run against main -- that's the run
+    # that reflects what's actually merged, not a PR's provisional head.
+    if: >
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reflect main's CI state in a tracking issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        with:
+          script: |
+            const MARKER = '<!-- spinr-main-branch-guard -->';
+            const LABEL = 'main-broken';
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+            const conclusion = process.env.RUN_CONCLUSION;
+            const sha = run.head_sha;
+            const shortSha = sha.slice(0, 10);
+            const runUrl = run.html_url;
+            const commitMsg = (run.head_commit && run.head_commit.message || '').split('\n')[0];
+
+            // Only 'success' and 'failure' are decisive here. 'cancelled',
+            // 'timed_out', 'action_required', 'stale', etc. don't tell us
+            // whether main is actually broken -- leave existing state alone
+            // rather than guess.
+            if (conclusion !== 'success' && conclusion !== 'failure') {
+              core.info(`Run conclusion '${conclusion}' is not decisive -- no action taken.`);
+              return;
+            }
+
+            let existing;
+            try {
+              const openIssues = await github.rest.issues.listForRepo({
+                owner, repo, state: 'open', labels: LABEL, per_page: 20,
+              });
+              existing = openIssues.data.find(i => i.body && i.body.includes(MARKER));
+            } catch (e) {
+              core.warning('listForRepo: ' + e.message);
+            }
+
+            if (conclusion === 'failure') {
+              let failedJobsText = '_(could not list jobs -- see the run itself)_';
+              try {
+                const jobs = await github.rest.actions.listJobsForWorkflowRun({
+                  owner, repo, run_id: run.id, per_page: 100,
+                });
+                const failed = jobs.data.jobs.filter(j => j.conclusion === 'failure');
+                if (failed.length) {
+                  failedJobsText = failed.map(j => `- \`${j.name}\``).join('\n');
+                }
+              } catch (e) {
+                core.warning('listJobsForWorkflowRun: ' + e.message);
+              }
+
+              // Cross-reference ci-error-audit.yml's own tracking issues
+              // rather than duplicating or ignoring its output (see file
+              // header). Best-effort -- a failure here shouldn't stop this
+              // issue from being created/updated.
+              let ciAuditLine = '';
+              try {
+                const auditIssues = await github.rest.issues.listForRepo({
+                  owner, repo, state: 'open', labels: 'ci-audit', per_page: 5,
+                });
+                if (auditIssues.data.length) {
+                  const links = auditIssues.data.map(i => `#${i.number}`).join(', ');
+                  ciAuditLine = `\n\nRelated \`ci-audit\` issue(s) with root-cause detail: ${links}`;
+                } else {
+                  ciAuditLine = '\n\nNo open `ci-audit`-labeled issue exists for this yet -- ' +
+                    'see `.github/workflows/ci-error-audit.yml` (this has happened before: ' +
+                    'no such issue was created for the 2026-09-04 16:08-18:31 incident either).';
+                }
+              } catch (e) {
+                core.warning('listForRepo(ci-audit): ' + e.message);
+              }
+
+              const body = [
+                MARKER,
+                '### 🔴 `main` is red',
+                '',
+                `\`CI/CD Pipeline\` failed on a push to \`main\` at \`${shortSha}\`${commitMsg ? ` — ${commitMsg}` : ''}.`,
+                '',
+                '**Failed jobs:**',
+                failedJobsText,
+                '',
+                `Run: ${runUrl}`,
+                ciAuditLine,
+                '',
+                'This issue is maintained automatically by ' +
+                  '`.github/workflows/main-branch-guard.yml` (ACTION_ITEMS.md ' +
+                  'C21 backstop). It updates in place on every push to `main` ' +
+                  'and closes itself once `CI/CD Pipeline` passes again. This ' +
+                  'workflow only detects and reports -- it cannot block a ' +
+                  'further merge onto a still-red `main`; that needs the ' +
+                  'branch-protection fix described in C21.',
+              ].join('\n');
+
+              if (existing) {
+                await github.rest.issues.update({
+                  owner, repo, issue_number: existing.number, body,
+                });
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: existing.number,
+                  body: `🔴 Still red at \`${shortSha}\`. ${runUrl}`,
+                });
+                core.info(`Updated existing guard issue #${existing.number}.`);
+              } else {
+                try {
+                  await github.rest.issues.create({
+                    owner, repo,
+                    title: '🔴 main is red — CI/CD Pipeline failing on push',
+                    body,
+                    labels: [LABEL],
+                  });
+                } catch (e) {
+                  // Label may not exist yet in a repo that's never hit this
+                  // path before -- retry once without it rather than lose
+                  // the alert entirely.
+                  core.warning('issues.create with label failed (' + e.message + '), retrying without label');
+                  await github.rest.issues.create({
+                    owner, repo,
+                    title: '🔴 main is red — CI/CD Pipeline failing on push',
+                    body,
+                  });
+                }
+                core.info('Opened a new guard issue.');
+              }
+              return;
+            }
+
+            // conclusion === 'success'
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `✅ \`main\` is green again at \`${shortSha}\`${commitMsg ? ` — ${commitMsg}` : ''}. ${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: existing.number, state: 'closed',
+              });
+              core.info(`Closed guard issue #${existing.number} -- main recovered.`);
+            } else {
+              core.info('main is green and no open guard issue exists -- nothing to do.');
+            }

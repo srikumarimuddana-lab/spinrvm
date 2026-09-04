@@ -26,7 +26,7 @@ try:
     from . import conversations, response_cache
     from .guardrails import fallback_over_cap
     from .pii import ScrubPolicy, filter_tool_leakage, scrub_pii
-    from .prompts import build_system_prompt
+    from .prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
     from .threat import record_security_event, scan_message
@@ -35,7 +35,7 @@ except ImportError:
     from ai import conversations, response_cache
     from ai.guardrails import fallback_over_cap
     from ai.pii import ScrubPolicy, filter_tool_leakage, scrub_pii
-    from ai.prompts import build_system_prompt
+    from ai.prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
     from ai.threat import record_security_event, scan_message
@@ -115,12 +115,14 @@ async def _pinned_quote_context(conversation_id: str) -> str:
         # the "LAST QUOTE" wording, which this deliberately does not use).
         return "\n".join(
             [
-                "\n\nLAST FARE CHECK IN THIS CONVERSATION (no drivers were available, so nothing was priced):",
+                f"\n\n{FARE_CHECK_BLOCK_HEADER} (no drivers were available, so nothing was priced):",
                 f"- pickup: {pinned.get('pickup_address') or 'unnamed'} [{pickup_lat},{pickup_lng}]",
                 f"- dropoff: {pinned.get('dropoff_address') or 'unnamed'} [{dropoff_lat},{dropoff_lng}]",
                 "If the rider says yes to re-checking or asks to try again, call get_fare_quote with exactly "
                 "these coordinates and addresses — do NOT re-resolve them, and do NOT call "
-                "propose_ride_booking from this block: there is no priced trip to book.",
+                "propose_ride_booking from this block: there is no priced trip to book. This block replaced "
+                "any earlier priced quote in this conversation — if the rider refers to an earlier trip, "
+                "re-quote it with get_fare_quote before proposing.",
             ]
         )
     bits = [

@@ -8,6 +8,14 @@ warm. Never interpolate timestamps, user ids or per-request values here.
 
 from typing import Any, Dict
 
+# Header of the prompt-tail block the orchestrator replays after a fare check
+# that found no drivers (orchestrator._pinned_quote_context). Shared with the
+# get_fare_quote note in tools_booking.py so the model's instructions and the
+# block it is told to read can never drift apart. Rule 6c below spells the
+# same words out verbatim -- the core strings must stay plain literals so the
+# provider prompt cache keeps working.
+FARE_CHECK_BLOCK_HEADER = "LAST FARE CHECK IN THIS CONVERSATION"
+
 _RIDER_CORE = """You are Spinr's in-app AI assistant for riders. Spinr is a Canadian \
 ride-sharing platform (Saskatchewan-first) where drivers keep 100% of the fare.
 

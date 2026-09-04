@@ -20720,6 +20720,25 @@ how much they de-risk a public launch._
   authoring environment has no npm registry access and no `node_modules`, so
   per CLAUDE.md's admin-dashboard gate this is verified by type reading and
   brace-balance checks only, not by a real build. Re-verify before merge.
+- **Correction (2026-09-04): this surface DOES have active visual-regression
+  coverage, and the note above understated the verification gap.** CLAUDE.md
+  claimed admin-dashboard's Playwright job self-skips for want of baselines;
+  that stopped being true at PR #4916 (`27ff638`, 2026-09-02), which seeded 5 of
+  6 — including `dashboard-monitoring`, the page this change edits. CLAUDE.md's
+  paragraph is corrected in PR #4909. Consequences for this item:
+  - `ride-panel.tsx` changes what the monitoring page renders (the Cancel button
+    is hidden on an `in_progress` ride), so a `dashboard-monitoring` visual diff
+    is an *expected* result of this change, not necessarily a defect.
+  - The baseline must be re-captured via `update-visual-baselines.yml`, which
+    needs Actions-dispatch access this session's integration does not have
+    (B38 records the same 403). **A human has to re-seed it.**
+  - Not merge-blocking today: `visual-regression-test` keeps
+    `continue-on-error: true` in `ci.yml` until all 6 baselines exist, which is
+    why the check can be red while the run concludes `success`.
+  - Separately and *not* caused by this change: `dashboard-rides` fails on a
+    missing snapshot (unseeded, B38), and `dashboard-settings` was already
+    failing on `a2359e8` — a commit in PR #4909 whose diff touched no
+    admin-dashboard file at all, which is what proves those two are pre-existing.
 - **Issue/gap:** `admin_cancel_ride` now rejects any non-pre-trip status with
   400 (`_ADMIN_CANCELLABLE_STATUSES`), but neither admin-dashboard call site
   reflects that. `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`

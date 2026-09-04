@@ -222,3 +222,33 @@ previously-impossible-to-detect race now correctly 409s instead of a false
 - No `admin-dashboard` build was run — this PR does not touch
   `admin-dashboard/`, and the one caller's request/response shape is
   unchanged.
+
+
+## Post-merge correction (2026-09-04) — this surface is under visual regression after all
+
+The admin-dashboard portion of this work (C68, `ride-panel.tsx` and
+`ride-detail-modal.tsx`) was documented as unverifiable beyond type-reading,
+citing CLAUDE.md's statement that admin-dashboard's Playwright visual-regression
+job self-skips for want of committed baselines.
+
+**That statement was stale.** PR #4916 (`27ff638`, 2026-09-02) seeded 5 of the 6
+baselines, `dashboard-monitoring` among them — the very page `ride-panel.tsx`
+renders. The job runs, and on this PR's own CI it reported failures.
+
+What that changes:
+
+- Hiding the Cancel button on an `in_progress` ride is a deliberate visual
+  change to a page with a committed baseline, so a `dashboard-monitoring` diff
+  is the expected outcome, not evidence of a bug. The baseline needs
+  re-capturing through `update-visual-baselines.yml` by someone with
+  Actions-dispatch access (this session has none — same 403 recorded in B38).
+- It is not merge-blocking: `visual-regression-test` carries
+  `continue-on-error: true` in `ci.yml` until all 6 baselines exist, which is
+  why the check can be red while the workflow run concludes `success`.
+- `dashboard-rides` (missing snapshot) and `dashboard-settings` are **not** this
+  change's doing. Both failed on `a2359e8`, a commit in this PR whose diff
+  contained no admin-dashboard file — which is the evidence that separates them
+  from the monitoring diff.
+
+CLAUDE.md's paragraph has been corrected so the next author is not told this
+surface has no coverage.

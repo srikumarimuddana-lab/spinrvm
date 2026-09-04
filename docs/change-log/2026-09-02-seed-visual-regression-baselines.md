@@ -148,12 +148,63 @@ visual baselines" step degrades gracefully either way.
 
 ## What was NOT verified
 
-- `dashboard-rides`'s corrected mock has not yet been re-captured against
-  CI's real Chromium — the fix is verified by code inspection (the mock
-  shape now matches `getRides()`'s declared TypeScript return type) and a
-  clean production build, not by a fresh screenshot. That's the concrete
-  remaining step tracked in B38.
 - The two pages flagged as changed-since-capture (`dashboard-monitoring`,
   `dashboard-settings`) were not re-diffed pixel-by-pixel against current
   `main` — only their source diff was reviewed. The first real CI
   comparison run will be the actual test of whether they still match.
+
+## 10. Follow-up (2026-09-03): dashboard-rides seeded, dashboard-monitoring flakiness found and left un-gated
+
+Triggered `update-visual-baselines.yml` a second time, this time against
+the PR branch (`claude/weekly-payout-audit-tsdnxg`, which carries the
+`admin-mocks.ts` rides fix) instead of `main`, to get a corrected
+`dashboard-rides` screenshot before merge rather than after.
+
+- **`dashboard-rides` now renders correctly**: full stat cards, filters,
+  "No rides found" empty state, Create Ride button — no crash. Reviewed
+  and added as the 6th baseline.
+- **`dashboard-monitoring` flakiness discovered, not fixed.** Comparing
+  this run's `dashboard-monitoring` capture against the one already
+  committed (same commit's page code, different CI run): the first showed
+  a normal empty basemap; this one showed a red "Failed to load map style.
+  Check network / tile provider." error instead. Root cause: the map panel
+  (`src/lib/map/maplibre-base.ts`, `MAP_STYLE_URL` = live
+  `tiles.openfreemap.org`) has no mock in `admin-mocks.ts` — unlike every
+  `/api/**` call, which the whole file exists to intercept — so its
+  screenshot depends on the CI runner actually reaching an external host
+  at capture time, and evidently doesn't always. **Did not overwrite the
+  already-good, already-merged `dashboard-monitoring` baseline with this
+  run's broken-map capture** — kept the working one, only added
+  `dashboard-rides` from this run.
+- **Did not flip `continue-on-error` to `false`** on `visual-regression-test`
+  despite all 6 pages now having baselines, specifically because of this
+  finding — doing so now would make the gate intermittently red for
+  reasons unrelated to any future PR's diff, the exact "decayed gate"
+  problem `CLAUDE.md`'s CI-red discipline warns against, self-inflicted
+  before the gate even started blocking anything. Documented as the
+  concrete remaining step in `ACTION_ITEMS.md` B38: mock/stub the tile
+  fetch via `page.route()` on `tiles.openfreemap.org`, mirroring this
+  file's existing `/api/**` interception pattern, before flipping the gate.
+- Updated `ci.yml`'s job comment and `visual-regression.spec.ts`'s header
+  comment to state this reasoning inline, not just here, so a future
+  reader of either file sees why the gate still isn't blocking with all 6
+  baselines present.
+
+### Verification performed (this follow-up)
+
+- [x] Visually reviewed the `dashboard-rides` screenshot — confirmed
+  correct, no crash, no PII/secrets.
+- [x] Diffed the run's source commit against current `main` at merge time:
+  only 3 files changed (`compliance/page.tsx`, not screenshotted;
+  `monitoring/ride-panel.tsx`, a side panel only visible on driver
+  selection, not visible in the captured "no selection" state;
+  `ride-detail-modal.tsx`, a closed modal) — none affect any of the 6
+  baseline images' visible content.
+- [x] Compared this run's `dashboard-settings` capture against the
+  already-committed one — structurally identical (same fields, same
+  placeholder values), confirmed no regression, left the committed one
+  unchanged rather than churn the diff for no reason.
+- [x] Confirmed no existing tile-mocking infrastructure was missed before
+  concluding this is a real gap: grepped `admin-mocks.ts` and
+  `visual-regression.spec.ts` for `tile`/`maplibre`/`openfreemap`/`route` —
+  zero matches.

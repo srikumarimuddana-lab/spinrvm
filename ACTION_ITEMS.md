@@ -11165,7 +11165,12 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B39. No schema-validation library on any frontend surface — money- and compliance-adjacent forms are validated ad hoc with no dedicated test coverage
 
-- [ ] **Status:** open — step 1 of the recommended fix done (2026-08-22).
+- [x] **Status:** done (2026-09-04) — see the final dated update below
+  (step 37 + ADR-013) for why this checkbox now flips: the item's own
+  three-part **Acceptance** bar (zod added; highest-risk form on each
+  surface migrated with accept/reject tests; a documented decision on
+  migration order) is now literally satisfied. Step 1 of the recommended
+  fix done (2026-08-22).
   Per the item's own "adopt `zod` for new forms, migrate one at a time,
   don't mass-migrate" guidance: added `zod` to `rider-app/package.json`
   and migrated `rider-app/app/work-allowance-request.tsx` — the exact
@@ -12506,6 +12511,94 @@ record of what was assumed vs. what was actually true</summary>
   since step 1) — forms outside this specific sweep were never
   exhaustively enumerated, so this checkbox does not claim the item
   itself is complete, only that this sweep's scope is done.
+- **2026-09-04 update — ADR-013 written, closing this item's own
+  acceptance bar; step 37 done as a targeted freshness check, not a
+  re-sweep.** Per user request: (1) wrote `docs/adr/013-zod-incremental-
+  risk-first-form-validation.md` (Accepted, backfilling the decision
+  already made and followed across steps 1-36) documenting the context
+  (validation duplication/drift risk across 3 apps), the decision (zod;
+  incremental, never mass-migrated; risk-ordered — money/compliance
+  first, cosmetic last; pure byte-for-byte extraction discipline;
+  colocated schema + dedicated test file; "nothing to extract" is a
+  valid, documented outcome), consequences (not every form is on zod yet
+  — accepted, not a gap; the two Spinr-Pass-plan-form duplicate schemas
+  from step 13 remain un-de-duplicated), and full tables of what's
+  migrated so far (cited from this section's own history, not
+  re-verified against the code) versus what's explicitly out of scope.
+  Added to `docs/adr/README.md`'s index as ADR-013. This closes gap (a)
+  from this item's own "Still open" note across every prior step (no
+  ADR/migration-order doc).
+
+  (2) Per this item's own instruction to do one freshness check rather
+  than a full re-sweep: the most recent dated "Still open" note (step 36,
+  immediately above) named no specific unmigrated candidate — it declared
+  the 2026-08-31 broader sweep "genuinely fully closed" across all three
+  apps. Per the fallback instruction, spot-checked 2-3 forms on
+  admin-dashboard (reasoned as the surface whose candidate list closed
+  earliest in this log's narrative sequence — step 27/28-parallel, vs.
+  driver-app's step 34 and rider-app's step 35-36 — i.e. the surface with
+  the least-recent dedicated re-verification), specifically the
+  `support-tickets` area (Zoho Desk-backed screens), which was never part
+  of either the opportunistic (steps 1-14) or the 21-candidate broader
+  (steps 15-36) sweep. Found 3 real, genuine gaps across 2 pages —
+  step 37: `support-tickets/tickets/page.tsx`'s "New ticket" dialog
+  (`create()`'s silent `if (!form.subject.trim()) return;`, duplicated
+  exactly in the Create button's `disabled` prop) and
+  `support-tickets/tickets/[id]/page.tsx`'s reply-content and
+  internal-note guards (`sendReply()`'s `if (!toText(html).trim())
+  return;`, `sendNote()`'s `if (!note.trim()) return;`, the latter also
+  duplicated exactly in its own button's `disabled` prop). Migrated all
+  three following the exact same discipline as every prior step: new
+  colocated `admin-dashboard/src/lib/createTicketFormSchema.ts`
+  (`isTicketSubjectValid`) and `admin-dashboard/src/lib/
+  ticketReplyFormSchema.ts` (`isReplyContentValid`, `isNoteContentValid`)
+  reproduce the three checks byte-for-byte; the two exact-duplicate
+  `disabled`-prop checks (subject, note) were consolidated onto their
+  shared predicate (same discipline as step 25), while the reply button's
+  own `disabled` prop was deliberately left alone — it checks the
+  *unsanitized* draft (`!toText(reply).trim()`), a pre-existing,
+  non-identical duplicate of the actual (sanitized-input) guard inside
+  `sendReply()`, and folding the two together would be a validation-rule
+  change, not a pure extraction. New
+  `admin-dashboard/src/lib/__tests__/createTicketFormSchema.test.ts` (6
+  accept/reject cases) and
+  `admin-dashboard/src/lib/__tests__/ticketReplyFormSchema.test.ts` (9
+  accept/reject cases). Verification: 15/15 new tests pass; full
+  admin-dashboard suite (`npm run test:coverage`, the exact CI
+  invocation) 61/61 suites, 577/577 tests passing, 0 regressions; `npx
+  tsc --noEmit` clean (repo-wide); `npx eslint` on touched files: 0
+  errors, 1 pre-existing `react-hooks/set-state-in-effect` warning on an
+  unrelated line, confirmed via `git diff`; **real production build**
+  (`npm run build`) completed successfully, exit code 0, full route
+  manifest generated including both touched routes. Blast-radius grep
+  for the three checks' exact expressions found one more, real,
+  near-duplicate — `admin-dashboard/src/app/dashboard/support/_tabs/
+  tickets.tsx` line 106 has its own separate `if (!form.subject.trim())
+  { toast(...); return; }` gating a *different* ticket-creation form on
+  a *different* page (`dashboard/support`, not `dashboard/support-tickets`)
+  — deliberately **not** migrated in this pass (out of this freshness
+  check's 2-3-form scope, per this item's own "do not attempt a full
+  re-sweep" instruction) and flagged here as the next candidate for a
+  future step. Full Change Impact Log:
+  `docs/change-log/2026-09-04-b39-admin-support-tickets-zod-step37.md`.
+
+  **Checkbox flips to `[x]` done.** This item's own **Acceptance**
+  criteria — "`zod` (or equivalent) added as a dependency; at least the
+  highest-risk money/compliance-adjacent form on each surface migrated
+  with accept/reject unit tests; a documented decision (here or in a
+  short ADR) on migration order for the rest" — is now literally met:
+  zod is a direct dependency on all three surfaces; the highest-risk form
+  identified on each surface at the time (rider-app's
+  `work-allowance-request.tsx`, driver-app's `payout.tsx`, admin-
+  dashboard's `allowance-dialog.tsx`) was migrated with dedicated
+  accept/reject tests; and ADR-013 is now the documented migration-order
+  decision. This does **not** claim every form in the codebase is on
+  zod, or that every form has been exhaustively enumerated — both remain
+  true and are recorded as accepted, ongoing facts in ADR-013's
+  "Out of scope / explicitly deferred" section, not hidden by closing
+  this checkbox. Further form migrations (starting with the
+  `support/_tabs/tickets.tsx` candidate named above) continue as normal
+  incremental work, just no longer gated behind this specific checkbox.
 - **(historical) Status:** open. Found 2026-08-22 during the same audit. Checked
   `rider-app/package.json`, `driver-app/package.json`, and
   `admin-dashboard/package.json` for `zod`/`yup`/`joi`/`ajv`-as-form-validator

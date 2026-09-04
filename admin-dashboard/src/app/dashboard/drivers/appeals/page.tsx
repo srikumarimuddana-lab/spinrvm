@@ -163,7 +163,7 @@ export default function DriverAppealsPage() {
                 {appeals.length === 0 ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No appeals found</TableCell></TableRow>
                 ) : appeals.map((a) => (
-                  <TableRow key={a.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(a)}>
+                  <TableRow key={a.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(a)} tabIndex={0} aria-label={`${APPEAL_TYPE_LABELS[a.appeal_type] || a.appeal_type} appeal, view details`} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(a); } }}>
                     <TableCell className="font-mono text-xs">{a.driver_id.slice(0, 8)}…</TableCell>
                     <TableCell><Badge variant="outline">{APPEAL_TYPE_LABELS[a.appeal_type] || a.appeal_type}</Badge></TableCell>
                     <TableCell className="max-w-xs truncate text-sm">{a.driver_message}</TableCell>

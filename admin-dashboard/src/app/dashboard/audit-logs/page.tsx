@@ -534,6 +534,9 @@ export default function AuditLogsPage() {
                                                     key={log.id}
                                                     className={isLong ? "cursor-pointer" : ""}
                                                     onClick={isLong ? () => setExpandedRow(isExpanded ? null : log.id) : undefined}
+                                                    tabIndex={isLong ? 0 : undefined}
+                                                    aria-label={isLong ? `${log.action}, press Enter to ${isExpanded ? "collapse" : "expand"} details` : undefined}
+                                                    onKeyDown={isLong ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedRow(isExpanded ? null : log.id); } } : undefined}
                                                 >
                                                     <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                                                         {formatDate(log.created_at)}

@@ -741,8 +741,8 @@ async def test_claim_stripe_event_duplicate_with_failed_followup_still_returns_f
     mock_sb.table.return_value.insert.return_value.execute.side_effect = Exception(
         "duplicate key value violates unique constraint (23505)"
     )
-    mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = (
-        Exception("connection reset")
+    mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.side_effect = Exception(
+        "connection reset"
     )
     with (
         patch("repositories.wallet_repo.supabase", mock_sb),
@@ -825,7 +825,12 @@ async def test_mark_stripe_event_processed_swallows_db_error_but_logs_loudly():
     surface loudly, not silently, per CLAUDE.md's "do not silently swallow
     a payment error" rule. Was `logger.warning`; fixed to `logger.error` so
     it trips the loguru->Sentry bridge (backend/server.py's
-    `_loguru_sentry_sink`, level=ERROR) with the payments domain tag."""
+    `_loguru_sentry_sink`, level=ERROR) with the payments domain tag.
+
+    Structured context is passed via `logger.bind(...)` (loguru has no
+    `extra=` kwarg -- ACTION_ITEMS.md C69), so the assertions below check
+    the `.bind()` call and the `.error()` call on its returned logger,
+    rather than kwargs on `logger.error` directly."""
     mock_sb = MagicMock()
     mock_sb.table.return_value.update.return_value.eq.return_value.execute.side_effect = RuntimeError("db down")
     with (
@@ -837,10 +842,8 @@ async def test_mark_stripe_event_processed_swallows_db_error_but_logs_loudly():
         result = await mark_stripe_event_processed("evt_1")
 
     assert result is None
-    mock_logger.error.assert_called_once()
-    _, kwargs = mock_logger.error.call_args
-    assert kwargs["extra"]["domain"] == "payments"
-    assert kwargs["extra"]["event_id"] == "evt_1"
+    mock_logger.bind.assert_called_once_with(domain="payments", event_id="evt_1")
+    mock_logger.bind.return_value.error.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

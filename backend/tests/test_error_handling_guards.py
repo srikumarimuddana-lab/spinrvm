@@ -307,7 +307,11 @@ class TestIncentiveClaimFailsOpen:
         for i, line in enumerate(lines):
             if "incentive claim failed" in line:
                 context = "\n".join(lines[max(0, i - 3) : i + 1])
-                assert "logger.error" in context, "incentive claim failure must log at ERROR"
+                # logger.error(...) or logger.opt(exception=True).error(...) --
+                # both log at ERROR; the latter also captures the traceback
+                # (see test_loguru_call_conventions.py, the canonical test for
+                # that convention), so it satisfies this assertion's intent too.
+                assert ".error(" in context, "incentive claim failure must log at ERROR"
                 return
         pytest.fail("incentive claim failure log not found")
 
@@ -337,7 +341,9 @@ class TestRidePathLogLevels:
         for i, line in enumerate(lines):
             if "fare snapshot save failed" in line:
                 context = "\n".join(lines[max(0, i - 3) : i + 1])
-                assert "logger.error" in context, "fare snapshot save failure must use logger.error"
+                # logger.error(...) or logger.opt(exception=True).error(...) --
+                # see test_incentive_claim_logs_error's comment above.
+                assert ".error(" in context, "fare snapshot save failure must use logger.error"
                 return
         pytest.fail("fare snapshot failure log line not found")
 
@@ -346,7 +352,7 @@ class TestRidePathLogLevels:
         for i, line in enumerate(lines):
             if "attribution write failed" in line:
                 context = "\n".join(lines[max(0, i - 3) : i + 1])
-                assert "logger.error" in context, "cancellation attribution failure must use logger.error"
+                assert ".error(" in context, "cancellation attribution failure must use logger.error"
                 assert "logger.warning" not in context
                 return
         pytest.fail("attribution write failure log line not found")
@@ -356,7 +362,7 @@ class TestRidePathLogLevels:
         for i, line in enumerate(lines):
             if "incentive_claims lookup failed" in line:
                 context = "\n".join(lines[max(0, i - 3) : i + 1])
-                assert "logger.error" in context, "incentive_claims lookup must use logger.error, not logger.debug"
+                assert ".error(" in context, "incentive_claims lookup must use logger.error, not logger.debug"
                 return
         pytest.fail("incentive_claims lookup failure log not found")
 

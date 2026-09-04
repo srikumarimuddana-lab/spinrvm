@@ -319,7 +319,7 @@ function ProfileScreenInner() {
               key={i}
               name={i <= Math.round(rating) ? 'star' : 'star-outline'}
               size={14}
-              color={i <= Math.round(rating) ? '#FFD700' : 'rgba(255,255,255,0.3)'}
+              color={i <= Math.round(rating) ? colors.gold : 'rgba(255,255,255,0.3)'}
             />
         );
     }
@@ -376,7 +376,7 @@ function ProfileScreenInner() {
               <Ionicons
                 name={driverData?.is_verified ? 'checkmark-circle' : 'time-outline'}
                 size={20}
-                color={driverData?.is_verified ? '#10B981' : '#F59E0B'}
+                color={driverData?.is_verified ? colors.success : colors.warning}
               />
             </View>
           </TouchableOpacity>
@@ -487,7 +487,7 @@ function ProfileScreenInner() {
 
             {!!(driverData?.rejection_reason) && !driverData.is_verified && (
             <View style={styles.rejectionBox}>
-                <Ionicons name="alert-circle" size={24} color={'#EF4444'} />
+                <Ionicons name="alert-circle" size={24} color={colors.danger} />
                 <View style={{flex: 1}}>
                     <Text style={styles.rejectionTitle}>Application Rejected</Text>
                     <Text style={styles.rejectionText}>{driverData.rejection_reason as string}</Text>
@@ -598,12 +598,12 @@ function ProfileScreenInner() {
                 const isExpiringSoon = expiresIn !== null && expiresIn > 0 && expiresIn < 30;
 
                 const badgeColor =
-                    docStatus === 'pending' ? '#F59E0B' :
-                    docStatus === 'rejected' ? '#EF4444' :
-                    isExpired ? '#EF4444' :
-                    isExpiringSoon ? '#F59E0B' :
-                    (isValid || docStatus === 'approved') ? '#10B981' :
-                    '#EF4444'; // upload required
+                    docStatus === 'pending' ? colors.warning :
+                    docStatus === 'rejected' ? colors.danger :
+                    isExpired ? colors.danger :
+                    isExpiringSoon ? colors.warning :
+                    (isValid || docStatus === 'approved') ? colors.success :
+                    colors.danger; // upload required
 
                 const badgeLabel =
                     docStatus === 'pending' ? 'PENDING REVIEW' :
@@ -614,10 +614,10 @@ function ProfileScreenInner() {
                     'UPLOAD REQUIRED';
 
                 const iconColor =
-                    docStatus === 'pending' ? '#F59E0B' :
-                    docStatus === 'rejected' ? '#EF4444' :
-                    isExpired ? '#EF4444' :
-                    (isValid || docStatus === 'approved') ? '#10B981' :
+                    docStatus === 'pending' ? colors.warning :
+                    docStatus === 'rejected' ? colors.danger :
+                    isExpired ? colors.danger :
+                    (isValid || docStatus === 'approved') ? colors.success :
                     colors.textDim;
 
                 const iconBg =
@@ -625,7 +625,7 @@ function ProfileScreenInner() {
                     docStatus === 'rejected' ? 'rgba(239, 68, 68, 0.1)' :
                     isExpired ? 'rgba(239, 68, 68, 0.1)' :
                     (isValid || docStatus === 'approved') ? 'rgba(16, 185, 129, 0.1)' :
-                    '#F9FAFB';
+                    colors.surfaceLight;
 
                 return (
                     <React.Fragment key={req.id}>
@@ -645,7 +645,7 @@ function ProfileScreenInner() {
                             </View>
                         </View>
                         </View>
-                        <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                        <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                     </View>
                     </React.Fragment>
                 );
@@ -659,10 +659,10 @@ function ProfileScreenInner() {
             <View style={styles.card}>
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/lost-and-found' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(249, 115, 22, 0.1)' }]}>
-                        <Ionicons name="bag-handle" size={18} color="#F97316" />
+                        <Ionicons name="bag-handle" size={18} color={colors.orange} />
                     </View>
                     <Text style={styles.actionText}>Lost & Found</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/help' as any)}>
@@ -674,7 +674,7 @@ function ProfileScreenInner() {
                         <Ionicons name="help-circle" size={18} color={colors.info} />
                     </View>
                     <Text style={styles.actionText}>Help Center</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/quests' as any)}>
@@ -682,7 +682,7 @@ function ProfileScreenInner() {
                         <Ionicons name="trophy" size={18} color="#8B5CF6" />
                     </View>
                     <Text style={styles.actionText}>Quests & Bonuses</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 {/* Spinr Pass subscription. The destination screen itself
@@ -695,7 +695,7 @@ function ProfileScreenInner() {
                         <Ionicons name="card" size={18} color="#10B981" />
                     </View>
                     <Text style={styles.actionText}>Spinr Pass</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/referral' as any)}>
@@ -703,7 +703,7 @@ function ProfileScreenInner() {
                         <Ionicons name="gift" size={18} color={'#F59E0B'} />
                     </View>
                     <Text style={styles.actionText}>Referral Program</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/settings' as any)}>
@@ -711,21 +711,21 @@ function ProfileScreenInner() {
                         <Ionicons name="settings" size={18} color={colors.textDim} />
                     </View>
                     <Text style={styles.actionText}>App Settings</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={handleLogoutAll}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
-                        <Ionicons name="log-out-outline" size={18} color={'#EF4444'} />
+                        <Ionicons name="log-out-outline" size={18} color={colors.danger} />
                     </View>
-                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign out of all devices</Text>
+                    <Text style={[styles.actionText, { color: colors.danger }]}>Sign out of all devices</Text>
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={handleLogout}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
-                        <Ionicons name="log-out" size={18} color={'#EF4444'} />
+                        <Ionicons name="log-out" size={18} color={colors.danger} />
                     </View>
-                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign Out</Text>
+                    <Text style={[styles.actionText, { color: colors.danger }]}>Sign Out</Text>
                 </TouchableOpacity>
             </View>
             </View>
@@ -755,7 +755,7 @@ function ProfileScreenInner() {
         onRequestClose={() => setShowEditModal(false)}
       >
         <View style={modalStyles.container}>
-          <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={[colors.surface, colors.surfaceLight]} style={StyleSheet.absoluteFill} />
 
           {/* Header */}
           <ScreenHeader title="Personal Information" onBack={() => setShowEditModal(false)} />
@@ -807,7 +807,7 @@ function ProfileScreenInner() {
                     value={editFirstName}
                     onChangeText={setEditFirstName}
                     placeholder="John"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="words"
                     autoCorrect={false}
                   />
@@ -820,7 +820,7 @@ function ProfileScreenInner() {
                     value={editLastName}
                     onChangeText={setEditLastName}
                     placeholder="Doe"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="words"
                     autoCorrect={false}
                   />
@@ -837,7 +837,7 @@ function ProfileScreenInner() {
                     value={editEmail}
                     onChangeText={setEditEmail}
                     placeholder="john.doe@example.com"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -870,7 +870,7 @@ function ProfileScreenInner() {
                     <Text
                       style={[
                         modalStyles.pickerValue,
-                        !editGender && { color: '#B0B7C0', fontWeight: '500' },
+                        !editGender && { color: colors.textDim, fontWeight: '500' },
                       ]}
                     >
                       {editGender || 'Tap to select'}
@@ -986,7 +986,7 @@ function ProfileScreenInner() {
         onRequestClose={() => setShowLicenseModal(false)}
       >
         <View style={modalStyles.container}>
-          <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={[colors.surface, colors.surfaceLight]} style={StyleSheet.absoluteFill} />
           <ScreenHeader title="Driver's Licence" onBack={() => setShowLicenseModal(false)} />
           <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
             <ScrollView
@@ -1012,7 +1012,7 @@ function ProfileScreenInner() {
                     value={editLicenseNumber}
                     onChangeText={setEditLicenseNumber}
                     placeholder="S1234-5678-9012"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="characters"
                     autoCorrect={false}
                   />
@@ -1025,7 +1025,7 @@ function ProfileScreenInner() {
                     value={editLicenseClass}
                     onChangeText={setEditLicenseClass}
                     placeholder="5"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="characters"
                     autoCorrect={false}
                   />
@@ -1375,7 +1375,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     borderColor: 'rgba(239, 68, 68, 0.2)',
   },
   rejectionTitle: {
-    color: '#EF4444',
+    color: colors.danger,
     fontSize: 15,
     fontWeight: '800',
     marginBottom: 4,
@@ -1402,7 +1402,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingHorizontal: 20,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomColor: colors.border,
   },
   backBtn: { padding: 4, width: 32 },
   headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text, flex: 1, textAlign: 'center' },
@@ -1519,7 +1519,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
+    borderTopColor: colors.border,
   },
   saveButton: {
     flexDirection: 'row',
@@ -1536,7 +1536,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     elevation: 4,
   },
   saveButtonDisabled: {
-    backgroundColor: '#D1D5DB',
+    backgroundColor: colors.border,
     shadowOpacity: 0,
     elevation: 0,
   },
@@ -1553,7 +1553,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
   sheetHandle: {
     width: 40,
     height: 4,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: colors.border,
     borderRadius: 2,
     alignSelf: 'center',
     marginTop: 10,
@@ -1581,7 +1581,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingVertical: 14,
     gap: 12,
     borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
+    borderTopColor: colors.border,
   },
   sheetOptionSelected: { backgroundColor: 'rgba(255,59,48,0.04)' },
   sheetOptionIcon: {

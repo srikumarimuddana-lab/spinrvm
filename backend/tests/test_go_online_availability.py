@@ -43,6 +43,11 @@ def _driver_row(**extra) -> dict:
         # don't care about eligibility keep passing unchanged.
         "license_class": "5",
         "vehicle_year": datetime.now(timezone.utc).year,
+        # C63: a licence issued well over 3 years ago, so existing tests
+        # that don't care about the experience sub-check keep passing
+        # unchanged (same "default is always-eligible" pattern as the two
+        # fields above).
+        "license_issue_date": (datetime.now(timezone.utc) - timedelta(days=365 * 10)).date().isoformat(),
         **extra,
     }
 
@@ -335,14 +340,51 @@ class TestGoOnlineEligibilityRecheck:
         assert result["success"] is True
         assert writes
 
-    async def test_driving_experience_check_not_enforced_pending_schema_field(self):
-        """Documents the known, deliberate gap: no field in `drivers` or
-        `driver_documents` records a licence-issue/experience-start date
-        (confirmed by repo-wide search), so the 3-year-experience rule
-        cannot be re-checked here without inventing a migration — which is
-        out of scope for this fix per CLAUDE.md's migration conventions.
-        A driver otherwise eligible must still go online; this is not a
-        regression, it's the documented boundary of this change."""
+    async def test_license_issue_date_over_three_years_goes_online_normally(self):
+        """Baseline (C63): a licence issued well over 3 years ago must not
+        be blocked by the new experience sub-check."""
         result, writes = await self._go_online({})
+        assert result["success"] is True
+        assert writes
+
+    async def test_license_issue_date_under_three_years_is_rejected(self):
+        """C63: fewer than 3 years of licensed driving experience must be
+        rejected with a distinct, actionable error — matching the
+        license-class/vehicle-age sub-checks' shape, not a generic
+        ineligibility bucket."""
+        from backend.utils.error_handling import ErrorCode, SpinrException
+
+        recent_issue_date = (datetime.now(timezone.utc) - timedelta(days=365)).date().isoformat()
+        with pytest.raises(SpinrException) as excinfo:
+            await self._go_online({"license_issue_date": recent_issue_date})
+        assert excinfo.value.error_code == ErrorCode.DRIVER_INSUFFICIENT_EXPERIENCE
+        assert excinfo.value.status_code == 400
+
+    async def test_license_issue_date_just_over_three_years_goes_online(self):
+        """Just past the 3-year cutoff must not be blocked."""
+        eligible_issue_date = (datetime.now(timezone.utc) - timedelta(days=365 * 3 + 5)).date().isoformat()
+        result, writes = await self._go_online({"license_issue_date": eligible_issue_date})
+        assert result["success"] is True
+        assert writes
+
+    async def test_missing_license_issue_date_is_not_blocked(self):
+        """C63: a driver with no license_issue_date on file (every driver
+        onboarded before migration 405, or onboarded after without
+        capturing it) must not be retroactively locked out — unknown data
+        is left unblocked, not guessed at, same fail-safe direction as the
+        license_class/vehicle_year sub-checks."""
+        result, writes = await self._go_online({"license_issue_date": None})
+        assert result["success"] is True
+        assert writes
+
+    async def test_flag_disabled_does_not_block_insufficient_experience_driver(self):
+        """Dark-ship default: with enforce_driver_eligibility_recheck OFF,
+        a driver who would fail the new experience sub-check must still go
+        online unchanged (CLAUDE.md gate #3)."""
+        recent_issue_date = (datetime.now(timezone.utc) - timedelta(days=365)).date().isoformat()
+        result, writes = await self._go_online(
+            {"license_issue_date": recent_issue_date},
+            flag_enabled=False,
+        )
         assert result["success"] is True
         assert writes

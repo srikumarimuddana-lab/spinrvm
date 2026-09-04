@@ -6,6 +6,16 @@
 #   1. Dispatch latency breach (P1)
 #   2. Payment failure rate breach (P1)
 #
+# Rule 3 (insurance-period write failure) was added later, per ACTION_ITEMS.md
+# C55 -- it is not part of ADR-010 §3's original scope. It closes the gap
+# docs/runbooks/deploy-migration-64-65.md's "Alert immediately if non-zero"
+# contract for spinr_insurance_period_write_failed_total described but this
+# file never implemented (see docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md
+# §3). A dropped write is now also self-healed on its next tick by
+# backend/utils/insurance_period_reconciler.py (WS-12 §3), so this alert's
+# job is surfacing the underlying write failure for investigation, not
+# covering an unrecoverable audit gap.
+#
 # NOT YET LOADED into any Grafana Cloud instance -- no account exists in
 # this session to provision against. A human imports this after account
 # creation, either via file provisioning (copy into Grafana's provisioning
@@ -118,4 +128,44 @@ groups:
                 - evaluator:
                     type: gt
                     params: [0.01]
+              refId: C
+
+      - uid: spinr-insurance-period-write-failed
+        title: "Insurance-period write failure (write-failed metric non-zero)"
+        condition: C
+        for: 0m
+        labels:
+          severity: P1
+          domain: safety
+        annotations:
+          summary: "spinr_insurance_period_write_failed_total incremented -- a driver insurance-period transition write failed"
+          description: >-
+            docs/runbooks/deploy-migration-64-65.md: "Alert immediately if
+            non-zero." record_period_transition (backend/utils/insurance_periods.py)
+            swallows DB/RPC failures by design so dispatch is never blocked on
+            a compliance-grade audit write, but a miss here is a regulatory/SGI
+            audit gap until backend/utils/insurance_period_reconciler.py's
+            next 10-minute tick self-heals it (ACTION_ITEMS.md C55). This
+            alert exists to surface the underlying write failure for
+            investigation, not to cover an unrecoverable gap.
+          runbook_url: "docs/runbooks/deploy-migration-64-65.md"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: "<GRAFANA_CLOUD_PROMETHEUS_DATASOURCE_UID>"
+            model:
+              expr: >-
+                sum(increase(spinr_insurance_period_write_failed_total[5m]))
+              refId: A
+          - refId: C
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
               refId: C

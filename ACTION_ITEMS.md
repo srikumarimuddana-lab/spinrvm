@@ -20748,8 +20748,22 @@ how much they de-risk a public launch._
   `git patch-id` commands) against a wider commit window is the way to
   extend coverage.
 
-### C63. `go_online` eligibility recheck never validates 3-year minimum driving experience
-- [ ] **Status:** open — split out 2026-09-04 from A40's ranked blocker #10
+### C63. `go_online` eligibility recheck never validates 3-year minimum driving experience — CLOSED (2026-09-04)
+- [x] **Status:** closed — PR #4964 (`f31afff`, merged 2026-09-04). Added
+  nullable `drivers.license_issue_date` (migration 405) and wired the
+  3-year licensed-experience sub-check into the `go_online` recheck path,
+  fail-safe on `NULL` exactly as this item's own Acceptance bar specified,
+  gated behind the existing `enforce_driver_eligibility_recheck` flag. 5
+  new regression tests (19/19 passing) mirroring the existing
+  `TestGoOnlineEligibilityRecheck` suite. Full write-up:
+  `docs/change-log/2026-09-04-c63-go-online-experience-recheck.md`.
+  **Caveat carried forward, not closed by this fix**: nothing populates
+  `license_issue_date` for any existing driver yet (no backfill path, no
+  onboarding-flow write) — the enforcement plumbing is correct but is a
+  behavioral no-op for the current fleet until a separate follow-up adds
+  data collection/backfill. Filing that follow-up is out of this item's
+  original scope (which was "wire the check," not "populate the data").
+- **(historical) Status:** open — split out 2026-09-04 from A40's ranked blocker #10
   while correcting that entry's stale status. #10 shipped a license-class
   (Class 5, or Class 1-4 with `drivers.sgi_approved`) and vehicle-age
   (<10yr) recheck on `go_online` (2026-08-19, gated dark behind
@@ -20783,8 +20797,21 @@ how much they de-risk a public launch._
   `NULL` `license_issue_date` is not rejected; new regression tests
   mirroring #10's existing eligibility-recheck test coverage.
 
-### C64. WebSocket `location_batch` handler only integrity-checks the last point in a batch, not every point
-- [ ] **Status:** open — split out 2026-09-04 from A40's finding #7 while
+### C64. WebSocket `location_batch` handler only integrity-checks the last point in a batch, not every point — CLOSED (2026-09-04)
+- [x] **Status:** closed — PR #4965 (`e59c570`, merged 2026-09-04). Added
+  `_filter_plausible_batch_points()` to `backend/routes/websocket.py`,
+  mirroring the REST v2 path's `evaluate_gps_plausibility()` sweep — each
+  point is checked against the last point that actually passed before it,
+  and a rejected point never becomes the new trusted baseline; the
+  existing `check_location_integrity()` call on the raw last point (live
+  marker) is untouched. 3 new tests (unit on the helper, no-regression on
+  an all-plausible batch, end-to-end WS test proving `persist_ride_breadcrumbs`
+  only receives plausible points). Full write-up:
+  `docs/change-log/2026-09-04-c64-ws-location-batch-plausibility.md`.
+  **Scope note carried forward**: `persist_ride_breadcrumbs` has 3 total
+  callers; this fix covers only the WS batch path this item named. The
+  other 2 callers are unaudited — flagged, not silently assumed fine.
+- **(historical) Status:** open — split out 2026-09-04 from A40's finding #7 while
   correcting that entry's stale status. #7's 2026-08-19 fix added
   `check_location_integrity()`/`evaluate_gps_plausibility()` coverage to
   the REST v2 location-batch path (both the live-marker write and the
@@ -21100,6 +21127,48 @@ how much they de-risk a public launch._
   carSurface.tsx`, `driver-app/lib/androidAuto/carMapCamera.ts`, `driver-app/eas.json`,
   `docs/carplay-android-auto.md`, `docs/change-log/2026-08-16-android-auto-hardware-
   validation.md`, `docs/change-log/2026-08-13-driver-heatmap-p2-p3.md`.
+
+### C71. `matching.py` loguru `%`-style placeholders + 2 stale `resolve_matching_config` test mocks — CLOSED (2026-09-04)
+- [x] **Status:** closed — PR #4967 (`ffc56cd7`, merged 2026-09-04), branch
+  `claude/c70-matching-py-latent-bugs`. **Numbering note**: this fix's own
+  PR title, commits, and change-log doc call it "C70" — that label was
+  assigned informally (found while investigating an unrelated CI failure,
+  never actually registered as a `### C70.` entry here) and has since been
+  claimed for real by the unrelated Android Auto item directly above.
+  Filed here under the next free number, C71, to resolve the collision;
+  the existing `docs/change-log/2026-09-04-c70-matching-py-latent-dispatch-bugs.md`
+  filename is left as-is (its content is accurate, only the label
+  collides) rather than renamed, since renaming a merged doc after the
+  fact would break any existing links/references to it.
+- **Issue/gap:** found while diagnosing a real `backend-test` CI failure on
+  3 unrelated PRs (#4964/#4965/#4966) — reproduced against a clean
+  `origin/main` clone first to confirm it predated and was unrelated to
+  any of those PRs' own diffs. Two distinct pre-existing bugs in
+  `backend/routes/rides/matching.py` (the dispatch hot path), both traced
+  to PR #4948 (dispatch-geo-provider feature): (1) a `logger.warning(...)`
+  on a loguru-bound logger used `%s`/`%d` placeholders — loguru formats
+  with `str.format`, so every argument was silently dropped, same defect
+  class as C60/C65/C69; (2) 2 of 14 `resolve_matching_config` mocks across
+  `test_dispatch_db_errors.py`/`test_dispatch_match_attempt_branches.py`
+  were still 5-tuples, stale since #4948 widened the real function's
+  return to 6 elements — a mocked-test-only bug, never live (production
+  always calls the real 6-tuple function).
+- **Fix:** `%s`/`%d` → `{}` in the log line (output-identical); appended
+  the missing 6th tuple element (`500`) to both stale mocks, matching the
+  other 12 already-correct call sites in the same two files. Both fixes
+  were also cherry-picked directly into #4964/#4965/#4966's own branches
+  and pushed, so each of those PRs went green on its own head rather than
+  waiting on #4967 to merge first.
+- **Verification:** reproduced the original 3-test failure against clean
+  `origin/main` before touching anything; `pytest tests/test_dispatch_db_errors.py
+  tests/test_dispatch_match_attempt_branches.py tests/test_loguru_call_conventions.py
+  --no-cov` → 30/30 passed post-fix; broader sweep `pytest tests/ -k
+  "matching or dispatch" --no-cov` → 492 passed, 4 skipped; `ruff check`
+  clean. Full write-up:
+  `docs/change-log/2026-09-04-c70-matching-py-latent-dispatch-bugs.md`
+  (filename retains the informal "c70" slug per the numbering note above).
+- **Files:** `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_db_errors.py`,
+  `backend/tests/test_dispatch_match_attempt_branches.py`.
 
 ## Recently completed (do not redo)
 

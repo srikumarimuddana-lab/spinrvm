@@ -74,6 +74,13 @@ the instrumentation this harness pairs with:
   `spinr_payment_settlement_total`, `spinr_ws_fanout_duration_ms`,
   `spinr_db_thread_pool_threads` / `spinr_db_thread_pool_max_workers`,
   `spinr_db_retry_total`, `spinr_db_circuit_state`
+- **C50 Phase 0 T3 per-phase dispatch timing** (additive, for the eventual G3/G4
+  PostgREST-vs-direct-pool comparison): `spinr_dispatch_attempt_duration_ms`
+  labelled `phase=candidate_read|rank|claim|offer_insert|insurance|notify`,
+  `spinr_db_run_sync_queue_wait_ms` / `spinr_db_run_sync_exec_ms` (per DB call,
+  submit→thread-start vs thread-start→return), and `spinr_dispatch_attempt_db_calls`
+  (DB calls per dispatch attempt) — scrape and record these alongside the
+  existing offer→accept histogram on the next ramp run (T5).
 - admin monitoring → replica panel: DB thread-pool `queued_calls` (queue
   growth = the pool is the bottleneck), circuit-breaker state, Redis memory.
 - `spinr_db_thread_pool_queue_depth`, `spinr_db_calls_rejected_total`

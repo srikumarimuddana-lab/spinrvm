@@ -95,6 +95,15 @@ const enforceHttps = (url: string): string => {
   return PRODUCTION_BACKEND_URL;
 };
 
+// Base color tokens. Aliases below reference these instead of re-typing the
+// hex literal, so each color has exactly one source of truth — previously
+// `accent`/`accentDim`/`danger` duplicated `primary`/`primaryDark`/`error`'s
+// hex strings verbatim, which meant a rebrand had to update the same color
+// in two places (and silently wouldn't, if only one was caught).
+const PRIMARY = '#FF3B30'; // Vibrant Red
+const PRIMARY_DARK = '#D32F2F';
+const ERROR = '#DC2626';
+
 export const SpinrConfig = {
   backendUrl: enforceHttps(getBackendUrl()),
   // App Info
@@ -107,8 +116,8 @@ export const SpinrConfig = {
   // Design System
   theme: {
     colors: {
-      primary: '#FF3B30', // Vibrant Red
-      primaryDark: '#D32F2F',
+      primary: PRIMARY,
+      primaryDark: PRIMARY_DARK,
       background: '#FFFFFF',
       surface: '#FFFFFF',
       surfaceLight: '#F5F5F5',
@@ -116,14 +125,14 @@ export const SpinrConfig = {
       textDim: '#666666',
       textSecondary: '#6B7280',
       border: '#E5E7EB',
-      error: '#DC2626',
+      error: ERROR,
       success: '#34C759', // Green for success
       warning: '#FFCC00',
 
       // Aliases & Legacy Support
-      accent: '#FF3B30',
-      accentDim: '#D32F2F',
-      danger: '#DC2626',
+      accent: PRIMARY,
+      accentDim: PRIMARY_DARK,
+      danger: ERROR,
       orange: '#FF9500',
       gold: '#FFD700',
       overlay: 'rgba(255, 255, 255, 0.95)',

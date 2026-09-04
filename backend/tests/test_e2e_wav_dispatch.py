@@ -163,7 +163,7 @@ class TestWAVDispatchQuery:
             patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_capture_get_rows)),
             patch(
                 "backend.routes.rides._shared.dispatch.resolve_matching_config",
-                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
+                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True, 500)),
             ),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch(
@@ -208,7 +208,7 @@ class TestWAVDispatchQuery:
             patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_capture_get_rows)),
             patch(
                 "backend.routes.rides._shared.dispatch.resolve_matching_config",
-                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
+                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True, 500)),
             ),
             patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch(

@@ -1056,6 +1056,41 @@ export default function SettingsPage() {
                                     />
                                 </div>
                             </div>
+                            <div className="space-y-2">
+                                <Label>Geo provider</Label>
+                                <Select
+                                    value={settings.dispatch_geo_provider ?? "postgis"}
+                                    onValueChange={(v) => update("dispatch_geo_provider", v)}
+                                >
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="postgis">PostGIS (recommended, fastest)</SelectItem>
+                                        <SelectItem value="legacy">Legacy bounding box</SelectItem>
+                                        <SelectItem value="shadow">Shadow (compare, no risk)</SelectItem>
+                                        <SelectItem value="h3">H3 index (experimental)</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                    Platform-wide default; a service area can override it. PostGIS returns the true nearest drivers using a spatial index. Legacy returns an unordered set and is only safe with a large candidate pool. Shadow runs Legacy for real while comparing PostGIS in the background.
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Max candidate pool</Label>
+                                <Input
+                                    type="number"
+                                    min={50} max={500}
+                                    value={settings.max_candidate_pool ?? 500}
+                                    onChange={(e) => update("max_candidate_pool", parseInt(e.target.value))}
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    How many nearby drivers are <strong>considered</strong> before ranking — not how many receive an offer (that is Simultaneous offers above). Range 50–500, default 500.
+                                </p>
+                                {(settings.dispatch_geo_provider ?? "postgis") === "legacy" && (settings.max_candidate_pool ?? 500) < 200 && (
+                                    <p className="text-xs font-semibold text-warning">
+                                        Legacy does not sort by distance, so a pool of {settings.max_candidate_pool ?? 500} may skip the closest driver. Raise the pool to 200 or more, or switch to PostGIS.
+                                    </p>
+                                )}
+                            </div>
                             <div className="flex items-center justify-between">
                                 <div className="space-y-0.5">
                                     <Label htmlFor="use_eta_ranking">ETA-based ranking</Label>

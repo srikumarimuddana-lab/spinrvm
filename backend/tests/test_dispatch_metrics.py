@@ -75,7 +75,7 @@ async def test_match_driver_to_ride_counts_offers_sent():
         patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
         patch(
             "backend.routes.rides._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False, 500)),
         ),
         patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
         patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=_driver())),
@@ -396,7 +396,7 @@ async def test_match_driver_to_ride_records_phase_timings_and_db_calls():
         patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
         patch(
             "backend.routes.rides._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False, 500)),
         ),
         patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
         patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=_driver())),
@@ -466,7 +466,7 @@ async def test_match_driver_to_ride_records_db_calls_on_early_no_drivers_return(
         patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
         patch(
             "backend.routes.rides._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False, 500)),
         ),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
         patch("backend.routes.rides._deps.asyncio.create_task", MagicMock(side_effect=close_spawned_coro)),

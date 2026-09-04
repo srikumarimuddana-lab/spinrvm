@@ -34,6 +34,52 @@ _SURGE_MAX = 10.0  # absolute ceiling for manual admin override
 _AIRPORT_MAX_BBOX_KM = 10.0
 
 
+def _valid_geo_providers() -> frozenset:
+    """The dispatch path's own allowed provider set, imported lazily.
+
+    Deliberately not a module-level import: dispatch_candidates pulls in
+    utils.h3_cells, which hard-imports the optional `h3` wheel at module
+    load. Importing it at the top of an admin router would make the whole
+    admin API (and therefore server boot) fail wherever that extra is not
+    installed, purely to read a four-element frozenset. Same function-local
+    dual-import shape _polygon_bbox_km below already uses.
+
+    Imported rather than re-declared so the admin API's accepted values
+    cannot drift from what resolve_provider() actually honours.
+    """
+    try:
+        from ...services.dispatch_candidates import VALID_PROVIDERS
+    except ImportError:
+        from services.dispatch_candidates import VALID_PROVIDERS  # type: ignore
+    return VALID_PROVIDERS
+
+
+def _normalize_geo_provider(v: Optional[str]) -> Optional[str]:
+    """Validate a per-area dispatch_geo_provider override.
+
+    None (and blank, which is what an HTML <select> sends for its
+    "(inherit global)" option) both mean *inherit the global setting* and
+    are stored as SQL NULL — service_areas.dispatch_geo_provider is
+    nullable by design (migration 397). An unknown value is a 422 here
+    rather than a DB CHECK violation surfacing as a 500, and rather than
+    resolve_provider() silently falling back to legacy on a typo.
+
+    VALID_PROVIDERS is imported from services/dispatch_candidates.py so the
+    admin API cannot drift from the dispatch path's own allowed set.
+    """
+    if v is None:
+        return None
+    cleaned = v.strip().lower()
+    if not cleaned:
+        return None
+    valid = _valid_geo_providers()
+    if cleaned not in valid:
+        raise ValueError(
+            f"dispatch_geo_provider must be one of: {', '.join(sorted(valid))} (or blank to inherit the global setting)"
+        )
+    return cleaned
+
+
 def _polygon_bbox_km(polygon: Any) -> Optional[Dict[str, float]]:
     """Compute a coarse bounding-box size (km) for a polygon.
 
@@ -170,6 +216,14 @@ class ServiceAreaCreateRequest(BaseModel):
     search_radius_km: float = Field(default=10.0, ge=1, le=100)
     min_driver_rating: float = Field(default=4.0, ge=1.0, le=5.0)
     max_simultaneous_offers: int = Field(default=3, ge=1, le=10)
+    # ── Dispatch engine tuning ───────────────────────────────────────────
+    # None = inherit settings.dispatch_geo_provider (the global default).
+    # All 6 production areas are NULL today, i.e. everyone inherits.
+    dispatch_geo_provider: Optional[str] = None
+    # How many nearby drivers are CONSIDERED before ranking — not how many
+    # get an offer (that is max_simultaneous_offers). 500 matches the
+    # previously-hardcoded dispatch limit, so the default is a no-op.
+    max_candidate_pool: int = Field(default=500, ge=50, le=500)
     use_eta_ranking: bool = True
     show_demand_heatmap: bool = False
     # Per-area referral rewards (CAD). Defaults equal the global constants.
@@ -187,6 +241,11 @@ class ServiceAreaCreateRequest(BaseModel):
     driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
     # Dispatch cascade rules (migration 185): [{from: uuid, to: [uuid, ...]}]
     vehicle_cascade_map: List[Any] = []
+
+    @field_validator("dispatch_geo_provider")
+    @classmethod
+    def _check_geo_provider(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_geo_provider(v)
 
 
 class ServiceAreaUpdateRequest(BaseModel):
@@ -217,6 +276,12 @@ class ServiceAreaUpdateRequest(BaseModel):
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
+    # ── Dispatch engine tuning ───────────────────────────────────────────
+    # None here is ambiguous in the allow-list loop below (which skips
+    # None), so clearing the override back to "inherit global" is handled
+    # explicitly via model_fields_set — see admin_update_service_area.
+    dispatch_geo_provider: Optional[str] = None
+    max_candidate_pool: Optional[int] = Field(default=None, ge=50, le=500)
     use_eta_ranking: Optional[bool] = None
     show_demand_heatmap: Optional[bool] = None
     # Sparse per-area heatmap tuning overrides. Validated key-by-key below
@@ -254,6 +319,11 @@ class ServiceAreaUpdateRequest(BaseModel):
     # Dispatch cascade rules (migration 185): [{from: uuid, to: [uuid, ...]}]
     vehicle_cascade_map: Optional[List[Any]] = None
     instant_payout_enabled: Optional[bool] = None
+
+    @field_validator("dispatch_geo_provider")
+    @classmethod
+    def _check_geo_provider(cls, v: Optional[str]) -> Optional[str]:
+        return _normalize_geo_provider(v)
 
     @field_validator("heatmap_config")
     @classmethod
@@ -560,6 +630,8 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "search_radius_km": area.search_radius_km,
         "min_driver_rating": area.min_driver_rating,
         "max_simultaneous_offers": area.max_simultaneous_offers,
+        "dispatch_geo_provider": area.dispatch_geo_provider,
+        "max_candidate_pool": area.max_candidate_pool,
         "use_eta_ranking": area.use_eta_ranking,
         "show_demand_heatmap": area.show_demand_heatmap,
         "rider_referrer_reward": area.rider_referrer_reward,
@@ -729,6 +801,8 @@ async def admin_update_service_area(
         "search_radius_km",
         "min_driver_rating",
         "max_simultaneous_offers",
+        "dispatch_geo_provider",
+        "max_candidate_pool",
         "use_eta_ranking",
         "show_demand_heatmap",
         "heatmap_config",
@@ -761,6 +835,14 @@ async def admin_update_service_area(
         update_payload["polygon"] = polygon
     if surge_active is not None:
         update_payload["surge_active"] = surge_active
+
+    # Clearing the per-area geo-provider override back to "inherit global"
+    # means writing SQL NULL, but the allow-list loop above skips None (it
+    # cannot tell "not sent" from "sent as null"). The UI's "(inherit
+    # global)" option sends "" or null, so without this the override could
+    # be set but never removed. model_fields_set distinguishes the two.
+    if "dispatch_geo_provider" in area.model_fields_set and area.dispatch_geo_provider is None:
+        update_payload["dispatch_geo_provider"] = None
 
     # Invariant: subscription_required=True ⟹ spinr_pass_enabled=True.
     # Two cases to guard:

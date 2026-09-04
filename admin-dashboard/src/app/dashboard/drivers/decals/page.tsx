@@ -82,12 +82,41 @@ export default function WelcomeLettersPage() {
     const load = useCallback(async () => {
         try {
             setRefreshing(true);
-            const opts: Record<string, any> = { limit: 500 };
+            const opts: Record<string, any> = {};
             if (driverStatus !== "all") opts.status = driverStatus;
             if (serviceAreaId !== "all") opts.service_area_id = serviceAreaId;
-            const res = await getDrivers(opts);
-            const list = Array.isArray(res) ? res : (res as any)?.drivers || [];
-            setDrivers(list);
+
+            // The backend caps a single page at 500 (routes/admin/drivers.py's
+            // `limit: int = Query(50, ge=1, le=500)`). A single capped fetch used
+            // to silently drop every driver past the 500th matching the current
+            // filter, with no indication to the admin — this page's CSV export
+            // and "select all -> bulk generate" both operate on that same
+            // truncated array, so the bug wasn't just a display gap. Loop pages
+            // until the backend returns a short page (no more rows), same
+            // "fetch until exhausted" shape as any offset-paginated API client.
+            const FETCH_PAGE_SIZE = 500;
+            const MAX_FETCH_PAGES = 20; // 10,000 drivers per filter combo — a
+            // safety ceiling, not an expected real count, so a runaway loop
+            // against a misbehaving backend can't hang the page.
+            let all: any[] = [];
+            let offset = 0;
+            let truncated = false;
+            for (let i = 0; i < MAX_FETCH_PAGES; i++) {
+                const res = await getDrivers({ ...opts, limit: FETCH_PAGE_SIZE, offset });
+                const batch = Array.isArray(res) ? res : (res as any)?.drivers || [];
+                all = all.concat(batch);
+                if (batch.length < FETCH_PAGE_SIZE) break;
+                offset += FETCH_PAGE_SIZE;
+                if (i === MAX_FETCH_PAGES - 1) truncated = true;
+            }
+            setDrivers(all);
+            if (truncated) {
+                toast({
+                    title: "Driver list may be incomplete",
+                    description: `Loaded the first ${all.length.toLocaleString()} drivers matching your filters — narrow the Status or Area filter to see the rest.`,
+                    variant: "destructive",
+                });
+            }
         } catch (e: any) {
             toast({ title: "Failed to load drivers", description: e?.message, variant: "destructive" });
         } finally {

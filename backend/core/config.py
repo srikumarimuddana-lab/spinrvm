@@ -33,13 +33,22 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # iOS ride-offer push as a Critical Alert (bypasses silent mode/DND, can
-    # loop) instead of a standard one-shot alert. MUST stay False until BOTH:
+    # loop) instead of a standard one-shot alert. MUST stay False until ALL
+    # THREE of these are true:
     #   1. Apple has actually granted the com.apple.developer.usernotifications
     #      .critical-alerts entitlement for the driver app, and
     #   2. a driver-app build with that entitlement compiled in has shipped
     #      and is adopted widely enough that drivers aren't left on an old
     #      binary — the entitlement itself is native/build-time and cannot be
-    #      toggled by this flag.
+    #      toggled by this flag, and
+    #   3. the driver app actually REQUESTS criticalAlert authorization at
+    #      runtime. It does not today: notifeeService.ts's requestPermission()
+    #      passes {alert, sound, badge, provisional} with no criticalAlert, so
+    #      UNAuthorizationOptions.criticalAlert is never granted and iOS would
+    #      not honour a critical alert even with the entitlement installed.
+    #      (That file's comment claiming critical is "attempted" is wrong —
+    #      corrected here rather than in the client, which is untestable from
+    #      this environment and dead code until #1 lands anyway.)
     # Sending aps.sound as a CriticalSound without a held entitlement is
     # documented by Apple to fail/be rejected by APNs — flipping this on
     # prematurely risks breaking the ride-offer alert for iOS drivers

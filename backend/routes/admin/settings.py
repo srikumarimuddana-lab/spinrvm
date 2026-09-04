@@ -277,6 +277,16 @@ class SettingsUpdateRequest(BaseModel):
     sos_show_report_issue: Optional[bool] = None
     # Dispatch & matching — also configurable per service area (area overrides global).
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
+    # Global dispatch geo provider (migration 397). NOT NULL in the DB, so
+    # unlike the per-area override this can never be blank — a service area
+    # with no override falls through to this value. Validated against
+    # services/dispatch_candidates.VALID_PROVIDERS so the API and the
+    # dispatch path cannot drift.
+    dispatch_geo_provider: Optional[str] = None
+    # Global default for how many nearby drivers are CONSIDERED before
+    # ranking (migration 404). Not how many receive an offer — that is
+    # max_simultaneous_offers above.
+    max_candidate_pool: Optional[int] = Field(default=None, ge=50, le=500)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
     use_eta_ranking: Optional[bool] = None
     # Hours of unreachability before the stale-intent reconciler flips a
@@ -497,6 +507,30 @@ class SettingsUpdateRequest(BaseModel):
     # above (scheduled_dispatch_enabled etc.). Default False; Phase 2 (T12/T13,
     # not yet built) is the only thing that reads this as True having any effect.
     dispatch_direct_pool_enabled: Optional[bool] = None
+
+    @field_validator("dispatch_geo_provider")
+    @classmethod
+    def _check_geo_provider(cls, v: Optional[str]) -> Optional[str]:
+        """The global provider is NOT NULL in the DB — never store blank.
+
+        None means "not sent" (exclude_none drops it from the payload), but
+        an explicit empty string would land as '' and make resolve_provider
+        fall back to legacy silently, so reject it. Unknown values are a 422
+        here rather than a bad value quietly degrading dispatch.
+        """
+        if v is None:
+            return None
+        cleaned = v.strip().lower()
+        # Lazy import: dispatch_candidates pulls in utils.h3_cells, which
+        # hard-imports the optional `h3` wheel. Importing it at module scope
+        # would make admin API boot depend on that extra being installed.
+        try:
+            from ...services.dispatch_candidates import VALID_PROVIDERS
+        except ImportError:
+            from services.dispatch_candidates import VALID_PROVIDERS  # type: ignore
+        if cleaned not in VALID_PROVIDERS:
+            raise ValueError(f"dispatch_geo_provider must be one of: {', '.join(sorted(VALID_PROVIDERS))}")
+        return cleaned
 
     @field_validator("lms_api_base_url")
     @classmethod

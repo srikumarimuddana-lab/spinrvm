@@ -1677,10 +1677,31 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Android Auto car session needs the identical behaviour on a car-only launch
   // where this hook never mounts. The buzz stays here: it is the phone's way of
   // announcing an offer, and the head unit raises its own alert instead.
-  const consumePendingOffer = useCallback(
-    () => consumePendingRideOffer({ onOffer: () => Vibration.vibrate([0, 500, 200, 500]) }),
-    [],
-  );
+  const consumePendingOffer = useCallback(async () => {
+    // consumePendingRideOffer() resolves true only when a still-live offer was
+    // actually surfaced into the store (see pendingRideOffer.ts) — never for an
+    // expired one or when a ride is already active. Ring + surface the native
+    // notification ONLY in that case. Unlike the WS/FCM handlers above, this
+    // AsyncStorage-hydration path (an offer that arrived while backgrounded or
+    // killed) previously only vibrated — it never started the in-app tone or
+    // touched the still-looping native/Notifee notification, which otherwise
+    // keeps ringing on its own timer while the driver looks at a silent offer
+    // card. If the WS reconnect below also replays the same offer, its guard
+    // (rideState !== 'idle') now finds the state this call already claimed and
+    // skips re-processing — so exactly one of the two paths ever rings.
+    // offerSound.play() is idempotent and _surfaceOfferNotification() re-posts
+    // the same notification id onto the silent channel while foreground, so
+    // calling both here always collapses to exactly one audible source,
+    // however the offer actually reached the driver.
+    const surfaced = await consumePendingRideOffer({
+      onOffer: () => Vibration.vibrate([0, 500, 200, 500]),
+    });
+    if (surfaced) {
+      offerSound.play();
+      const offer = useDriverStore.getState().incomingRide;
+      if (offer) _surfaceOfferNotification(offer);
+    }
+  }, [offerSound]);
 
   // ─── Crash recovery + background-push hydration ──────────────────
   // 1. Surface any offer received while backgrounded/killed — on mount AND on

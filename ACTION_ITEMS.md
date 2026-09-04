@@ -12801,6 +12801,14 @@ record of what was assumed vs. what was actually true</summary>
   actioned now. Recorded here specifically so this doesn't repeat the same
   "temporary, no owner, no expiry" pattern that caused the original drift —
   re-surface this item once device testing / go-live work winds down.
+- **Update (2026-09-04):** re-surfaced and re-checked with the user (asked
+  directly whether to override the 2026-09-02 deferral and re-enable now).
+  **Confirmed still deferred** — device testing/go-live has not wound down
+  enough to action this yet. No change made; re-surface again once it has.
+  (Also noted in passing: no tool available to this session can modify a
+  GitHub Environment protection rule directly — that step will need the
+  GitHub UI, or an API token with `admin:repo_hook`/environments scope,
+  whenever this is actually actioned.)
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here

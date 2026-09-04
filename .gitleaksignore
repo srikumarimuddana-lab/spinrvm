@@ -71,3 +71,12 @@ dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions
 # "${SID}:${TOKEN}"`) -- the rule apparently only matches the
 # empty-password form.
 9e579dc67bf82e839637985698fdacf3cb2d7d1e:.github/workflows/billing-usage-monitor.yml:curl-auth-user:78
+
+# Same finding as directly above, re-flagged under PR #4913's actual
+# merged commit SHA on main (1fac3616...) -- gitleaks fingerprints are
+# per-commit, and 1fac3616 differs from 9e579dc6 above (squash-merge
+# produces a new commit SHA even though the flagged line's content is
+# identical), so the prior entry alone doesn't suppress this. Found
+# 2026-09-04 when this still-open finding failed PR #4936's Gitleaks
+# check even though #4936 never touched billing-usage-monitor.yml.
+1fac36162033dabdce221445bdab64ca8e15a3fc:.github/workflows/billing-usage-monitor.yml:curl-auth-user:78

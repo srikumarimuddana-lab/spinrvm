@@ -12,6 +12,7 @@ import {
     fitBoundsToGeoJSON,
     makeCircleMarkerEl,
     makeRoutePinEl,
+    monitoringFallbackStyle,
     themedMapStyle,
 } from "@/lib/map/maplibre-base";
 import {
@@ -438,10 +439,22 @@ export function MonitoringMap({
         if (!containerRef.current || mapRef.current) return;
 
         let cancelled = false;
-        try {
+        // Guards the retry to exactly one attempt — a fallback style that
+        // itself fails to load must surface the error, not loop forever.
+        let usedFallback = false;
+
+        // Building the map is a function (not inline) so a style-load
+        // failure can tear down and rebuild once against a different
+        // provider, instead of only ever surfacing the error. MapLibre
+        // doesn't support swapping an already-mounted map's style at
+        // runtime without losing sources/layers (see themedMapStyle's own
+        // doc comment), so "retry" means a real new Map instance on the
+        // same container, same as remounting via a theme-keyed component
+        // does elsewhere in this codebase.
+        const buildMap = (styleUrl: string) => {
             const map = new maplibregl.Map({
-                container: containerRef.current,
-                style: themedMapStyle(resolvedTheme),
+                container: containerRef.current!,
+                style: styleUrl,
                 center: DEFAULT_CENTER,
                 zoom: DEFAULT_ZOOM,
                 attributionControl: { compact: true },
@@ -491,10 +504,21 @@ export function MonitoringMap({
             map.on("error", (e) => {
                 if (cancelled) return;
                 const err = e?.error as Error | undefined;
-                if (err && /style/i.test(err.message ?? "")) {
-                    setLoadError(err.message);
+                if (!(err && /style/i.test(err.message ?? ""))) return;
+
+                const fallback = !usedFallback ? monitoringFallbackStyle(resolvedTheme) : null;
+                if (fallback && fallback !== styleUrl) {
+                    usedFallback = true;
+                    map.remove();
+                    buildMap(fallback);
+                    return;
                 }
+                setLoadError(err.message);
             });
+        };
+
+        try {
+            buildMap(themedMapStyle(resolvedTheme));
         } catch (err: unknown) {
             setLoadError(err instanceof Error ? err.message : String(err));
         }

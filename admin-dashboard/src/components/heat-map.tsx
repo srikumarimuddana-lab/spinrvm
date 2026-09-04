@@ -9,6 +9,7 @@ import {
     MAP_STYLE_POSITRON,
     addStandardControls,
     fitBoundsToPoints,
+    monitoringFallbackStyle,
 } from "@/lib/map/maplibre-base";
 
 export interface HeatMapPoint {
@@ -98,65 +99,89 @@ export default function HeatMap({
         if (!containerRef.current || mapRef.current) return;
 
         let cancelled = false;
-        const map = new maplibregl.Map({
-            container: containerRef.current,
-            style: MAP_STYLE_POSITRON, // grayscale so heat layers pop
-            center: [center.lng, center.lat],
-            zoom,
-        });
-        addStandardControls(map);
-        mapRef.current = map;
+        // Guards the retry to exactly one attempt -- a fallback style that
+        // itself fails to load must surface the error, not loop forever.
+        let usedFallback = false;
 
-        map.on("error", (e) => {
-            if (cancelled) return;
-            const err = e?.error as Error | undefined;
-            if (err && /style/i.test(err.message ?? "")) {
+        // A function (not inline) so a style-load failure can tear down and
+        // rebuild once against a different provider -- mirrors
+        // monitoring-map.tsx's buildMap, same reasoning: MapLibre doesn't
+        // support swapping an already-mounted map's style at runtime without
+        // losing sources/layers, so "retry" means a real new Map instance.
+        const buildMap = (styleUrl: string) => {
+            isLoadedRef.current = false;
+            const map = new maplibregl.Map({
+                container: containerRef.current!,
+                style: styleUrl,
+                center: [center.lng, center.lat],
+                zoom,
+            });
+            addStandardControls(map);
+            mapRef.current = map;
+
+            map.on("error", (e) => {
+                if (cancelled) return;
+                const err = e?.error as Error | undefined;
+                if (!(err && /style/i.test(err.message ?? ""))) return;
+
+                // Positron is deliberately grayscale so heat layers pop; ask
+                // for the same flavor from the fallback provider rather than
+                // its default light style.
+                const fallback = !usedFallback ? monitoringFallbackStyle("grayscale") : null;
+                if (fallback && fallback !== styleUrl) {
+                    usedFallback = true;
+                    map.remove();
+                    buildMap(fallback);
+                    return;
+                }
                 setLoadError(err.message);
-            }
-        });
-
-        map.on("load", () => {
-            isLoadedRef.current = true;
-
-            map.addSource(PICKUP_SOURCE, { type: "geojson", data: pointsToFeatureCollection([]) });
-            map.addSource(DROPOFF_SOURCE, { type: "geojson", data: pointsToFeatureCollection([]) });
-
-            const radius = settings.radius ?? 25;
-            const maxVal = settings.max ?? 1;
-
-            map.addLayer({
-                id: PICKUP_LAYER,
-                type: "heatmap",
-                source: PICKUP_SOURCE,
-                paint: {
-                    "heatmap-weight": [
-                        "interpolate", ["linear"], ["get", "intensity"],
-                        0, 0,
-                        maxVal, 1,
-                    ],
-                    "heatmap-intensity": 1,
-                    "heatmap-radius": radius,
-                    "heatmap-color": PICKUP_GRADIENT_EXPR,
-                    "heatmap-opacity": 0.8,
-                },
             });
-            map.addLayer({
-                id: DROPOFF_LAYER,
-                type: "heatmap",
-                source: DROPOFF_SOURCE,
-                paint: {
-                    "heatmap-weight": [
-                        "interpolate", ["linear"], ["get", "intensity"],
-                        0, 0,
-                        maxVal, 1,
-                    ],
-                    "heatmap-intensity": 1,
-                    "heatmap-radius": radius,
-                    "heatmap-color": DROPOFF_GRADIENT_EXPR,
-                    "heatmap-opacity": 0.8,
-                },
+
+            map.on("load", () => {
+                isLoadedRef.current = true;
+
+                map.addSource(PICKUP_SOURCE, { type: "geojson", data: pointsToFeatureCollection([]) });
+                map.addSource(DROPOFF_SOURCE, { type: "geojson", data: pointsToFeatureCollection([]) });
+
+                const radius = settings.radius ?? 25;
+                const maxVal = settings.max ?? 1;
+
+                map.addLayer({
+                    id: PICKUP_LAYER,
+                    type: "heatmap",
+                    source: PICKUP_SOURCE,
+                    paint: {
+                        "heatmap-weight": [
+                            "interpolate", ["linear"], ["get", "intensity"],
+                            0, 0,
+                            maxVal, 1,
+                        ],
+                        "heatmap-intensity": 1,
+                        "heatmap-radius": radius,
+                        "heatmap-color": PICKUP_GRADIENT_EXPR,
+                        "heatmap-opacity": 0.8,
+                    },
+                });
+                map.addLayer({
+                    id: DROPOFF_LAYER,
+                    type: "heatmap",
+                    source: DROPOFF_SOURCE,
+                    paint: {
+                        "heatmap-weight": [
+                            "interpolate", ["linear"], ["get", "intensity"],
+                            0, 0,
+                            maxVal, 1,
+                        ],
+                        "heatmap-intensity": 1,
+                        "heatmap-radius": radius,
+                        "heatmap-color": DROPOFF_GRADIENT_EXPR,
+                        "heatmap-opacity": 0.8,
+                    },
+                });
             });
-        });
+        };
+
+        buildMap(MAP_STYLE_POSITRON); // grayscale so heat layers pop
 
         // Resize fix for dialog / tab mount timing
         const resizeTimer = setTimeout(() => {
@@ -166,7 +191,7 @@ export default function HeatMap({
         return () => {
             cancelled = true;
             clearTimeout(resizeTimer);
-            map.remove();
+            mapRef.current?.remove();
             mapRef.current = null;
             isLoadedRef.current = false;
         };

@@ -395,10 +395,10 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             # is a degraded dispatch, not a broken one, and refusing to dispatch
             # would be strictly worse for the rider.
             logger.warning(
-                "[DISPATCH] unsafe pool config ride_id=%s: provider=legacy with "
-                "max_candidate_pool=%d (<200). legacy uses an UNORDERED LIMIT, so the "
+                "[DISPATCH] unsafe pool config ride_id={}: provider=legacy with "
+                "max_candidate_pool={} (<200). legacy uses an UNORDERED LIMIT, so the "
                 "nearest driver is NOT guaranteed to be in the candidate pool once the "
-                "geo box holds more than %d drivers — ranking may silently skip the "
+                "geo box holds more than {} drivers — ranking may silently skip the "
                 "closest driver. Switch dispatch_geo_provider to 'postgis' (true "
                 "nearest-N via ORDER BY ST_Distance) or raise max_candidate_pool.",
                 ride_id,
@@ -1854,7 +1854,9 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     if _released:
                         logger.info("[AUTO-CANCEL] released pre-auth hold ride_id={} pi={}", r_id, _booking_pi)
                 except Exception as _rel_exc:
-                    logger.opt(exception=True).error("[AUTO-CANCEL] pre-auth release failed ride_id={}: {}", r_id, _rel_exc)
+                    logger.opt(exception=True).error(
+                        "[AUTO-CANCEL] pre-auth release failed ride_id={}: {}", r_id, _rel_exc
+                    )
 
             now = datetime.now(timezone.utc)
             base_update = {
@@ -1880,7 +1882,9 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     },
                 )
             except Exception as _col_exc:
-                logger.opt(exception=True).error(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
+                logger.opt(exception=True).error(
+                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+                )
                 await _deps.db_supabase.update_ride(r_id, base_update)
             # 2026-08-18 fleet audit: ride-state-transition metric — one of
             # the most common real cancellation reasons ("no drivers found"),

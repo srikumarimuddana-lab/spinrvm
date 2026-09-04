@@ -13,11 +13,13 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 try:
+    from ..core.config import settings
     from ..db_supabase import run_sync
     from ..features import _is_expo_token, _send_expo_push
     from ..supabase_client import supabase
     from .redis_client import try_acquire_leader_lock
 except ImportError:
+    from core.config import settings  # type: ignore
     from db_supabase import run_sync  # type: ignore
     from features import _is_expo_token, _send_expo_push  # type: ignore
     from supabase_client import supabase  # type: ignore
@@ -255,7 +257,18 @@ async def _send_fcm_push(
                 payload=messaging.APNSPayload(
                     aps=messaging.Aps(
                         alert=messaging.ApsAlert(title=title, body=body),
-                        sound="ride_offer.caf" if is_dispatch else "default",
+                        # Mirrors features.py's _deliver_push_now — see the
+                        # comment there and settings.IOS_CRITICAL_ALERTS_ENABLED
+                        # in core/config.py before touching this.
+                        sound=(
+                            (
+                                messaging.CriticalSound(name="ride_offer.caf", critical=True, volume=1.0)
+                                if settings.IOS_CRITICAL_ALERTS_ENABLED
+                                else "ride_offer.caf"
+                            )
+                            if is_dispatch
+                            else "default"
+                        ),
                         category="ride-offer" if is_dispatch else None,
                         content_available=True,
                         mutable_content=True,

@@ -156,7 +156,7 @@ class TestCoordinates:
                 continue
             if _re.search(r"\bAI_CHAT\b", path.read_text()):
                 opt_in_files.add(path.relative_to(backend).as_posix())
-        assert opt_in_files == {"ai/pii.py", "ai/orchestrator.py"}
+        assert opt_in_files == {"ai/pii.py", "ai/orchestrator.py", "ai/tools.py"}
 
 
 class TestPostalCodes:
@@ -415,14 +415,40 @@ class TestCapResultScrubsToolResults:
         result = _cap_result({"driver_phone": "306-555-1234", "ok": True})
         assert result == {"driver_phone": "[PHONE]", "ok": True}
 
-    def test_cap_result_scrubs_client_action_too(self):
-        """/mcp serializes _client_action verbatim with no further
-        processing (mcp_server.py's _call_tool), so it must be scrubbed
-        here too, not just the model-facing portion."""
+    def test_cap_result_never_scrubs_client_action(self):
+        """The card is the rider's own data going back to the rider's own
+        app, not a third-party egress (ADR 012). Scrubbing it here is what
+        put the literal "[POSTAL]" into every dropoff-choice card, the
+        tapped-card message, the model's prose and rides.pickup_address
+        (2026-09-04 change-log). /mcp -- the one consumer that IS a third
+        party -- re-scrubs its whole response in
+        mcp_server._serialize_tool_payload instead."""
         from backend.ai.tools import _cap_result
 
-        result = _cap_result({"ok": True, "_client_action": {"contact_email": "jane@example.ca"}})
-        assert result["_client_action"] == {"contact_email": "[EMAIL]"}
+        card = {
+            "type": "location_suggestions",
+            "candidates": [{"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7", "phone": "306-555-1234"}],
+        }
+        handler_result = {"ok": True, "_client_action": card}
+        result = _cap_result(handler_result)
+        assert result["_client_action"] == card
+        assert result["_client_action"] is card  # same object, never copied through the scrubber
+        # The handler's own dict is left alone (find_place aliases the same
+        # candidate dicts in its model-facing list; an in-place split would
+        # corrupt the card through that alias).
+        assert handler_result == {"ok": True, "_client_action": card}
+
+    def test_cap_result_model_portion_keeps_postal_codes(self):
+        """ScrubPolicy.AI_CHAT on the model-facing portion: identifiers go,
+        trip-location data (postal code beside a street address) stays --
+        otherwise the model echoes "[POSTAL]" in prose and passes it back
+        into get_fare_quote / propose_ride_booking as the address."""
+        from backend.ai.tools import _cap_result
+
+        result = _cap_result(
+            {"address": "1855 Victoria Ave #304, Regina, SK S4P 3T7, Canada", "driver_phone": "306-555-1234"}
+        )
+        assert result == {"address": "1855 Victoria Ave #304, Regina, SK S4P 3T7, Canada", "driver_phone": "[PHONE]"}
 
     def test_cap_result_scrub_survives_truncation(self):
         from backend.ai.tools import TOOL_RESULT_MAX_CHARS, _cap_result

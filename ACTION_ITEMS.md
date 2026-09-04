@@ -19001,6 +19001,25 @@ how much they de-risk a public launch._
     lagging live application), not itself part of C44's scope. Worth its
     own tracked item if it isn't picked up by the next
     `run_migrations.py` invocation someone runs.
+  - **2026-09-04 same-day follow-up — 6 of the 7 applied to production at
+    explicit user direction.** `400`, `401`, `402`, `403`, `404`, `405`
+    applied via Supabase MCP `apply_migration` (out of band —
+    `DATABASE_URL` still not configured in this session), each preceded by
+    a review pass (`spinr-migration-reviewer` for 400/401/402/403/405,
+    `spinr-dispatch-reviewer` for 404 specifically) and every load-bearing
+    claim from both independently re-verified via direct read-only
+    queries/repo greps before applying anything — one review agent run
+    came back flagged by this session's own security classifier for an
+    unspecified reason, so nothing was trusted at face value. All 6
+    confirmed live post-apply; `schema_migrations` tracking rows inserted
+    manually (real `sha256sum` checksums) so `run_migrations.py`'s
+    bookkeeping stays accurate. Full write-up, including 404's live
+    dispatch-behavior change (`dispatch_geo_provider`: `legacy` →
+    `postgis`) and its rollback path:
+    `docs/change-log/2026-09-04-apply-migrations-400-405-production.md`.
+    **`379` was NOT applied** — excluded per its own file header's
+    explicit instruction not to apply until the product owner confirms
+    the C43 deferral is lifted; no such confirmation was given.
   - **Checksum bookkeeping anomaly, also unrelated to this item's scope**:
     `377_zoho_desk_tickets_sla_breach_alerted.sql`'s recorded `checksum`
     (`dc751cdd37f9757e1fd3518eb1a5f438`, 32 hex chars — MD5-length) doesn't
@@ -20037,6 +20056,19 @@ how much they de-risk a public launch._
   renumbered 400/401 → 401/402 (main took 400). Still open after that pass: pooler facts
   on the real project (gate G5), and the unattributed `DISPATCH_POOL_DSN` Fly secret the
   T16 round-2 report found already staged on `spinr-backend-staging`.
+- **2026-09-04 update — migrations 401/402/403/404 applied to production**
+  (see C44's dated follow-up for the full write-up and review trail;
+  `docs/change-log/2026-09-04-apply-migrations-400-405-production.md`).
+  `dispatch_direct_pool_enabled` (401) is live and `false`; `dispatch_claim_batch`
+  (402/403) exists, locked to `service_role`, and is dark (neither gating
+  condition — the flag, nor `DISPATCH_POOL_DSN` — is on). This does NOT
+  advance Phase 2 to "done" or touch the Phase 3 flip decision — T13's
+  Python wiring was already found merged on `main` during this apply's own
+  verification pass (matching.py/dispatch_pool.py already reference the
+  flag), but that's a pre-existing fact this note is surfacing, not new
+  work done here. Still open: everything this entry already listed above
+  (gate G5's pooler facts, the unattributed Fly secret, Phase 3's 7-day
+  validation window, ADR-011).
 - **Related:** E1/E2 (staging + load test, P4 section above), C5 (stale Railway
   standby still running loops against prod — the plan's §3a), the untracked
   `_DEFAULT_ROW_LIMIT` 200-call-site sweep noted in the P0 change-log (§3b).

@@ -4,7 +4,7 @@
 - Date: 2026-09-04
 - Deciders: Claude Code session on branch `claude/ai-chat-postal-code-bug-nx9tun`, prompted by live-testing screenshots showing `[POSTAL]` in customer-facing addresses
 - Domain: ai
-- Affects: `backend/ai/pii.py` (`ScrubPolicy`), `backend/ai/tools.py` (`_cap_result`), `backend/ai/orchestrator.py`, `backend/ai/mcp_server.py` (`_serialize_tool_payload`); referenced by `docs/compliance/pia-ai-surfaces-2026-08.md` §3/§6 and `.claude/agents/spinr-ai-guardrail-reviewer.md`
+- Affects: `backend/ai/pii.py` (`ScrubPolicy`), `backend/ai/tools.py` (`_cap_result`), `backend/ai/orchestrator.py`, `backend/ai/mcp_server.py` (`_serialize_tool_payload`); referenced by `docs/compliance/pia-ai-surfaces-2026-08.md` §3/§8/§15 and `.claude/agents/spinr-ai-guardrail-reviewer.md`
 
 ## Context
 
@@ -19,7 +19,7 @@ consumers with completely different trust levels:
 | LLM provider (Anthropic / OpenAI / Gemini) | Third-party processor under the PIA | Identifiers redacted; **trip-location data intact**, because booking is the job |
 | `/mcp` client | Third party chosen by the rider (Claude Desktop etc.) | Everything redacted — read-only tools, no booking, PIA R-10 |
 | The rider's own app (SSE `action` cards, `token` stream) | The data subject | **Nothing redacted** — it is their data; the concern is *internal-detail* leakage (tool names, ids, raw errors) |
-| Telemetry (logs, Sentry, support tickets, anonymous web chat) | Ops and vendors | Everything redacted, GPS above all (PIPEDA hard rule) |
+| Telemetry (logs, Sentry, support tickets, anonymous web chat) | Ops and vendors | Everything redacted, GPS above all (PIPEDA hard rule). The AI escalation transcript is re-scrubbed STRICT in `tools_support._recent_transcript` at the Zoho boundary, because persistence is no longer strict; the anonymous web assistant's tool results stay STRICT via `tools._policy_for_audience` |
 
 Applying the telemetry policy at the choke point rewrote every Canadian postal code in the
 rider-facing `_client_action` cards to the literal `[POSTAL]`. Because the app builds the tapped-card
@@ -69,6 +69,14 @@ thought of, so the next exemption — the postal code — had nowhere principled
   tool returns a card today").
 
 **Negative / accepted**
+- **One pin per conversation, most recent request wins.** A no-drivers fare check overwrites a
+  still-valid priced pin for an earlier trip (same Redis key). Kept deliberately after review: a second
+  key with a second replay block adds a state machine (delete-on-success, diverging TTLs), and a "yes"
+  after a fare check must never be read as confirming an older priced trip. The replay block tells the
+  model an earlier trip must be re-quoted before proposing; the rider then sees a fresh quote card. In
+  practice the pickup is usually shared, so the earlier trip would have no drivers either.
+- `/mcp` output is byte-identical to before except at the truncation boundary: `_cap_result` measures
+  the cap on the `AI_CHAT`-scrubbed dict, so an over-cap result can truncate at a different offset.
 - Postal codes now reach the LLM provider and `ai_messages` as bare text on the chat path (they
   previously reached both inside the street address; the marginal exposure is a code that identifies a
   block face, beside an address that identifies the building). Recorded as a PIA amendment.

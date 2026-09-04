@@ -22,9 +22,8 @@ import { setupAdminMocks } from './admin-mocks';
  * stubbing that host below with a minimal, source-less MapLibre style: it
  * has no "sources"/"glyphs"/"sprite" keys, so maplibre-gl renders a plain
  * background and fires its "load" event without issuing any further
- * requests — no live network involved at all. See the `continue-on-error`
- * comment on `visual-regression-test` in ci.yml, which this fix should let
- * a follow-up PR flip off.
+ * requests — no live network involved at all. `visual-regression-test` in
+ * ci.yml is blocking as of this fix (ACTION_ITEMS.md B38 closed).
  */
 
 const PAGES = [

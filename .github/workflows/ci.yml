@@ -492,24 +492,23 @@ jobs:
           path: admin-dashboard/playwright-report/
           retention-days: 7
 
-  # Visual regression — separate from e2e-test above and always
-  # continue-on-error. All 6 baselines are now seeded (2026-09-03, see
-  # docs/change-log/2026-09-02-seed-visual-regression-baselines.md and its
-  # follow-up commit), but continue-on-error stays on deliberately: seeding
-  # dashboard-monitoring's baseline surfaced that its map panel fetches live
-  # vector tiles from tiles.openfreemap.org (src/lib/map/maplibre-base.ts,
-  # MAP_STYLE_URL) with no mock in admin-mocks.ts — two runs on the same
-  # commit rendered a normal empty basemap once and "Failed to load map
-  # style. Check network / tile provider." the other time, purely from CI
-  # runner network variance, not a code change. Flipping this to blocking
-  # now would make CI intermittently red for reasons unrelated to any PR's
-  # diff. Flip it off once that page's spec mocks/stubs the tile fetch
-  # (page.route() on tiles.openfreemap.org, mirroring the /api/** mocking
-  # this file's specs already do) so the comparison no longer depends on
-  # live network reachability. Runs the `visual-regression` Playwright
-  # project only — explicitly excluded from the e2e-test job above via
-  # playwright.config.ts's testIgnore, so it can't accidentally start
-  # failing that already-meaningful job.
+  # Visual regression — separate from e2e-test above. Blocking as of
+  # 2026-09-04 (ACTION_ITEMS.md B38 closed): all 6 baselines are seeded
+  # (docs/change-log/2026-09-02-seed-visual-regression-baselines.md and its
+  # follow-up commits) and the one known source of non-determinism is fixed
+  # -- dashboard-monitoring's map panel used to fetch live vector tiles
+  # from tiles.openfreemap.org with no mock, so two runs on the same commit
+  # could render a normal basemap once and "Failed to load map style" the
+  # other time, purely from CI runner network variance. Now stubbed
+  # (page.route() on tiles.openfreemap.org in visual-regression.spec.ts,
+  # mirroring the /api/** mocking this file's specs already do) with a
+  # minimal source-less MapLibre style, so the comparison no longer depends
+  # on live network reachability at all -- see
+  # docs/change-log/2026-09-04-mock-dashboard-monitoring-map-tiles.md.
+  # Runs the `visual-regression` Playwright project only — explicitly
+  # excluded from the e2e-test job above via playwright.config.ts's
+  # testIgnore, so it can't accidentally start failing that
+  # already-meaningful job.
   visual-regression-test:
     name: Visual regression (Playwright)
     runs-on: ubuntu-latest
@@ -517,28 +516,25 @@ jobs:
     needs: [backend-test]
     # Phase 2 (docs/audit/2026-08-27-cicd-gates-guardrails-audit.md Section
     # 5): deliberately NOT gated on detect-changes, unlike e2e-test above.
-    # This job already self-skips to a near-zero-cost checkout + `find`
-    # (see "Check for committed visual baselines" below -- no baselines
-    # are committed yet), so there's negligible runtime left to save, and
-    # it's always continue-on-error already. Adding filter logic here
-    # would be complexity with no real turnaround-time payoff.
+    # All 6 baselines are seeded and this job is blocking (2026-09-04) --
+    # a real visual regression on any admin-dashboard page is exactly the
+    # kind of change path-filtering would risk skipping.
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
-    continue-on-error: true
     defaults:
       run:
         working-directory: admin-dashboard
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # `continue-on-error: true` above stops a baseline-less run blocking a
-      # merge, but it does NOT stop the check reporting `failure` — so this
-      # gate has been permanently red since it was added, for a reason the job
-      # comment itself documents as expected. A check that is always red stops
-      # being read, and then a real failure arrives looking like the noise.
-      #
-      # Detect the missing baselines up front and skip cleanly instead. This
-      # also avoids `npm ci` + a Chromium download + a full Next.js production
-      # build on every PR purely to fail at the last step.
+      # Kept for the rare case a future PR deletes every committed baseline
+      # PNG without re-seeding (e.g. reverting the seeding commits) --
+      # detect that and skip cleanly instead of failing on "no baseline
+      # found", which would read as this gate itself being broken rather
+      # than as the actual regression it should be reporting. Not expected
+      # to fire in the normal case now that baselines are seeded and this
+      # job is blocking. This also avoids `npm ci` + a Chromium download +
+      # a full Next.js production build on every PR purely to fail at the
+      # last step.
       #
       # Seed baselines with .github/workflows/update-visual-baselines.yml; the
       # moment any `*-snapshots/*.png` is committed, every step below runs

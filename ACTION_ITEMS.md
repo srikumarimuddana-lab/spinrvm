@@ -11058,29 +11058,28 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
 
-- [ ] **Status:** open, all 6 baselines now seeded 2026-09-02/03 (`login`,
+- [x] **Status: CLOSED 2026-09-04.** All 6 baselines seeded (`login`,
   `dashboard-home`, `dashboard-drivers`, `dashboard-monitoring`,
-  `dashboard-settings`, `dashboard-rides`; see
+  `dashboard-settings`, `dashboard-rides`;
   `docs/change-log/2026-09-02-seed-visual-regression-baselines.md`).
-  `dashboard-rides` needed a follow-up run after fixing the mock-fixture bug
-  its first capture surfaced. **Still not closed**, though — `continue-on-error`
-  on `visual-regression-test` in `ci.yml` deliberately stays `true`:
-  re-capturing baselines twice on the same commit surfaced that
-  `dashboard-monitoring`'s map panel fetches live vector tiles from
-  `tiles.openfreemap.org` with no mock/stub, so its comparison depends on
-  the CI runner's network reachability at capture/compare time — one run
-  rendered a normal empty basemap, the other "Failed to load map style"
-  purely from runner network variance, no code change involved. Flipping
-  to blocking now would make CI intermittently red for reasons unrelated
-  to any PR's diff (exactly this file's own "gate that's decayed" pattern,
-  self-inflicted before it even started gating). Needs a `page.route()`
-  stub on that tile host (mirroring the existing `/api/**` mocking pattern
-  in `admin-mocks.ts`) before `continue-on-error` can safely flip off.
-  The 403-blocked-from-this-session finding below is resolved: the workflow
-  can be triggered from the GitHub web UI by an account with
-  Actions-dispatch access (confirmed working 2026-09-02/03) — this
-  session's own GitHub App integration still lacks that scope, but that's
-  no longer the blocker it was when this item was filed.
+  `dashboard-rides` needed a follow-up run after fixing a mock-fixture bug
+  its first capture surfaced. `dashboard-monitoring`'s flakiness (its map
+  panel fetched live vector tiles from `tiles.openfreemap.org` with no
+  mock, so its comparison depended on the CI runner's network reachability
+  — one run rendered a normal basemap, another "Failed to load map style,"
+  same commit) fixed by stubbing that host with a minimal, source-less
+  MapLibre style (`page.route()` in `visual-regression.spec.ts`, mirroring
+  `admin-mocks.ts`'s `/api/**` pattern) —
+  `docs/change-log/2026-09-04-mock-dashboard-monitoring-map-tiles.md`.
+  Re-captured `dashboard-monitoring` under the mock and confirmed
+  deterministic (flat background, no error, no live network involved).
+  `continue-on-error` on `visual-regression-test` in `ci.yml` flipped
+  off — the gate is now actually blocking. The 403-blocked-from-this-session
+  finding below is resolved too: the workflow can be triggered from the
+  GitHub web UI by an account with Actions-dispatch access (confirmed
+  working 2026-09-02 through 09-04) — this session's own GitHub App
+  integration still lacks that scope, but that's no longer the blocker it
+  was when this item was filed.
 - **Original finding (2026-08-22):** found during the same coverage/validation
   audit as B37 — distinct surface from B25 (which covers Maestro
   real-device mobile E2E for rider-app/driver-app); this is
@@ -11146,11 +11145,15 @@ record of what was assumed vs. what was actually true</summary>
   it actually screenshots) — only that zero baselines are committed, so
   none of it currently runs.
 - **Acceptance:** baselines seeded via the existing workflow (done,
-  2026-09-02/03, all 6 pages); `dashboard-monitoring`'s tile fetch mocked so
-  `continue-on-error` can flip off without introducing network-dependent
-  flakiness (not done); a follow-up PR proves the gate catches a real
-  visual diff (not done); CLAUDE.md's gate-#6 text updated to reflect the
-  corrected (still not fully active) state (not done).
+  2026-09-02 through 09-04, all 6 pages); `dashboard-monitoring`'s tile
+  fetch mocked so `continue-on-error` could flip off without introducing
+  network-dependent flakiness (done, 2026-09-04); CLAUDE.md's gate-#6 text
+  updated to reflect the now-fully-active, blocking state (done,
+  2026-09-04). **Optional remaining follow-up, not required to consider
+  this item closed**: a deliberate visual change in a small test PR to
+  confirm the gate actually fails a real diff end-to-end, not just that it
+  compares successfully against itself — nice-to-have verification, not a
+  functional gap in the fix.
 
 ### B39. No schema-validation library on any frontend surface — money- and compliance-adjacent forms are validated ad hoc with no dedicated test coverage
 

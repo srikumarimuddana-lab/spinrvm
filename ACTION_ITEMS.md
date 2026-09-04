@@ -20159,8 +20159,8 @@ how much they de-risk a public launch._
   matching sweep (489 passed, 4 skipped, 0 failed). `ruff check`/`ruff
   format --check` clean on both touched files.
 
-### C55. Insurance-period write-failure alerting: no confirmed live Grafana/Sentry rule; no Period-2 reconciler (only Period-3 has one)
-- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+### C55. Insurance-period write-failure alerting: no confirmed live Grafana/Sentry rule; no Period-2 reconciler (only Period-3 has one) — CLOSED (2026-09-04)
+- [x] **Status:** closed. Found during C50's T2 retro `spinr-dispatch-reviewer`
   pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
 - **Issue/gap:** `record_period_transition` (`backend/utils/insurance_periods.py`)
   is a deliberate, documented exception to AGENTS.md's no-silent-swallow
@@ -20206,6 +20206,44 @@ how much they de-risk a public launch._
   the write-failed metric, or a reconciler loop landed with tests per the
   WS-12 §3 spec (kill the RPC mid-transition → reconciler restores the open
   period on next tick) — whichever the team decides is the actual bar.
+- **Fix:** built the reconciler loop (option (b)'s "build it" branch), not
+  just the alert. Added `metrics-agent/grafana/alert-rules.yaml`'s third
+  rule (`spinr-insurance-period-write-failed`, mirrors the dispatch-latency
+  P95 rule's structure) plus `backend/utils/insurance_period_reconciler.py`
+  — a 10-min loop, registered in `core/lifespan.py`'s `_WATCHDOG_LOOP_NAMES`,
+  that derives the expected period from ride state (pending `ride_offers` /
+  `driver_assigned|accepted|arrived` ride → P2, `in_progress` ride → P3,
+  online with no active ride → P1) and self-heals a missing/wrong open
+  `driver_insurance_periods` row via the existing `record_period_transition`
+  RPC. Opening/correcting a P2/3 row is unconditional (pure addition, no
+  downside); downgrading an online-idle driver's open P2/3 row to P1 is
+  gated behind `insurance_period_reconciler_downgrade_enabled` (default
+  off, alert-first — see the module docstring for the full risk reasoning:
+  a batch-limited or otherwise incomplete ride/offer scan could otherwise
+  make a genuinely-active driver look idle and close a live commercial-
+  coverage window under them). No `reconciled=true` marker column was
+  added (would need its own migration + RPC param change) — the
+  `spinr_insurance_period_reconciled_total{action=opened|corrected}` metric
+  and the reconciler's own log lines serve that distinguishing purpose
+  instead. `docs/CRITICAL_BUGS_IMPLEMENTATION_PLAN.md`'s WS-12 §3 marked
+  done with the same deviations noted.
+- **Files:** `metrics-agent/grafana/alert-rules.yaml`;
+  `backend/utils/insurance_period_reconciler.py` (new);
+  `backend/core/lifespan.py`; `backend/tests/test_lifespan_watchdog_coverage.py`;
+  `backend/tests/test_insurance_period_reconciler.py` (new);
+  `docs/CRITICAL_BUGS_IMPLEMENTATION_PLAN.md`; `CLAUDE.md` (loop-count
+  references). Full Change Impact & Risk Log:
+  `docs/change-log/2026-09-04-c55-insurance-period-alerting-reconciler.md`.
+- **Verified:** `pytest tests/test_insurance_period_reconciler.py
+  tests/test_lifespan_watchdog_coverage.py tests/test_stale_p3_closer.py
+  tests/test_insurance_period_rpc.py tests/test_insurance_periods.py -v` —
+  all passing (see the change-log entry for exact counts). `ruff check`/
+  `ruff format --check` clean on all touched Python files. **Not verified:**
+  no live Grafana access to confirm the new alert rule actually fires or
+  even parses under a real Grafana Cloud instance (same caveat the file's
+  existing two rules already carry); no live Supabase to run the
+  reconciler against real fleet drift — its DB interaction is exercised
+  only against mocked `db_supabase.get_rows`/`record_period_transition`.
 
 ### C56. `claim_driver_atomic`'s `run_sync` call uses the default read retry policy, not an explicit write policy — CLOSED (2026-09-03)
 - [x] **Status:** closed. Found during C50's T2 retro `spinr-dispatch-reviewer`

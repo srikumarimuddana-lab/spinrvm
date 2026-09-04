@@ -19941,8 +19941,8 @@ how much they de-risk a public launch._
   green except the one pre-existing, confirmed-unrelated
   `test_email_deliverability.py` failure (item 7 above).
 
-### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle
-- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle — CLOSED (2026-09-04)
+- [x] **Status:** closed. Found during C50's T2 retro `spinr-dispatch-reviewer`
   pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
 - **Issue/gap:** `_match_driver_to_ride_attempt`'s batch-claim loop
   (`backend/routes/rides/matching.py:822-842`) calls
@@ -19980,10 +19980,28 @@ how much they de-risk a public launch._
   claimed driver is released.
 - **Files:** `backend/routes/rides/matching.py` (the claim loop),
   `backend/tests/test_dispatch_match_attempt_branches.py` (new test).
+- **Fix:** the PostgREST claim loop's `claim_driver_atomic` call is now
+  wrapped in `try/except`; on exception it logs at `error` with the full
+  traceback, releases every driver already appended to `claimed_drivers`
+  via `set_driver_available(d["id"], True)`, then re-raises — the exact
+  pattern the `ride_offers` insert failure handler a few lines below
+  already used. Note: this fix applies to the PostgREST claim path only
+  (`_direct_pool_enabled=False`); the direct-pool path (C50 Phase 2's
+  `dispatch_claim_batch` RPC) claims + inserts + writes insurance in one
+  Postgres transaction, so a mid-call failure there rolls back the whole
+  transaction server-side — nothing is left claimed to release, per that
+  branch's own comment.
 - **Acceptance:** a `claim_driver_atomic` exception on candidate N releases
   every driver claimed at candidates 1..N-1 before the exception reaches the
   `match_driver_to_ride` recovery shell; new regression test passes; no
   behavior change to the successful-claim or `ride_offers`-failure paths.
+  Verified: new test `test_claim_loop_exception_releases_earlier_claims_and_reraises`
+  (2 candidates, 2nd raises, asserts only the 1st is released via
+  `set_driver_available`) plus the full existing
+  `test_dispatch_match_attempt_branches.py` (14/14, including the
+  `ride_offers`-failure sibling test unmodified) and a broader dispatch/
+  matching sweep (489 passed, 4 skipped, 0 failed). `ruff check`/`ruff
+  format --check` clean on both touched files.
 
 ### C55. Insurance-period write-failure alerting: no confirmed live Grafana/Sentry rule; no Period-2 reconciler (only Period-3 has one)
 - [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`

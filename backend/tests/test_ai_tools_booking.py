@@ -1301,6 +1301,45 @@ class TestFareQuote:
         assert "_client_action" not in result
 
     @pytest.mark.anyio
+    async def test_no_drivers_pins_the_endpoints_for_a_requote_only(self):
+        """Reported 2026-09-04: after "no drivers available" the rider
+        answered "Yes" to trying again and the model replied that it had no
+        active quote -- nothing had been pinned, tool results never reach the
+        next turn, and rule 6 forbids reusing older bracketed coordinates.
+        The no-drivers branch now pins the endpoints (and ONLY the endpoints:
+        no vehicle_type_id / total, so nothing can be booked from it) and its
+        note tells the model to re-check on "yes"."""
+        all_unavailable = {
+            "estimates": [dict(ESTIMATES["estimates"][0], available=False, eta_minutes=None, driver_count=0)],
+            "route_polyline": None,
+        }
+        pin = AsyncMock()
+        args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
+        with (
+            _patch_estimates(all_unavailable),
+            _patch_promos([]),
+            _patch_settings(key=""),
+            _patch_area(),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+            patch.object(tools_booking, "_pin_quote", pin),
+        ):
+            result, ok = await execute_tool("get_fare_quote", args, user=dict(RIDER, _conversation_id="conv-1"))
+        assert ok
+        assert result["no_drivers"] is True
+        assert "offer to re-check" in result["note"]
+        assert "call get_fare_quote again" in result["note"]
+        assert "LAST FARE CHECK" in result["note"]
+        pin.assert_awaited_once()
+        conversation_id, pinned = pin.await_args.args
+        assert conversation_id == "conv-1"
+        assert pinned["no_drivers"] is True
+        assert (pinned["pickup_lat"], pinned["pickup_lng"]) == (self.ARGS["pickup_lat"], self.ARGS["pickup_lng"])
+        assert (pinned["dropoff_lat"], pinned["dropoff_lng"]) == (self.ARGS["dropoff_lat"], self.ARGS["dropoff_lng"])
+        assert pinned["pickup_address"] == "123 Main St, Saskatoon"
+        assert pinned["dropoff_address"] == "Saskatoon Airport"
+        assert "vehicle_type_id" not in pinned and "total" not in pinned
+
+    @pytest.mark.anyio
     async def test_promo_failure_does_not_kill_quote(self):
         with _patch_estimates(ESTIMATES), _patch_promos(error=RuntimeError("promo db down")):
             result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)

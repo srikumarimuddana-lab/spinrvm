@@ -15346,7 +15346,7 @@ record of what was assumed vs. what was actually true</summary>
       `SLACK_WEBHOOK` being configured, and it surfaces "is `main` red
       *right now*" as a live open/closed issue state rather than requiring
       someone to scroll a 29-comment thread to find out. **One genuine,
-      smaller follow-up remains, not yet filed as its own item:**
+      smaller follow-up remains — filed as its own item, C72:**
       `create_github_issue.py`'s fingerprint is coarser than the failure
       content (job+category+surface, not the specific error) — tightening
       it, or re-opening/re-flagging when a matching-fingerprint issue's
@@ -21562,6 +21562,61 @@ how much they de-risk a public launch._
   (filename retains the informal "c70" slug per the numbering note above).
 - **Files:** `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_db_errors.py`,
   `backend/tests/test_dispatch_match_attempt_branches.py`.
+
+### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue
+
+- [ ] **Status:** open — found 2026-09-04 while root-causing what first
+  looked like a gap in C21's 2026-09-04 follow-up (see that entry's
+  same-day correction for the full investigation trail; this item is the
+  one genuine, smaller finding that came out of it, filed on its own
+  rather than left as a buried note).
+- **What's wrong:** `scripts/ci-audit/create_github_issue.py` computes a
+  fingerprint per failure and, when an **open** issue already carries a
+  matching `<!-- ci-audit-fingerprint: HASH -->` marker, comments on it
+  instead of opening a new one — the correct anti-issue-spam behavior CR
+  #4612 added. But the fingerprint reads coarser than intended: it groups
+  by job + category + surface (e.g. `backend-test` / `test` / `backend`),
+  not by the specific error signature. Confirmed concretely: issue #4925
+  (`[CI Audit] CI/CD Pipeline — P1 — 1 error(s) on main`, opened 00:21 UTC
+  2026-09-04 for one `backend-test` failure) went on to absorb **14
+  separate, genuinely unrelated** `backend-test` failures from a same-day
+  16:08-18:31 incident (2 stale test mocks + a real `loguru`
+  `%`-placeholder bug in `routes/rides/matching.py` — see C21 and C71) as
+  comments, ending the day with 29 comments total. Anyone reading #4925's
+  title/body sees the *original* 00:21 failure only; the fact that a
+  distinct, already-diagnosed-and-fixed bug also lived under the same
+  issue is discoverable only by reading all 29 comments.
+- **Why it matters:** the dedup is doing its job (no issue-count spam),
+  but at the cost of an issue's own title/body going stale relative to
+  what it's actually tracking. A human triaging `ci-audit`-labeled issues
+  by title/severity/surface would reasonably treat #4925 as "one known
+  P1, still open" and not realize 14 more (possibly-worse) occurrences,
+  with a different root cause, piled up underneath. It also means an
+  issue can look perpetually "still open, still relevant" long after its
+  original cause was fixed, if a different bug in the same job/category
+  keeps recurring.
+- **Fix options** (not yet decided, no code fix attempted):
+  1. Tighten the fingerprint to include a hash of the actual error
+     message/traceback signature (e.g. the specific
+     `pytest`/`ValueError`/assertion text), not just job+category+surface
+     — closer to how the "same failure" concept should work, at the cost
+     of the dedup being less aggressive (more distinct issues for
+     genuinely-varying flakiness in the same job).
+  2. Keep the coarse fingerprint but have `create_github_issue.py`
+     re-open/re-flag or update the issue's own title/severity when a new
+     occurrence's classified content differs materially from the
+     original, rather than only ever appending a comment.
+  3. At minimum, have the commented-on-existing-issue path also re-apply
+     or reconcile severity/category labels so an issue that started P2
+     but has since absorbed a P1 occurrence doesn't stay mislabeled.
+- **Not resolvable as a drive-by edit**: `create_github_issue.py` is a
+  working, in-use script (183+ issues created historically per the file's
+  own git-blame-adjacent history) — changing its dedup semantics deserves
+  its own scoped PR with its own review, not a fix folded into an
+  unrelated documentation correction.
+- **Files:** `scripts/ci-audit/create_github_issue.py` (the fingerprint
+  computation and comment-vs-create branch), `.github/workflows/
+  ci-error-audit.yml` (the `create-audit-issues` job that calls it).
 
 ## Recently completed (do not redo)
 

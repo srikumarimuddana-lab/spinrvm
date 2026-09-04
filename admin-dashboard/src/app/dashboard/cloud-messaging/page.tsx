@@ -769,7 +769,7 @@ export default function CloudMessagingPage() {
                                             const typeCfg = NOTIFICATION_TYPES.find((t) => t.value === msg.type);
                                             const TI = typeCfg?.icon || Info;
                                             return (
-                                                <TableRow key={msg.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedMessage(msg)}>
+                                                <TableRow key={msg.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedMessage(msg)} tabIndex={0} aria-label={`${msg.title}, ${msg.type || "info"}, ${sc.label}`} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedMessage(msg); } }}>
                                                     <TableCell><p className="font-medium text-sm">{msg.title}</p><p className="text-xs text-muted-foreground truncate max-w-[180px]">{msg.description}</p></TableCell>
                                                     <TableCell><div className="flex items-center gap-1"><TI className={`h-3 w-3 ${typeCfg?.color || ""}`} /><span className="text-xs capitalize">{msg.type || "info"}</span></div></TableCell>
                                                     <TableCell><span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span></TableCell>

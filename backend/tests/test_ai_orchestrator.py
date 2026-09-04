@@ -322,19 +322,27 @@ class TestPinnedQuoteContext:
         }
         with self._patch_pin(pinned):
             await _run(adapter)
-        assert "LAST FARE CHECK IN THIS CONVERSATION" in adapter.system
+        header = f"\n\n{orch.FARE_CHECK_BLOCK_HEADER} (no drivers were available"
+        assert header in adapter.system
         assert _PIN_MARKER not in adapter.system
-        assert "[50.45010,-104.61780]" in adapter.system
-        assert "[50.44970,-104.53450]" in adapter.system
-        assert "2150 Prince of Wales Dr, Regina, SK S4V 2Z7" in adapter.system
-        assert "call get_fare_quote" in adapter.system
-        assert "do NOT call propose_ride_booking" in adapter.system
-        assert "quoted_total" not in adapter.system
+        # Scope every assertion to the replayed block itself: rule 6c in the
+        # core prompt also mentions the header, get_fare_quote and
+        # quoted_total, so a whole-prompt check would be a tautology.
+        block = adapter.system.split(header, 1)[1]
+        assert "[50.45010,-104.61780]" in block
+        assert "[50.44970,-104.53450]" in block
+        assert "2150 Prince of Wales Dr, Regina, SK S4V 2Z7" in block
+        assert "call get_fare_quote" in block
+        assert "do NOT call propose_ride_booking" in block
+        assert "replaced any earlier priced quote" in block
+        assert "quoted_total" not in block and "vehicle_type_id" not in block
 
     def test_rule_6c_tells_the_model_what_a_fare_check_block_means(self):
-        from backend.ai.prompts import build_system_prompt
+        from backend.ai.prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
 
         prompt = build_system_prompt({}, "rider")
+        # The shared constant and the literal in rule 6c must agree.
+        assert f'A "{FARE_CHECK_BLOCK_HEADER}"' in prompt
         assert 'A "LAST FARE CHECK IN THIS CONVERSATION"' in prompt
         assert "never say you have no quote to work from" in prompt
         assert "never book from that block directly" in prompt

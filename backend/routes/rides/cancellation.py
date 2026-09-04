@@ -124,7 +124,7 @@ async def cancel_ride_rider(
         charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
         total_cancel_fee = _round(charged_admin + charged_driver)
     except Exception as _fee_exc:
-        logger.error("[CANCEL] cancellation fee computation failed ride_id=%s: %s", ride_id, _fee_exc, exc_info=True)
+        logger.opt(exception=True).error("[CANCEL] cancellation fee computation failed ride_id={}: {}", ride_id, _fee_exc)
         charged_admin = charged_driver = Decimal("0")
         total_cancel_fee = Decimal("0")
 
@@ -170,7 +170,7 @@ async def cancel_ride_rider(
                     authorized_amount=_held_amount,
                 )
             except Exception as _cap_exc:  # pragma: no cover — helper never raises
-                logger.error("[CANCEL] fee capture raised ride_id=%s: %s", ride_id, _cap_exc, exc_info=True)
+                logger.opt(exception=True).error("[CANCEL] fee capture raised ride_id={}: {}", ride_id, _cap_exc)
                 _fee_outcome = None
 
             if _fee_outcome is not None and _fee_outcome.status == "captured":
@@ -179,7 +179,7 @@ async def cancel_ride_rider(
                 cancel_fee_payment_status = "paid"
                 cancel_fee_payment_intent_id = _fee_outcome.payment_intent_id
                 logger.info(
-                    "[CANCEL] fee taken from hold ride_id=%s captured=%s of fee=%s (remainder released)",
+                    "[CANCEL] fee taken from hold ride_id={} captured={} of fee={} (remainder released)",
                     ride_id,
                     fee_taken_from_hold,
                     total_cancel_fee,
@@ -209,7 +209,7 @@ async def cancel_ride_rider(
                 # fallback succeeds. An uncaptured hold expires on its own, and
                 # the orphaned-hold reconciler sweeps it.
                 logger.error(
-                    "[CANCEL] fee capture from hold failed ride_id=%s status=%s — falling back to a fresh charge",
+                    "[CANCEL] fee capture from hold failed ride_id={} status={} — falling back to a fresh charge",
                     ride_id,
                     getattr(_fee_outcome, "status", "raised"),
                 )
@@ -218,9 +218,9 @@ async def cancel_ride_rider(
                 _released = await _deps.cancel_authorization(ride_id=ride_id, payment_intent_id=_booking_pi)
                 if _released:
                     _hold_released_in_full = True
-                    logger.info("[CANCEL] released pre-auth hold ride_id=%s pi=%s", ride_id, _booking_pi)
+                    logger.info("[CANCEL] released pre-auth hold ride_id={} pi={}", ride_id, _booking_pi)
             except Exception as _rel_exc:
-                logger.error("[CANCEL] pre-auth release failed ride_id=%s: %s", ride_id, _rel_exc, exc_info=True)
+                logger.opt(exception=True).error("[CANCEL] pre-auth release failed ride_id={}: {}", ride_id, _rel_exc)
 
     # The cancel is already persisted by the atomic claim above, so the
     # assigned driver MUST be released, transitioned back to Period 1, and
@@ -273,7 +273,7 @@ async def cancel_ride_rider(
                     _charged = _round(abs(_d(str(_fee_txn.get("applied_delta") or 0))))
                     if _charged < total_cancel_fee:
                         logger.info(
-                            "[CANCEL] partial cancellation fee collected ride_id=%s charged=%s of=%s",
+                            "[CANCEL] partial cancellation fee collected ride_id={} charged={} of={}",
                             ride_id,
                             _charged,
                             total_cancel_fee,
@@ -301,7 +301,7 @@ async def cancel_ride_rider(
                     # at all, so leave payment_status/payment_intent_id untouched
                     # rather than mislabel a config gap as a decline.
                     logger.error(
-                        "[CANCEL] cancellation fee charge skipped (stripe unconfigured) ride=%s amount=%s",
+                        "[CANCEL] cancellation fee charge skipped (stripe unconfigured) ride={} amount={}",
                         ride_id,
                         total_cancel_fee,
                     )
@@ -338,8 +338,8 @@ async def cancel_ride_rider(
                     else:
                         cancel_fee_payment_status = "failed"
                         logger.error(
-                            "[CANCEL] cancellation fee card charge failed ride=%s rider=%s amount=%s "
-                            "status=%s error=%s",
+                            "[CANCEL] cancellation fee card charge failed ride={} rider={} amount={} "
+                            "status={} error={}",
                             ride_id,
                             current_user["id"],
                             total_cancel_fee,
@@ -356,13 +356,12 @@ async def cancel_ride_rider(
                 ride_status_at_cancel=ride.get("status"),
             )
     except Exception as _fee_exc:
-        logger.error(
+        logger.opt(exception=True).error(
             "[CANCEL] cancellation-fee write failed after the cancel was "
-            "persisted for ride %s; releasing the driver anyway — fee needs "
-            "reconciliation: %s",
+            "persisted for ride {}; releasing the driver anyway — fee needs "
+            "reconciliation: {}",
             ride_id,
             getattr(_fee_exc, "details", {}).get("original", _fee_exc) if hasattr(_fee_exc, "details") else _fee_exc,
-            exc_info=True,
         )
 
     _now = datetime.now(timezone.utc)
@@ -415,7 +414,7 @@ async def cancel_ride_rider(
             },
         )
     except Exception as _col_exc:
-        logger.error(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
+        logger.opt(exception=True).error(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal")
         await _deps.db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of
@@ -560,7 +559,7 @@ async def cancel_ride_rider(
                 except Exception as _e:
                     logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")
     except Exception as _batch_exc:
-        logger.error(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}", exc_info=True)
+        logger.opt(exception=True).error(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}")
 
     # Notify the rider's own connection — broadcast_ride_status only fans
     # out to the rider when rider_id is passed, but an explicit message
@@ -670,7 +669,7 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
                 )
             elif outcome.status != "unconfigured":
                 logger.error(
-                    "[SCHED-CANCEL] notice-window fee card charge failed ride=%s rider=%s amount=%s status=%s error=%s",
+                    "[SCHED-CANCEL] notice-window fee card charge failed ride={} rider={} amount={} status={} error={}",
                     ride_id,
                     rider_id,
                     fee,
@@ -680,12 +679,11 @@ async def _charge_scheduled_cancel_notice_fee(ride: dict, rider_id: str) -> None
         # Any other payment_method (e.g. company_allowance) is already
         # excluded by calculate_scheduled_cancel_notice_fee returning 0.
     except Exception as _fee_exc:
-        logger.error(
-            "[SCHED-CANCEL] notice-window fee charge failed for ride %s; cancellation already "
-            "persisted and is not affected: %s",
+        logger.opt(exception=True).error(
+            "[SCHED-CANCEL] notice-window fee charge failed for ride {}; cancellation already "
+            "persisted and is not affected: {}",
             ride_id,
             _fee_exc,
-            exc_info=True,
         )
 
 

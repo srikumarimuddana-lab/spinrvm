@@ -40,7 +40,7 @@ def _push_in_background(*args, _ctx: str = "", **kwargs) -> None:
         try:
             await _deps.send_push_notification(*args, **kwargs)
         except Exception:
-            logger.error(f"background push failed ({_ctx})", exc_info=True)
+            logger.opt(exception=True).error(f"background push failed ({_ctx})")
 
     _deps.spawn(_send())
 
@@ -137,7 +137,7 @@ async def _fetch_directions_route(
             data = resp.json()
         if data.get("status") != "OK" or not data.get("routes"):
             logger.warning(
-                "_fetch_directions_route: status=%s — no route returned",
+                "_fetch_directions_route: status={} — no route returned",
                 data.get("status"),
             )
             return None
@@ -176,7 +176,7 @@ async def _fetch_directions_route(
         # Money path: this decides whether the ride bills on the road route or
         # on the shorter straight line, so it must not disappear into a
         # warning. Callers fall back to haversine and undercharge.
-        logger.error("_fetch_directions_route failed — fare will fall back to haversine: %s", exc, exc_info=True)
+        logger.opt(exception=True).error("_fetch_directions_route failed — fare will fall back to haversine: {}", exc)
         return None
 
 

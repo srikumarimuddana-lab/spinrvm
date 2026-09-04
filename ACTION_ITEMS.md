@@ -20568,11 +20568,11 @@ how much they de-risk a public launch._
   plausibility-check test coverage; no behavior change to the live-marker
   write (already covered by `check_location_integrity()` on `last_pt`).
 
-### C65. `test_loguru_call_conventions.py` selects files by the literal loguru import line — modules that take `logger` from a re-export are never scanned
+### C65. `test_loguru_call_conventions.py` selects files by the literal loguru import line — modules that take `logger` from a re-export are never scanned — CLOSED (2026-09-04)
 
-- [ ] **Status:** open — found 2026-09-03 during the WS-1 self-review
+- [x] **Status:** closed — found 2026-09-03 during the WS-1 self-review
   (PR #4909), immediately after C60 fixed 9 real offenders that this gate
-  *did* catch.
+  *did* catch; fixed in the same PR at the user's direction.
 - **Issue/gap:** `_loguru_modules()` selects files with
   `if "from loguru import logger" in src`. A module that obtains loguru's
   `logger` indirectly — e.g. `backend/routes/rides/matching.py`, which takes
@@ -20600,11 +20600,48 @@ how much they de-risk a public launch._
 - **Files:** `backend/tests/test_loguru_call_conventions.py` (selector),
   `backend/routes/rides/matching.py` (largest known offender), plus whatever
   else the widened scan reports.
-- **Note:** WS-1 (PR #4909) fixed only the call sites it introduced, using
-  `logger.opt(exception=True)`, and did **not** touch the pre-existing ones —
-  deliberately out of scope. Beware: adding the literal import string to a
-  file *in a comment* is enough to pull it into the scan and turn the gate
-  red (this happened once during that PR and was caught before push).
+- **Note:** WS-1 (PR #4909) initially fixed only the call sites it introduced,
+  using `logger.opt(exception=True)`, and did **not** touch the pre-existing
+  ones. Beware: with the *old* substring selector, adding the literal import
+  string to a file *in a comment* was enough to pull it into the scan and turn
+  the gate red (this happened once during that PR and was caught before push).
+  The AST resolver below is immune to that — a mention in a comment or
+  docstring is no longer a selector.
+
+**Resolution (2026-09-04, bundled into PR #4909 at the user's direction):**
+
+- **Selector.** `_loguru_modules()` no longer greps for a substring. A new
+  `_logger_flavor()` resolves each module's `logger` binding through the AST,
+  following `from ._deps import logger` to the module that defines it, and
+  understands `from loguru import logger as _raw` + `logger = _raw.bind(...)`.
+- **The scope was *not* what this entry predicted, in both directions.** The
+  two re-export hubs are not the same flavor:
+
+  | module | binding | flavor |
+  |---|---|---|
+  | `routes/rides/_deps.py` | `from loguru import logger` | loguru |
+  | `routes/drivers/_deps.py` | `logger = logging.getLogger(__name__)` | **stdlib** |
+
+  So the 13 `routes/drivers/*` modules are stdlib, and their `exc_info=`/`%s`
+  calls are **correct** — "scan anything that isn't obviously stdlib" would
+  have broken them. The widened scan adds exactly the 12 `routes/rides/*`
+  modules (39 → 50 modules, ~560 → 722 calls), removing none.
+- **Offenders fixed:** 161 across 10 files — 78 `exc_info=True` →
+  `logger.opt(exception=True).<level>(...)`, and 83 `%`-style messages → `{}`
+  (`%s`→`{}`, `%d`→`{}` — every argument is a `len()`/index, so this is
+  output-identical — and `%.3f`→`{:.3f}`, preserving the shadow fare-distance
+  log's precision). Zero arity mismatches, zero literals already containing
+  braces, zero `%%`, so nothing had to be skipped.
+- **Recurrence guard:** `test_every_logger_binding_resolves` now **fails** on
+  any module that calls `logger.*` with a binding the resolver cannot classify.
+  An unrecognised binding used to mean "silently not scanned" — which is the
+  entire mechanism of this bug. It found a third shape on its first run
+  (`utils/outbox_worker.py`'s aliased `.bind()`, which the old substring
+  selector had been matching only by accident). `test_scan_covers_reexported_loggers_and_only_those`
+  pins both edges: `routes/rides/*` in, `routes/drivers/*` out.
+- **Verified:** the widened gate was run against the pre-fix tree and fails
+  both detectors there, so it is not vacuously green. See the change-log entry
+  `docs/change-log/2026-09-04-loguru-gate-reexport-blind-spot.md`.
 
 ### C66. Admin ride-mutation endpoints: `admin_complete_ride` has no optimistic lock and both admin endpoints can open Period 1 for an offline driver — CLOSED (2026-09-04)
 
@@ -20703,6 +20740,42 @@ how much they de-risk a public launch._
   than a tracked follow-up.
 - **Files:** `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`,
   `admin-dashboard/src/app/dashboard/rides/_components/ride-detail-modal.tsx`.
+
+### C69. loguru calls passing `extra={...}` silently discard their structured context
+
+- [ ] **Status:** open — found 2026-09-04 while closing C65, by scanning the
+  newly-widened set of loguru modules for a third defect of the same family.
+- **Issue/gap:** 6 call sites in 4 loguru modules pass `extra={...}`:
+  `repositories/_base.py`, `repositories/dispatch_pool.py`,
+  `repositories/wallet_repo.py`, `routes/rides/estimates.py`. loguru has no
+  `extra=` parameter — like `exc_info=` (C60/C65), it is handed to
+  `str.format(**kwargs)`, and since no message contains an `{extra}` field the
+  dict is simply dropped. The log line renders without it and the
+  loguru→Sentry bridge never sees it.
+- **Root cause:** the same stdlib-spelling-on-a-loguru-logger confusion as
+  C60 and C65. CLAUDE.md's Observability section explicitly instructs "use
+  structured context via `extra={...}`" — correct for the 252 stdlib modules,
+  silently wrong for the 50 loguru ones. The doc does not distinguish them.
+- **Why it matters:** it is the *values* that are lost, not the message. E.g.
+  `routes/rides/estimates.py`'s haversine-undercharge ERROR carries
+  `extra={"haversine_km": ..., "fare_mode": ...}` — the two fields that make
+  the alert actionable — and logs none of them. The message alone cannot tell
+  an operator how large the undercharge was.
+- **Action:** replace `logger.<lvl>(msg, extra={...})` with
+  `logger.bind(**{...}).<lvl>(msg)` in loguru modules, extend
+  `test_loguru_call_conventions.py` with a third detector (the selector and
+  the `_logger_calls` walker already handle `.bind()` chains, so this is a
+  ~10-line test), and add the loguru/stdlib split to CLAUDE.md's Observability
+  section so the next author is not misled the same way.
+- **Not bundled into PR #4909:** distinct defect class from C65, needs its own
+  blast-radius pass — `repositories/_base.py` is a hot path with a dedicated
+  PII-logging test (`tests/test_base_pii_logging.py`) that must be read, not
+  just grepped, before its log calls are reshaped.
+- **Files:** `backend/repositories/_base.py`,
+  `backend/repositories/dispatch_pool.py`,
+  `backend/repositories/wallet_repo.py`,
+  `backend/routes/rides/estimates.py`,
+  `backend/tests/test_loguru_call_conventions.py`, `CLAUDE.md`.
 
 ## Recently completed (do not redo)
 

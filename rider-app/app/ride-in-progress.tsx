@@ -130,6 +130,21 @@ function RideInProgressScreenContent() {
   // so the rider can look around; it resumes after FOLLOW_RESUME_MS.
   const didInitialFitRef = React.useRef(false);
   const followPausedUntilRef = React.useRef(0);
+  // CarMarker's own reported position (route-snapped, PLAYBACK_DELAY_MS-
+  // delayed) — the follow camera below anchors on THIS, not the raw
+  // currentDriver.lat/lng fix. Same root cause driver-app diagnosed and
+  // fixed for its own follow camera (2026-08-31, "icon missing" at speed):
+  // anchoring on the raw fix while the icon renders delayed lets the two
+  // drift apart at driving speed, pushing the car icon toward the edge of
+  // (or outside) the visible map. Falls back to the raw fix before
+  // CarMarker's first tick has reported one (e.g. right after mount).
+  const markerPosRef = React.useRef<{ latitude: number; longitude: number } | null>(null);
+  const handleMarkerPositionChange = React.useCallback(
+    (coord: { latitude: number; longitude: number }) => {
+      markerPosRef.current = coord;
+    },
+    [],
+  );
   useEffect(() => {
     // Snapshot props at effect entry — the closure shouldn't reach into
     // currentRide / currentDriver after an async state change. Driver lat/
@@ -166,8 +181,11 @@ function RideInProgressScreenContent() {
         );
       } else if (Date.now() >= followPausedUntilRef.current) {
         // Keep the rider's current zoom — only glide the center to the car.
+        // Anchor on CarMarker's own reported (delayed, route-snapped)
+        // position when available, not the raw fix — see markerPosRef above.
+        const center = markerPosRef.current ?? { latitude: dLat, longitude: dLng };
         map.animateCamera(
-          { center: { latitude: dLat, longitude: dLng } },
+          { center },
           { duration: 800 },
         );
       }
@@ -748,6 +766,7 @@ function RideInProgressScreenContent() {
                 coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
                 heading={(currentDriver as any).heading}
                 routeCoordinates={tripRouteCoords.length > 1 ? tripRouteCoords : null}
+                onPositionChange={handleMarkerPositionChange}
                 size={44}
                 zIndex={100}
                 // Single marker on this screen (the assigned driver) — safe

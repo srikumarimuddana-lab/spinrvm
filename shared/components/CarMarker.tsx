@@ -110,6 +110,22 @@ interface CarMarkerProps {
      * this prop there.
      */
     ring?: { color: string; pulsing: boolean } | null;
+    /**
+     * Fired every playback tick with the position this marker is actually
+     * rendering (route-snapped when on-route, PLAYBACK_DELAY_MS-delayed per
+     * the playback buffer). A caller that derives a camera position FROM
+     * this vehicle's location (e.g. a follow camera that re-centers on each
+     * GPS update) MUST anchor on this position, not a separately-held raw
+     * GPS fix — otherwise the camera tracks the live, undelayed position
+     * while the icon renders PLAYBACK_DELAY_MS behind it, and at driving
+     * speed the two can drift far enough apart that the icon renders near
+     * or outside the visible map area. Same root cause diagnosed and fixed
+     * for driver-app's own copy of this component (2026-08-31, "icon
+     * missing" at 46 km/h) — ported here for rider-app's follow cameras
+     * (`ride-in-progress.tsx`, `driver-arriving.tsx`), which anchor on the
+     * driver's raw fix the same way driver-app's did before that fix.
+     */
+    onPositionChange?: (coordinate: TrackingLatLng) => void;
 }
 
 // Playback tick: the marker re-targets its position animation this often,
@@ -199,6 +215,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     imageUri,
     routeCoordinates,
     ring,
+    onPositionChange,
 }) => {
     const markerRef = useRef<any>(null);
     // Stable Animated holders created once; reading .current at init is safe.
@@ -224,6 +241,12 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     useEffect(() => {
         headingRef.current = heading;
     }, [heading]);
+    // Latest onPositionChange, read by the ticker (which must not re-fire
+    // per callback-identity change — same reasoning as headingRef above).
+    const onPositionChangeRef = useRef(onPositionChange);
+    useEffect(() => {
+        onPositionChangeRef.current = onPositionChange;
+    }, [onPositionChange]);
 
     // Route lookup happens inside the position effect via a ref so a route
     // refresh (live-route poll returns a new array every ~20 s) re-snaps the
@@ -382,6 +405,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             // otherwise render it raw (off-route/detour honesty).
             const snap = snapToRoute(p.coordinate, routeRef.current, MAX_ROUTE_SNAP_M);
             const target = snap?.coordinate ?? p.coordinate;
+            onPositionChangeRef.current?.(target);
 
             const from = prevTargetRef.current;
             const movedM = distanceMeters(

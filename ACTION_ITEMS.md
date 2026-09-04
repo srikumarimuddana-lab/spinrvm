@@ -20860,9 +20860,25 @@ how much they de-risk a public launch._
 - **Files:** `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`,
   `admin-dashboard/src/app/dashboard/rides/_components/ride-detail-modal.tsx`.
 
-### C69. loguru calls passing `extra={...}` silently discard their structured context
+### C69. loguru calls passing `extra={...}` silently discard their structured context — CLOSED (2026-09-04)
 
-- [ ] **Status:** open — found 2026-09-04 while closing C65, by scanning the
+- [x] **Status:** closed (2026-09-04) — all 6 call sites converted to
+  `logger.bind(**{...}).<lvl>(msg)` in a dedicated PR (not bundled into
+  #4909, per this entry's own note below). `backend/tests/test_base_pii_logging.py`
+  was read in full before touching `_base.py`; none of the 3 fields moved
+  into `.bind()` there are PII-relevant (`reason`/`stage`/`retry_policy`/
+  `attempt`/`overdue_seconds`/`waited_seconds` — deadline bookkeeping only).
+  New static detector `test_no_extra_kwarg_in_loguru_calls` added to
+  `test_loguru_call_conventions.py` and proven non-vacuous (temporarily
+  reverted one call site, confirmed the detector caught it, restored the
+  fix). One test dependency broke and was fixed:
+  `test_wallet_repo.py::test_mark_stripe_event_processed_swallows_db_error_but_logs_loudly`
+  asserted `kwargs["extra"][...]` on `mock_logger.error` directly, which no
+  longer matches the `.bind(...).error(...)` call shape — updated to assert
+  on `mock_logger.bind` and `mock_logger.bind.return_value.error`. CLAUDE.md's
+  Observability Conventions section now documents the loguru/stdlib
+  `extra=`/`exc_info=` split. See `docs/change-log/2026-09-04-c69-loguru-extra-fix.md`.
+- **Status (historical):** open — found 2026-09-04 while closing C65, by scanning the
   newly-widened set of loguru modules for a third defect of the same family.
 - **Issue/gap:** 6 call sites in 4 loguru modules pass `extra={...}`:
   `repositories/_base.py`, `repositories/dispatch_pool.py`,

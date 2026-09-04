@@ -477,9 +477,8 @@ async def compute_ride_estimates(
         # neutral degrade: haversine <= road always, so every one of these
         # undercharges. Loud enough to alert on — a metric alone let this run
         # unnoticed (incident: 16.6 km road billed as 15.5 km straight-line).
-        logger.error(
-            "[estimate] road distance unavailable — billing haversine (undercharge)",
-            extra={"haversine_km": round(float(haversine_km), 3), "fare_mode": _fare_mode},
+        logger.bind(haversine_km=round(float(haversine_km), 3), fare_mode=_fare_mode).error(
+            "[estimate] road distance unavailable — billing haversine (undercharge)"
         )
     if road_km is not None:
         _deps._metric_observe(

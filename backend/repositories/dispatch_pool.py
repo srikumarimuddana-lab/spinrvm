@@ -337,9 +337,8 @@ async def acquire() -> AsyncIterator["psycopg.AsyncConnection"]:
 
     if _deadline_exhausted():
         remaining = _remaining_seconds()
-        logger.warning(
-            "[dispatch_pool] rejected before acquire: client deadline already expired",
-            extra={"overdue_seconds": round(-(remaining or 0.0), 3)},
+        logger.bind(overdue_seconds=round(-(remaining or 0.0), 3)).warning(
+            "[dispatch_pool] rejected before acquire: client deadline already expired"
         )
         raise TimeoutError("dispatch direct pool: client deadline already expired")
 

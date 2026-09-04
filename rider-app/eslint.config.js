@@ -53,6 +53,33 @@ module.exports = defineConfig([
     // header comment says never to import directly; it's since been
     // deleted entirely (2026-09-04), so useTheme() is now correctly the
     // only path anyway.)
+    //
+    // Second selector pair (below): enforce spacing/font-scale token usage
+    // — padding/margin/fontSize values should come from SPACING/FONT
+    // (shared/utils/responsive.ts), not hardcoded numeric literals.
+    // shared/utils/responsive.ts is a genuinely well-built utility (dynamic
+    // font scaling clamped +/-30%, responsive breakpoints, tablet-aware
+    // sheet snaps) that almost nothing in the app actually imports — this
+    // is the same "lint enforcement + opportunistic migration" fix as the
+    // hex-color rule above, not a redesign. Also 'warn' for the same
+    // pre-existing-violations reason (hundreds of pre-existing call sites).
+    // Scoped to the padding/margin/fontSize property family specifically
+    // (not all numeric literals) because numbers are used for many
+    // legitimate non-spacing things (array indices, opacity, zIndex,
+    // durations, dimensions unrelated to spacing) that would otherwise
+    // drown real hits in false positives. Two selector variants cover both
+    // `paddingTop: 8` (plain Literal) and `marginLeft: -8` (negative
+    // numbers parse as a UnaryExpression wrapping a Literal, not a Literal
+    // themselves).
+    //
+    // NOTE: both rule pairs live in one `no-restricted-syntax` array
+    // deliberately — ESLint flat config does not merge an array-valued
+    // rule option across two config objects that match the same files;
+    // the later object's array fully replaces the earlier one. A separate
+    // second block here (each setting its own `no-restricted-syntax`)
+    // silently disabled the hex-color rule entirely (verified: 729 → 0
+    // warnings). Add any further selector to this same array, not a new
+    // block, unless its `files` glob is truly disjoint from this one.
     files: ['app/**/*.{ts,tsx}', 'store/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': [
@@ -61,6 +88,18 @@ module.exports = defineConfig([
           selector: "Literal[value=/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/]",
           message:
             'Do not hardcode hex colors — call useTheme() from shared/theme and use its colors.* design tokens instead.',
+        },
+        {
+          selector:
+            "Property[key.name=/^(padding|margin|fontSize)/][value.type='Literal'][value.raw=/^[0-9]+(\\.[0-9]+)?$/]",
+          message:
+            'Do not hardcode padding/margin/fontSize values — use SPACING/FONT from shared/utils/responsive.ts.',
+        },
+        {
+          selector:
+            "Property[key.name=/^(padding|margin|fontSize)/][value.type='UnaryExpression'][value.operator='-'][value.argument.type='Literal'][value.argument.raw=/^[0-9]+(\\.[0-9]+)?$/]",
+          message:
+            'Do not hardcode padding/margin/fontSize values — use SPACING/FONT from shared/utils/responsive.ts.',
         },
       ],
     },

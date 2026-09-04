@@ -11,9 +11,11 @@ Defence in depth:
 - app_settings.ai_mcp_enabled (default False) is checked per request → 503
 - admin tokens are rejected (this surface is for rider/driver accounts)
 - booking tools are invisible here (mcp_exposed=False on their specs)
-- every response body is PII-scrubbed under ScrubPolicy.STRICT in
-  _serialize_tool_payload -- this surface is a third-party egress, so
-  unlike the in-app chat card it gets no trip-location exemption (ADR 012)
+- every tool-call response body is PII-scrubbed under ScrubPolicy.STRICT in
+  _serialize_tool_payload (bounded to pii._MAX_SCRUB_DEPTH) -- this surface
+  is a third-party egress, so unlike the in-app chat card it gets no
+  trip-location exemption (ADR 012). The auth / kill-switch error bodies and
+  the tool list carry no user data and do not pass through it.
 - per-user daily tool-call cap (ai_mcp_daily_tool_cap, falling back to
   ai_daily_message_cap) — the chat path is capped in the orchestrator, this
   surface caps itself

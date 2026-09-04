@@ -35,3 +35,15 @@ for (const name of EXPO_WINTER_GLOBALS) {
     }
   }
 }
+
+// Mock @react-native-async-storage/async-storage — no test in this app
+// previously imported shared/theme/ThemeContext.tsx (which requires it at
+// module scope for its persisted theme preference), so this gap went
+// unnoticed until shared/components/Button.tsx's tests started importing it
+// transitively via useTheme(). Same mock driver-app/jest.setup.js already
+// carries for the same reason — mirrored here rather than invented fresh.
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn(() => Promise.resolve(null)),
+  setItem: jest.fn(() => Promise.resolve()),
+  removeItem: jest.fn(() => Promise.resolve()),
+}));

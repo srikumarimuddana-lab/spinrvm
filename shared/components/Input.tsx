@@ -33,10 +33,15 @@ export interface InputProps extends Omit<TextInputProps, 'style'> {
   error?: string;
   containerStyle?: StyleProp<ViewStyle>;
   style?: StyleProp<TextStyle>;
+  /** Override the label's default styling. Added for the first real
+   *  consumer (rider-app/app/emergency-contacts.tsx): its label used a
+   *  brand fontFamily (PlusJakartaSans_600SemiBold) this component doesn't
+   *  set by default — mirrors Button's existing `textStyle` escape hatch. */
+  labelStyle?: StyleProp<TextStyle>;
 }
 
 export const Input = forwardRef<TextInput, InputProps>(function Input(
-  { label, error, containerStyle, style, editable = true, ...rest },
+  { label, labelStyle, error, containerStyle, style, editable = true, ...rest },
   ref,
 ) {
   const { colors } = useTheme();
@@ -44,7 +49,7 @@ export const Input = forwardRef<TextInput, InputProps>(function Input(
 
   return (
     <View style={containerStyle}>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
+      {label ? <Text style={[styles.label, labelStyle]}>{label}</Text> : null}
       <TextInput
         ref={ref}
         style={[

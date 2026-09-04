@@ -33,8 +33,10 @@ import httpx
 from fastapi import HTTPException
 
 try:
+    from .prompts import FARE_CHECK_BLOCK_HEADER
     from .tools import ToolSpec, register
 except ImportError:
+    from ai.prompts import FARE_CHECK_BLOCK_HEADER
     from ai.tools import ToolSpec, register
 
 try:
@@ -1269,10 +1271,11 @@ async def get_fare_quote(
             "note": (
                 "No drivers are available near this pickup right now — tell the rider "
                 "plainly, suggest trying again in a few minutes, and offer to re-check "
-                'now. If they agree ("yes", "try again"), call get_fare_quote again '
-                "on the same pickup and dropoff — the LAST FARE CHECK block at the end "
-                "of your instructions carries their exact coordinates and addresses. "
-                "Never tell the rider you have no active quote to work from."
+                "now. Never tell the rider you have no active quote to work from. If "
+                'they agree ("yes", "try again"), call get_fare_quote again with this '
+                "result's pickup_lat/pickup_lng/dropoff_lat/dropoff_lng and addresses — "
+                "do not re-resolve them; they will also be replayed to you on your next "
+                f"turn as a {FARE_CHECK_BLOCK_HEADER} block."
             ),
         }
         if pickup_note:

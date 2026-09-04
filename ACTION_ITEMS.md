@@ -135,6 +135,14 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ## P0 — Launch gating (code)
 
 ### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline — CLOSED (2026-09-04 status correction), 2 named residual follow-ups remain
+> **Regression note (2026-09-04):** the fix for this audit's ranked blocker
+> #5/#6 (`scrub_pii_deep` wired into `tools.py::_cap_result`) also scrubbed
+> the rider-facing `_client_action` card, which put the literal `[POSTAL]`
+> into customer-facing addresses and, via the tapped-card message, into
+> `rides.pickup_address`. Its change-log's "no downstream code reads a tool
+> result after `_cap_result`" was wrong — the SSE `action` frame is that
+> code. Fixed under **AI16** / ADR-012.
+
 > Companion to A34 above — A34 tracks the Part B dual-run cutover seam audit;
 > this tracks Part A, the whole-app fleet audit (all 21 `spinr-*` reviewers,
 > not a diff). Full report: `docs/audit/2026-08-18-full-fleet-whole-app-audit.md`.
@@ -144,13 +152,6 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 > same duplicate-number pattern as the two `A34`s above; not renumbered
 > because this one had already merged. Treat the heading text as the
 > disambiguator.
-> **Regression note (2026-09-04):** the fix for this audit's ranked blocker
-> #5/#6 (`scrub_pii_deep` wired into `tools.py::_cap_result`) also scrubbed
-> the rider-facing `_client_action` card, which put the literal `[POSTAL]`
-> into customer-facing addresses and, via the tapped-card message, into
-> `rides.pickup_address`. Its change-log's "no downstream code reads a tool
-> result after `_cap_result`" was wrong — the SSE `action` frame is that
-> code. Fixed under **AI16** / ADR-012.
   **RESOLVED 2026-08-31** (decision-log row "Corporate payment-source
   cascade": correct `domain-payments.md`'s "wallet → allowance → master →
   card" language to describe payment-method choice, or build the literal
@@ -17173,6 +17174,16 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   cap, "no eval harness") and `spinr-ai-tool/SKILL.md` ("tool results are
   not scrubbed") corrected in the same PR. See ADR-012 and
   `docs/change-log/2026-09-04-ai-chat-postal-code-card-scrub.md`.
+  **Review round 1 (2026-09-04, same branch):** three read-only reviewers
+  found and the branch fixed — the Zoho escalation transcript copying
+  `AI_CHAT`-persisted rows verbatim (now STRICT-scrubbed per line at the
+  boundary), the anonymous web audience getting `AI_CHAT` on tool results
+  (now STRICT via `_policy_for_audience`), an unmapped `ScrubPolicy`
+  member escaping into the swallow-all guard, two new tests that would have
+  failed in CI (nearest-first candidate order; `quoted_total` present in the
+  core prompt), and a no-drivers pin overwriting a priced pin (kept
+  most-recent-wins deliberately, documented in ADR-012, transition test
+  added). One pre-existing finding was deferred to **AI18**.
 
 - [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
   found while root-causing AI16, deliberately not shipped in that PR; each
@@ -17195,6 +17206,23 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `FareQuoteCard.tsx` + shared types + prompt, flagged). (F5) nothing clears
   `ai:quote:{conversation_id}` on "new conversation" or
   `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
+
+- [ ] **AI18. Anonymous web assistant's tool path is dead in production** —
+  found during AI16's review round, pre-existing and unrelated to that fix.
+  `backend/ai/public_assistant.py` deliberately builds its synthetic
+  `tool_user` with NO `id` key ("so any handler that reached for one would
+  raise loudly"), but `backend/ai/tools.py::_execute_tool_inner` fails
+  closed on a missing `user["id"]` *before* any handler runs
+  (`logger.error("ai tool blocked: no authenticated user id")` →
+  `{"error": "not authorized"}`). Every anonymous `search_faqs` /
+  `get_company_info` call therefore returns "not authorized" and emits an
+  error log; the model answers from the prompt alone. Not caught by
+  `tests/test_ai_public_assistant.py`, which mocks `execute_tool`. Fix
+  needs its own design — an explicit anonymous-scope allow-list on the
+  `ToolSpec` (e.g. `allow_anonymous=True` for the two web tools, honoured
+  only for audience `web`), never a blanket relaxation of the fail-closed
+  identity check — plus an integration test through the real
+  `execute_tool`. Until then the public site's assistant is prompt-only.
 
 - [x] **D1. PostGIS surge query** — stale, already substantially done by
   another session before this pass. `utils/surge_engine.py` already: (1)

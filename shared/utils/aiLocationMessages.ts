@@ -10,7 +10,7 @@
  * the imprecise-address gate on every retry ("please check the exact street
  * address…" forever). The bracketed format is the established transport —
  * the quote-card tap and the map-pin picker use it, the backend PII scrubber
- * preserves it (keep_trip_pins), and prompt rule 6b tells the model to use
+ * preserves it (ScrubPolicy.AI_CHAT), and prompt rule 6b tells the model to use
  * it verbatim without re-geocoding.
  *
  * When a candidate's `precise` field is explicitly `false` (Google flagged

@@ -2,8 +2,12 @@
  * app/driver/lost-and-found.tsx — the driver's list of lost-and-found
  * cases. Pins:
  *  - GET /lost-and-found fires on focus
- *  - a load failure silently keeps stale data (no error UI)
- *  - the empty state renders when there are no cases
+ *  - a load failure with cases already on screen silently keeps the stale
+ *    list (no error UI) — a background refresh failure never blanks data
+ *    that's already visible
+ *  - a load failure with nothing on screen yet shows a distinct error/retry
+ *    state, not the same "No cases yet" copy a genuinely-empty inbox shows
+ *  - the empty state renders when there are no cases and the fetch succeeded
  *  - `reported`/`driver_notified` statuses render as "Action Needed" with
  *    the urgent-border/dot styling instead of their normal status label —
  *    every other status shows its normal label with no urgency marker
@@ -103,13 +107,32 @@ describe('DriverLostAndFoundScreen', () => {
     expect(allText(r)).toContain('No cases yet');
   });
 
-  it('does not crash and shows no error UI when the load fails', async () => {
+  it('shows a distinct error/retry state (not the empty state) when the first load fails', async () => {
     mockApiGet.mockRejectedValue(new Error('network down'));
     const r = await renderScreen();
-    // No error state exists on this screen -- a failed fetch just leaves
-    // `cases` empty, rendering the same empty state a genuinely-empty
-    // inbox would show.
-    expect(allText(r)).toContain('No cases yet');
+    // Nothing was ever loaded, so this must not read as "genuinely no
+    // cases" — a driver needs to be able to tell "empty" from "failed".
+    expect(allText(r)).toContain("Couldn't load your cases");
+    expect(allText(r)).not.toContain('No cases yet');
+  });
+
+  it('retrying from the error state re-fetches and shows cases on success', async () => {
+    mockApiGet.mockRejectedValueOnce(new Error('network down'));
+    const r = await renderScreen();
+    expect(allText(r)).toContain("Couldn't load your cases");
+
+    mockApiGet.mockResolvedValueOnce({ data: { cases: [CASE_1] } });
+    const retryBtn = r.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.findAllByType(Text).some((t) => JSON.stringify(t.props.children).includes('Try Again')))!;
+    await act(async () => {
+      retryBtn.props.onPress();
+      await flush();
+    });
+
+    expect(mockApiGet).toHaveBeenCalledTimes(2);
+    expect(allText(r)).toContain('Black wallet');
+    expect(allText(r)).not.toContain("Couldn't load your cases");
   });
 
   it('shows "Action Needed" for a reported case, not its normal status label', async () => {

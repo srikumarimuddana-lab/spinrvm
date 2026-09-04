@@ -32,6 +32,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker, resolveMarkerVariant } from '@shared/components/CarMarker';
+import { Button } from '@shared/components/Button';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
@@ -1107,23 +1108,28 @@ function RideOptionsScreenContent() {
                 )}
               </TouchableOpacity>
 
-              {/* Confirm button */}
-              <TouchableOpacity
-                style={[styles.confirmButton, (!selectedEstimate.available || isBooking) && { opacity: 0.5 }]}
+              {/* Confirm button — extracted to shared Button (design-audit
+                  follow-up — was styles.confirmButton at 28px radius, one of
+                  the three CTA implementations the audit cited). Same
+                  handler, same combined disabled condition (unavailable OR
+                  already booking — matches the original TouchableOpacity's
+                  `disabled` exactly, including for the isBooking guard
+                  test in rideOptionsScreen.test.tsx), same accessibilityLabel;
+                  radius now matches the shared lg-size token instead of this
+                  screen's old local value, and the button no longer
+                  additionally dims while isBooking (the spinner alone is the
+                  loading affordance, matching RideOfferPanel's accept/decline). */}
+              <Button
+                variant="primary"
+                size="lg"
                 onPress={handleBookRide}
-                activeOpacity={0.8}
                 disabled={!selectedEstimate.available || isBooking}
-                accessibilityRole="button"
+                loading={isBooking}
+                style={styles.confirmButtonSpacing}
                 accessibilityLabel={`${scheduledTime ? 'Schedule' : 'Confirm'} ${selectedEstimate.vehicle_type.name}`}
               >
-                {isBooking ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.confirmButtonText}>
-                    {scheduledTime ? 'Schedule' : 'Confirm'} {selectedEstimate.vehicle_type.name} · ${totalFare.toFixed(2)}
-                  </Text>
-                )}
-              </TouchableOpacity>
+                {scheduledTime ? 'Schedule' : 'Confirm'} {selectedEstimate.vehicle_type.name} · ${totalFare.toFixed(2)}
+              </Button>
             </View>
           )}
         </BottomSheetScrollView>
@@ -2042,18 +2048,9 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.primary,
     },
-    confirmButton: {
-      backgroundColor: colors.primary,
-      borderRadius: 28,
-      paddingVertical: 16,
-      alignItems: 'center',
-      justifyContent: 'center',
+    // Only marginTop survives the Button extraction — see the call site comment.
+    confirmButtonSpacing: {
       marginTop: 10,
-    },
-    confirmButtonText: {
-      fontSize: sf(16),
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: '#FFFFFF',
     },
 
     // ── Payment sheet ──

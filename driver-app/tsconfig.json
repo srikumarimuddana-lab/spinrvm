@@ -12,6 +12,9 @@
       "react-native": [
         "./node_modules/react-native"
       ],
+      "@testing-library/react-native": [
+        "./node_modules/@testing-library/react-native"
+      ],
       "react-native-maps": [
         "./node_modules/react-native-maps"
       ],

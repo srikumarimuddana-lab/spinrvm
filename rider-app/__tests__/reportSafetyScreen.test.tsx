@@ -11,12 +11,12 @@
  *  - a failed submit logs, toasts the backend's message, and re-enables
  *    the form (submitting flips back to false) instead of leaving it
  *    stuck disabled
- *  - the submit button's label and disabled state track `submitting`,
- *    and the input is not editable while submitting
+ *  - the submit button's loading spinner and disabled state track
+ *    `submitting`, and the input is not editable while submitting
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TextInput, TouchableOpacity, Text } from 'react-native';
+import { ActivityIndicator, TextInput, TouchableOpacity } from 'react-native';
 
 import ReportSafetyScreen from '../app/report-safety';
 
@@ -58,9 +58,13 @@ async function renderScreen() {
   return renderer!;
 }
 
+// Located by testID (set on the shared Button component report-safety.tsx
+// now renders) rather than by matching label text — the shared Button shows
+// a spinner in place of the label while loading, so there is no "Submitting"
+// text to match during that state any more.
 function submitButton(r: TestRenderer.ReactTestRenderer) {
   return r.root.findAllByType(TouchableOpacity).find((n) =>
-    n.findAllByType(Text).some((t) => /Submit Report|Submitting/.test(String(t.props.children)))
+    n.props.testID === 'report-safety-submit-button'
   )!;
 }
 
@@ -105,7 +109,7 @@ describe('ReportSafetyScreen', () => {
     expect(mockBack).toHaveBeenCalled();
   });
 
-  it('shows "Submitting..." and disables the input while the request is in flight', async () => {
+  it('shows a loading spinner and disables the input while the request is in flight', async () => {
     let resolveFn!: (v: any) => void;
     mockApiPost.mockReturnValue(new Promise((resolve) => { resolveFn = resolve; }));
     const r = await renderScreen();
@@ -114,6 +118,9 @@ describe('ReportSafetyScreen', () => {
     act(() => { submitButton(r).props.onPress(); });
     expect(r.root.findByType(TextInput).props.editable).toBe(false);
     expect(submitButton(r).props.disabled).toBe(true);
+    // Shared Button swaps the label for a spinner while loading (design-audit
+    // follow-up — was a "Submit Report" -> "Submitting..." text swap before).
+    expect(submitButton(r).findAllByType(ActivityIndicator).length).toBe(1);
     await act(async () => { resolveFn({ data: {} }); await flush(); });
   });
 

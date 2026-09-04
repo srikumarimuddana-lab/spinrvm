@@ -38,7 +38,14 @@ jest.mock('react-native-safe-area-context', () => ({
 jest.mock('@shared/components/ErrorBoundary', () => ({
   ErrorBoundary: ({ children }: any) => children,
 }));
-jest.mock('@shared/utils/responsive', () => ({ useResponsive: () => ({ sf: (n: number) => n }) }));
+// Keep the real SPACING/FONT tokens (jest.requireActual) — shared Button.tsx,
+// pulled in transitively via app/ride-options.tsx's now-migrated Confirm
+// button, reads them at module scope. Only useResponsive is overridden, as
+// before.
+jest.mock('@shared/utils/responsive', () => ({
+  ...jest.requireActual('@shared/utils/responsive'),
+  useResponsive: () => ({ sf: (n: number) => n }),
+}));
 
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');

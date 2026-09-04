@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Pagination } from "@/components/ui/pagination";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
 
@@ -65,6 +66,8 @@ function ageSeverity(minutes: number | null): "destructive" | "secondary" | "out
     return "outline";
 }
 
+const PAGE_SIZE = 50;
+
 function eventTypeBadge(eventType: string | null): string {
     if (!eventType) return "bg-muted text-muted-foreground";
     if (eventType.includes("succeeded") || eventType.includes("paid"))
@@ -83,6 +86,8 @@ export default function StripeEventsPage() {
     const [events, setEvents] = useState<StuckStripeEvent[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
 
     // Detail dialog
     const [detailOpen, setDetailOpen] = useState(false);
@@ -105,15 +110,19 @@ export default function StripeEventsPage() {
     const fetchEvents = useCallback(async () => {
         try {
             setError(null);
-            const data = await getStuckStripeEvents(50, 0);
-            setEvents(data.items);
+            // Fetch one extra row to know whether a next page exists, without
+            // a second round-trip to /stuck/count (the "count" field on this
+            // response is just this page's item count, not a total).
+            const data = await getStuckStripeEvents(PAGE_SIZE + 1, page * PAGE_SIZE);
+            setHasNextPage(data.items.length > PAGE_SIZE);
+            setEvents(data.items.slice(0, PAGE_SIZE));
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : "Failed to load events";
             setError(msg);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [page]);
 
     useEffect(() => {
         fetchEvents();
@@ -331,6 +340,12 @@ export default function StripeEventsPage() {
                                     ))}
                                 </tbody>
                             </table>
+                            <Pagination
+                                page={page}
+                                pageSize={PAGE_SIZE}
+                                hasNextPage={hasNextPage}
+                                onPageChange={setPage}
+                            />
                         </div>
                     )}
                 </CardContent>

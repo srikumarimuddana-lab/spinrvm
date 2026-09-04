@@ -105,12 +105,11 @@ def _make_driver(driver_id="drv-1"):
 
 def _base_patches(table_responses=None):
     """Returns the tuple of context managers common to every notify-loop test."""
-    responses = table_responses or {}
     return (
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -248,7 +247,7 @@ async def test_offer_card_url_signing_failure_is_non_fatal():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -294,10 +293,13 @@ async def test_eta_ranking_failure_falls_back_to_haversine():
 
     with (
         patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
-        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={"google_maps_api_key": "key"})),
+        patch(
+            "backend.routes.rides.matching._deps.get_app_settings",
+            AsyncMock(return_value={"google_maps_api_key": "key"}),
+        ),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, True)),  # use_eta=True
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, True, 500)),  # use_eta=True
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",

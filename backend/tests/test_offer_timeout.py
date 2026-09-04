@@ -227,7 +227,7 @@ class TestDispatchHardening:
             patch("backend.routes.rides._deps.db_supabase.get_rows", get_rows_mock),
             patch(
                 "backend.routes.rides._shared.dispatch.resolve_matching_config",
-                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
+                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False, 500)),
             ),
             patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
             # side_effect closes the coroutine handed to spawn()/create_task()
@@ -261,7 +261,7 @@ class TestDispatchHardening:
             patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[self._DRIVER])),
             patch(
                 "backend.routes.rides._shared.dispatch.resolve_matching_config",
-                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
+                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True, 500)),
             ),
             patch("backend.routes.rides._deps.db_supabase.match_and_claim_driver", AsyncMock(return_value=None)),
             patch(

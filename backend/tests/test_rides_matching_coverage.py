@@ -159,7 +159,7 @@ async def test_requires_wav_adds_wav_filter():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch("backend.routes.rides.matching._deps.filter_and_rank_drivers", return_value=[]),
         patch(
@@ -190,7 +190,7 @@ async def test_candidate_pool_hits_500_cap_logs_warning():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch("backend.routes.rides.matching._deps.filter_and_rank_drivers", return_value=[]),
         patch(
@@ -219,7 +219,7 @@ async def test_presence_filter_outer_exception_fails_open():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -257,7 +257,7 @@ async def test_subscription_inherits_from_parent_area():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
@@ -290,7 +290,7 @@ async def test_quota_filter_drops_exhausted_drivers():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -345,7 +345,7 @@ async def test_cascade_requires_wav_and_parent_map_and_presence_reachable():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -410,7 +410,7 @@ async def test_cascade_redis_filter_exception_is_non_fatal():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -451,7 +451,7 @@ async def _run_full_dispatch(ride, driver, *, use_eta=False, eta_side_effect=Non
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, max_offers, use_eta)),
+            AsyncMock(return_value=("nearest", 0, 10.0, max_offers, use_eta, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -519,7 +519,7 @@ async def test_fetch_rider_exception_is_non_fatal():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 1, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -559,7 +559,7 @@ async def test_service_area_polygon_fetch_exception_is_non_fatal():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 1, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -601,7 +601,7 @@ async def test_max_offers_breaks_claim_loop():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 1, False)),  # max_offers=1
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False, 500)),  # max_offers=1
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -650,7 +650,7 @@ async def test_period_2_opened_for_each_claimed_driver_after_offer_insert():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 5, False)),  # max_offers=5, both drivers claimed
+            AsyncMock(return_value=("nearest", 0, 10.0, 5, False, 500)),  # max_offers=5, both drivers claimed
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -698,7 +698,7 @@ async def test_period_2_not_opened_when_offer_insert_fails():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 1, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -854,7 +854,7 @@ async def _run_single_driver_dispatch(ride):
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 1, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 1, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",

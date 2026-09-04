@@ -40,14 +40,20 @@ module.exports = defineConfig([
     },
   },
   {
-    // Enforce design-token usage: colors must come from
-    // SpinrConfig.theme.colors (@shared/config/spinr.config), not
-    // hardcoded hex literals scattered through screens/components. A
-    // hardcoded hex bypasses the single source of truth for the palette,
-    // so a rebrand or dark-mode pass has to hunt every occurrence instead
-    // of changing one token. 'warn' (not 'error') because ~53 files
-    // predate this rule — same pre-existing-violations posture as
-    // admin-dashboard/eslint.config.mjs; tighten to 'error' once cleaned up.
+    // Enforce design-token usage: colors must come from useTheme()
+    // (shared/theme/index.ts), not hardcoded hex literals scattered
+    // through screens/components. A hardcoded hex bypasses the single
+    // source of truth for the palette, so a rebrand or dark-mode pass has
+    // to hunt every occurrence instead of changing one token. 'warn' (not
+    // 'error') because ~53 files predate this rule — same
+    // pre-existing-violations posture as admin-dashboard/eslint.config.mjs;
+    // tighten to 'error' once cleaned up.
+    //
+    // (Originally pointed this message at SpinrConfig.theme.colors — that
+    // was the deprecated, drifted source shared/theme/index.ts's own
+    // header comment says never to import directly; it's since been
+    // deleted entirely (2026-09-04), so useTheme() is now correctly the
+    // only path anyway.)
     files: ['app/**/*.{ts,tsx}', 'store/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': [
@@ -55,7 +61,7 @@ module.exports = defineConfig([
         {
           selector: "Literal[value=/^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/]",
           message:
-            'Do not hardcode hex colors — use SpinrConfig.theme.colors.* design tokens from @shared/config/spinr.config instead.',
+            'Do not hardcode hex colors — call useTheme() from shared/theme and use its colors.* design tokens instead.',
         },
       ],
     },

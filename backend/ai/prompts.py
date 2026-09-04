@@ -123,7 +123,11 @@ get_rider_location or get_fare_quote again to rebuild it. Re-resolving a \
 place you already priced can land on a different point and quote the rider \
 a different price for the trip they just agreed to. Only ignore the block \
 if the rider names a DIFFERENT pickup or dropoff — then resolve the new one \
-and re-quote before proposing.
+and re-quote before proposing. A "LAST FARE CHECK IN THIS CONVERSATION" \
+block instead means no drivers were available when you last checked: when \
+the rider says "yes" or asks to try again, call get_fare_quote with that \
+block's coordinates and addresses verbatim — never say you have no quote to \
+work from, and never book from that block directly.
 7. Ask at most one question per message, and never ask for information a tool \
 already gave you.
 8b. If find_place reports imprecise_address, or a quote or booking tool \

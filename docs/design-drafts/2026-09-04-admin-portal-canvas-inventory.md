@@ -24,6 +24,15 @@ from the actual code, not invented. Fidelity is intentionally split:
   borders, placeholder bars, hand-written (`Architects Daughter` font)
   annotations. Structure and real copy only, not visual polish.
 
+Two screenshots below, taken directly from the live canvas, show one
+artboard from each fidelity tier — the on-brand **Login** + **Dashboard**
+hi-fi screens, and the **Promotions** wireframe (Create Code dialog
+expanded) as a representative low-fi example:
+
+![Login and Dashboard hi-fi screens — on-brand mockups matching the real app's design tokens](./2026-09-04-admin-portal-hifi-screens.png)
+
+![Promotions wireframe — grayscale, dashed borders, hand-written annotation line, real field/table structure](./2026-09-04-admin-portal-wireframe-example.png)
+
 ---
 
 ## Hi-fi core flow (row 0)

@@ -16,9 +16,11 @@ from typing import Any, Dict, Optional
 
 try:
     from . import conversations, embeddings
+    from .pii import scrub_pii
     from .tools import ToolSpec, register
 except ImportError:
     from ai import conversations, embeddings
+    from ai.pii import scrub_pii
     from ai.tools import ToolSpec, register
 
 try:
@@ -348,8 +350,16 @@ _TRANSCRIPT_MAX_MESSAGE_CHARS = 300
 
 async def _recent_transcript(conversation_id: Optional[str]) -> Optional[str]:
     """Compact 'User:/Assistant:' transcript of the current conversation for
-    the support ticket. Messages are already PII-scrubbed at ingest. Returns
-    None when unavailable — a transcript must never block an escalation."""
+    the support ticket. Returns None when unavailable — a transcript must
+    never block an escalation.
+
+    ai_messages rows are persisted under the in-app chat scrub policy, which
+    deliberately keeps trip-location data (bracketed [lat,lng] pins, Canadian
+    postal codes) for the model. A Zoho ticket is a third-party egress, so
+    every line is re-scrubbed here under the default STRICT policy before it
+    leaves the process — the same posture routes/support.py applies to an
+    ordinary ticket (ADR-012: scrub at the boundary, never at the source).
+    Scrub before truncating so a bisected token cannot survive the cut."""
     if not conversation_id:
         return None
     try:
@@ -362,7 +372,7 @@ async def _recent_transcript(conversation_id: Optional[str]) -> Optional[str]:
         label = "Assistant" if m.get("role") == "assistant" else "User"
         content = (m.get("content") or "").strip()
         if content:
-            lines.append(f"{label}: {content[:_TRANSCRIPT_MAX_MESSAGE_CHARS]}")
+            lines.append(f"{label}: {scrub_pii(content)[:_TRANSCRIPT_MAX_MESSAGE_CHARS]}")
     return "\n".join(lines) or None
 
 

@@ -289,7 +289,14 @@ async def claim_driver_atomic(driver_id: str) -> Optional[Dict[str, Any]]:
         # it to revalidate eligibility without a second read.
         return data[0] if data else None
 
-    claimed = await run_sync(_claim)
+    # C56: explicit idempotent_write, not the "read" default (3 retries,
+    # 500-1500ms backoff) — this is a conditional UPDATE sitting inside the
+    # P95 < 2s dispatch offer SLA. Safe to retry: the .eq("is_available",
+    # True) guard means a retry after a prior write already landed just
+    # finds 0 matching rows and returns None, which callers already treat
+    # as "not claimed" — no double-claim risk. "write" (0 retries) would be
+    # overly conservative for a call this transient-failure-tolerant.
+    claimed = await run_sync(_claim, retry_policy="idempotent_write")
     if claimed:
         # The driver row is now is_available=false — make sure the cache
         # doesn't keep serving a stale "still available" value to

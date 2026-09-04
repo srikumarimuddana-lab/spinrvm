@@ -1049,34 +1049,38 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             else:
                                 await _deps.db_supabase.set_driver_available(driver["id"], True)
                 except Exception as e:
-                    # Release every driver claimed so far before propagating.
-                    # Mirrors the ride_offers-insert failure handling below
-                    # (:1080-1086) — without this, a mid-loop exception (e.g. a
-                    # transient PostgREST error on the 3rd of 5 claims) would
-                    # strand the earlier-claimed drivers is_available=False
-                    # with no ride_offers row and no re-dispatch, invisible to
-                    # both the driver and dispatch (ACTION_ITEMS.md C54,
-                    # plans/2026-09-03-path-to-a-implementation-plan.md WS-1).
-                    # logger.opt(exception=True), not exc_info=True: `logger`
-                    # here is loguru (re-exported via _deps), and loguru
-                    # swallows exc_info as a str.format keyword, capturing no
-                    # traceback and reaching Sentry as a bare capture_message
-                    # with no stack (ACTION_ITEMS.md C60). Note this module is
-                    # NOT scanned by tests/test_loguru_call_conventions.py:
-                    # that gate selects files by searching for loguru's direct
-                    # import line, which this file does not have (it takes
-                    # `logger` from _deps). See ACTION_ITEMS.md C63 for that
-                    # blind spot and the pre-existing sites it hides, the
-                    # sibling ride_offers handler below among them.
+                    # C54: mirror the ride_offers-insert failure handler below — a
+                    # raise here (e.g. a transient DatabaseError) must not leave every
+                    # driver claimed by EARLIER iterations of this same loop stuck
+                    # is_available=false until the orphan-claim reaper's ~150s
+                    # worst-case window. Release them before re-raising so the outer
+                    # recovery shell's retry sees them available again immediately,
+                    # not minutes later.
+                    #
+                    # MERGE NOTE (PR #4909 vs #4919): #4919 landed this same C54 fix
+                    # on main first, wrapping only the claim_driver_atomic call. This
+                    # is that fix with two corrections found in #4909's review, kept
+                    # deliberately over main's version:
+                    #   1. logger.opt(exception=True), NOT exc_info=True. `logger`
+                    #      here is loguru (re-exported via _deps), which swallows
+                    #      exc_info as a str.format keyword — no traceback is
+                    #      captured and the loguru→Sentry bridge sends a stack-less
+                    #      capture_message, i.e. the diagnostic this handler exists
+                    #      for is lost. Not caught by
+                    #      tests/test_loguru_call_conventions.py: that gate selects
+                    #      files by searching for loguru's direct import line, which
+                    #      this module does not have. See ACTION_ITEMS.md C60/C65.
+                    #   2. Each release is individually guarded. The most likely
+                    #      trigger for the claim failing at all is a DB blip, which
+                    #      makes set_driver_available just as likely to fail — an
+                    #      unguarded loop aborts at the first failed release
+                    #      (stranding the rest) AND replaces the original exception,
+                    #      losing the root cause. The reaper stays the backstop for
+                    #      any release that genuinely cannot be written here.
+                    # The try also spans the whole loop rather than the claim call
+                    # alone, so a failure of the inline revalidation release above is
+                    # covered by the same recovery.
                     logger.opt(exception=True).error(f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}")
-                    # Each release is individually guarded: the most likely
-                    # trigger for the claim failing at all is a DB blip, which
-                    # makes set_driver_available just as likely to fail — an
-                    # unguarded loop would abort at the first failed release
-                    # (stranding the rest) AND replace the original exception,
-                    # losing the root cause the recovery shell logs. The
-                    # orphan-claim reaper remains the backstop for any release
-                    # that genuinely cannot be written here.
                     for d, _ in claimed_drivers:
                         try:
                             await _deps.db_supabase.set_driver_available(d["id"], True)

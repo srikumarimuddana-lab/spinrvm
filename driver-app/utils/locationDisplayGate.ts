@@ -14,6 +14,14 @@ export const MAX_DISPLAY_ACCURACY_M = 50;
 // an approximate car beats a car stuck blocks behind.
 export const ACCURACY_OVERRIDE_MS = 30_000;
 
+// Floor for the on-map speed readout (index.tsx's speedChip). coords.speed is
+// Doppler-derived and noisy near zero — a genuinely stationary vehicle
+// (dashboard mount, weaker sky view) has been live-reported showing ~2.2 m/s
+// (8 km/h) while parked. 3 m/s clears that with margin while staying well
+// below any real driving speed, so a driver who actually starts moving still
+// sees the chip appear promptly.
+export const MIN_DISPLAYED_SPEED_MPS = 3; // ~10.8 km/h
+
 /**
  * Should this fix move the marker / feed the live WS position?
  * (Durable trip capture is NOT gated by this — capture-before-filter.)

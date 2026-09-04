@@ -768,6 +768,13 @@ async def admin_cancel_ride(
                 "ride_id": ride_id,
                 "reason": reason,
                 "source": "admin",
+                # Same "flag scheduled cancellations for follow-up" signal the
+                # driver-cancel path already sends (routes/drivers/ride_cancel.py)
+                # and the rider-cancel path now sends too — was missing here,
+                # so an admin cancelling a scheduled ride from the dashboard
+                # showed the generic "Ride cancelled" alert with no follow-up
+                # flag on their own action.
+                "is_scheduled": bool((ride or {}).get("is_scheduled")),
             }
         )
     except Exception as e:  # pragma: no cover - best effort

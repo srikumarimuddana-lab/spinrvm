@@ -8,10 +8,13 @@ import { setupAdminMocks } from './admin-mocks';
  * set (epic #2785 Phase 1 prerequisite); expand incrementally the same way
  * e2e/a11y-baseline.json's route coverage can grow over time.
  *
- * No baselines are committed yet — see
- * .github/workflows/update-visual-baselines.yml and the Change Impact Log
- * for why (this sandbox's pre-installed Chromium revision doesn't match
- * CI's pinned one; visual baselines must come from CI's own renderer).
+ * Baselines for 5 of these 6 pages were seeded 2026-09-02 — see
+ * docs/change-log/2026-09-02-seed-visual-regression-baselines.md.
+ * `dashboard-rides` is not yet seeded: capturing it first surfaced a
+ * mock-fixture gap (admin-mocks.ts's generic /api/** fallback shape doesn't
+ * match what getRides() expects), now fixed — it needs one more run of
+ * update-visual-baselines.yml (see that workflow) to pick up a corrected
+ * screenshot before it can be added.
  */
 
 const PAGES = [

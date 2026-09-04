@@ -109,9 +109,16 @@ async def test_fetch_monitoring_drivers_shapes_online_and_available():
     users = [{"id": "u1", "first_name": "Bob", "last_name": "S", "phone": "306-555-0200", "profile_image": None}]
     active_rides = [{"driver_id": "drv1", "id": "ride-1"}]
 
-    run_sync_mock = AsyncMock(side_effect=[_res(drivers), _res(users), _res(active_rides)])
+    # The base drivers query is still a plain run_sync(...) call (no growing
+    # id list to batch); the users/active-rides lookups now go through
+    # db_supabase.get_rows_batched_in (see monitoring.py) instead of a raw
+    # run_sync(supabase.table(...).in_(...)) call, so they're mocked
+    # separately and return plain lists, not a Supabase response object.
+    run_sync_mock = AsyncMock(side_effect=[_res(drivers)])
+    batched_in_mock = AsyncMock(side_effect=[users, active_rides])
     with (
         patch.object(monitoring, "run_sync", run_sync_mock),
+        patch.object(monitoring.db_supabase, "get_rows_batched_in", batched_in_mock),
         patch.object(monitoring, "present_driver_ids", AsyncMock(return_value={"drv1"})),
         patch.object(monitoring, "intent_online", return_value=True),
     ):
@@ -130,9 +137,11 @@ async def test_fetch_monitoring_drivers_offline_when_not_present():
     """A driver who intends online but has no Redis presence heartbeat must
     surface as offline — this is the whole point of the presence layer."""
     drivers = [{"id": "drv1", "user_id": "u1", "is_available": True}]
-    run_sync_mock = AsyncMock(side_effect=[_res(drivers), _res([]), _res([])])
+    run_sync_mock = AsyncMock(side_effect=[_res(drivers)])
+    batched_in_mock = AsyncMock(side_effect=[[], []])
     with (
         patch.object(monitoring, "run_sync", run_sync_mock),
+        patch.object(monitoring.db_supabase, "get_rows_batched_in", batched_in_mock),
         patch.object(monitoring, "present_driver_ids", AsyncMock(return_value=set())),
         patch.object(monitoring, "intent_online", return_value=True),
     ):
@@ -167,8 +176,14 @@ async def test_fetch_monitoring_rides_joins_riders_and_drivers():
     drivers_map = [{"id": "drv1", "user_id": "du1", "lat": 1.0, "lng": 2.0}]
     driver_users = [{"id": "du1", "first_name": "Bob", "last_name": "S"}]
 
-    run_sync_mock = AsyncMock(side_effect=[_res(rides), _res(riders), _res(drivers_map), _res(driver_users)])
-    with patch.object(monitoring, "run_sync", run_sync_mock):
+    # The base rides query is still run_sync(...); riders/drivers/driver-users
+    # now go through db_supabase.get_rows_batched_in — see monitoring.py.
+    run_sync_mock = AsyncMock(side_effect=[_res(rides)])
+    batched_in_mock = AsyncMock(side_effect=[riders, drivers_map, driver_users])
+    with (
+        patch.object(monitoring, "run_sync", run_sync_mock),
+        patch.object(monitoring.db_supabase, "get_rows_batched_in", batched_in_mock),
+    ):
         out = await monitoring.fetch_monitoring_rides()
 
     assert len(out) == 1

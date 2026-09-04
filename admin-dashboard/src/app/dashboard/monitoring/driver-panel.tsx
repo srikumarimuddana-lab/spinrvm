@@ -28,16 +28,29 @@ export function DriverPanel({ driver, onRideClick, onClose }: DriverPanelProps) 
     const [rides, setRides] = useState<any[]>([]);
     const [docs, setDocs] = useState<any[]>([]);
     const [tabLoading, setTabLoading] = useState(false);
+    // A swallowed fetch failure here used to render identically to the
+    // driver genuinely having zero rides/documents — the exact anti-pattern
+    // page.tsx's own activeRidesError state was added to avoid elsewhere in
+    // this same feature. Distinguishes "failed to load" from "confirmed empty".
+    const [tabError, setTabError] = useState(false);
 
-    useEffect(() => {
+    const loadTabs = () => {
         setTabLoading(true);
+        setTabError(false);
         Promise.all([
             getDriverRides(driver.id),
             getDriverDocuments(driver.id),
         ]).then(([ridesRes, docsRes]) => {
             setRides((ridesRes as any)?.rides?.slice(0, 10) ?? []);
             setDocs(Array.isArray(docsRes) ? docsRes : []);
-        }).catch(() => {}).finally(() => setTabLoading(false));
+        }).catch(() => {
+            setTabError(true);
+        }).finally(() => setTabLoading(false));
+    };
+
+    useEffect(() => {
+        loadTabs();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [driver.id]);
 
     const initials = driver.name
@@ -190,6 +203,11 @@ export function DriverPanel({ driver, onRideClick, onClose }: DriverPanelProps) 
                 <TabsContent value="rides" className="flex-1 overflow-y-auto px-4 pb-4">
                     {tabLoading ? (
                         <div className="flex justify-center py-8"><span className="text-xs text-muted-foreground">Loading…</span></div>
+                    ) : tabError ? (
+                        <div className="flex flex-col items-center gap-2 pt-6 text-center">
+                            <p className="text-xs text-destructive">Couldn&apos;t load rides — the server didn&apos;t respond.</p>
+                            <Button variant="outline" size="sm" onClick={loadTabs}>Retry</Button>
+                        </div>
                     ) : rides.length === 0 ? (
                         <p className="pt-6 text-center text-xs text-muted-foreground">No rides found</p>
                     ) : (
@@ -223,6 +241,11 @@ export function DriverPanel({ driver, onRideClick, onClose }: DriverPanelProps) 
                 <TabsContent value="documents" className="flex-1 overflow-y-auto px-4 pb-4">
                     {tabLoading ? (
                         <div className="flex justify-center py-8"><span className="text-xs text-muted-foreground">Loading…</span></div>
+                    ) : tabError ? (
+                        <div className="flex flex-col items-center gap-2 pt-6 text-center">
+                            <p className="text-xs text-destructive">Couldn&apos;t load documents — the server didn&apos;t respond.</p>
+                            <Button variant="outline" size="sm" onClick={loadTabs}>Retry</Button>
+                        </div>
                     ) : docs.length === 0 ? (
                         <p className="pt-6 text-center text-xs text-muted-foreground">No documents found</p>
                     ) : (

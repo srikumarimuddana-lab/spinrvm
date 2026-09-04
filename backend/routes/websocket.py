@@ -10,12 +10,14 @@ from loguru import logger
 try:
     from ..utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs
     from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
-    from ..utils.location_integrity import check_location_integrity
+    from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.location_integrity import check_location_integrity, evaluate_gps_plausibility
     from ..utils.session_revocation import is_session_revoked
 except ImportError:
     from utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs  # type: ignore
     from utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached  # type: ignore
-    from utils.location_integrity import check_location_integrity  # type: ignore
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.location_integrity import check_location_integrity, evaluate_gps_plausibility  # type: ignore
     from utils.session_revocation import is_session_revoked  # type: ignore
 
 try:
@@ -114,6 +116,72 @@ def _parse_live_coordinate(value):
 
 def _valid_live_coordinates(lat: float, lng: float) -> bool:
     return -90 <= lat <= 90 and -180 <= lng <= 180 and not (lat == 0 and lng == 0)
+
+
+def _filter_plausible_batch_points(driver_id, points):
+    """Drop GPS-implausible points from a WS ``location_batch``/
+    ``driver_location_batch`` before they reach ``persist_ride_breadcrumbs``.
+
+    Historically only the batch's LAST point was checked (via
+    ``check_location_integrity``, for the live marker below) — every earlier
+    point in the same batch was persisted with no spoofing/plausibility check
+    at all (C64 / ranked-blocker-#7 follow-up). This mirrors the REST v2
+    location-batch fix (``utils/breadcrumbs.py::persist_trip_location_batch``,
+    see ``docs/change-log/2026-08-19-v2-location-batch-spoofing-fix.md``):
+    ``evaluate_gps_plausibility`` (pure, no I/O) is swept across every
+    consecutive point pair in list order, and a rejected point is dropped
+    from the list rather than becoming the next comparison baseline — a
+    spoofed jump must not "reset" the trusted trail for points after it.
+
+    A point whose coordinates can't be parsed is passed through unfiltered
+    (that is ``persist_ride_breadcrumbs``'s own job to reject) and does not
+    touch the plausibility baseline, matching how the REST v2 path skips its
+    own equivalent per-point checks before they even reach the coordinate
+    stage.
+    """
+    filtered = []
+    prev_lat = None
+    prev_lng = None
+    prev_captured_at = None
+    for point in points:
+        lat = _parse_live_coordinate(point.get("lat") if point.get("lat") is not None else point.get("latitude"))
+        lng = _parse_live_coordinate(point.get("lng") if point.get("lng") is not None else point.get("longitude"))
+        if lat is None or lng is None or not _valid_live_coordinates(lat, lng):
+            filtered.append(point)
+            continue
+
+        captured_at = parse_iso_utc(point.get("captured_at") or point.get("device_timestamp") or point.get("timestamp"))
+        elapsed_seconds = (
+            (captured_at - prev_captured_at).total_seconds()
+            if captured_at is not None and prev_captured_at is not None
+            else None
+        )
+        trusted, reason = evaluate_gps_plausibility(
+            lat,
+            lng,
+            prev_lat=prev_lat,
+            prev_lng=prev_lng,
+            elapsed_seconds=elapsed_seconds,
+            speed=point.get("speed"),
+            accuracy=point.get("accuracy"),
+            mocked=point.get("mocked"),
+        )
+        if not trusted:
+            # No raw lat/lng in the log -- reason is one of a fixed set of
+            # short codes (mock_location / zero_accuracy / low_accuracy /
+            # impossible_speed / teleport), never a coordinate (PIPEDA).
+            logger.warning(
+                "ws location_batch point failed GPS plausibility check driver_id={} reason={}",
+                driver_id,
+                reason,
+            )
+            continue
+
+        prev_lat, prev_lng = lat, lng
+        if captured_at is not None:
+            prev_captured_at = captured_at
+        filtered.append(point)
+    return filtered
 
 
 # GAP FIX: Heartbeat constants — tightened from 30s to 10s to match
@@ -991,7 +1059,15 @@ async def websocket_endpoint(
                     # per point (from its own timestamp vs the ride milestones),
                     # stale / other-ride discard, and the 500-point cap. Never
                     # trusts the client's ride_id/tracking_phase.
-                    inserted = await persist_ride_breadcrumbs(driver_id, dict_points)
+                    # C64: sweep every consecutive point pair for GPS
+                    # plausibility BEFORE the breadcrumb persist — previously
+                    # only the last point (below, for the live marker) was
+                    # checked, so an implausible earlier point in the batch
+                    # reached the regulatory GPS-trace record unchecked. Uses
+                    # the original (unfiltered) dict_points for the live
+                    # marker below, unchanged.
+                    plausible_points = _filter_plausible_batch_points(driver_id, dict_points)
+                    inserted = await persist_ride_breadcrumbs(driver_id, plausible_points)
                     # Live marker from the most recent point (best-effort). Accept
                     # both compact lat/lng and REST-style latitude/longitude keys.
                     last_pt = dict_points[-1]

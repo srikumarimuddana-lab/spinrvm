@@ -157,7 +157,7 @@ class ScrubPolicy(Enum):
 
     A policy is an explicit per-call-site opt-in, never a default, because
     scrub_pii is shared: raw GPS must never reach Sentry (PIPEDA hard rule),
-    and tests/test_ai_pii.py enumerates every AI_CHAT call site.
+    and tests/test_ai_pii.py enumerates every file that opts in to AI_CHAT.
     """
 
     STRICT = "strict"
@@ -189,8 +189,11 @@ def _check_policy(policy: Any) -> None:
     # typed policy has to be rejected BEFORE that guard -- otherwise it would
     # silently hand the value back unscrubbed, which is a privacy regression
     # dressed up as resilience.
-    if not isinstance(policy, ScrubPolicy):
-        raise TypeError(f"policy must be a ScrubPolicy, got {type(policy).__name__}")
+    # Membership in _POLICY_SKIPS is checked too: a future enum member added
+    # without a skip-set row would otherwise KeyError inside the pattern pass
+    # and be swallowed the same way.
+    if not isinstance(policy, ScrubPolicy) or policy not in _POLICY_SKIPS:
+        raise TypeError(f"policy must be a ScrubPolicy with a _POLICY_SKIPS entry, got {policy!r}")
 
 
 def scrub_pii(text: str, *, policy: ScrubPolicy = ScrubPolicy.STRICT) -> str:
@@ -271,19 +274,24 @@ def scrub_pii_deep(value: Any, depth: int = 0, *, policy: ScrubPolicy = ScrubPol
 
     Bounded recursion so a pathological/cyclic result can never spin the
     scrubber. Never raises on content -- a scrub failure must not break the
-    chat turn. A wrong-typed ``policy`` DOES raise, deliberately, before that
-    guard (see _check_policy).
+    chat turn. A wrong-typed or unmapped ``policy`` DOES raise, deliberately,
+    once at the top level and outside that guard (see _check_policy); the
+    recursion below runs unchecked so the check is never inside the swallow.
     """
     _check_policy(policy)
+    return _scrub_deep(value, depth, policy)
+
+
+def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
     if depth >= _MAX_SCRUB_DEPTH:
         return value
     try:
         if isinstance(value, str):
             return scrub_pii(value, policy=policy)
         if isinstance(value, dict):
-            return {k: scrub_pii_deep(v, depth + 1, policy=policy) for k, v in value.items()}
+            return {k: _scrub_deep(v, depth + 1, policy) for k, v in value.items()}
         if isinstance(value, (list, tuple)):
-            return type(value)(scrub_pii_deep(v, depth + 1, policy=policy) for v in value)
+            return type(value)(_scrub_deep(v, depth + 1, policy) for v in value)
     except Exception:  # noqa: BLE001 - never let scrubbing break a tool result
         return value
     return value

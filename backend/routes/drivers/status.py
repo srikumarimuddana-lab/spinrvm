@@ -464,16 +464,35 @@ async def update_driver_status(
                         action_hint="Update vehicle in Profile",
                     )
 
-            # Minimum 3 years licensed driving experience: intentionally NOT
-            # enforced here even when the flag is on. Repo-wide search
-            # (drivers + driver_documents migrations and every
-            # onboarding/profile route) found no field that records a
-            # licence-issue or experience-start date — the requirement was
-            # never captured at onboarding either, so there is nothing to
-            # re-check on go-online without inventing a new column. Per this
-            # task's instructions and CLAUDE.md's migration conventions,
-            # that schema decision is not this fix's to make silently —
-            # flagged as a follow-up in the change log rather than guessed at.
+            # Minimum 3 years licensed driving experience (ACTION_ITEMS.md
+            # C63, follow-up to #10 above): migration 405 added
+            # drivers.license_issue_date. A driver with no issue date on file
+            # (every driver onboarded before this column existed, and any
+            # driver onboarded after without capturing it) is left unblocked
+            # rather than guessed at — same fail-safe direction as the
+            # license_class/vehicle_year sub-checks above.
+            license_issue_date = driver.get("license_issue_date")
+            if license_issue_date:
+                if isinstance(license_issue_date, str):
+                    try:
+                        license_issue_date = datetime.fromisoformat(license_issue_date.replace("Z", "+00:00"))
+                    except ValueError:
+                        license_issue_date = None
+                if isinstance(license_issue_date, datetime):
+                    if license_issue_date.tzinfo is None:
+                        license_issue_date = license_issue_date.replace(tzinfo=timezone.utc)
+                    years_licensed = (now - license_issue_date).days / 365.25
+                    if years_licensed < 3:
+                        raise SpinrException(
+                            message=(
+                                "You need at least 3 years of licensed driving experience to "
+                                "drive for Spinr. Please contact support."
+                            ),
+                            error_code=ErrorCode.DRIVER_INSUFFICIENT_EXPERIENCE,
+                            status_code=400,
+                            message_key=ErrorKeys.DRIVER_INSUFFICIENT_EXPERIENCE,
+                            action_hint="Contact support",
+                        )
 
         # is_verified check removed — status field is the single source of truth now.
         # Only status='active' drivers reach this point (blocked above).

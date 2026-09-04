@@ -8,7 +8,7 @@
 | Author | Claude Code session (see PR for attribution) |
 | Surface(s) | backend (rider-app and admin AI console render the corrected payload with no client change) |
 | Domain (Sentry tag) | ai |
-| PR / commit link | branch `claude/ai-chat-postal-code-bug-nx9tun` — commits `94c5e3d`, `7bab2db`, `b914b27`, `71e2b39`, `ec5bbb6` |
+| PR / commit link | branch `claude/ai-chat-postal-code-bug-nx9tun` — code: `94c5e3d`, `7bab2db`, `b914b27`, `71e2b39`, `ec5bbb6`; docs: `9dd319d`, `77dd143`, `35b391c`; review round 1 (code/tests): `7bd94ca`, `a26b029`, `18ed747`, `e143b3f`, `db38792`; review-round docs commits follow |
 | Related issue or gap ID | `ACTION_ITEMS.md` AI16 (new); regression introduced by A40 (2026-08-18); ADR-012 |
 
 ## 1. Issue / gap identified
@@ -29,7 +29,7 @@ right now"* instead of re-checking the fare.
 **`[POSTAL]` (confirmed in code, not inferred).** `backend/ai/tools.py::_cap_result` ran
 `scrub_pii_deep()` over the *whole* tool result — including `_client_action`, the UI-card payload that
 the orchestrator pops and streams to the rider's app as an SSE `action` frame
-(`orchestrator.py:423-435`). The scrub was wired in on 2026-08-18
+(`orchestrator.py::_run_chat_turn`, the `_client_action` pop — lines 423-435 on `main` before this branch). The scrub was wired in on 2026-08-18
 (`docs/change-log/2026-08-18-ai-tool-result-pii-scrub-fix.md`, A40) on the written assumption that
 "no downstream code reads a tool result after `_cap_result` returns it". That assumption missed the
 card path. The regex at `backend/ai/pii.py` rewrote every postal code to `[POSTAL]`; the test
@@ -75,8 +75,9 @@ Every caller of `scrub_pii` / `scrub_pii_deep` (grepped):
 | Caller | Policy after this change | Behaviour change? |
 |---|---|---|
 | `ai/orchestrator.py` — user message (persisted + sent), assistant reply (persisted copy) | `AI_CHAT` | **Yes**: postal codes now reach the provider and `ai_messages` (they already reached both inside the street address) |
-| `ai/tools.py::_cap_result` — model-facing tool results | `AI_CHAT`; `_client_action` exempt | **Yes**: postal codes in *all* chat-path tool results (booking, ride history, saved places, driver tools) reach the provider; cards are no longer scrubbed |
-| `ai/mcp_server.py::_serialize_tool_payload` (new) | `STRICT` on the whole payload | No — identical output to before for `/mcp` clients |
+| `ai/tools.py::_cap_result` — model-facing tool results | `AI_CHAT` for rider/driver, `STRICT` for the anonymous `web` audience (`_policy_for_audience`); `_client_action` exempt | **Yes**: postal codes in *all* in-app chat tool results (booking, ride history, saved places, driver tools) reach the provider; cards are no longer scrubbed |
+| `ai/mcp_server.py::_serialize_tool_payload` (new) | `STRICT` on the whole payload | No, except at the truncation boundary: `_cap_result` measures `TOOL_RESULT_MAX_CHARS` on the `AI_CHAT`-scrubbed dict (postal codes at full length), so an over-cap result can truncate at a different offset than before; the STRICT re-scrub then runs on that preview |
+| `ai/tools_support.py::_recent_transcript` — AI escalation transcript → Zoho ticket (review round 1) | `STRICT` per line at the Zoho boundary | **Yes**: previously copied persisted rows verbatim on the assumption persistence was strict; now re-scrubbed so postal codes and trip pins never reach Zoho |
 | `ai/support_assistant.py:140,142,163`, `ai/public_assistant.py:148,216`, `routes/support.py:122`, `utils/log_guard.py:157`, `utils/sentry_scrub.py:25` | default (`STRICT`) | No |
 
 - **Ride state machine / money / background loops:** not touched. `get_fare_quote` still calls
@@ -119,6 +120,10 @@ Every caller of `scrub_pii` / `scrub_pii_deep` (grepped):
 | `backend/tests/test_ai_mcp.py` | `TestSerializeToolPayload` | Where the "/mcp scrubs the card too" guarantee now lives |
 | `backend/tests/test_ai_tools_booking.py` | `TestCardsKeepPostalCodes` (find_place / get_fare_quote / propose through `execute_tool`); no-drivers pin test | End-to-end regression guards through the real `_cap_result` |
 | `backend/tests/test_ai_orchestrator.py` | action-frame test through the real `_cap_result`; no-drivers replay test; rule-6c prompt test | Frame-level proof + replay variant |
+| `backend/ai/tools_support.py`, `backend/tests/test_ai_tools_support.py` (review round 1) | `_recent_transcript` STRICT-scrubs each line before truncation; test | Zoho is a third-party egress |
+| `ACTION_ITEMS.md` | AI16 (this fix), AI17 (follow-ups), AI18 (pre-existing web tool-path finding), A40 regression note | Backlog ledger |
+| `.claude/agents/spinr-ai-guardrail-reviewer.md`, `.claude/skills/spinr-ai-tool/SKILL.md`, `.claude/commands/ai-check.md` | Stale claims corrected (per-IP limiter, fail-open cap, no eval harness, tool results unscrubbed; backlog scope) | Reviewer/skill guidance must match the code |
+| `shared/utils/aiLocationMessages.ts` | one comment: `keep_trip_pins` → `ScrubPolicy.AI_CHAT` | Dangling symbol |
 | `docs/adr/012-ai-egress-trust-boundaries.md`, `docs/adr/README.md` | new ADR + index row | The rule this fix is made against |
 | `docs/compliance/pia-ai-surfaces-2026-08.md` | amendment notes on the affected rows + amendment log | Keep the PIA truthful about what reaches the provider |
 
@@ -196,12 +201,44 @@ def scrub_pii(text: str, *, policy: ScrubPolicy = ScrubPolicy.STRICT) -> str:
 - [x] `ruff check` and `ruff format --check` clean on every modified file.
 - [x] Blast-radius grep: every `scrub_pii(`/`scrub_pii_deep(` caller (table in §4); every `_client_action`
   producer (`tools_booking.py` ×4, `tools_support.py` ×1 — all `mcp_exposed=False`); every
-  `keep_trip_pins` reference (none left outside this change-log and one `shared/` comment).
+  `keep_trip_pins` reference — none left in executable code; historical mentions remain in
+  `ACTION_ITEMS.md` AI13/AI14, ADR-012's narrative and the PIA's "was `keep_trip_pins`" notes.
 - [x] Reviewed against `CLAUDE.md`: PIPEDA ban-list (raw GPS still never reaches Sentry/logs — STRICT
   default unchanged), "do not silently swallow errors" (policy type check placed before the guard),
   dual-import pattern (both branches updated in `tools.py`, `orchestrator.py`, `mcp_server.py`).
 - [ ] Feature-flagged — **not**, see §8.
 - [ ] Manual repro in staging — **not performed** (no staging or live provider in this session).
+
+## Review round 1 (Codex-style, 2026-09-04)
+
+Three independent read-only reviewers (code, tests, docs) went over the branch; the material findings
+were re-verified by hand before fixing. Fixed in commits `7bd94ca`, `a26b029`, `18ed747`, `e143b3f`,
+`db38792` and the docs commits that follow:
+
+- **Zoho escalation transcript** (`tools_support._recent_transcript`) copied persisted rows verbatim;
+  persistence is now `AI_CHAT`, so postal codes and trip pins would have reached a third party. Each
+  line is now STRICT-scrubbed before truncation. *(high)*
+- **Anonymous web assistant** tool results were scrubbed under `AI_CHAT` while the docstring/ADR said
+  STRICT; `_policy_for_audience("web")` → STRICT. *(medium)*
+- **No-drivers pin overwrites a priced pin** in the same conversation. Kept most-recent-wins on purpose
+  (a second key means a second state machine, and "yes" after a fare check must never confirm an older
+  priced trip); the replay block now says so and tells the model to re-quote an earlier trip; a
+  transition test pins both directions. *(medium, decision recorded in ADR-012)*
+- The no-drivers **note** referenced a prompt block that does not exist on the turn the note is read
+  (the system prompt is built before the tool loop); reworded to be self-contained. *(low)*
+- `_check_policy` now also rejects an enum member with no `_POLICY_SKIPS` row, and runs once outside
+  the swallow-all guard. *(low)*
+- **Two new tests would have failed in CI**: the `find_place` card test asserted Google's order but
+  candidates are re-sorted nearest-first; the no-drivers replay test asserted `quoted_total` was absent
+  from the whole prompt, which rules 6/6c contain. Both corrected (set comparison; block-scoped
+  assertions). The proposal test now pins the Maps-unavailable branch explicitly. *(high, test)*
+- Guard test skips vendored trees and reads UTF-8 tolerant; `/mcp` docstring narrowed; shared
+  `FARE_CHECK_BLOCK_HEADER` constant; mcp assert split; doc inaccuracies in the PIA rows, ADR
+  section references, this file's tables, the reviewer agent, the skill and the `/ai-check` command.
+- **Deferred, logged as AI18**: the anonymous web assistant's tool path is dead in production —
+  `public_assistant.py` builds a `tool_user` with no `id` and `execute_tool` fails closed on it, so
+  every web `search_faqs` call returns `not authorized`. Pre-existing, unrelated to this fix, needs
+  its own design (an explicit anonymous-scope allow-list).
 
 ## What was NOT verified
 

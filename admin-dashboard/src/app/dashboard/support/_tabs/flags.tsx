@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import { Pagination } from "@/components/ui/pagination";
 import { Flag, Search, Plus, Trash2, Eye, RefreshCw, EyeOff, Users, Car } from "lucide-react";
 import { formatDate } from "@/lib/utils";
@@ -100,7 +101,7 @@ export default function FlagsTab() {
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No flags found.</div>
                 : <Table><TableHeader><TableRow><SortableHead column="target_type" sort={sort} onSort={toggle}>Target</SortableHead><SortableHead column="reason" sort={sort} onSort={toggle}>Reason</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="description" sort={sort} onSort={toggle}>Description</SortableHead><SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                     <TableBody>{sorted.map((f) => (
-                        <TableRow key={f.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(f)} tabIndex={0} aria-label={`${f.target_type} flag, ${f.reason || "no reason given"}, ${f.is_active ? "active" : "inactive"}`} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(f); } }}>
+                        <ClickableTableRow key={f.id} className="hover:bg-muted/50" onActivate={() => setSelected(f)} ariaLabel={`${f.target_type} flag, ${f.reason || "no reason given"}, ${f.is_active ? "active" : "inactive"}`}>
                             {/* eslint-disable-next-line no-restricted-syntax -- decorative rider/driver icon tint, not a status signal (#2816) */}
                             <TableCell><div className="flex items-center gap-1.5">{f.target_type === "rider" ? <Users className="h-3.5 w-3.5 text-blue-500" /> : <Car className="h-3.5 w-3.5 text-emerald-500" />}<span className="text-sm capitalize">{f.target_type}</span></div></TableCell>
                             <TableCell><Badge variant="outline" className="text-[10px]">{f.reason?.replace(/_/g, " ") || "other"}</Badge></TableCell>
@@ -113,7 +114,7 @@ export default function FlagsTab() {
                                 {f.is_active !== false && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); deactivateFlag(f.id).then(load); }} title="Deactivate" aria-label="Deactivate"><EyeOff className="h-3.5 w-3.5" /></Button>}
                                 <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Delete flag" onClick={(e) => { e.stopPropagation(); setDeleteTarget(f.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
-                        </TableRow>
+                        </ClickableTableRow>
                     ))}</TableBody></Table>}
             </CardContent></Card>
 

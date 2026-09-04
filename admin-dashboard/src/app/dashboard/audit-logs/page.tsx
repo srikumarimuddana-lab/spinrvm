@@ -13,6 +13,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import {
     Select,
     SelectContent,
@@ -530,13 +531,11 @@ export default function AuditLogsPage() {
                                             const isExpanded = expandedRow === log.id;
                                             const isLong = detailStr.length > 80;
                                             return (
-                                                <TableRow
+                                                <ClickableTableRow
                                                     key={log.id}
-                                                    className={isLong ? "cursor-pointer" : ""}
-                                                    onClick={isLong ? () => setExpandedRow(isExpanded ? null : log.id) : undefined}
-                                                    tabIndex={isLong ? 0 : undefined}
-                                                    aria-label={isLong ? `${log.action}, press Enter to ${isExpanded ? "collapse" : "expand"} details` : undefined}
-                                                    onKeyDown={isLong ? (e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedRow(isExpanded ? null : log.id); } } : undefined}
+                                                    active={isLong}
+                                                    onActivate={() => setExpandedRow(isExpanded ? null : log.id)}
+                                                    ariaLabel={`${log.action}, press Enter to ${isExpanded ? "collapse" : "expand"} details`}
                                                 >
                                                     <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                                                         {formatDate(log.created_at)}
@@ -580,7 +579,7 @@ export default function AuditLogsPage() {
                                                             detailStr || "—"
                                                         )}
                                                     </TableCell>
-                                                </TableRow>
+                                                </ClickableTableRow>
                                             );
                                         })}
                                     </TableBody>

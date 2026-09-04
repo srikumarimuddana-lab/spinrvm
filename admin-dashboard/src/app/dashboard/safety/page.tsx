@@ -32,6 +32,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/components/page-header";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -422,19 +423,12 @@ export default function SafetyPage() {
                                 const st = statusTone(it.status);
                                 const sv = severityTone(it.severity);
                                 return (
-                                    <TableRow
+                                    <ClickableTableRow
                                         key={it.id}
-                                        className="cursor-pointer hover:bg-muted/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                                        className="hover:bg-muted/20"
                                         role="button"
-                                        tabIndex={0}
-                                        aria-label={`Open incident ${it.category}, reported ${relativeTime(it.reported_at)}`}
-                                        onClick={() => openSelected(it.id)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === "Enter" || e.key === " ") {
-                                                e.preventDefault();
-                                                openSelected(it.id);
-                                            }
-                                        }}
+                                        onActivate={() => openSelected(it.id)}
+                                        ariaLabel={`Open incident ${it.category}, reported ${relativeTime(it.reported_at)}`}
                                     >
                                         <TableCell className="text-xs whitespace-nowrap">
                                             <div className="font-medium">{relativeTime(it.reported_at)}</div>
@@ -496,7 +490,7 @@ export default function SafetyPage() {
                                                 <span className="italic">unassigned</span>
                                             )}
                                         </TableCell>
-                                    </TableRow>
+                                    </ClickableTableRow>
                                 );
                             })}
                         </TableBody>

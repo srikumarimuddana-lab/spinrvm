@@ -17,6 +17,7 @@ import { PageHeader } from "@/components/page-header";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -769,7 +770,7 @@ export default function CloudMessagingPage() {
                                             const typeCfg = NOTIFICATION_TYPES.find((t) => t.value === msg.type);
                                             const TI = typeCfg?.icon || Info;
                                             return (
-                                                <TableRow key={msg.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedMessage(msg)} tabIndex={0} aria-label={`${msg.title}, ${msg.type || "info"}, ${sc.label}`} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedMessage(msg); } }}>
+                                                <ClickableTableRow key={msg.id} className="hover:bg-muted/50" onActivate={() => setSelectedMessage(msg)} ariaLabel={`${msg.title}, ${msg.type || "info"}, ${sc.label}`}>
                                                     <TableCell><p className="font-medium text-sm">{msg.title}</p><p className="text-xs text-muted-foreground truncate max-w-[180px]">{msg.description}</p></TableCell>
                                                     <TableCell><div className="flex items-center gap-1"><TI className={`h-3 w-3 ${typeCfg?.color || ""}`} /><span className="text-xs capitalize">{msg.type || "info"}</span></div></TableCell>
                                                     <TableCell><span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span></TableCell>
@@ -785,7 +786,7 @@ export default function CloudMessagingPage() {
                                                             {(msg.status === "scheduled" || msg.status === "pending") && <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label="Cancel message" onClick={(e) => { e.stopPropagation(); handleDelete(msg.id); }}><Trash2 className="h-4 w-4" /></Button>}
                                                         </div>
                                                     </TableCell>
-                                                </TableRow>
+                                                </ClickableTableRow>
                                             );
                                         })}
                                     </TableBody>

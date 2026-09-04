@@ -14,6 +14,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload, Trash2, Tag, UserX, Globe } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
@@ -1044,7 +1045,7 @@ export default function DriversPage() {
                             ) : sorted.map(driver => {
                                 const areaName = serviceAreas.find(a => a.id === driver.service_area_id)?.name;
                                 return (
-                                    <TableRow key={driver.id} className={`group cursor-pointer transition-colors hover:bg-muted/40 ${selected?.id === driver.id ? "bg-primary/5 hover:bg-primary/5" : ""}`} onClick={() => setSelected(driver)} tabIndex={0} aria-label={`${driver.first_name} ${driver.last_name}, ${driver.status}, ${driver.is_online ? "online" : "offline"}`} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(driver); } }}>
+                                    <ClickableTableRow key={driver.id} className={`group transition-colors hover:bg-muted/40 ${selected?.id === driver.id ? "bg-primary/5 hover:bg-primary/5" : ""}`} onActivate={() => setSelected(driver)} ariaLabel={`${driver.first_name} ${driver.last_name}, ${driver.status}, ${driver.is_online ? "online" : "offline"}`}>
                                         <TableCell className="pl-4 align-middle">
                                             <Button size="sm" variant="secondary" className="h-7 text-[10px] font-medium px-2" onClick={(e) => { e.stopPropagation(); setSelected(driver); }}><Eye className="h-3 w-3 mr-1" />View</Button>
                                         </TableCell>
@@ -1160,7 +1161,7 @@ export default function DriversPage() {
                                         <TableCell className="pr-5">
                                             <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><Clock className="h-3 w-3 shrink-0" />{fmtDate(driver.created_at)}</div>
                                         </TableCell>
-                                    </TableRow>
+                                    </ClickableTableRow>
                                 );
                             })}
                         </TableBody>

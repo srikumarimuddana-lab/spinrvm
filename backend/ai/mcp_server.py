@@ -11,6 +11,11 @@ Defence in depth:
 - app_settings.ai_mcp_enabled (default False) is checked per request → 503
 - admin tokens are rejected (this surface is for rider/driver accounts)
 - booking tools are invisible here (mcp_exposed=False on their specs)
+- every tool-call response body is PII-scrubbed under ScrubPolicy.STRICT in
+  _serialize_tool_payload (bounded to pii._MAX_SCRUB_DEPTH) -- this surface
+  is a third-party egress, so unlike the in-app chat card it gets no
+  trip-location exemption (ADR 012). The auth / kill-switch error bodies and
+  the tool list carry no user data and do not pass through it.
 - per-user daily tool-call cap (ai_mcp_daily_tool_cap, falling back to
   ai_daily_message_cap) — the chat path is capped in the orchestrator, this
   surface caps itself
@@ -31,10 +36,12 @@ from fastapi.security import HTTPAuthorizationCredentials
 try:
     from .context import current_ai_user, require_ai_user
     from .guardrails import fallback_over_cap
+    from .pii import scrub_pii_deep
     from .tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 except ImportError:
     from ai.context import current_ai_user, require_ai_user
     from ai.guardrails import fallback_over_cap
+    from ai.pii import scrub_pii_deep
     from ai.tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 
 try:
@@ -65,6 +72,19 @@ async def _send_json(send, status: int, payload: Dict[str, Any]) -> None:
 
 def _audience_for(user: Dict[str, Any]) -> str:
     return "driver" if user.get("is_driver") else "rider"
+
+
+def _serialize_tool_payload(payload: Any) -> str:
+    """The /mcp egress point. execute_tool's _cap_result scrubs only the
+    MODEL-facing portion of a result (the in-app chat policy: postal codes
+    and trip pins kept) and leaves ``_client_action`` untouched because in the
+    chat path that card goes back to the rider's own app. An MCP client is a
+    third party, so the whole payload -- card included -- is re-scrubbed
+    here under the default STRICT policy before it leaves the process. This
+    keeps /mcp's posture exactly what it was before the card exemption
+    (2026-09-04, ADR 012); the double scrub is idempotent because redaction
+    tokens never re-match a pattern."""
+    return json.dumps(scrub_pii_deep(payload), default=str)
 
 
 async def _over_mcp_daily_cap(user_id: str, cap: int) -> bool:
@@ -185,7 +205,7 @@ def build_mcp_asgi_app() -> Optional[MCPAuthMiddleware]:
                     payload = {"error": "daily limit reached — try again tomorrow"}
                 else:
                     payload, _ok = await execute_tool(name, arguments or {}, user=user, audience=_audience_for(user))
-            return [mcp_types.TextContent(type="text", text=json.dumps(payload, default=str))]
+            return [mcp_types.TextContent(type="text", text=_serialize_tool_payload(payload))]
 
         manager = StreamableHTTPSessionManager(app=server, stateless=True)
         _state["manager"] = manager

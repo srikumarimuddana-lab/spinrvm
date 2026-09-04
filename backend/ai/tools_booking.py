@@ -33,8 +33,10 @@ import httpx
 from fastapi import HTTPException
 
 try:
+    from .prompts import FARE_CHECK_BLOCK_HEADER
     from .tools import ToolSpec, register
 except ImportError:
+    from ai.prompts import FARE_CHECK_BLOCK_HEADER
     from ai.tools import ToolSpec, register
 
 try:
@@ -1268,11 +1270,35 @@ async def get_fare_quote(
             "no_drivers": True,
             "note": (
                 "No drivers are available near this pickup right now — tell the rider "
-                "plainly and suggest trying again in a few minutes."
+                "plainly, suggest trying again in a few minutes, and offer to re-check "
+                "now. Never tell the rider you have no active quote to work from. If "
+                'they agree ("yes", "try again"), call get_fare_quote again with this '
+                "result's pickup_lat/pickup_lng/dropoff_lat/dropoff_lng and addresses — "
+                "do not re-resolve them; they will also be replayed to you on your next "
+                f"turn as a {FARE_CHECK_BLOCK_HEADER} block."
             ),
         }
         if pickup_note:
             no_drivers["pickup_note"] = pickup_note
+        # Pin the endpoints even though nothing was priced. Tool results never
+        # survive into the next turn, so a rider who answers "yes" to "try
+        # again in a few minutes?" would otherwise leave the model with no
+        # coordinates — and rule 6 forbids reusing older bracketed ones — so
+        # it told the rider it had no active quote (reported 2026-09-04). No
+        # vehicle_type_id or total is pinned: nothing can be BOOKED from this
+        # pin, and the orchestrator renders it as a re-quote-only block.
+        await _pin_quote(
+            user.get("_conversation_id"),
+            {
+                "no_drivers": True,
+                "pickup_lat": pickup_lat,
+                "pickup_lng": pickup_lng,
+                "pickup_address": shared.get("pickup_address") or pickup_address,
+                "dropoff_lat": dropoff_lat,
+                "dropoff_lng": dropoff_lng,
+                "dropoff_address": shared.get("dropoff_address") or dropoff_address,
+            },
+        )
         return no_drivers
 
     recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))

@@ -160,7 +160,11 @@ describe('HeatmapCells source', () => {
 
   it('accepts the grid size as a prop instead of hardcoding it', () => {
     expect(source).toMatch(/cellLatDeg/);
-    expect(source).toMatch(/cellToCorners\(cell\.lat, cell\.lng, cellLat, cellLng\)/);
+    // cellToCorners (4-corner Polygon geometry) was replaced by cellCenter
+    // (a single center point) when the renderer split by platform — Heatmap
+    // (Android) and Circle (iOS) both take a center, not corners. Same guard,
+    // same call shape, new function name.
+    expect(source).toMatch(/cellCenter\(cell\.lat, cell\.lng, cellLat, cellLng\)/);
   });
 
   it('keys polygons on coordinates, not array index', () => {

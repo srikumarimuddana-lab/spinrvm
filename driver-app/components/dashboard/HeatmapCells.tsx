@@ -141,9 +141,11 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
         const idx = weightToRampIndex(cell.weight, maxWeight);
         const color = colors.heatmapRamp[idx];
         const center = cellCenter(cell.lat, cell.lng, cellLat, cellLng);
-        const key = `hm-${cell.lat}-${cell.lng}`;
         return (
-          <React.Fragment key={key}>
+          // Keyed on the cell's own coordinates, not array index — the list
+          // is re-sorted by weight on every poll, so an index-prefixed key
+          // would churn native views for cells that had only moved position.
+          <React.Fragment key={`hm-${cell.lat}-${cell.lng}`}>
             <Circle
               center={center}
               radius={outerRadiusM}

@@ -77,7 +77,7 @@ async def test_candidate_fetch_failure_schedules_retry():
         patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
         patch(
             "backend.routes.rides._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False, 500)),
         ),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
         patch("backend.routes.rides._deps.spawn", spawn_mock),

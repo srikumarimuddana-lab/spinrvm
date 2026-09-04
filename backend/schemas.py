@@ -698,6 +698,17 @@ class AppSettings(BaseModel):
     # rollback switch at all and becomes a boot-time setting — do not make
     # that change without replacing the rollback procedure documented here.
     dispatch_direct_pool_enabled: bool = False
+    # ── Dispatch geo provider / candidate pool ───────────────────────────
+    # Global default provider (migration 397, settings.dispatch_geo_provider
+    # TEXT NOT NULL). A service area's own dispatch_geo_provider is a
+    # nullable override; when it is NULL this value wins. See
+    # services/dispatch_candidates.resolve_provider. Not Optional — the DB
+    # column is NOT NULL, so there is no "unset" state to represent.
+    dispatch_geo_provider: str = "postgis"
+    # How many nearby drivers are CONSIDERED before ranking (migration 404).
+    # NOT the number that receive an offer — that is max_simultaneous_offers.
+    # 500 matches the limit dispatch used to hardcode.
+    max_candidate_pool: int = 500
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

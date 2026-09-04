@@ -11,6 +11,7 @@ try:
     from ...repositories._base import _redact_pg_error
     from ...repositories._base import get_db_call_count as _get_db_call_count
     from ...repositories._base import reset_db_call_count as _reset_db_call_count
+    from ...services.dispatch_candidates import fetch_dispatch_candidates, resolve_provider
     from ...services.incentive_service import incentive_display_payload, match_ride_incentives
     from ...utils.metrics import observe as _dispatch_observe
     from ...utils.metrics import time_ms as _time_ms
@@ -19,6 +20,10 @@ except ImportError:  # pragma: no cover - dual-import pattern
     from repositories._base import _redact_pg_error  # type: ignore
     from repositories._base import get_db_call_count as _get_db_call_count  # type: ignore
     from repositories._base import reset_db_call_count as _reset_db_call_count  # type: ignore
+    from services.dispatch_candidates import (  # type: ignore
+        fetch_dispatch_candidates,
+        resolve_provider,
+    )
     from services.incentive_service import (  # type: ignore
         incentive_display_payload,
         match_ride_incentives,
@@ -361,9 +366,45 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             return row
 
         # Algorithm + radius + rating floor + batch config (area overrides app settings).
-        algorithm, min_rating, search_radius, max_offers, use_eta = await _shared.dispatch.resolve_matching_config(
+        (
+            algorithm,
+            min_rating,
+            search_radius,
+            max_offers,
+            use_eta,
+            max_candidate_pool,
+        ) = await _shared.dispatch.resolve_matching_config(
             ride, app_settings=app_settings, area=None if _area_lookup_failed else _ride_area
         )
+
+        # Which geo provider actually serves the candidate reads below. Same
+        # resolution the provider framework does internally (area override beats
+        # global) — computed here only so the pool-size guard can see it.
+        _geo_provider = resolve_provider(app_settings, None if _area_lookup_failed else _ride_area)
+        if _geo_provider == "legacy" and max_candidate_pool < 200:
+            # `legacy` is the bounding-box read, and it passes NO `order` to
+            # get_rows — an UNORDERED LIMIT. Postgres returns an arbitrary
+            # max_candidate_pool rows from the box and distance ranking happens
+            # afterwards in Python, over only those rows. Once the in-box count
+            # exceeds the cap, the nearest driver can be one of the rows that was
+            # never returned: dispatch then offers a further driver, or reports a
+            # false "no drivers", with nothing in the logs to show for it.
+            # `postgis` does not have this failure mode (ORDER BY ST_Distance in
+            # the drivers_nearby_location_geog RPC — migration 398 — drops the
+            # FURTHEST rows by construction). Warn, never raise: a shrunken pool
+            # is a degraded dispatch, not a broken one, and refusing to dispatch
+            # would be strictly worse for the rider.
+            logger.warning(
+                "[DISPATCH] unsafe pool config ride_id=%s: provider=legacy with "
+                "max_candidate_pool=%d (<200). legacy uses an UNORDERED LIMIT, so the "
+                "nearest driver is NOT guaranteed to be in the candidate pool once the "
+                "geo box holds more than %d drivers — ranking may silently skip the "
+                "closest driver. Switch dispatch_geo_provider to 'postgis' (true "
+                "nearest-N via ORDER BY ST_Distance) or raise max_candidate_pool.",
+                ride_id,
+                max_candidate_pool,
+                max_candidate_pool,
+            )
 
         # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs
         # (and this line fires on every dispatch). Correlate by ride_id only.
@@ -436,26 +477,42 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             # A transient Supabase failure here is NOT "no drivers" — it raises to the
             # match_driver_to_ride recovery shell, which re-arms the retry chain with
             # backoff instead of letting the ride strand until the sweeper cancels it.
-            all_drivers = await _deps.db_supabase.get_rows(
-                "drivers",
-                _dispatch_filter,
+            #
+            # Routed through the provider framework (services/dispatch_candidates.py)
+            # rather than calling get_rows directly: it resolves
+            # dispatch_geo_provider (area override beats global), and for
+            # `postgis`/`h3` swaps this unordered box read for a true nearest-N
+            # lookup, with automatic failover back to exactly this legacy query on
+            # any error. The `legacy` path IS the get_rows call this replaced, same
+            # filter, same projection, so provider=legacy is byte-for-byte today's
+            # behaviour.
+            all_drivers = await fetch_dispatch_candidates(
+                db=_deps.db_supabase,
+                dispatch_filter=_dispatch_filter,
+                pickup_lat=_box_lat,
+                pickup_lng=_box_lng,
+                search_radius_km=search_radius,
+                app_settings=app_settings,
+                area=None if _area_lookup_failed else _ride_area,
                 # P1: project only what ranking/filtering reads — NOT "*". The full row
                 # carries encrypted PII (address, licence, vehicle details) that this hot
-                # path (up to 500 rows every dispatch + retry, every replica) never needs;
-                # the offer payload is built from the post-claim get_driver_by_id re-read.
+                # path (up to max_candidate_pool rows every dispatch + retry, every
+                # replica) never needs; the offer payload is built from the post-claim
+                # get_driver_by_id re-read.
                 columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-                limit=500,
+                limit=max_candidate_pool,
+                ride_id=ride_id,
             )
 
             logger.info(
                 f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
                 f"matching vehicle_type_id + online + available within {search_radius}km box"
             )
-            if len(all_drivers) >= 500:
+            if len(all_drivers) >= max_candidate_pool:
                 # Even inside the box the pool is truncated — the dropped rows are
                 # in-radius candidates, so ranking quality degrades. Surface it.
                 logger.warning(
-                    f"[DISPATCH] candidate pool hit the 500-row cap inside the "
+                    f"[DISPATCH] candidate pool hit the {max_candidate_pool}-row cap inside the "
                     f"{search_radius}km box for ride {ride_id} — pool truncated"
                 )
 
@@ -746,11 +803,17 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             _casc_filter.update(
                                 build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area)
                             )
-                        _casc_pool = await _deps.db_supabase.get_rows(
-                            "drivers",
-                            _casc_filter,
+                        _casc_pool = await fetch_dispatch_candidates(
+                            db=_deps.db_supabase,
+                            dispatch_filter=_casc_filter,
+                            pickup_lat=_box_lat,
+                            pickup_lng=_box_lng,
+                            search_radius_km=search_radius,
+                            app_settings=app_settings,
+                            area=None if _area_lookup_failed else _ride_area,
                             columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,service_area_id",
-                            limit=500,
+                            limit=max_candidate_pool,
+                            ride_id=ride_id,
                         )
                         # Fix 4: Presence filter using _checked variant so a Redis outage
                         # (configured-but-unavailable) cannot silently empty the cascade pool.

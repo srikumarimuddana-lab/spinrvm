@@ -17,6 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
 import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, ExternalLink } from "lucide-react";
@@ -153,7 +154,7 @@ function TicketsList() {
                     : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No tickets found.</div>
                     : <Table><TableHeader><TableRow><SortableHead column="subject" sort={sort} onSort={toggle}>Subject</SortableHead><SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="priority" sort={sort} onSort={toggle}>Priority</SortableHead><SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                         <TableBody>{sorted.map((t) => (
-                            <TableRow key={t.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(t)} tabIndex={0} aria-label={`${t.subject}, ${t.priority || "medium"} priority, ${t.status?.replace(/_/g, " ")}`} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(t); } }}>
+                            <ClickableTableRow key={t.id} className="hover:bg-muted/50" onActivate={() => setSelected(t)} ariaLabel={`${t.subject}, ${t.priority || "medium"} priority, ${t.status?.replace(/_/g, " ")}`}>
                                 <TableCell className="font-medium max-w-[160px] truncate text-sm">{t.subject}</TableCell>
                                 <TableCell className="text-xs text-muted-foreground capitalize">{t.category || "general"}</TableCell>
                                 <TableCell className="text-xs text-muted-foreground">{areaName(t.service_area_id) || "—"}</TableCell>
@@ -164,7 +165,7 @@ function TicketsList() {
                                     <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Edit ticket" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "", service_area_id: t.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
                                     <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" aria-label="Delete ticket" onClick={(e) => { e.stopPropagation(); setDeleteTarget(t.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                                 </div></TableCell>
-                            </TableRow>
+                            </ClickableTableRow>
                         ))}</TableBody></Table>}
                 </CardContent>
                 <Pagination page={page} pageSize={PAGE_SIZE} hasNextPage={hasNextPage} onPageChange={setPage} />

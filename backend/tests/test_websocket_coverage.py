@@ -454,6 +454,125 @@ async def test_location_batch_successful_persist_fans_out_to_riders(app_with_ws)
     broadcast_admin_loc.assert_awaited_once()
 
 
+# ── 4b. C64: GPS plausibility sweep on non-last batch points ────────────────
+#
+# Previously only the batch's LAST point was ever checked (via
+# check_location_integrity, for the live marker) — every earlier point in the
+# same location_batch/driver_location_batch message reached
+# persist_ride_breadcrumbs with no spoofing check at all. This mirrors the
+# REST v2 location-batch fix's plausibility sweep
+# (docs/change-log/2026-08-19-v2-location-batch-spoofing-fix.md).
+
+_REGINA = (50.4452, -104.6189)
+_SASKATOON = (52.1332, -106.6700)
+
+
+def test_filter_plausible_batch_points_drops_implausible_non_last_point():
+    """Unit coverage of the extracted helper: a physically impossible jump
+    between the batch's own points (~230km in 3s) is dropped, and a rejected
+    point does not become the new comparison baseline for points after it —
+    the third point here is checked against the first (still Regina), not
+    against the rejected Saskatoon point, so it is accepted."""
+    from backend.routes.websocket import _filter_plausible_batch_points
+
+    points = [
+        {"lat": _REGINA[0], "lng": _REGINA[1], "captured_at": "2026-06-01T23:06:00Z"},
+        # 3s later but ~230km away -- physically impossible.
+        {"lat": _SASKATOON[0], "lng": _SASKATOON[1], "captured_at": "2026-06-01T23:06:03Z"},
+        # Close to the first (Regina) point, checked against it since the
+        # Saskatoon point above never became the trusted baseline.
+        {"lat": 50.4460, "lng": -104.6195, "captured_at": "2026-06-01T23:06:06Z"},
+    ]
+
+    filtered = _filter_plausible_batch_points("drv_c64_1", points)
+
+    assert [p["lat"] for p in filtered] == [_REGINA[0], 50.4460]
+
+
+def test_filter_plausible_batch_points_all_plausible_points_pass_through():
+    """No regression: ordinary, closely-spaced points are unaffected."""
+    from backend.routes.websocket import _filter_plausible_batch_points
+
+    points = [
+        {"lat": 50.4452, "lng": -104.6189, "captured_at": "2026-06-01T23:06:00Z"},
+        {"lat": 50.4460, "lng": -104.6195, "captured_at": "2026-06-01T23:06:05Z"},
+        {"lat": 50.4470, "lng": -104.6205, "captured_at": "2026-06-01T23:06:10Z"},
+    ]
+
+    filtered = _filter_plausible_batch_points("drv_c64_2", points)
+
+    assert len(filtered) == 3
+
+
+@pytest.mark.anyio
+async def test_location_batch_drops_implausible_middle_point_but_live_marker_unchanged(app_with_ws):
+    """End-to-end: an implausible non-last point in a WS batch must be
+    excluded from what reaches persist_ride_breadcrumbs, while the existing
+    check_location_integrity() call on the raw last point (live marker) is
+    untouched -- this fix is additive to the breadcrumb-persist path only."""
+    persist_breadcrumbs = AsyncMock(return_value=2)
+    check_integrity = AsyncMock(return_value=(True, "ok"))
+
+    extra = [
+        patch("backend.routes.websocket.redis_incr", new=AsyncMock(return_value=1)),
+        patch("backend.routes.websocket.redis_expire", new=AsyncMock(return_value=None)),
+        patch("backend.routes.websocket.is_session_revoked", new=AsyncMock(return_value=False)),
+        patch("backend.routes.websocket.persist_ride_breadcrumbs", new=persist_breadcrumbs),
+        patch("backend.routes.websocket.check_location_integrity", new=check_integrity),
+        patch("backend.routes.websocket.db_supabase.update_driver_location", new=AsyncMock(return_value=None)),
+        patch("backend.routes.websocket.manager.update_driver_location", new=AsyncMock(return_value=None)),
+        patch(
+            "backend.routes.websocket.db_supabase.get_rows",
+            new=AsyncMock(side_effect=[[_DRIVER_PROFILE], []]),
+        ),
+        patch("backend.routes.websocket.manager.broadcast_driver_location_to_admins", new=AsyncMock(return_value=None)),
+    ]
+    patches = _start(*_driver_auth_patches(extra))
+    try:
+        from backend.routes.websocket import router
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        with client.websocket_connect(f"/ws/driver/{_DRIVER_USER['id']}") as ws:
+            ws.send_json({"type": "auth", "token": "tok"})
+            ws.receive_json()
+            ws.send_json(
+                {
+                    "type": "location_batch",
+                    "points": [
+                        {"lat": _REGINA[0], "lng": _REGINA[1], "captured_at": "2026-06-01T23:06:00Z"},
+                        # Implausible teleport -- must be dropped from the
+                        # breadcrumb persist, but is still the raw last point.
+                        {
+                            "lat": _SASKATOON[0],
+                            "lng": _SASKATOON[1],
+                            "captured_at": "2026-06-01T23:06:03Z",
+                            "speed": 5,
+                        },
+                    ],
+                }
+            )
+            msg = ws.receive_json()
+            assert msg == {"type": "location_batch_ack", "count": 2}
+    finally:
+        _stop(patches)
+
+    # Only the plausible first point reached the breadcrumb persist.
+    persist_breadcrumbs.assert_awaited_once()
+    persisted_points = persist_breadcrumbs.await_args.args[1]
+    assert len(persisted_points) == 1
+    assert persisted_points[0]["lat"] == _REGINA[0]
+
+    # The live-marker check still runs against the RAW last point (Saskatoon),
+    # unfiltered -- unchanged from before this fix.
+    check_integrity.assert_awaited_once()
+    call_args, call_kwargs = check_integrity.await_args.args, check_integrity.await_args.kwargs
+    assert call_args[1] == _SASKATOON[0]
+    assert call_args[2] == _SASKATOON[1]
+    assert call_kwargs.get("speed") == 5
+
+
 # ── 5. Disconnect / exception-handling tail ──────────────────────────────────
 
 

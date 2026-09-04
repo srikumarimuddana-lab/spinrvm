@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -8,6 +8,7 @@ import { useAuthStore, type User } from '@shared/store/authStore';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 
 /**
  * Self-serve reactivation any time before the 7-year deletion retention
@@ -104,19 +105,16 @@ export default function ReactivateAccountScreen() {
           Note: ride history removed when you requested deletion cannot be restored.
         </Text>
 
-        <TouchableOpacity
-          style={[styles.primaryBtn, busy && styles.btnDisabled]}
+        <Button
+          style={styles.primaryBtn}
+          textStyle={styles.primaryBtnText}
+          loading={busy}
           onPress={handleReactivate}
-          disabled={busy}
           activeOpacity={0.85}
           accessibilityLabel="Reactivate my account"
         >
-          {busy ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.primaryBtnText}>Reactivate my account</Text>
-          )}
-        </TouchableOpacity>
+          Reactivate my account
+        </Button>
 
         <TouchableOpacity
           style={styles.secondaryBtn}
@@ -148,16 +146,14 @@ function createStyles(colors: ThemeColors) {
     title: { fontSize: 24, fontWeight: '800', color: colors.text, textAlign: 'center', marginBottom: 12 },
     body: { fontSize: 15, color: colors.textDim, textAlign: 'center', lineHeight: 22, marginBottom: 12 },
     note: { fontSize: 12, color: colors.textDim, textAlign: 'center', lineHeight: 18, marginBottom: 32 },
+    // Button (variant="primary" size="lg", the default) supplies width,
+    // background, radius (14 vs this file's original 16 — disclosed 2px
+    // cosmetic rounding, same convergence Button.tsx's own doc comment
+    // calls out for its other CTA-button migrations) and height (54 vs 56).
+    // Only the below-button spacing is a real leftover.
     primaryBtn: {
-      width: '100%',
-      backgroundColor: colors.primary,
-      borderRadius: 16,
-      height: 56,
-      justifyContent: 'center',
-      alignItems: 'center',
       marginBottom: 14,
     },
-    btnDisabled: { opacity: 0.6 },
     primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
     secondaryBtn: { height: 48, justifyContent: 'center', alignItems: 'center' },
     secondaryBtnText: { color: colors.textDim, fontSize: 15, fontWeight: '600' },

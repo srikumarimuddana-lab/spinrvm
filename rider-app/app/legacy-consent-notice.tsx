@@ -8,6 +8,7 @@ import { showToast } from '../store/toastStore';
 import { useTranslation } from '../i18n';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 
 /**
  * One-time notice for a rider whose account has no recorded consent to
@@ -104,19 +105,16 @@ export default function LegacyConsentNoticeScreen() {
         <Text style={styles.body}>{t('legacyConsent.body')}</Text>
         <Text style={styles.note}>{t('legacyConsent.note')}</Text>
 
-        <TouchableOpacity
-          style={[styles.primaryBtn, accepting && styles.btnDisabled]}
+        <Button
+          style={styles.primaryBtn}
+          textStyle={styles.primaryBtnText}
+          loading={accepting}
           onPress={handleAccept}
-          disabled={accepting}
           activeOpacity={0.85}
           accessibilityLabel={t('legacyConsent.acceptLabel')}
         >
-          {accepting ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.primaryBtnText}>{t('legacyConsent.accept')}</Text>
-          )}
-        </TouchableOpacity>
+          {t('legacyConsent.accept')}
+        </Button>
 
         <TouchableOpacity
           style={styles.secondaryBtn}
@@ -149,16 +147,14 @@ function createStyles(colors: ThemeColors) {
     title: { fontSize: 24, fontWeight: '800', color: colors.text, textAlign: 'center', marginBottom: 12 },
     body: { fontSize: 15, color: colors.textDim, textAlign: 'center', lineHeight: 22, marginBottom: 12 },
     note: { fontSize: 12, color: colors.textDim, textAlign: 'center', lineHeight: 18, marginBottom: 32 },
+    // Button (variant="primary" size="lg", the default) supplies width,
+    // background, radius (14 vs this file's original 16 — disclosed 2px
+    // cosmetic rounding, same convergence Button.tsx's own doc comment
+    // calls out for its other CTA-button migrations) and height (54 vs 56).
+    // Only the below-button spacing is a real leftover.
     primaryBtn: {
-      width: '100%',
-      backgroundColor: colors.primary,
-      borderRadius: 16,
-      height: 56,
-      justifyContent: 'center',
-      alignItems: 'center',
       marginBottom: 14,
     },
-    btnDisabled: { opacity: 0.6 },
     primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
     secondaryBtn: { height: 48, justifyContent: 'center', alignItems: 'center' },
     secondaryBtnText: { color: colors.textDim, fontSize: 15, fontWeight: '600' },

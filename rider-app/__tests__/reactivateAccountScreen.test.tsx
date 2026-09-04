@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { ActivityIndicator } from 'react-native';
+import { ActivityIndicator, TouchableOpacity } from 'react-native';
 
 import ReactivateAccountScreen from '../app/reactivate-account';
 import { useAuthStore } from '@shared/store/authStore';
@@ -220,7 +220,13 @@ describe('ReactivateAccountScreen', () => {
       btn.props.onPress();
     });
     expect(renderer.root.findAllByType(ActivityIndicator)).toHaveLength(1);
-    expect(btn.props.disabled).toBe(true);
+    // btn (findByProps, non-deep) resolves to the outer Button component
+    // instance, which doesn't re-expose `disabled` — it's Button's inner
+    // TouchableOpacity (loading -> isDisabled) that actually carries it.
+    const touchable = renderer.root
+      .findAllByType(TouchableOpacity)
+      .find((n) => n.props.accessibilityLabel === 'Reactivate my account');
+    expect(touchable?.props.disabled).toBe(true);
     await act(async () => {
       resolvePost!({ data: { token: 'access-1', user: { id: 'u1', profile_complete: true } } });
       await flush();

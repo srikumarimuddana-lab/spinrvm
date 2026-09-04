@@ -54,4 +54,15 @@ describe('Input', () => {
 
     expect(getByPlaceholderText('Locked').props.editable).toBe(false);
   });
+
+  it('applies labelStyle on top of the default label styling', () => {
+    const { getByText } = render(
+      <Input label="Full Name" labelStyle={{ fontFamily: 'PlusJakartaSans_600SemiBold' }} />,
+    );
+
+    const flatStyle = Object.assign({}, ...[].concat(getByText('Full Name').props.style));
+    expect(flatStyle.fontFamily).toBe('PlusJakartaSans_600SemiBold');
+    // Default label styling (e.g. fontSize) survives alongside the override.
+    expect(flatStyle.fontSize).toBe(13);
+  });
 });

@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiAction, FareQuoteOption } from '@shared/types/ai';
+import { Card } from '@shared/components/Card';
 
 type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 
@@ -74,7 +75,7 @@ export default function FareQuoteCard({ quote, onSelect, disabled }: Props) {
     .join(' · ');
 
   return (
-    <View style={[styles.card, disabled && styles.staleCard]}>
+    <Card padding="md" style={[styles.card, disabled && styles.staleCard]}>
       <View style={styles.headerRow}>
         <Ionicons name="pricetags-outline" size={17} color={colors.primary} />
         <Text style={styles.headerText}>Your ride options</Text>
@@ -132,19 +133,19 @@ export default function FareQuoteCard({ quote, onSelect, disabled }: Props) {
       <FareBreakdown quote={quote} styles={styles} />
 
       <Text style={styles.fineprint}>Totals include taxes & fees. Tap an option to book it.</Text>
-    </View>
+    </Card>
   );
 }
 
 const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({
+    // Card (padding="md") supplies backgroundColor/borderRadius/border/padding —
+    // this is only the chat-bubble-alignment leftover (marginLeft/gap/alignSelf).
+    // Card's padding="md" token is 16 vs this file's original literal 14 —
+    // disclosed 2px cosmetic rounding, same convergence Card.tsx's own doc
+    // comment calls out.
     card: {
       marginLeft: 34,
-      padding: 14,
-      borderRadius: 14,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
       gap: 8,
       alignSelf: 'stretch',
     },

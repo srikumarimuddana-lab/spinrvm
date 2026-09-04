@@ -1,4 +1,5 @@
-"""State-machine guard tests for POST /api/admin/rides/{id}/cancel.
+"""State-machine guard tests for the admin ride-mutation endpoints
+(POST /api/admin/rides/{id}/cancel and .../complete).
 
 WS-1 subtask A (plans/2026-09-03-path-to-a-implementation-plan.md): the #1
 Blocker from docs/audit/2026-09-03-engineering-director-teardown-round2.md
@@ -16,7 +17,10 @@ This file locks down:
      the write loses the update_one() call (0 rows) and must surface as a
      409, never a silent 200.
   3. Freeing an assigned driver on a successful cancel records a Period 1
-     (online, no ride) insurance-period transition row.
+     (online, no ride) insurance-period transition row -- but only when the
+     release actually made them available.
+  4. The same three guards on `admin_complete_ride`, the symmetric sibling
+     (ACTION_ITEMS.md C66).
 """
 
 from __future__ import annotations
@@ -189,6 +193,61 @@ class TestAdminCancelRideRaceGuard:
         update_one_mock.assert_awaited_once()
         filters = update_one_mock.call_args.args[1]
         assert filters == {"id": "ride-1", "status": "driver_arrived"}
+
+
+class TestAdminCompleteRideGuards:
+    """`admin_complete_ride` is the symmetric sibling of `admin_cancel_ride`
+    and had the same two gaps (ACTION_ITEMS.md C66): an unconditional write
+    with no optimistic lock, and an unguarded Period-1 transition."""
+
+    def test_race_lost_returns_409_and_does_not_overwrite(self, client, as_super_admin):
+        ride = _ride("in_progress", driver_id="drv-1")
+        raced = {**ride, "status": "cancelled"}
+        with (
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[ride, raced])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+        ):
+            resp = client.post(f"/api/admin/rides/{ride['id']}/complete")
+        assert resp.status_code == 409
+
+    def test_already_completed_is_idempotent_success(self, client, as_super_admin):
+        """The same retry path as the cancel handler: a landed write whose
+        response was lost is retried, matches 0 rows, and must not 409 after
+        the ride is already completed."""
+        ride = _ride("in_progress", driver_id="drv-1")
+        done = {**ride, "status": "completed"}
+        with (
+            patch("db_supabase.get_ride", AsyncMock(side_effect=[ride, done])),
+            patch("db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("db_supabase.set_driver_available", AsyncMock(return_value={"id": "drv-1", "is_available": True})),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("routes.admin.rides.record_period_transition", AsyncMock()),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("utils.ride_settlement.settle_completed_ride_geometry", AsyncMock()),
+        ):
+            resp = client.post(f"/api/admin/rides/{ride['id']}/complete")
+        assert resp.status_code == 200
+
+    def test_no_period_1_when_release_clamped_offline(self, client, as_super_admin):
+        ride = _ride("in_progress", driver_id="drv-1")
+        done = {**ride, "status": "completed"}
+        record_period_mock = AsyncMock()
+        with (
+            patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("db_supabase.update_one", AsyncMock(return_value=done)),
+            patch("db_supabase.set_driver_available", AsyncMock(return_value={"id": "drv-1", "is_available": False})),
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value=_DRIVER)),
+            patch("routes.admin.rides.record_period_transition", record_period_mock),
+            patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.broadcast_ride_status", AsyncMock()),
+            patch("utils.ride_settlement.settle_completed_ride_geometry", AsyncMock()),
+        ):
+            resp = client.post(f"/api/admin/rides/{ride['id']}/complete")
+        assert resp.status_code == 200
+        record_period_mock.assert_not_awaited()
 
 
 class TestAdminCancelRideInsurancePeriod:

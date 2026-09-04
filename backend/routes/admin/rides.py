@@ -848,14 +848,49 @@ async def admin_complete_ride(
         "ride_completed_at": now,
     }
 
+    # Conditional update scoped to the status just read — the same
+    # optimistic-lock pattern admin_cancel_ride and routes/drivers/
+    # ride_flow.py:331 use. Without it, a concurrent transition between the
+    # read above and this write is silently overwritten with `completed`.
+    complete_filter = {"id": ride_id, "status": status_from}
     try:
-        await db_supabase.update_ride(ride_id, update_data)
+        completed = await db_supabase.update_one("rides", complete_filter, update_data)
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(
             f"admin_complete_ride: update failed ride_id={ride_id} admin_id={admin_user.get('id')} err={original or e}"
         )
         raise HTTPException(status_code=500, detail="Failed to update ride status") from e
+
+    if completed is None:
+        # Same three-way split as admin_cancel_ride: an already-`completed`
+        # ride is an idempotent success (update_one retries under run_sync's
+        # 3-attempt "read" policy, so a landed write whose response was lost
+        # comes back here); an unchanged status is a silently-blocked write;
+        # anything else genuinely raced.
+        current = await db_supabase.get_ride(ride_id)
+        current_status = (current or {}).get("status")
+        if current is not None and current_status == "completed":
+            logger.info(
+                f"admin_complete_ride: ride {ride_id} already completed at write time "
+                f"(retry or concurrent complete) — completing side effects idempotently"
+            )
+            completed = current
+        elif current is not None and current_status == status_from:
+            logger.error(
+                f"admin_complete_ride: silent no-op on {ride_id} — conditional update matched 0 rows "
+                f"but the ride is still status={status_from!r} (RLS or service-role misconfiguration?)"
+            )
+            raise HTTPException(status_code=500, detail="Complete did not persist — see backend logs.")
+        else:
+            logger.info(
+                f"admin_complete_ride: ride_state_changed ride_id={ride_id} "
+                f"admin_id={admin_user.get('id')} expected_status={status_from} current_status={current_status}"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Ride state changed before the completion could be applied — refresh and retry",
+            )
 
     # Audit + period transition are best-effort — they must never roll back
     # the ride status mutation that already succeeded above.
@@ -868,11 +903,22 @@ async def admin_complete_ride(
     )
 
     driver_user_id: str | None = None
-    driver_id = ride.get("driver_id")
+    # From the post-write row, not the pre-write read: complete_filter pins the
+    # status but not the driver, so a concurrent reassignment would otherwise
+    # free the stale driver and open a bogus Period 1 for them. Same reasoning
+    # as admin_cancel_ride.
+    driver_id = (completed or {}).get("driver_id") or ride.get("driver_id")
     if driver_id:
         try:
-            await db_supabase.set_driver_available(driver_id, True)
-            await record_period_transition(driver_id, 1)
+            released = await db_supabase.set_driver_available(driver_id, True)
+            # Only open Period 1 if the release actually made the driver
+            # available — set_driver_available clamps is_available to False for
+            # a driver who went offline or was suspended while assigned, and
+            # their go-offline already logged Period 0. Recording Period 1 here
+            # would falsely reopen a commercial-insurance window for a driver
+            # on personal auto only.
+            if isinstance(released, dict) and released.get("is_available"):
+                await record_period_transition(driver_id, 1)
         except Exception as e:
             logger.error(
                 f"admin_complete_ride: could not free driver {driver_id}: {e}",

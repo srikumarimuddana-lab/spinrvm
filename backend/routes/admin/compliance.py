@@ -1689,12 +1689,12 @@ async def _saskatoon_city_trip_log_rows(start_date: datetime, end_date: datetime
     since the trip never started, along with Begin_Timestamp and
     End_Timestamp.
 
-    Driver_License_Number (added 2026-09-03 per requester follow-up) is
-    the assigned driver's license number, decrypted via the same
-    _decrypt_driver_pii vault round-trip _driver_roster_rows uses — every
-    retained row has a driver_id (completed rides always have one;
-    cancelled-after-acceptance rows are only kept because
-    driver_accepted_at is set, which implies one)."""
+    Deliberately does not include the driver's license number — a
+    government ID that belongs on the SGI/insurance-side reports and the
+    internal Driver Roster (both already export it via the same
+    _decrypt_driver_pii path), not a municipal per-trip log. Added then
+    removed in this same file's history (2026-09-03) after the requester
+    reconsidered; see docs/change-log/2026-09-03-saskatoon-city-trip-log-report.md."""
     saskatoon_ids = await _resolve_saskatoon_service_area_ids()
     filters: dict = {
         "status": {"$in": ["completed", "cancelled"]},
@@ -1705,14 +1705,13 @@ async def _saskatoon_city_trip_log_rows(start_date: datetime, end_date: datetime
         "rides",
         filters,
         columns=(
-            "id,status,ride_requested_at,driver_accepted_at,ride_started_at,ride_completed_at,"
-            "cancelled_at,cancelled_by,driver_id"
+            "id,status,ride_requested_at,driver_accepted_at,ride_started_at,ride_completed_at,cancelled_at,cancelled_by"
         ),
         limit=_ROW_LIMIT,
     )
     truncated = _check_truncated(len(rides), "saskatoon_city_trip_log")
 
-    kept: list[tuple[dict, str, str, str, "int | None"]] = []
+    rows = []
     for r in rides:
         status = r.get("status")
         if status == "completed":
@@ -1737,33 +1736,17 @@ async def _saskatoon_city_trip_log_rows(start_date: datetime, end_date: datetime
             # contract violation per CLAUDE.md. Surface loudly, don't guess.
             logger.error(f"Unexpected ride status '{status}' on ride {r.get('id')} in Saskatoon City trip log query")
             continue
-        kept.append((r, trip_status, begin_ts, end_ts, wait_minutes))
 
-    # Batched, decrypted driver-license lookup — same $in-chunking-by-200
-    # and vault round-trip _airport_trips_rows/_driver_roster_rows use.
-    driver_ids = sorted({r.get("driver_id") for r, *_ in kept if r.get("driver_id")})
-    license_by_driver: dict[str, str] = {}
-    for i in range(0, len(driver_ids), 200):
-        batch = driver_ids[i : i + 200]
-        driver_rows = await db_supabase.get_rows(
-            "drivers", {"id": {"$in": batch}}, columns="id,license_number", limit=len(batch)
+        rows.append(
+            {
+                "Request_Timestamp": report_branding.format_report_timestamp(r.get("ride_requested_at")),
+                "Accept_Timestamp": report_branding.format_report_timestamp(r.get("driver_accepted_at")),
+                "Begin_Timestamp": begin_ts,
+                "End_Timestamp": end_ts,
+                "Passenger_Wait_Time (Mins)": "" if wait_minutes is None else str(wait_minutes),
+                "Trip_Status": trip_status,
+            }
         )
-        for d in driver_rows:
-            decrypted = await _decrypt_driver_pii(d)
-            license_by_driver[d["id"]] = decrypted.get("license_number") or ""
-
-    rows = [
-        {
-            "Request_Timestamp": report_branding.format_report_timestamp(r.get("ride_requested_at")),
-            "Accept_Timestamp": report_branding.format_report_timestamp(r.get("driver_accepted_at")),
-            "Begin_Timestamp": begin_ts,
-            "End_Timestamp": end_ts,
-            "Passenger_Wait_Time (Mins)": "" if wait_minutes is None else str(wait_minutes),
-            "Trip_Status": trip_status,
-            "Driver_License_Number": license_by_driver.get(r.get("driver_id"), ""),
-        }
-        for r, trip_status, begin_ts, end_ts, wait_minutes in kept
-    ]
     rows.sort(key=lambda row: row["Request_Timestamp"], reverse=True)
     return rows, truncated
 
@@ -1782,8 +1765,7 @@ async def get_saskatoon_city_trip_log(
     after a driver had already accepted it. Trip_Status distinguishes
     Completed / Cancelled by Rider / Cancelled by Driver; Begin_Timestamp,
     End_Timestamp, and Passenger_Wait_Time are blank for cancelled trips
-    since the trip never started. Driver_License_Number is the assigned
-    driver's decrypted license number. See _saskatoon_city_trip_log_rows's
+    since the trip never started. See _saskatoon_city_trip_log_rows's
     docstring for the date-field and wait-time definitions this report
     uses."""
     _require_super_admin(admin)
@@ -1815,7 +1797,6 @@ async def get_saskatoon_city_trip_log(
         "End_Timestamp",
         "Passenger_Wait_Time (Mins)",
         "Trip_Status",
-        "Driver_License_Number",
     ]
     completed_count = sum(1 for r in rows if r["Trip_Status"] == "Completed")
     cancelled_count = len(rows) - completed_count
@@ -1842,5 +1823,5 @@ async def get_saskatoon_city_trip_log(
         subtitle=subtitle,
         format=format,
         pdf_landscape=True,
-        pdf_col_widths=[1.4, 1.4, 1.4, 1.4, 1.6, 1.4, 1.6],
+        pdf_col_widths=[1.4, 1.4, 1.4, 1.4, 1.6, 1.4],
     )

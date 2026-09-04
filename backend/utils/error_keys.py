@@ -31,6 +31,7 @@ class ErrorKeys:
     DRIVER_DUAL_RUN_HOLD: Final[str] = "errors.driver.dual_run_hold"
     DRIVER_LICENSE_CLASS_INELIGIBLE: Final[str] = "errors.driver.license_class_ineligible"
     DRIVER_VEHICLE_TOO_OLD: Final[str] = "errors.driver.vehicle_too_old"
+    DRIVER_INSUFFICIENT_EXPERIENCE: Final[str] = "errors.driver.insufficient_experience"
 
     # Ride
     RIDE_NOT_FOUND: Final[str] = "errors.ride.not_found"

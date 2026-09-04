@@ -13733,6 +13733,14 @@ record of what was assumed vs. what was actually true</summary>
   recurring) — a future session hitting the same zero-runs symptom should
   treat it as a fresh incident to re-diagnose, not assume this note means
   it can't happen.
+- **2026-09-04 re-check — still does not reproduce.** Spot-checked every
+  PR merged same-day (#4974, #4977, #4978, #4979–#4984) via
+  `list_workflow_runs(event=pull_request)`: `ci.yml` fired normally on
+  every one, low-minute latency, none of C13's zero-runs symptom. (While
+  checking these same PRs' merge timing for a different reason, found a
+  concrete, worse instance of the *adjacent* gate-integrity item C21 —
+  see that entry's 2026-09-04 update.) C13's own root cause is still
+  unidentified either way.
 
 ### C14. `Migration Safety Check` false positives, and a blank-template PR merged with no compliance flags ticked
 - [x] **Status:** the checker bugs are fixed (2026-08-10); the merged-PR
@@ -15168,6 +15176,62 @@ record of what was assumed vs. what was actually true</summary>
 - **Files:** none — this is a GitHub repo-settings issue, not a workflow
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
+- **2026-09-04 update — reproduces again today, and the mechanism is
+  narrower/worse than originally suspected.** Investigated fresh after a
+  general ACTION_ITEMS.md sweep flagged this item as worth digging into.
+  Compared `created_at`→`merged_at` gaps and `merged_by` across several PRs
+  merged the same day:
+  - **#4977** (`risk:high`, `area:money` — the C69 loguru fix) and **#4978**
+    (`risk:high`, `area:money` — the C64 WS-plausibility fix): both **self-
+    merged by their own author account** (`ittalenthireca-sketch`,
+    `merged_by == user.login`) **9–11 seconds** after PR creation — before
+    any check could possibly have completed. #4977's `Visual regression
+    (Playwright)` check later came back `failure`, 22 minutes *after* the
+    merge; #4978's full check set kept running for another 36 minutes
+    post-merge. `requested_reviewers` was set (`srikumarimuddana-lab`) on
+    both but the reviewer never had a window to act.
+  - **Ruled out the original hypothesis** (narrow required-checks already
+    green from an earlier `push`-triggered run on the branch, so native
+    auto-merge legitimately fires instantly): checked `list_workflow_runs`
+    for `ci.yml` filtered to each PR's branch + `event: push` — **zero
+    runs** on either branch before the PR opened. So at merge time these
+    two `risk:high`/money-labeled PRs had **no CI run of any kind** (`push`
+    or `pull_request`) completed for their head SHA yet, not just an
+    incomplete required subset.
+  - **Contrast, same day:** two `risk:low`/`docs` PRs from the same account
+    (#4974, #4980) wanted ~9–11 minutes before merging — consistent with
+    genuinely waiting on checks. One PR merged by a *different* account
+    (`srikumarimuddana-lab`, #4981) waited ~47 minutes with a real
+    requested-reviewer flow. The zero-wait self-merges are specific to
+    `ittalenthireca-sketch` merging its own `risk:high` PRs, not a blanket
+    repo behavior.
+  - **Revised diagnosis:** this pattern doesn't fit "native auto-merge
+    waiting only for a narrow required-checks list" (that would still take
+    at least as long as the fastest required check needs to start and
+    report) — it fits an actor that can merge **without required-status-
+    checks blocking at all**, e.g. a branch-protection bypass/admin-merge
+    allowance on that account, or "Merge without waiting for requirements
+    to be met" used per-PR. Still not distinguishable from here — both read
+    identically from the Actions/PR API — and still needs the same repo-
+    admin access (Settings → Branches → `main` → required status checks,
+    and whichever setting grants `ittalenthireca-sketch` bypass/admin-merge
+    rights) that no session, including this one, has had.
+  - **Why this raises the stakes over the original two examples:** the
+    2026-08-12 near-misses (#3719/#3728) at least had checks `queued`/
+    `in_progress` at merge time. Today's #4977/#4978 had **no check
+    running yet at all**, and #4977 is a concrete case of a check that
+    would have failed the PR (`Visual regression`) reporting red only after
+    the money-labeled, `risk:high` change was already on `main` — the exact
+    failure mode this item warns is a *risk*, now observed as a fact rather
+    than a hypothetical. No bad code actually landed (the failure was later
+    triaged as unrelated/pre-existing in that PR's own thread), but the gate
+    that should have caught it before merge did not run in time to matter.
+  - **Acceptance unchanged** — still a repo-admin settings fix, now with a
+    sharper ask: alongside the required-status-checks review already listed
+    above, a repo admin should also check whether `ittalenthireca-sketch`
+    (or any non-human actor) holds a branch-protection bypass/admin-merge
+    allowance on `main`, since that — not the required-checks *list* being
+    incomplete — is what today's evidence actually points to.
 
 ### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — CLOSED (2026-09-04)
 

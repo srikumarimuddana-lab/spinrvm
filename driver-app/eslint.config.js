@@ -2,6 +2,7 @@
 const { defineConfig } = require('eslint/config');
 const expoConfig = require('eslint-config-expo/flat');
 const globals = require('globals');
+const minTouchTarget = require('./eslint-rules/min-touch-target');
 
 module.exports = defineConfig([
   expoConfig,
@@ -104,6 +105,26 @@ module.exports = defineConfig([
             'Do not hardcode padding/margin/fontSize values — use SPACING/FONT from shared/utils/responsive.ts.',
         },
       ],
+    },
+  },
+  {
+    // MIN_TOUCH (44pt Apple HIG touch-target) half of the same design-audit
+    // finding as the SPACING/FONT rule above — deliberately left out of the
+    // PR that added that rule (#4951) because a plain no-restricted-syntax
+    // selector can't compute an *effective* touch-target size (that needs
+    // width/height combined with hitSlop). This is a real custom rule
+    // instead — see eslint-rules/min-touch-target.js for the resolution
+    // logic and its false-negative-over-false-positive posture. 'warn' for
+    // the same pre-existing-violations reason as the rule above; note
+    // rider-app-test/driver-app-test in ci.yml don't currently run `eslint`
+    // at all (only tsc --noEmit + jest), so this is advisory today
+    // regardless of severity, same as SPACING/FONT.
+    files: ['app/**/*.{ts,tsx}', 'store/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}'],
+    plugins: {
+      spinr: { rules: { 'min-touch-target': minTouchTarget } },
+    },
+    rules: {
+      'spinr/min-touch-target': 'warn',
     },
   },
 ]);

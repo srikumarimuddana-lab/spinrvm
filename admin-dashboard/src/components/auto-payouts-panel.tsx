@@ -523,6 +523,9 @@ export default function AutoPayoutsPanel() {
                                                     key={b.id}
                                                     className={hasDetail ? "cursor-pointer" : undefined}
                                                     onClick={() => hasDetail && setExpanded(isOpen ? null : b.id)}
+                                                    tabIndex={hasDetail ? 0 : undefined}
+                                                    aria-label={hasDetail ? `Week ${b.week_key}, ${isOpen ? "expanded" : "collapsed"}, press Enter to ${isOpen ? "collapse" : "expand"} details` : undefined}
+                                                    onKeyDown={hasDetail ? (e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(isOpen ? null : b.id); } } : undefined}
                                                 >
                                                     <TableCell>
                                                         {hasDetail && (isOpen

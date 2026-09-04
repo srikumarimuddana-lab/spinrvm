@@ -214,6 +214,9 @@ export function DriverOffersPanel({
                       onClick={() => setSelected({ id: d.driver_id, name: d.name })}
                       className={`cursor-pointer ${selected?.id === d.driver_id ? "bg-primary/5" : ""}`}
                       title="Click to see this driver's trend"
+                      tabIndex={0}
+                      aria-label={`${d.name}, ${d.is_online ? "online" : "offline"}, ${d.offered} offers, see trend`}
+                      onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected({ id: d.driver_id, name: d.name }); } }}
                     >
                       <TableCell className="font-medium">
                         <span className="flex items-center gap-2">

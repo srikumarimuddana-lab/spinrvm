@@ -15169,9 +15169,17 @@ record of what was assumed vs. what was actually true</summary>
   YAML or application-code defect. No `.github/workflows/*.yml` change is
   implicated.
 
-### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — PARTIALLY RESOLVED (2026-08-17, follow-up 2026-08-18)
+### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — CLOSED (2026-09-04)
 
-- [ ] **Status:** partially resolved (2026-08-17, follow-up 2026-08-18).
+- [x] **Status:** closed (2026-09-04) — see the final dated update below.
+  All 10 files the 2026-08-31 drift audit flagged as untracked are now
+  individually live-verified (5 on 2026-09-04's first pass, the remaining
+  5 on this same day's second pass); acceptance (3) — "manually audit at
+  least the highest-risk ones... before actually applying" — is now
+  satisfied for the full flagged set, not just the money/auth/RLS subset.
+  Nothing in this item needed a code or schema change; the reconciliation
+  itself is the deliverable.
+- **(historical) Status:** partially resolved (2026-08-17, follow-up 2026-08-18).
   `scripts/migrate.py` no
   longer exists — deleted by A39, which reconciled `run_migrations.py` to
   the correct (migration 24) `schema_migrations` shape and ported
@@ -15388,6 +15396,51 @@ record of what was assumed vs. what was actually true</summary>
       resolved (bookkeeping-only gap), 2 (78/137) are moot (superseded by
       138), and 1 (70) is confirmed correctly blocked — no code or schema
       change was made or is needed for any of the 5.
+  - **2026-09-04 follow-up #2 — remaining 5 (lower-priority) untracked
+    files, all live-verified clean. This closes the item.** Read-only
+    Supabase MCP checks against `soavhtdhefowwvforzwb`, no writes:
+    - **`299_rider_email_verification_otp.sql`** — tracked + applied
+      (2026-09-02). Live table `rider_email_verification_otp` confirmed
+      with `user_id TEXT` (not the `UUID` the file itself declares) —
+      confirms G2 item 3's earlier finding that this file is broken as
+      merged (`users.id` is `TEXT`, the file's `REFERENCES` clause would
+      42804 if replayed literally) and that **362**
+      (`362_fix_rider_email_verification_otp_user_id_type.sql`, tracked
+      since 2026-08-21) is the actual live fix-forward definition. RLS
+      enabled, `rider_email_verification_otp_service_only` deny-all policy
+      present, matching the file's intent exactly (just via 362's corrected
+      column type, not 299's own broken one). No action needed — G2 already
+      covers 299/362; this is a fresh live confirmation, not a new finding.
+    - **`373_saved_addresses_legacy_import_metadata.sql`** — tracked +
+      applied (2026-09-02). `saved_addresses.legacy_import_metadata`
+      confirmed live: `jsonb NOT NULL DEFAULT '{}'`, matching the file
+      exactly.
+    - **`375_incentive_eligibility_enforcement_flag.sql`** — tracked +
+      applied (2026-09-02). `settings.incentive_eligibility_enforced`
+      confirmed live (`boolean NOT NULL DEFAULT false`), plus both
+      `ride_incentive_claims` indexes
+      (`idx_ride_incentive_claims_incentive_id`,
+      `idx_ride_incentive_claims_ride_id`).
+    - **`376_service_area_tax_history.sql`** — tracked + applied
+      (2026-09-02; a second, unrelated file also numbered 376 —
+      `376_corporate_wallet_adjust_idempotency.sql`, already verified in
+      follow-up #1 — the known duplicate-numeric-prefix pattern, handled by
+      full-filename keying as usual). Table exists, RLS enabled,
+      `service_area_tax_history_select` policy present matching the file's
+      `admin`/`super_admin`-only `qual` exactly, and the
+      `service_area_tax_history_no_mutate` trigger is present and enabled
+      (`tgenabled='O'`) — the append-only tamper-evidence guarantee the
+      file's own docstring promises is live, not just declared.
+    - **`377_zoho_desk_tickets_sla_breach_alerted.sql`** — tracked +
+      applied (2026-09-01, `applied_by='claude-code-manual'`).
+      `zoho_desk_tickets.sla_breach_alerted_at` and the
+      `idx_zdt_sla_breach_pending` partial index both confirmed live.
+    - **Net result**: all 5 fully applied, tracked, and structurally
+      verified — 0 remaining gaps. Combined with follow-up #1, **all 10**
+      files the 2026-08-31 audit flagged as untracked are now individually
+      resolved: 8 fully applied+tracked+verified, 1 (137) moot/superseded,
+      1 (70) confirmed correctly blocked. No code or schema change was
+      needed for any of the 10 — closing the item on that basis.
 - [ ] **Original status (2026-08-13, superseded above but kept for
   history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see

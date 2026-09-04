@@ -21050,6 +21050,49 @@ how much they de-risk a public launch._
   `backend/routes/rides/estimates.py`,
   `backend/tests/test_loguru_call_conventions.py`, `CLAUDE.md`.
 
+### C70. Android Auto hardware re-validation overdue — every marker/heading/heatmap fix since the one 2026-08-16 device pass is JS-level-only, unverified on real hardware/DHU
+- [ ] **Status:** open — found 2026-09-04 while auditing Android Auto (AA) map/vehicle-icon/
+  heatmap/speedometer/compass/zoom coverage. `driver-app/lib/androidAuto/carSurface.tsx`'s
+  own file header (line 20) still reads *"UNPROVEN ON HARDWARE: validated at the JS level
+  only. The on-surface render must still be confirmed on an EAS dev build + Android Auto
+  DHU."* — that line has not changed since the one confirmed hardware pass on 2026-08-16
+  (`docs/change-log/2026-08-16-android-auto-hardware-validation.md`).
+- **Issue/gap:** at least 5 substantive AA-surface changes have landed *after* that single
+  hardware pass with no re-validation on a device or the Android Auto Desktop Head Unit
+  (DHU): the marker-heading fix (`2026-08-20-android-auto-heading-and-live-route.md`), the
+  carried-bearing/marker-vs-camera-bearing fix (`2026-08-21-android-auto-car-heading.md`),
+  the `heading===0` sentinel fix (`2026-08-28-car-marker-heading-zero.md`), a debug-readout
+  add-then-revert (`2026-08-21-android-auto-heading-readout.md`), and the HM-30 heatmap
+  polygon-cell rendering (`2026-08-13-driver-heatmap-p2-p3.md`, whose own QA sub-ticket
+  HM-31 is recorded there as "Blocked — requires EAS dev build + Android Auto DHU").
+- **Root cause:** no CI-reachable way to exercise a real/emulated head unit — hardware
+  validation is a manual, one-off event that has to be deliberately re-run, and nothing
+  currently triggers or tracks that it's due again after an AA-surface change ships.
+- **Risk if left open:** the class of bug already fixed twice on this surface (icon
+  pointing the wrong way while the car moves) is exactly the kind of regression JS-level
+  tests and code review cannot catch — it only reproduces against the real Android Auto
+  rendering/camera pipeline on a head unit or DHU.
+- **Action:**
+  1. Run an EAS dev build (`driver-app`'s `android-auto` build profile, `eas.json`) and
+     validate on the Android Auto DHU (or a real head unit if available): map renders,
+     vehicle icon rotates to true course (not the damped camera bearing) while driving in
+     multiple directions, course-up camera rotation follows heading, heatmap polygons
+     render during idle state (HM-31), and zoom in/out via the template buttons both work.
+  2. Record the pass/fail result as a dated `docs/change-log/` entry (same pattern as the
+     2026-08-16 entry) and update `carSurface.tsx`'s header comment to reflect current
+     validation status instead of leaving the stale "UNPROVEN" note in place indefinitely.
+  3. Decide and document whether AA should ever receive the 2026-09-04 phone-screen
+     heatmap gradient redesign and idle-follow adaptive zoom (both currently, deliberately,
+     AA-surface-unmodified) or whether the simpler flat-cell/button-zoom AA UX is the
+     intended permanent design — currently undocumented either way.
+- **Owner / follow-up:** needs a person with EAS dev-build + DHU (or physical head unit)
+  access — no session in this repo's agent integration has that. Flag for the next mobile/
+  device-testing cycle.
+- **Files (reference only, no code changed by this entry):** `driver-app/lib/androidAuto/
+  carSurface.tsx`, `driver-app/lib/androidAuto/carMapCamera.ts`, `driver-app/eas.json`,
+  `docs/carplay-android-auto.md`, `docs/change-log/2026-08-16-android-auto-hardware-
+  validation.md`, `docs/change-log/2026-08-13-driver-heatmap-p2-p3.md`.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

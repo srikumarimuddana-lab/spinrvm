@@ -34,6 +34,7 @@ import { showToast } from '../../../hooks/useToast';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { ScreenHeader } from '../../../components/ScreenHeader';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { isProfileFieldsComplete, getProfileFormError } from '../../../utils/driverProfileSchema';
@@ -319,7 +320,7 @@ function ProfileScreenInner() {
               key={i}
               name={i <= Math.round(rating) ? 'star' : 'star-outline'}
               size={14}
-              color={i <= Math.round(rating) ? '#FFD700' : 'rgba(255,255,255,0.3)'}
+              color={i <= Math.round(rating) ? colors.gold : 'rgba(255,255,255,0.3)'}
             />
         );
     }
@@ -376,7 +377,7 @@ function ProfileScreenInner() {
               <Ionicons
                 name={driverData?.is_verified ? 'checkmark-circle' : 'time-outline'}
                 size={20}
-                color={driverData?.is_verified ? '#10B981' : '#F59E0B'}
+                color={driverData?.is_verified ? colors.success : colors.warning}
               />
             </View>
           </TouchableOpacity>
@@ -487,7 +488,7 @@ function ProfileScreenInner() {
 
             {!!(driverData?.rejection_reason) && !driverData.is_verified && (
             <View style={styles.rejectionBox}>
-                <Ionicons name="alert-circle" size={24} color={'#EF4444'} />
+                <Ionicons name="alert-circle" size={24} color={colors.danger} />
                 <View style={{flex: 1}}>
                     <Text style={styles.rejectionTitle}>Application Rejected</Text>
                     <Text style={styles.rejectionText}>{driverData.rejection_reason as string}</Text>
@@ -562,7 +563,7 @@ function ProfileScreenInner() {
                 {docRequirements.length === 0 ? (
                 <View style={styles.cardRow}>
                     <Ionicons name="document-text-outline" size={16} color={colors.textDim} />
-                    <Text style={[styles.cardValueDim, { marginLeft: 8 }]}>No document requirements found</Text>
+                    <Text style={[styles.cardValueDim, { marginLeft: SPACING.sm }]}>No document requirements found</Text>
                 </View>
                 ) : docRequirements.map((req, i) => {
                 const icon: any = 'document-outline';
@@ -598,12 +599,12 @@ function ProfileScreenInner() {
                 const isExpiringSoon = expiresIn !== null && expiresIn > 0 && expiresIn < 30;
 
                 const badgeColor =
-                    docStatus === 'pending' ? '#F59E0B' :
-                    docStatus === 'rejected' ? '#EF4444' :
-                    isExpired ? '#EF4444' :
-                    isExpiringSoon ? '#F59E0B' :
-                    (isValid || docStatus === 'approved') ? '#10B981' :
-                    '#EF4444'; // upload required
+                    docStatus === 'pending' ? colors.warning :
+                    docStatus === 'rejected' ? colors.danger :
+                    isExpired ? colors.danger :
+                    isExpiringSoon ? colors.warning :
+                    (isValid || docStatus === 'approved') ? colors.success :
+                    colors.danger; // upload required
 
                 const badgeLabel =
                     docStatus === 'pending' ? 'PENDING REVIEW' :
@@ -614,10 +615,10 @@ function ProfileScreenInner() {
                     'UPLOAD REQUIRED';
 
                 const iconColor =
-                    docStatus === 'pending' ? '#F59E0B' :
-                    docStatus === 'rejected' ? '#EF4444' :
-                    isExpired ? '#EF4444' :
-                    (isValid || docStatus === 'approved') ? '#10B981' :
+                    docStatus === 'pending' ? colors.warning :
+                    docStatus === 'rejected' ? colors.danger :
+                    isExpired ? colors.danger :
+                    (isValid || docStatus === 'approved') ? colors.success :
                     colors.textDim;
 
                 const iconBg =
@@ -625,7 +626,7 @@ function ProfileScreenInner() {
                     docStatus === 'rejected' ? 'rgba(239, 68, 68, 0.1)' :
                     isExpired ? 'rgba(239, 68, 68, 0.1)' :
                     (isValid || docStatus === 'approved') ? 'rgba(16, 185, 129, 0.1)' :
-                    '#F9FAFB';
+                    colors.surfaceLight;
 
                 return (
                     <React.Fragment key={req.id}>
@@ -645,7 +646,7 @@ function ProfileScreenInner() {
                             </View>
                         </View>
                         </View>
-                        <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                        <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                     </View>
                     </React.Fragment>
                 );
@@ -659,10 +660,10 @@ function ProfileScreenInner() {
             <View style={styles.card}>
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/lost-and-found' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(249, 115, 22, 0.1)' }]}>
-                        <Ionicons name="bag-handle" size={18} color="#F97316" />
+                        <Ionicons name="bag-handle" size={18} color={colors.orange} />
                     </View>
                     <Text style={styles.actionText}>Lost & Found</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/help' as any)}>
@@ -674,7 +675,7 @@ function ProfileScreenInner() {
                         <Ionicons name="help-circle" size={18} color={colors.info} />
                     </View>
                     <Text style={styles.actionText}>Help Center</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/quests' as any)}>
@@ -682,7 +683,7 @@ function ProfileScreenInner() {
                         <Ionicons name="trophy" size={18} color="#8B5CF6" />
                     </View>
                     <Text style={styles.actionText}>Quests & Bonuses</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 {/* Spinr Pass subscription. The destination screen itself
@@ -695,7 +696,7 @@ function ProfileScreenInner() {
                         <Ionicons name="card" size={18} color="#10B981" />
                     </View>
                     <Text style={styles.actionText}>Spinr Pass</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/referral' as any)}>
@@ -703,7 +704,7 @@ function ProfileScreenInner() {
                         <Ionicons name="gift" size={18} color={'#F59E0B'} />
                     </View>
                     <Text style={styles.actionText}>Referral Program</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/settings' as any)}>
@@ -711,21 +712,21 @@ function ProfileScreenInner() {
                         <Ionicons name="settings" size={18} color={colors.textDim} />
                     </View>
                     <Text style={styles.actionText}>App Settings</Text>
-                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={handleLogoutAll}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
-                        <Ionicons name="log-out-outline" size={18} color={'#EF4444'} />
+                        <Ionicons name="log-out-outline" size={18} color={colors.danger} />
                     </View>
-                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign out of all devices</Text>
+                    <Text style={[styles.actionText, { color: colors.danger }]}>Sign out of all devices</Text>
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={handleLogout}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
-                        <Ionicons name="log-out" size={18} color={'#EF4444'} />
+                        <Ionicons name="log-out" size={18} color={colors.danger} />
                     </View>
-                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign Out</Text>
+                    <Text style={[styles.actionText, { color: colors.danger }]}>Sign Out</Text>
                 </TouchableOpacity>
             </View>
             </View>
@@ -755,7 +756,7 @@ function ProfileScreenInner() {
         onRequestClose={() => setShowEditModal(false)}
       >
         <View style={modalStyles.container}>
-          <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={[colors.surface, colors.surfaceLight]} style={StyleSheet.absoluteFill} />
 
           {/* Header */}
           <ScreenHeader title="Personal Information" onBack={() => setShowEditModal(false)} />
@@ -807,7 +808,7 @@ function ProfileScreenInner() {
                     value={editFirstName}
                     onChangeText={setEditFirstName}
                     placeholder="John"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="words"
                     autoCorrect={false}
                   />
@@ -820,7 +821,7 @@ function ProfileScreenInner() {
                     value={editLastName}
                     onChangeText={setEditLastName}
                     placeholder="Doe"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="words"
                     autoCorrect={false}
                   />
@@ -837,7 +838,7 @@ function ProfileScreenInner() {
                     value={editEmail}
                     onChangeText={setEditEmail}
                     placeholder="john.doe@example.com"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -870,7 +871,7 @@ function ProfileScreenInner() {
                     <Text
                       style={[
                         modalStyles.pickerValue,
-                        !editGender && { color: '#B0B7C0', fontWeight: '500' },
+                        !editGender && { color: colors.textDim, fontWeight: '500' },
                       ]}
                     >
                       {editGender || 'Tap to select'}
@@ -986,7 +987,7 @@ function ProfileScreenInner() {
         onRequestClose={() => setShowLicenseModal(false)}
       >
         <View style={modalStyles.container}>
-          <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={[colors.surface, colors.surfaceLight]} style={StyleSheet.absoluteFill} />
           <ScreenHeader title="Driver's Licence" onBack={() => setShowLicenseModal(false)} />
           <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
             <ScrollView
@@ -1012,7 +1013,7 @@ function ProfileScreenInner() {
                     value={editLicenseNumber}
                     onChangeText={setEditLicenseNumber}
                     placeholder="S1234-5678-9012"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="characters"
                     autoCorrect={false}
                   />
@@ -1025,7 +1026,7 @@ function ProfileScreenInner() {
                     value={editLicenseClass}
                     onChangeText={setEditLicenseClass}
                     placeholder="5"
-                    placeholderTextColor="#B0B7C0"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="characters"
                     autoCorrect={false}
                   />
@@ -1087,7 +1088,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   avatarContainer: {
     position: 'relative',
-    marginBottom: 16,
+    marginBottom: SPACING.md,
     marginTop: 10,
   },
   avatar: {
@@ -1156,14 +1157,14 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   name: {
     color: '#fff',
-    fontSize: 26,
+    fontSize: FONT.h2,
     fontWeight: '900',
     letterSpacing: 0.5,
   },
   driverCode: {
     color: 'rgba(255,255,255,0.95)',
-    fontSize: 13,
-    marginTop: 4,
+    fontSize: FONT.bodySm,
+    marginTop: SPACING.xs,
     fontWeight: '700',
     letterSpacing: 1,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
@@ -1185,7 +1186,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   referralChipCode: {
     color: '#fff',
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     fontWeight: '800',
     letterSpacing: 1,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
@@ -1203,7 +1204,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     borderRadius: 16,
     marginTop: 20,
     paddingVertical: 12,
-    paddingHorizontal: 24,
+    paddingHorizontal: SPACING.lg,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.3)',
   },
@@ -1219,26 +1220,26 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   ratingNumber: {
     color: '#fff',
-    fontSize: 22,
+    fontSize: FONT.h3,
     fontWeight: '900',
   },
   ratingLabel: {
     color: 'rgba(255,255,255,0.8)',
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '600',
     marginTop: 2,
     letterSpacing: 1,
   },
   starsRow: {
     flexDirection: 'row',
-    marginTop: 4,
+    marginTop: SPACING.xs,
     gap: 2,
   },
   contentBody: {
     paddingTop: 10,
   },
   section: {
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     marginTop: 20,
   },
   sectionHeaderRow: {
@@ -1246,7 +1247,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
-    paddingHorizontal: 4,
+    paddingHorizontal: SPACING.xs,
   },
   sectionTitle: {
     color: colors.text,
@@ -1270,8 +1271,8 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
     borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.02)',
     shadowColor: '#000',
@@ -1303,14 +1304,14 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   cardLabel: {
     color: colors.textDim,
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '600',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
   cardValue: {
     color: colors.text,
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontWeight: '700',
     marginTop: 2,
   },
@@ -1340,34 +1341,34 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   actionText: {
     flex: 1,
     color: colors.text,
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontWeight: '600',
   },
   companySection: {
-    marginHorizontal: 16,
-    marginTop: 24,
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.lg,
     marginBottom: 40,
-    paddingTop: 16,
+    paddingTop: SPACING.md,
     alignItems: 'center',
   },
   companyName: {
     color: colors.textDim,
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     fontWeight: '700',
     marginBottom: 6,
   },
   companyLine: {
     color: colors.textDim,
-    fontSize: 11,
+    fontSize: FONT.label,
     marginTop: 2,
     textAlign: 'center',
   },
   rejectionBox: {
-    marginHorizontal: 16,
-    marginTop: 24,
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.lg,
     backgroundColor: 'rgba(239, 68, 68, 0.1)',
     borderRadius: 16,
-    padding: 16,
+    padding: SPACING.md,
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
@@ -1375,14 +1376,14 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     borderColor: 'rgba(239, 68, 68, 0.2)',
   },
   rejectionTitle: {
-    color: '#EF4444',
-    fontSize: 15,
+    color: colors.danger,
+    fontSize: FONT.bodyMd,
     fontWeight: '800',
-    marginBottom: 4,
+    marginBottom: SPACING.xs,
   },
   rejectionText: {
     color: '#991B1B',
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     lineHeight: 18,
   },
 }); }
@@ -1397,14 +1398,14 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 16,
-    paddingBottom: 16,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.md,
     paddingHorizontal: 20,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomColor: colors.border,
   },
-  backBtn: { padding: 4, width: 32 },
+  backBtn: { padding: SPACING.xs, width: 32 },
   headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text, flex: 1, textAlign: 'center' },
 
   content: { padding: 20 },
@@ -1414,7 +1415,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     backgroundColor: colors.surface,
     padding: 18,
     borderRadius: 18,
-    marginBottom: 16,
+    marginBottom: SPACING.md,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -1438,8 +1439,8 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
-  heroSub: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
-  heroEmail: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+  heroSub: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 2 },
+  heroEmail: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: 2 },
 
   infoBox: {
     flexDirection: 'row',
@@ -1460,9 +1461,9 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     color: colors.textDim,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
-    marginBottom: 8,
-    marginTop: 4,
-    paddingHorizontal: 4,
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.xs,
+    paddingHorizontal: SPACING.xs,
   },
   card: {
     backgroundColor: colors.surface,
@@ -1475,24 +1476,24 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     elevation: 1,
     overflow: 'hidden',
   },
-  divider: { height: 1, backgroundColor: colors.surfaceLight, marginHorizontal: 16 },
+  divider: { height: 1, backgroundColor: colors.surfaceLight, marginHorizontal: SPACING.md },
 
-  field: { paddingHorizontal: 16, paddingVertical: 12 },
+  field: { paddingHorizontal: SPACING.md, paddingVertical: 12 },
   fieldLabel: {
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '700',
     color: colors.textDim,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
-    marginBottom: 4,
+    marginBottom: SPACING.xs,
   },
-  fieldInput: { fontSize: 16, color: colors.text, padding: 0, fontWeight: '500' },
-  fieldHelper: { fontSize: 11, color: colors.textDim, marginTop: 4 },
+  fieldInput: { fontSize: FONT.bodyLg, color: colors.text, padding: 0, fontWeight: '500' },
+  fieldHelper: { fontSize: FONT.label, color: colors.textDim, marginTop: SPACING.xs },
 
   pickerBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 14,
     gap: 12,
   },
@@ -1505,13 +1506,13 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     alignItems: 'center',
   },
   pickerLabel: {
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '700',
     color: colors.textDim,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
-  pickerValue: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
+  pickerValue: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 2 },
 
   // Sticky footer
   footer: {
@@ -1519,7 +1520,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
+    borderTopColor: colors.border,
   },
   saveButton: {
     flexDirection: 'row',
@@ -1527,7 +1528,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.primary,
     borderRadius: 14,
-    paddingVertical: 16,
+    paddingVertical: SPACING.md,
     gap: 8,
     shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 4 },
@@ -1536,11 +1537,11 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     elevation: 4,
   },
   saveButtonDisabled: {
-    backgroundColor: '#D1D5DB',
+    backgroundColor: colors.border,
     shadowOpacity: 0,
     elevation: 0,
   },
-  saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  saveButtonText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '700' },
 
   // Gender picker bottom sheet — mirrors vehicle-info vehicleTypePicker modal
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
@@ -1553,7 +1554,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
   sheetHandle: {
     width: 40,
     height: 4,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: colors.border,
     borderRadius: 2,
     alignSelf: 'center',
     marginTop: 10,
@@ -1581,7 +1582,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingVertical: 14,
     gap: 12,
     borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
+    borderTopColor: colors.border,
   },
   sheetOptionSelected: { backgroundColor: 'rgba(255,59,48,0.04)' },
   sheetOptionIcon: {
@@ -1592,5 +1593,5 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sheetOptionName: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.text },
+  sheetOptionName: { flex: 1, fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text },
 }); }

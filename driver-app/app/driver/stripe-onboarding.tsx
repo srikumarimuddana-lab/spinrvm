@@ -186,7 +186,7 @@ export default function StripeOnboardingScreen() {
                 style={[styles.header, { paddingTop: insets.top + 12 }]}
             >
                 <View style={styles.headerRow}>
-                    <TouchableOpacity onPress={() => finish({ refresh: true })} style={styles.backBtn}>
+                    <TouchableOpacity onPress={() => finish({ refresh: true })} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                         <Ionicons name="arrow-back" size={22} color={colors.text} />
                     </TouchableOpacity>
                     <Text style={[styles.headerTitle, { color: colors.text }]}>Verify Identity</Text>

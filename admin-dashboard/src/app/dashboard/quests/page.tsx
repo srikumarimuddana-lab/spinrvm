@@ -327,7 +327,7 @@ export default function QuestsPage() {
               <TableBody>
                 {sortedQuests.map((quest) => (
                   <>
-                    <TableRow key={quest.id} className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandQuest(quest.id)}>
+                    <TableRow key={quest.id} className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandQuest(quest.id)} tabIndex={0} aria-label={`${quest.title}, press Enter to view participants`} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleExpandQuest(quest.id); } }}>
                       <TableCell>
                         <div className="font-medium">{quest.title}</div>
                         <div className="text-xs text-muted-foreground truncate max-w-[200px]">

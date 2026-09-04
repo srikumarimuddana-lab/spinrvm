@@ -931,6 +931,7 @@ function ProfileScreenInner() {
                   <TouchableOpacity
                     onPress={() => setShowGenderPicker(false)}
                     style={modalStyles.sheetCloseBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
                     <Ionicons name="close" size={22} color={colors.text} />
                   </TouchableOpacity>

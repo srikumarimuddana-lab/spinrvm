@@ -414,6 +414,9 @@ export default function VenuesPage() {
                         key={v.id}
                         onClick={() => startEdit(v)}
                         className={`cursor-pointer ${editing?.id === v.id ? "bg-muted/60" : ""}`}
+                        tabIndex={0}
+                        aria-label={`${v.name}, ${v.is_active ? "active" : "inactive"}, edit`}
+                        onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEdit(v); } }}
                       >
                         <TableCell className="font-medium">{v.name}</TableCell>
                         <TableCell>

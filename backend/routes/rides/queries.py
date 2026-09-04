@@ -309,7 +309,7 @@ async def get_scheduled_rides(request: Request = None, current_user: dict = Depe
         try:
             settings = await _deps.get_app_settings()
         except Exception:
-            logger.error("Failed to load app settings for scheduled-ride cancel fee preview", exc_info=True)
+            logger.opt(exception=True).error("Failed to load app settings for scheduled-ride cancel fee preview")
             settings = None
         if settings is not None:
             for ride in rides:
@@ -318,10 +318,9 @@ async def get_scheduled_rides(request: Request = None, current_user: dict = Depe
                     if fee > 0:
                         ride["notice_window_fee_amount"] = fee
                 except Exception:
-                    logger.error(
+                    logger.opt(exception=True).error(
                         "Failed to compute scheduled-ride notice-window fee preview for ride_id={}",
                         ride.get("id"),
-                        exc_info=True,
                     )
 
     return rides
@@ -423,7 +422,7 @@ async def get_ride(
             )
             cancellation_fee_amount = fee_admin + fee_driver
         except Exception:
-            logger.error("Failed to fetch app settings for cancellation config", exc_info=True)
+            logger.opt(exception=True).error("Failed to fetch app settings for cancellation config")
 
     driver_accepted_at = ride.get("driver_accepted_at")
     ride_status = ride.get("status")
@@ -465,7 +464,7 @@ async def get_ride(
             else:
                 noshow_wait_seconds = int(settings.get("noshow_wait_seconds", 300))
         except Exception:
-            logger.error("Failed to load settings or service area override for noshow_wait_seconds", exc_info=True)
+            logger.opt(exception=True).error("Failed to load settings or service area override for noshow_wait_seconds")
     ride["noshow_wait_seconds"] = noshow_wait_seconds
 
     if ride_status == RideStatus.DRIVER_ARRIVED:
@@ -505,9 +504,8 @@ async def get_ride(
                 offer_timeout_seconds = int(settings.get("ride_offer_timeout_seconds", 15))
             except Exception:
                 # Non-fatal: fall back to hardcoded default if settings fetch fails
-                logger.error(
+                logger.opt(exception=True).error(
                     "Failed to fetch app settings for offer timeout config",
-                    exc_info=True,
                 )
         ride["offer_timeout_seconds"] = offer_timeout_seconds
         if driver_notified_at:
@@ -583,7 +581,7 @@ async def get_ride(
         _incentive_total = sum(float(c.get("bonus_amount") or 0) for c in _claims)
         ride["incentive_amount"] = round(_incentive_total, 2)
     except Exception:
-        logger.error("ride incentive_claims lookup failed", exc_info=True)
+        logger.opt(exception=True).error("ride incentive_claims lookup failed")
         ride["incentive_amount"] = 0
 
     # Prefer the frozen driver_earnings_snapshot when available
@@ -633,7 +631,7 @@ async def get_ride(
             settings = await _deps.get_app_settings()
             show_legacy_badge = bool(settings.get("legacy_ride_badge_enabled", False))
         except Exception:
-            logger.error("Failed to fetch app settings for legacy ride badge flag", exc_info=True)
+            logger.opt(exception=True).error("Failed to fetch app settings for legacy ride badge flag")
     ride["show_legacy_badge"] = show_legacy_badge
 
     return ride

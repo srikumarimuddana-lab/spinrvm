@@ -125,6 +125,78 @@ def test_dispatch_error_delay_scales_10_30_60():
 
 
 @pytest.mark.asyncio
+async def test_postgrest_claim_loop_releases_prior_claims_and_reraises():
+    """WS-1 subtask 3 (plans/2026-09-03-path-to-a-implementation-plan.md):
+    claim_driver_atomic succeeds for the first two candidates, then raises
+    (a transient PostgREST error) on the third. The two already-claimed
+    drivers must be released back to available before the exception
+    propagates -- previously an exception mid-loop left them
+    claimed-but-never-offered: is_available=False with no ride_offers row
+    and no re-dispatch, invisible to both the driver and dispatch."""
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = {
+        "id": "ride-1",
+        "rider_id": "rider-1",
+        "vehicle_type_id": "vt-std",
+        "service_area_id": None,
+        "pickup_lat": 52.13,
+        "pickup_lng": -106.67,
+        "dropoff_lat": 52.15,
+        "dropoff_lng": -106.60,
+        "requires_wav": False,
+        "status": "searching",
+    }
+
+    def _driver(driver_id):
+        return {
+            "id": driver_id,
+            "vehicle_type_id": "vt-std",
+            "is_online": True,
+            "is_available": True,
+            "is_verified": True,
+            "status": "active",
+            "lat": 52.14,
+            "lng": -106.68,
+            "average_rating": 4.8,
+            "user_id": driver_id,
+        }
+
+    drivers = [_driver("drv-1"), _driver("drv-2"), _driver("drv-3")]
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            # max_offers=3 so the loop doesn't stop claiming before the 3rd
+            # (failing) candidate is reached.
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+        ),
+        patch(
+            "backend.routes.rides.matching._deps.filter_and_rank_drivers",
+            side_effect=lambda ride, ds, *a, **kw: [(d, 1.0) for d in ds],
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[None])),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=drivers)
+        mock_db.find_one = AsyncMock(return_value=None)
+        mock_db.claim_driver_atomic = AsyncMock(side_effect=[drivers[0], drivers[1], RuntimeError("PostgREST 502")])
+        mock_db.set_driver_available = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="PostgREST 502"):
+            await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    released = {c.args[0] for c in mock_db.set_driver_available.call_args_list}
+    assert released == {"drv-1", "drv-2"}
+    assert mock_db.set_driver_available.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_post_fetch_failure_rearms_with_backoff():
     """A failure ANYWHERE in a dispatch attempt (not just the candidate fetch)
     must re-arm the retry chain — this covers the offer-timeout and scheduled
@@ -135,7 +207,9 @@ async def test_post_fetch_failure_rearms_with_backoff():
     spawn_mock = MagicMock()
 
     with (
-        patch.object(rides_mod.matching, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("mid-claim boom"))),
+        patch.object(
+            rides_mod.matching, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("mid-claim boom"))
+        ),
         patch.object(rides_mod.matching, "_dispatch_retry", retry_mock),
         patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),  # no pending offers
         patch("backend.routes.rides._deps.spawn", spawn_mock),

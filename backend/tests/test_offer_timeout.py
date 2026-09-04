@@ -32,17 +32,24 @@ class TestOfferTimeoutHandler:
 
         Production code:
             db.find_one("rides", {...})
+            db.update_one("rides", {id, status: driver_assigned, driver_id}, {...})  -- the
+                conditional revert-to-searching race guard (WS-1 subtask 4);
+                must run BEFORE the miss-streak/release logic below it, and
+                a truthy return is what lets the rest of the handler proceed.
             db_supabase.set_driver_available(driver_id, available=True)  -- NOT
                 a raw db.update_one("drivers", ...); this enforces the
                 is_available => is_online invariant and is skipped entirely
                 on the miss-streak auto-offline branch, which instead uses
                 db.update_one("drivers", ...) directly.
-            db.update_one("rides", {...}, {...})
         """
         update_calls = []
 
         async def _capture_update(table, filt, patch_doc):
             update_calls.append((table, filt, patch_doc))
+            # Truthy return simulates the conditional update matching a row
+            # (the race guard "won") -- see WS-1 subtask 4. An implicit None
+            # here would make the handler treat every call as a lost race.
+            return {"id": filt.get("id"), **patch_doc.get("$set", patch_doc)}
 
         with (
             patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
@@ -71,9 +78,12 @@ class TestOfferTimeoutHandler:
             # auto-offline threshold), not a raw db.update_one("drivers", ...).
             mock_set_available.assert_awaited_once_with("driver_1", available=True)
 
-            # Ride reset to searching via db.update_one("rides", ...)
+            # Ride reset to searching via a conditional db.update_one("rides", ...)
+            # scoped to the exact state just observed (race guard, WS-1 subtask 4).
             ride_calls = [c for c in update_calls if c[0] == "rides"]
             assert ride_calls, "Expected db.update_one('rides', ...) to be called"
+            _, ride_filter, _ = ride_calls[0]
+            assert ride_filter == {"id": "ride_1", "status": "driver_assigned", "driver_id": "driver_1"}
 
             # Rider notified
             mock_manager.send_personal_message.assert_called_once()
@@ -82,6 +92,65 @@ class TestOfferTimeoutHandler:
 
             # Re-dispatch triggered
             mock_redispatch.assert_called_once_with("ride_1")
+
+    @pytest.mark.asyncio
+    async def test_race_lost_skips_release_notify_and_redispatch(self, ride_still_assigned):
+        """WS-1 subtask 4: the driver accepted in the exact window between
+        this handler's initial read and its conditional revert-to-searching
+        write. The initial read still shows `driver_assigned` (stale), but
+        the conditional update_one({"id", "status": driver_assigned,
+        "driver_id"}, ...) matches 0 rows and returns None -- the handler
+        must treat that as "lost the race" and do NOTHING else: no driver
+        release/auto-offline, no miss-streak increment, no rider/driver
+        notification, no re-dispatch. Silently reverting a real acceptance
+        (and worse, releasing/auto-offlining a driver who is now correctly
+        obligated to this ride under insurance Period 2) was the bug this
+        subtask fixes -- see ACTION_ITEMS.md C54.
+        """
+        with (
+            patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides._deps.manager") as mock_manager,
+            patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
+            patch(
+                "backend.routes.rides._deps.db_supabase.set_driver_available",
+                AsyncMock(),
+            ) as mock_set_available,
+            patch("backend.routes.rides._deps.record_period_transition", AsyncMock()) as mock_period,
+            # Both spellings are patched deliberately. conftest.py documents
+            # that the bare and `backend.`-qualified module paths are "often
+            # different module objects", and matching.py reaches this function
+            # through a lazy relative import whose resolution depends on how
+            # the module itself was loaded — so which spelling actually
+            # intercepts is not statically obvious here. Patching both is the
+            # belt-and-suspenders pattern test_scheduled_rides_coverage.py
+            # already uses for the same hazard; picking one and being wrong
+            # would make the assertion below pass vacuously.
+            patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss_streak,
+            patch("utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss_streak_bare,
+        ):
+            mock_db.find_one = AsyncMock(return_value=ride_still_assigned)
+            # None == the conditional update matched 0 rows (lost the race).
+            mock_db.update_one = AsyncMock(return_value=None)
+            mock_manager.send_personal_message = AsyncMock()
+
+            from backend.routes.rides import _offer_timeout_handler
+
+            await _offer_timeout_handler("ride_1", "driver_1", rider_id="user_rider_1", timeout_seconds=30)
+
+            # The conditional update was attempted (with the race-guard filter)...
+            mock_db.update_one.assert_awaited_once()
+            call_args = mock_db.update_one.call_args
+            assert call_args.args[0] == "rides"
+            assert call_args.args[1] == {"id": "ride_1", "status": "driver_assigned", "driver_id": "driver_1"}
+
+            # ...but nothing downstream of it ran.
+            mock_miss_streak.assert_not_awaited()
+            mock_miss_streak_bare.assert_not_awaited()
+            mock_set_available.assert_not_awaited()
+            mock_period.assert_not_awaited()
+            mock_manager.send_personal_message.assert_not_called()
+            mock_redispatch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_noop_if_ride_progressed(self):

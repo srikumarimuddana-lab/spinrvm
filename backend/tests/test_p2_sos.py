@@ -565,7 +565,13 @@ class TestTriggerEmergency:
         assert "notification_warning" in result
         assert persisted, "the incident itself must still be persisted"
         assert sms_calls == []
-        assert any("SOS emergency contact notification failed" in c.args[0] for c in mock_logger.error.call_args_list)
+        # This site logs the traceback via logger.opt(exception=True).error(...),
+        # so the call lands on the opt() proxy rather than on logger.error itself.
+        # (The two SMS-failure assertions above stay on .error — those sites carry
+        # no traceback, because the exception is already rendered into the message.)
+        opt_errors = mock_logger.opt.return_value.error.call_args_list
+        assert {"exception": True} in [c.kwargs for c in mock_logger.opt.call_args_list]
+        assert any("SOS emergency contact notification failed" in c.args[0] for c in opt_errors)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

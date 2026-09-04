@@ -19975,7 +19975,30 @@ how much they de-risk a public launch._
   `test_email_deliverability.py` failure (item 7 above).
 
 ### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle — CLOSED (2026-09-04)
-- [x] **Status:** closed. Found during C50's T2 retro `spinr-dispatch-reviewer`
+- [x] **Status:** closed twice, in parallel. PR #4919 landed the fix on `main`
+  first (wrapping the `claim_driver_atomic` call); PR #4909 developed the same
+  fix independently as WS-1 subtask 3 of
+  `plans/2026-09-03-path-to-a-implementation-plan.md` and, on merging `main`
+  in, kept its own version because #4909's review pass had found two defects
+  in the shared approach that #4919's merged version still carries:
+  (1) `logger.error(..., exc_info=True)` captures no traceback in this module
+  — `logger` here is loguru via the `_deps` re-export, so `exc_info` is
+  swallowed as a `str.format` keyword and the loguru→Sentry bridge sends a
+  stack-less `capture_message` (the C60 defect class, invisible here because
+  `tests/test_loguru_call_conventions.py` selects files by loguru's direct
+  import line — see C65); and (2) the release loop was unguarded, so a failed
+  release aborts the remaining releases AND replaces the original exception,
+  losing the root cause — likely, since the DB blip that broke the claim
+  breaks the release too. The merged resolution also spans the whole loop
+  rather than the claim call alone, covering a failure of the inline
+  revalidation release. Regression tests exist on both sides and both pass
+  against the kept implementation: `test_claim_loop_releases_earlier_claims`
+  (#4919, `test_dispatch_match_attempt_branches.py`, 2 candidates) and
+  `test_postgrest_claim_loop_releases_prior_claims_and_reraises` (#4909,
+  `test_dispatch_db_errors.py`, 3 candidates). See
+  `docs/change-log/2026-09-04-dispatch-claim-loop-orphan-release.md` and
+  `docs/change-log/2026-09-03-ws1-correctness.md`.
+  Originally — found during C50's T2 retro `spinr-dispatch-reviewer`
   pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
 - **Issue/gap:** `_match_driver_to_ride_attempt`'s batch-claim loop
   (`backend/routes/rides/matching.py:822-842`) calls
@@ -20544,6 +20567,234 @@ how much they de-risk a public launch._
   handles it; new regression test mirroring the REST v2 path's existing
   plausibility-check test coverage; no behavior change to the live-marker
   write (already covered by `check_location_integrity()` on `last_pt`).
+
+### C65. `test_loguru_call_conventions.py` selects files by the literal loguru import line — modules that take `logger` from a re-export are never scanned — CLOSED (2026-09-04)
+
+- [x] **Status:** closed — found 2026-09-03 during the WS-1 self-review
+  (PR #4909), immediately after C60 fixed 9 real offenders that this gate
+  *did* catch; fixed in the same PR at the user's direction.
+- **Issue/gap:** `_loguru_modules()` selects files with
+  `if "from loguru import logger" in src`. A module that obtains loguru's
+  `logger` indirectly — e.g. `backend/routes/rides/matching.py`, which takes
+  it from `routes/rides/_deps.py`'s re-export — never matches, so none of its
+  loguru calls are checked. Measured by temporarily making the file match:
+  the scan then reported **~20 `exc_info=` offenders and ~10+ `%s`-style
+  offenders in `matching.py` alone**, all pre-existing and all invisible to
+  CI today. Both defect classes are exactly what C60 documents as silent:
+  `exc_info` is swallowed as a `str.format` kwarg so no traceback is
+  captured and the loguru→Sentry bridge sends a stack-less
+  `capture_message`; `%s` placeholders emit literally and drop every argument.
+  `matching.py` is the dispatch hot path, so the affected lines include the
+  ERROR logs an operator would rely on during a dispatch incident.
+- **Why it matters:** the gate reads as repo-wide but is not; its own
+  non-vacuity guard (`test_scan_actually_sees_the_backend`, >20 modules /
+  >200 calls) passes comfortably while missing a whole class of file, so
+  nothing signals the gap. This is the CI-gate-decay case CLAUDE.md's
+  pre-merge gate #8 says to file rather than work around.
+- **Action:** widen the selector to detect the re-exported `logger` (resolve
+  `from ._deps import logger`-style indirection, or simply scan any module
+  whose `logger` name resolves to loguru), then fix the offenders it newly
+  surfaces — `matching.py` first. Expect the fix to be mechanical
+  (`exc_info=True` → `logger.opt(exception=True)`, `%s` → `{}`) but large;
+  do it as its own PR, not bundled with a behavior change.
+- **Files:** `backend/tests/test_loguru_call_conventions.py` (selector),
+  `backend/routes/rides/matching.py` (largest known offender), plus whatever
+  else the widened scan reports.
+- **Note:** WS-1 (PR #4909) initially fixed only the call sites it introduced,
+  using `logger.opt(exception=True)`, and did **not** touch the pre-existing
+  ones. Beware: with the *old* substring selector, adding the literal import
+  string to a file *in a comment* was enough to pull it into the scan and turn
+  the gate red (this happened once during that PR and was caught before push).
+  The AST resolver below is immune to that — a mention in a comment or
+  docstring is no longer a selector.
+
+**Resolution (2026-09-04, bundled into PR #4909 at the user's direction):**
+
+- **Selector.** `_loguru_modules()` no longer greps for a substring. A new
+  `_logger_flavor()` resolves each module's `logger` binding through the AST,
+  following `from ._deps import logger` to the module that defines it, and
+  understands `from loguru import logger as _raw` + `logger = _raw.bind(...)`.
+- **The scope was *not* what this entry predicted, in both directions.** The
+  two re-export hubs are not the same flavor:
+
+  | module | binding | flavor |
+  |---|---|---|
+  | `routes/rides/_deps.py` | `from loguru import logger` | loguru |
+  | `routes/drivers/_deps.py` | `logger = logging.getLogger(__name__)` | **stdlib** |
+
+  So the 13 `routes/drivers/*` modules are stdlib, and their `exc_info=`/`%s`
+  calls are **correct** — "scan anything that isn't obviously stdlib" would
+  have broken them. The widened scan adds exactly the 12 `routes/rides/*`
+  modules (39 → 50 modules, ~560 → 722 calls), removing none.
+- **Offenders fixed:** 161 across 10 files — 78 `exc_info=True` →
+  `logger.opt(exception=True).<level>(...)`, and 83 `%`-style messages → `{}`
+  (`%s`→`{}`, `%d`→`{}` — every argument is a `len()`/index, so this is
+  output-identical — and `%.3f`→`{:.3f}`, preserving the shadow fare-distance
+  log's precision). Zero arity mismatches, zero literals already containing
+  braces, zero `%%`, so nothing had to be skipped.
+- **Recurrence guard:** `test_every_logger_binding_resolves` now **fails** on
+  any module that calls `logger.*` with a binding the resolver cannot classify.
+  An unrecognised binding used to mean "silently not scanned" — which is the
+  entire mechanism of this bug. It found a third shape on its first run
+  (`utils/outbox_worker.py`'s aliased `.bind()`, which the old substring
+  selector had been matching only by accident). `test_scan_covers_reexported_loggers_and_only_those`
+  pins both edges: `routes/rides/*` in, `routes/drivers/*` out.
+- **Verified:** the widened gate was run against the pre-fix tree and fails
+  both detectors there, so it is not vacuously green. See the change-log entry
+  `docs/change-log/2026-09-04-loguru-gate-reexport-blind-spot.md`.
+
+### C66. Admin ride-mutation endpoints: `admin_complete_ride` has no optimistic lock and both admin endpoints can open Period 1 for an offline driver — CLOSED (2026-09-04)
+
+- [x] **Status:** closed (2026-09-04) — both gaps ported from
+  `admin_cancel_ride` to `admin_complete_ride` in PR #4909: the write is now a
+  conditional `update_one` scoped to the status just read, with the same
+  three-way 0-rows split (already-`completed` = idempotent success that falls
+  through to the side effects, unchanged status = loud 500 silent-no-op,
+  anything else = 409); `driver_id` comes from the post-write row; and the
+  Period-1 transition is guarded on the release actually making the driver
+  available. Tests: `TestAdminCompleteRideGuards` in
+  `backend/tests/test_admin_rides_cancel_state.py`.
+- **Issue/gap:** two residual gaps in `backend/routes/admin/rides.py`:
+  1. `admin_complete_ride` still writes via `update_ride(ride_id, payload)` —
+     filtered on `id` alone, with no conditional/optimistic guard. It is the
+     symmetric sibling of `admin_cancel_ride`, which PR #4909 converted to a
+     status-scoped conditional `update_one`; the same read-then-blind-write
+     race remains open on the complete path.
+  2. `admin_complete_ride`'s `record_period_transition(driver_id, 1)` fires
+     unconditionally after `set_driver_available(driver_id, True)`, with no
+     check that the release actually made the driver available.
+     `set_driver_available` clamps `is_available` to False for a driver who
+     went offline or was suspended while assigned (their go-offline already
+     logged Period 0), so this can open a Period 1 — TNC contingent
+     liability — for a driver who is really Period 0, personal auto only.
+     PR #4909 added the guarded form (`if isinstance(released, dict) and
+     released.get("is_available")`) to `admin_cancel_ride`, matching
+     `routes/rides/matching.py`'s offer-timeout handler; `admin_complete_ride`
+     was left as-is (out of scope).
+- **Action:** port both fixes from `admin_cancel_ride` (PR #4909) to
+  `admin_complete_ride`, with a test per gap.
+- **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
+
+### C67. `settle_corporate`'s explicit kill-switch-off branch strands a guest-corporate ride at `payment_status='processing'` — CLOSED (2026-09-04)
+
+- [x] **Status:** closed (2026-09-04) — fixed in PR #4909 after a second
+  review pass over that same PR flagged that the fail-closed branch's new
+  comment claimed "every other failure branch in this function does" release
+  the claim while its immediate neighbour, this branch, did not. The explicit
+  kill-switch-off branch now releases `payment_status` back to `pending`
+  (guarded, so a failed release cannot mask the 503), with regression test
+  `test_settle_corporate_explicit_false_503s_and_releases_the_claim`.
+  Originally — found 2026-09-03 by `spinr-money-auditor` reviewing
+  PR #4909, which fixed the identical gap in the adjacent fail-closed branch.
+- **Issue/gap:** when `corporate_billing_enabled` is explicitly `False`,
+  `settle_corporate` returns a 503 `PaymentResult` **without** resetting
+  `payment_status` to `pending`, unlike its five other failure branches.
+  `auto_settle_guest_corporate` claims the ride `pending|failed → processing`
+  before calling it and relies on that reset (its own except-branch fires only
+  on a raise, and this path returns), so flipping the kill switch off strands
+  every in-flight guest-corporate ride at `processing`: the guest-corporate
+  sweep in `utils/payment_retry.py` polls only `pending`, and
+  `stripe_reconcile`'s healer bails on a ride with no `payment_intent_id`,
+  which a `company_allowance` ride never has. Recovery is manual, and the
+  trigger is deliberately flipping the incident kill switch — i.e. it fires
+  when the system is already degraded.
+- **Action:** reset `payment_status` to `pending` in that branch too (the
+  fail-closed branch immediately below it now does this, PR #4909), or make
+  `auto_settle_guest_corporate` release its own claim on any
+  `not result.success` rather than only on a raise. Add a test through the
+  `auto_settle_guest_corporate` → `settle_corporate` seam —
+  `tests/test_guest_auto_settle.py` currently stubs `settle_corporate` out
+  entirely, which is why neither this nor the PR #4909 blocker was caught by
+  the existing suite.
+- **Files:** `backend/services/payment_service.py`,
+  `backend/tests/test_guest_auto_settle.py`.
+
+### C68. admin-dashboard cancel buttons don't gate on the backend's pre-trip-only cancel rule — CLOSED (2026-09-04)
+
+- [x] **Status:** closed (2026-09-04) — both call sites gated in PR #4909.
+  `ride-panel.tsx` hides Cancel when `status === "in_progress"`; its
+  `MonitoringRide.status` union has only 4 members and excludes the terminal
+  states, so comparing against "completed"/"cancelled" there would be a TS2367
+  no-overlap error — the `.includes()` form was kept in the modal instead,
+  where the type is looser. **Caveat: `npm run build` could NOT be run** — the
+  authoring environment has no npm registry access and no `node_modules`, so
+  per CLAUDE.md's admin-dashboard gate this is verified by type reading and
+  brace-balance checks only, not by a real build. Re-verify before merge.
+- **Correction (2026-09-04): this surface DOES have active visual-regression
+  coverage, and the note above understated the verification gap.** CLAUDE.md
+  claimed admin-dashboard's Playwright job self-skips for want of baselines;
+  that stopped being true at PR #4916 (`27ff638`, 2026-09-02), which seeded 5 of
+  6 — including `dashboard-monitoring`, the page this change edits. CLAUDE.md's
+  paragraph is corrected in PR #4909. Consequences for this item:
+  - `ride-panel.tsx` changes what the monitoring page renders (the Cancel button
+    is hidden on an `in_progress` ride), so a `dashboard-monitoring` visual diff
+    is an *expected* result of this change, not necessarily a defect.
+  - The baseline must be re-captured via `update-visual-baselines.yml`, which
+    needs Actions-dispatch access this session's integration does not have
+    (B38 records the same 403). **A human has to re-seed it.**
+  - Not merge-blocking today: `visual-regression-test` keeps
+    `continue-on-error: true` in `ci.yml` until all 6 baselines exist, which is
+    why the check can be red while the run concludes `success`.
+  - Separately and *not* caused by this change: `dashboard-rides` fails on a
+    missing snapshot (unseeded, B38), and `dashboard-settings` was already
+    failing on `a2359e8` — a commit in PR #4909 whose diff touched no
+    admin-dashboard file at all, which is what proves those two are pre-existing.
+- **Issue/gap:** `admin_cancel_ride` now rejects any non-pre-trip status with
+  400 (`_ADMIN_CANCELLABLE_STATUSES`), but neither admin-dashboard call site
+  reflects that. `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`
+  renders "Cancel Ride" with no status gate at all, and
+  `admin-dashboard/src/app/dashboard/rides/_components/ride-detail-modal.tsx`
+  gates on `!['completed','cancelled']`, which still admits `in_progress`.
+- **Why it matters:** an admin clicking Cancel on an in-progress ride now gets
+  a 400 error toast instead of the previous (incorrect) success. That is the
+  correct backend behaviour — an in-progress ride must be force-*completed* so
+  its insurance Period 3 closes — but the UI gives no pointer to Force
+  Complete, on a live-tested surface.
+- **Action:** hide or disable Cancel for `in_progress` (and any non-pre-trip
+  status) in both components, and surface Force Complete as the correct action
+  instead. Small, but it is an `admin-dashboard` change, so per CLAUDE.md it
+  needs a real `npm run build` — which is why PR #4909 did not bundle it: that
+  PR's authoring environment has no npm registry access, so the mandated build
+  could not be run and an unverifiable frontend change would have been worse
+  than a tracked follow-up.
+- **Files:** `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`,
+  `admin-dashboard/src/app/dashboard/rides/_components/ride-detail-modal.tsx`.
+
+### C69. loguru calls passing `extra={...}` silently discard their structured context
+
+- [ ] **Status:** open — found 2026-09-04 while closing C65, by scanning the
+  newly-widened set of loguru modules for a third defect of the same family.
+- **Issue/gap:** 6 call sites in 4 loguru modules pass `extra={...}`:
+  `repositories/_base.py`, `repositories/dispatch_pool.py`,
+  `repositories/wallet_repo.py`, `routes/rides/estimates.py`. loguru has no
+  `extra=` parameter — like `exc_info=` (C60/C65), it is handed to
+  `str.format(**kwargs)`, and since no message contains an `{extra}` field the
+  dict is simply dropped. The log line renders without it and the
+  loguru→Sentry bridge never sees it.
+- **Root cause:** the same stdlib-spelling-on-a-loguru-logger confusion as
+  C60 and C65. CLAUDE.md's Observability section explicitly instructs "use
+  structured context via `extra={...}`" — correct for the 252 stdlib modules,
+  silently wrong for the 50 loguru ones. The doc does not distinguish them.
+- **Why it matters:** it is the *values* that are lost, not the message. E.g.
+  `routes/rides/estimates.py`'s haversine-undercharge ERROR carries
+  `extra={"haversine_km": ..., "fare_mode": ...}` — the two fields that make
+  the alert actionable — and logs none of them. The message alone cannot tell
+  an operator how large the undercharge was.
+- **Action:** replace `logger.<lvl>(msg, extra={...})` with
+  `logger.bind(**{...}).<lvl>(msg)` in loguru modules, extend
+  `test_loguru_call_conventions.py` with a third detector (the selector and
+  the `_logger_calls` walker already handle `.bind()` chains, so this is a
+  ~10-line test), and add the loguru/stdlib split to CLAUDE.md's Observability
+  section so the next author is not misled the same way.
+- **Not bundled into PR #4909:** distinct defect class from C65, needs its own
+  blast-radius pass — `repositories/_base.py` is a hot path with a dedicated
+  PII-logging test (`tests/test_base_pii_logging.py`) that must be read, not
+  just grepped, before its log calls are reshaped.
+- **Files:** `backend/repositories/_base.py`,
+  `backend/repositories/dispatch_pool.py`,
+  `backend/repositories/wallet_repo.py`,
+  `backend/routes/rides/estimates.py`,
+  `backend/tests/test_loguru_call_conventions.py`, `CLAUDE.md`.
 
 ## Recently completed (do not redo)
 

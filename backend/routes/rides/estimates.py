@@ -115,19 +115,19 @@ async def _filter_reachable_drivers(all_drivers: list) -> list:
     try:
         present, reachable = await present_driver_ids_checked(driver_ids)
     except Exception as exc:
-        logger.warning("[estimate] presence filter error, using DB state: %s", exc)
+        logger.warning("[estimate] presence filter error, using DB state: {}", exc)
         return [d for d in all_drivers if intent_online(d)]
 
     if reachable:
         before = len(all_drivers)
         filtered = [d for d in all_drivers if d.get("id") in present and intent_online(d)]
-        logger.info("[estimate] presence filter: %d/%d driver(s) reachable", len(filtered), before)
+        logger.info("[estimate] presence filter: {}/{} driver(s) reachable", len(filtered), before)
         return filtered
 
     # Redis configured but unreachable — keep DB state, log warning.
     filtered = [d for d in all_drivers if intent_online(d)]
     logger.warning(
-        "[estimate] presence store unreachable, using DB state (%d drivers after intent_online filter)",
+        "[estimate] presence store unreachable, using DB state ({} drivers after intent_online filter)",
         len(filtered),
     )
     return filtered
@@ -149,7 +149,7 @@ async def _track_price_search(rider_id: str, service_area_id: Optional[str]) -> 
         # error (not warning) so a broken price_searches table/RLS surfaces
         # loudly instead of the funnel silently flatlining at zero. Still
         # swallowed: a tracking failure must never fail or slow a fare quote.
-        logger.error("[estimate] price-search tracking write failed", exc_info=True)
+        logger.opt(exception=True).error("[estimate] price-search tracking write failed")
 
 
 async def compute_ride_estimates(
@@ -193,12 +193,12 @@ async def compute_ride_estimates(
     )
     if _est_matched_area:
         logger.info(
-            "[estimate] matched service area '%s' for fees",
+            "[estimate] matched service area '{}' for fees",
             _est_matched_area.get("name", _est_matched_area.get("id")),
         )
     else:
         logger.info(
-            "[estimate] no service area matched pickup %s — area fees will be empty",
+            "[estimate] no service area matched pickup {} — area fees will be empty",
             _deps.geohash(body.pickup_lat, body.pickup_lng),
         )
 
@@ -225,7 +225,7 @@ async def compute_ride_estimates(
         )
         if _dropoff_area is None:
             logger.info(
-                "[estimate] reject dropoff=%s — outside service areas",
+                "[estimate] reject dropoff={} — outside service areas",
                 _deps.geohash(body.dropoff_lat, body.dropoff_lng),
             )
             raise HTTPException(
@@ -245,7 +245,7 @@ async def compute_ride_estimates(
             _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, _est_all_areas)
             if _stop_area is None:
                 logger.info(
-                    "[estimate] reject stop[%d]=%s — outside service areas",
+                    "[estimate] reject stop[{}]={} — outside service areas",
                     idx,
                     _deps.geohash(s_lat, s_lng),
                 )
@@ -306,7 +306,7 @@ async def compute_ride_estimates(
                 waypoints=body.stops or [],
             )
         except Exception as _route_err:
-            logger.warning("[estimate] route fetch failed (non-fatal): %s", _route_err)
+            logger.warning("[estimate] route fetch failed (non-fatal): {}", _route_err)
             return None
         finally:
             _deps._metric_observe(
@@ -354,7 +354,7 @@ async def compute_ride_estimates(
     )
 
     logger.info(
-        "[estimate] fetched %d online+available drivers from DB",
+        "[estimate] fetched {} online+available drivers from DB",
         len(all_drivers),
     )
 
@@ -396,9 +396,9 @@ async def compute_ride_estimates(
         )
 
     if skipped_reasons:
-        logger.info("[estimate] skipped drivers: %s", dict(skipped_reasons))
+        logger.info("[estimate] skipped drivers: {}", dict(skipped_reasons))
     logger.info(
-        "[estimate] matched drivers by vehicle_type: %s",
+        "[estimate] matched drivers by vehicle_type: {}",
         {k: len(v) for k, v in drivers_by_type.items()},
     )
 
@@ -421,7 +421,7 @@ async def compute_ride_estimates(
     )
 
     logger.info(
-        "[estimate] fares=%d vehicle_types=%s",
+        "[estimate] fares={} vehicle_types={}",
         len(fares),
         [f.get("vehicle_type", {}).get("name", "?") for f in fares],
     )
@@ -439,7 +439,7 @@ async def compute_ride_estimates(
                 )
                 _est_cascade_map = (_est_parent_area or {}).get("vehicle_cascade_map") or []
             except Exception as _est_casc_exc:
-                logger.debug("[estimate] parent cascade map fetch skipped: %s", _est_casc_exc)
+                logger.debug("[estimate] parent cascade map fetch skipped: {}", _est_casc_exc)
 
     # Resolve the distance the fare is priced on BEFORE the per-vehicle loop.
     # Prefer the Directions road distance (sanity-banded); fall back to
@@ -458,7 +458,7 @@ async def compute_ride_estimates(
                 if _route:
                     road_km = _route.get("distance_km")
         except Exception as _await_err:  # defensive — _route_fetch traps its own errors
-            logger.warning("[estimate] route await failed (non-fatal): %s", _await_err)
+            logger.warning("[estimate] route await failed (non-fatal): {}", _await_err)
 
     distance_km, distance_basis = select_fare_distance(haversine_km, road_km, mode=_fare_mode)
     # Duration derives from the chosen (road) distance with the standard
@@ -490,7 +490,7 @@ async def compute_ride_estimates(
         )
         if _fare_mode == "shadow":
             logger.info(
-                "[estimate] shadow fare-distance: haversine=%.3f road=%.3f delta=%.3f (billing haversine)",
+                "[estimate] shadow fare-distance: haversine={:.3f} road={:.3f} delta={:.3f} (billing haversine)",
                 haversine_km,
                 road_km,
                 road_km - haversine_km,
@@ -532,7 +532,7 @@ async def compute_ride_estimates(
                 _area_fees=_est_area_fees,
             )
         except Exception as e:
-            logger.error("[estimate] calculate_all_fees failed: %s", e, exc_info=True)
+            logger.opt(exception=True).error("[estimate] calculate_all_fees failed: {}", e)
             raise HTTPException(
                 status_code=503,
                 detail="Unable to calculate fare estimate. Please try again.",
@@ -649,10 +649,10 @@ async def compute_ride_estimates(
         except asyncio.TimeoutError:
             logger.info("[estimate] route polyline not ready within budget — returning without it (non-fatal)")
         except Exception as _poly_err:  # defensive — _route_fetch traps its own errors
-            logger.warning("[estimate] route await failed (non-fatal): %s", _poly_err)
+            logger.warning("[estimate] route await failed (non-fatal): {}", _poly_err)
 
     logger.info(
-        "[estimate] returning %d estimates (polyline=%d pts): %s",
+        "[estimate] returning {} estimates (polyline={} pts): {}",
         len(estimates),
         len(route_polyline) if route_polyline else 0,
         [(e["vehicle_type"].get("name", "?"), e["available"], e["driver_count"]) for e in estimates],

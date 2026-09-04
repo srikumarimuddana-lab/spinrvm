@@ -268,7 +268,9 @@ class TestAdminCompleteRide:
 
         with (
             patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.admin.rides.db_supabase.update_ride", AsyncMock(return_value=completed)),
+            # Conditional update now, not update_ride: a truthy row is the
+            # "write landed" signal the handler proceeds on.
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(return_value=completed)),
             patch("backend.routes.admin.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
             patch("backend.routes.admin.rides.db_supabase.set_driver_available", AsyncMock()),
             patch("backend.routes.admin.rides.manager.send_personal_message", AsyncMock()),

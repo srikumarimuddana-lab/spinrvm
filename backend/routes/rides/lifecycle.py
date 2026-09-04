@@ -186,9 +186,8 @@ async def rider_complete_ride(
         try:
             await _deps.record_period_transition(driver_id, 1)
         except Exception:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"rider_complete_ride: period transition failed for driver {driver_id}",
-                exc_info=True,
             )
         driver_row = await _deps.db_supabase.get_driver_by_id(driver_id)
         driver_user_id = driver_row.get("user_id") if driver_row else None
@@ -207,7 +206,7 @@ async def rider_complete_ride(
             # The backstop sweep in route_finalizer re-settles any completed
             # ride left without a ride_routes row, so a failed spawn here is
             # recovered within minutes.
-            logger.error("rider_complete_ride: settlement spawn failed for ride %s", ride_id, exc_info=True)
+            logger.opt(exception=True).error("rider_complete_ride: settlement spawn failed for ride {}", ride_id)
 
         # Daily Spinr Pass allowance: flip the driver offline now (DB-level) if
         # this completion used their last ride for the day. Driver WS notice is
@@ -225,7 +224,7 @@ async def rider_complete_ride(
             )
         except Exception:
             _quota_offline = None
-            logger.error("rider_complete_ride: quota offline check failed for driver=%s", driver_id, exc_info=True)
+            logger.opt(exception=True).error("rider_complete_ride: quota offline check failed for driver={}", driver_id)
     else:
         _quota_offline = None
 
@@ -253,11 +252,10 @@ async def rider_complete_ride(
             # the rider stuck on the in-progress screen. A lost incentive is
             # reconcilable from the ride_incentives ledger; a stuck ride is not.
             _rider_incentive_total = Decimal("0")
-            logger.error(
-                "rider_complete_ride: incentive claim failed for ride %s — "
+            logger.opt(exception=True).error(
+                "rider_complete_ride: incentive claim failed for ride {} — "
                 "recording $0 incentive and continuing (ride already completed)",
                 ride_id,
-                exc_info=True,
             )
 
     # ── Driver earnings snapshot ──
@@ -277,7 +275,7 @@ async def rider_complete_ride(
             },
         )
     except Exception:
-        logger.error("rider_complete_ride: driver_earnings_snapshot failed for ride %s", ride_id, exc_info=True)
+        logger.opt(exception=True).error("rider_complete_ride: driver_earnings_snapshot failed for ride {}", ride_id)
 
     completed_ride = await _deps.db_supabase.get_ride(ride_id)
     total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
@@ -330,7 +328,7 @@ async def rider_complete_ride(
             }
         )
     except Exception as _bcast_err:
-        logger.warning("admin broadcast failed for ride_completed %s: %s", ride_id, _bcast_err)
+        logger.warning("admin broadcast failed for ride_completed {}: {}", ride_id, _bcast_err)
 
     # Advance any active driver quests this completion contributes to. Runs once
     # per ride because the atomic in_progress→completed guard above lets only the
@@ -345,8 +343,8 @@ async def rider_complete_ride(
                 from utils.quest_tracker import update_quest_progress_on_ride_complete
             _deps.spawn(update_quest_progress_on_ride_complete(driver_id, completed_ride or ride))
         except Exception:
-            logger.error(
-                "rider_complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True
+            logger.opt(exception=True).error(
+                "rider_complete_ride: scheduling quest progress update failed for ride {}", ride_id
             )
 
     # Notify the driver (and admins) if this completion took them offline for
@@ -370,7 +368,7 @@ async def rider_complete_ride(
                 {"type": "driver_status_changed", "driver_id": driver_id, "is_online": False}
             )
         except Exception:
-            logger.warning("rider_complete_ride: quota auto_offline notify failed for driver=%s", driver_id)
+            logger.warning("rider_complete_ride: quota auto_offline notify failed for driver={}", driver_id)
         # Push so the driver sees it even with the app backgrounded.
         try:
             await _deps.send_push_notification(
@@ -384,6 +382,6 @@ async def rider_complete_ride(
                 target_app="driver",
             )
         except Exception:
-            logger.warning("rider_complete_ride: quota push failed for driver=%s", driver_id)
+            logger.warning("rider_complete_ride: quota push failed for driver={}", driver_id)
 
     return completed_ride or ride

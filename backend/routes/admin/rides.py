@@ -581,26 +581,42 @@ class AdminCancelRideRequest(BaseModel):
     reason: Optional[str] = None
 
 
+_ADMIN_CANCELLABLE_STATUSES = (
+    "scheduled",
+    "searching",
+    "driver_assigned",
+    "driver_accepted",
+    "driver_arrived",
+)
+
+
 @router.post("/rides/{ride_id}/cancel")
 async def admin_cancel_ride(
     ride_id: str,
     body: AdminCancelRideRequest,
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Admin force-cancels an in-flight ride from the live monitoring page.
+    """Admin force-cancels a pre-trip ride from the live monitoring page.
 
-    Terminal states are rejected. Driver (if assigned) is freed so they
-    can immediately accept new requests. Rider + driver both receive a
-    ws ride_cancelled push so their apps reset out of the active-ride
-    flow — the rider's "Finding driver" screen was otherwise stuck
-    showing forever because the UI had no cancel signal.
+    Only pre-trip states are cancellable (see _ADMIN_CANCELLABLE_STATUSES) —
+    an in_progress ride must go through admin_complete_ride instead, so its
+    insurance Period 3 is closed correctly rather than left dangling by a
+    cancel. Driver (if assigned) is freed so they can immediately accept new
+    requests. Rider + driver both receive a ws ride_cancelled push so their
+    apps reset out of the active-ride flow — the rider's "Finding driver"
+    screen was otherwise stuck showing forever because the UI had no cancel
+    signal.
     """
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") in ("completed", "cancelled"):
-        raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
+    status_from = ride.get("status")
+    if status_from not in _ADMIN_CANCELLABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel ride from state '{status_from}'",
+        )
 
     reason = (body.reason or "Cancelled by admin").strip()[:500]
     now = datetime.now(timezone.utc)
@@ -619,8 +635,15 @@ async def admin_cancel_ride(
         "cancelled_by_admin_id": admin_user.get("id"),
     }
     with_38 = {**with_37, "cancelled_by": "admin", "cancellation_type": "admin_cancel"}
+
+    # Conditional update scoped to the status just read — the same
+    # optimistic-lock pattern routes/drivers/ride_flow.py:331 uses for
+    # driver-side accept. 0 rows means the ride changed state (e.g. the
+    # driver accepted/arrived) between our read and this write; blind-writing
+    # `cancelled` over that would silently discard a real state transition.
+    cancel_filter = {"id": ride_id, "status": status_from}
     try:
-        await db_supabase.update_ride(ride_id, with_38)
+        updated = await db_supabase.update_one("rides", cancel_filter, with_38)
     except Exception:
         # DB write fallback path — first attempt failed (mig-38 columns may not
         # exist yet on this DB). Surface to Sentry so we know when/where the
@@ -630,7 +653,7 @@ async def admin_cancel_ride(
             exc_info=True,
         )
         try:
-            await db_supabase.update_ride(ride_id, with_37)
+            updated = await db_supabase.update_one("rides", cancel_filter, with_37)
         except Exception as e37:
             original = getattr(e37, "details", {}).get("original") if hasattr(e37, "details") else None
             logger.error(
@@ -639,19 +662,80 @@ async def admin_cancel_ride(
             )
             raise
 
-    verify = await db_supabase.get_ride(ride_id)
-    if not verify or verify.get("status") != "cancelled":
-        logger.error(f"admin_cancel_ride: silent no-op on {ride_id}")
-        raise HTTPException(
-            status_code=500,
-            detail="Cancel did not persist — see backend logs.",
-        )
+    if updated is None:
+        # 0 rows matched. Three very different causes, and they must not be
+        # reported the same way. One extra read, on the failure path only, is
+        # what separates them.
+        current = await db_supabase.get_ride(ride_id)
+        current_status = (current or {}).get("status")
+        if current is not None and current_status == "cancelled":
+            # ALREADY CANCELLED — treat as success and fall through, do NOT
+            # 409. update_one runs under run_sync's default "read" policy (3
+            # attempts), so a write that lands and then loses its response to a
+            # dropped H2 connection is retried, and the retry matches 0 rows
+            # because the row it just wrote no longer has status=status_from.
+            # Returning here would leave the ride cancelled in the DB while
+            # skipping the driver release, the ride_cancelled WS/push and the
+            # audit row — driver stuck is_available=False until the orphan
+            # reaper, rider stuck on "Finding driver": precisely the failure
+            # this endpoint exists to prevent, and one the old
+            # verify-by-re-read handled correctly. A concurrent second cancel
+            # lands here too; re-running the side effects is idempotent enough
+            # (a duplicate ride_cancelled push) and strictly safer than
+            # stranding them. `current` becomes the post-write row the driver
+            # release below reads driver_id from.
+            logger.info(
+                f"admin_cancel_ride: ride {ride_id} already cancelled at write time "
+                f"(retry or concurrent cancel) — completing side effects idempotently"
+            )
+            updated = current
+        elif current is not None and current_status == status_from:
+            # Row still holds the status we filtered on and the write silently
+            # did nothing — RLS/service-role misconfiguration, the "silent
+            # no-op" this endpoint has surfaced loudly since it was first
+            # reported. Not concurrency; must not be reported as a 409.
+            logger.error(
+                f"admin_cancel_ride: silent no-op on {ride_id} — conditional update matched 0 rows "
+                f"but the ride is still status={status_from!r} (RLS or service-role misconfiguration?)"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Cancel did not persist — see backend logs.",
+            )
+        else:
+            # Genuinely raced to some other state (driver accepted/arrived,
+            # trip started) — the cancel must not be applied over it.
+            logger.info(
+                f"admin_cancel_ride: ride_state_changed ride_id={ride_id} "
+                f"admin_id={admin_user.get('id')} expected_status={status_from} current_status={current_status}"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Ride state changed before the cancel could be applied — refresh and retry",
+            )
 
     driver_user_id: str | None = None
-    driver_id = ride.get("driver_id")
+    # Read driver_id from the row the conditional update RETURNED, not from the
+    # pre-write read: cancel_filter pins the status but not the driver, so a
+    # concurrent offer-timeout revert + re-claim on another replica can hand
+    # this ride to a different driver between our read and our write. Freeing
+    # the stale driver would both open a bogus Period 1 for someone not on this
+    # ride and leave the driver who actually held it stuck is_available=False
+    # until the orphan-claim reaper. `updated` is the post-update row (this
+    # update never writes driver_id, so it carries the real holder).
+    driver_id = (updated or {}).get("driver_id") or ride.get("driver_id")
     if driver_id:
         try:
-            await db_supabase.set_driver_available(driver_id, True)
+            released = await db_supabase.set_driver_available(driver_id, True)
+            # Only open Period 1 (online, no ride) if the release actually made
+            # the driver available. set_driver_available clamps is_available to
+            # False for a driver who went offline (or was suspended) while
+            # assigned; their go-offline already logged Period 0, so recording
+            # Period 1 here would falsely reopen a commercial-insurance window
+            # for a driver who is on personal auto only. Mirrors the guarded
+            # pattern in routes/rides/matching.py's offer-timeout handler.
+            if isinstance(released, dict) and released.get("is_available"):
+                await record_period_transition(driver_id, 1)
         except Exception as e:
             logger.error(
                 f"admin_cancel_ride: could not free driver {driver_id}: {e}",
@@ -725,7 +809,7 @@ async def admin_cancel_ride(
         "ride_cancelled_by_admin",
         "rides",
         ride_id,
-        {"reason": reason, "prior_status": ride.get("status")},
+        {"reason": reason, "prior_status": status_from},
     )
     return {"success": True, "ride_id": ride_id, "status": "cancelled"}
 
@@ -764,14 +848,49 @@ async def admin_complete_ride(
         "ride_completed_at": now,
     }
 
+    # Conditional update scoped to the status just read — the same
+    # optimistic-lock pattern admin_cancel_ride and routes/drivers/
+    # ride_flow.py:331 use. Without it, a concurrent transition between the
+    # read above and this write is silently overwritten with `completed`.
+    complete_filter = {"id": ride_id, "status": status_from}
     try:
-        await db_supabase.update_ride(ride_id, update_data)
+        completed = await db_supabase.update_one("rides", complete_filter, update_data)
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(
             f"admin_complete_ride: update failed ride_id={ride_id} admin_id={admin_user.get('id')} err={original or e}"
         )
         raise HTTPException(status_code=500, detail="Failed to update ride status") from e
+
+    if completed is None:
+        # Same three-way split as admin_cancel_ride: an already-`completed`
+        # ride is an idempotent success (update_one retries under run_sync's
+        # 3-attempt "read" policy, so a landed write whose response was lost
+        # comes back here); an unchanged status is a silently-blocked write;
+        # anything else genuinely raced.
+        current = await db_supabase.get_ride(ride_id)
+        current_status = (current or {}).get("status")
+        if current is not None and current_status == "completed":
+            logger.info(
+                f"admin_complete_ride: ride {ride_id} already completed at write time "
+                f"(retry or concurrent complete) — completing side effects idempotently"
+            )
+            completed = current
+        elif current is not None and current_status == status_from:
+            logger.error(
+                f"admin_complete_ride: silent no-op on {ride_id} — conditional update matched 0 rows "
+                f"but the ride is still status={status_from!r} (RLS or service-role misconfiguration?)"
+            )
+            raise HTTPException(status_code=500, detail="Complete did not persist — see backend logs.")
+        else:
+            logger.info(
+                f"admin_complete_ride: ride_state_changed ride_id={ride_id} "
+                f"admin_id={admin_user.get('id')} expected_status={status_from} current_status={current_status}"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Ride state changed before the completion could be applied — refresh and retry",
+            )
 
     # Audit + period transition are best-effort — they must never roll back
     # the ride status mutation that already succeeded above.
@@ -784,11 +903,22 @@ async def admin_complete_ride(
     )
 
     driver_user_id: str | None = None
-    driver_id = ride.get("driver_id")
+    # From the post-write row, not the pre-write read: complete_filter pins the
+    # status but not the driver, so a concurrent reassignment would otherwise
+    # free the stale driver and open a bogus Period 1 for them. Same reasoning
+    # as admin_cancel_ride.
+    driver_id = (completed or {}).get("driver_id") or ride.get("driver_id")
     if driver_id:
         try:
-            await db_supabase.set_driver_available(driver_id, True)
-            await record_period_transition(driver_id, 1)
+            released = await db_supabase.set_driver_available(driver_id, True)
+            # Only open Period 1 if the release actually made the driver
+            # available — set_driver_available clamps is_available to False for
+            # a driver who went offline or was suspended while assigned, and
+            # their go-offline already logged Period 0. Recording Period 1 here
+            # would falsely reopen a commercial-insurance window for a driver
+            # on personal auto only.
+            if isinstance(released, dict) and released.get("is_available"):
+                await record_period_transition(driver_id, 1)
         except Exception as e:
             logger.error(
                 f"admin_complete_ride: could not free driver {driver_id}: {e}",

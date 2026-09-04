@@ -111,7 +111,7 @@ async def _record_late_tip_absorption(rider_id: str, ride_id: str, absorbed: Dec
         # Redis unavailable or any other failure: log and move on. This is a
         # monitoring signal, not a payment step — it must never affect the
         # tip that already succeeded from the rider's perspective.
-        logger.error(f"_record_late_tip_absorption failed for rider {rider_id}: {exc}", exc_info=True)
+        logger.opt(exception=True).error(f"_record_late_tip_absorption failed for rider {rider_id}: {exc}")
 
 
 class TipRequest(BaseModel):
@@ -286,9 +286,8 @@ async def add_tip(
             driver = await _deps.db_supabase.get_driver_by_id(driver_row_id)
             driver_user_id = driver.get("user_id") if driver else None
         except Exception as exc:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"[TIP] Could not resolve driver user_id for ride {ride_id}: {exc}",
-                exc_info=True,
             )
 
     if driver_user_id:
@@ -360,12 +359,12 @@ def _fire_purchase_conversion(ride: dict, user: dict, charged_amount) -> None:
         try:
             from services import meta_conversions_service as _meta  # type: ignore
         except ImportError:
-            logger.error("meta: conversions service unavailable — skipping Purchase", exc_info=True)
+            logger.opt(exception=True).error("meta: conversions service unavailable — skipping Purchase")
             return
     try:
         _deps.spawn(_meta.send_ride_purchase(ride, user, charged_amount))
     except Exception:
-        logger.error("meta: failed to queue Purchase for ride %s", ride.get("id"), exc_info=True)
+        logger.opt(exception=True).error("meta: failed to queue Purchase for ride {}", ride.get("id"))
 
 
 @router.post("/{ride_id}/process-payment")
@@ -459,7 +458,7 @@ async def process_payment(
     try:
         _app_settings = await get_app_settings() or {}
     except Exception:
-        logger.error(f"[PAYMENT] app_settings read failed for ride {ride_id}; spoof gate treated as off", exc_info=True)
+        logger.opt(exception=True).error(f"[PAYMENT] app_settings read failed for ride {ride_id}; spoof gate treated as off")
         _app_settings = {}
     if _app_settings.get("gps_spoof_charge_gate_enabled", False):
         _gps_validation: Optional[dict] = None
@@ -470,7 +469,7 @@ async def process_payment(
             _gps_validation = ((_route_rows[0] if _route_rows else {}) or {}).get("route_quality") or {}
             _gps_validation = _gps_validation.get("gps_route_validation")
         except Exception:
-            logger.error(f"[PAYMENT] gps_route_validation read failed for ride {ride_id}", exc_info=True)
+            logger.opt(exception=True).error(f"[PAYMENT] gps_route_validation read failed for ride {ride_id}")
             _gps_validation = None
         if _gps_validation:
             # GPS route-deviation percentage, not money -- see spinr-no-float-in-money's
@@ -668,7 +667,7 @@ async def process_payment(
         try:
             await _redis_del(_wallet_redrive_lock_key)
         except Exception as _lock_err:
-            logger.debug("wallet redrive lock release failed (TTL will expire): %s", _lock_err)
+            logger.debug("wallet redrive lock release failed (TTL will expire): {}", _lock_err)
 
     # Skip tip persistence and receipt on already_paid: no money moved, so we
     # must not mutate tip_amount/driver_earnings in the DB or send a duplicate
@@ -680,8 +679,8 @@ async def process_payment(
                 await _deps.db_supabase.update_ride(ride_id, _tip_db_update)
             except Exception as _snap_err:
                 logger.error(
-                    "[PAYMENT] fare_breakdown_snapshot write failed for ride %s — "
-                    "payment succeeded, snapshot will be stale: %s",
+                    "[PAYMENT] fare_breakdown_snapshot write failed for ride {} — "
+                    "payment succeeded, snapshot will be stale: {}",
                     ride_id,
                     _snap_err,
                 )

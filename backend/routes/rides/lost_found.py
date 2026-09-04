@@ -91,6 +91,6 @@ async def rider_report_lost_item(
                     },
                 )
     except Exception as e:
-        logger.error(f"Lost item driver notification failed for ride {ride_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Lost item driver notification failed for ride {ride_id}: {e}")
 
     return {"success": True, "item": item}

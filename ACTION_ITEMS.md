@@ -15232,6 +15232,79 @@ record of what was assumed vs. what was actually true</summary>
     (or any non-human actor) holds a branch-protection bypass/admin-merge
     allowance on `main`, since that — not the required-checks *list* being
     incomplete — is what today's evidence actually points to.
+  - **2026-09-04 follow-up — confirmed `main` was genuinely red for ~2.5h
+    across 14 merges, and the existing post-merge safety net produced no
+    tracking issue for it.** Asked directly "how do we ensure CI actually
+    runs for all PRs" — investigated the actual state of `main`'s post-
+    merge `CI/CD Pipeline` runs (which fire on every push to `main`
+    regardless of whether the PR-level gate was respected, confirmed via
+    `list_workflow_runs(event=push, branch=main)`):
+    - 14 consecutive push-triggered runs from 16:08 to 18:31 UTC came back
+      `conclusion: failure`, all on the same `backend-test` job, same root
+      cause: `test_dispatch_db_errors.py` and
+      `test_dispatch_match_attempt_branches.py` failing with `ValueError:
+      not enough values to unpack (expected 6, got 5)` (2 stale mocks
+      after PR #4948 widened `resolve_matching_config`'s return signature
+      to 6 elements) plus `test_loguru_call_conventions.py` genuinely
+      catching `routes/rides/matching.py:397` using `%s`/`%d` placeholders
+      with loguru (which formats with `{}` and silently drops every
+      argument — the actual bug this session's own C69 fix later closed).
+      A fix commit at 18:42 ("matching.py loguru %-placeholders + stale
+      dispatch-conf...") turned `main` green again; every push since has
+      been green.
+    - This repo already has a much more capable safety net for exactly
+      this — `.github/workflows/ci-error-audit.yml` — which per CR #4612
+      deliberately scopes `[CI Audit]`-labeled issue creation to
+      `head_branch == 'main'` specifically to avoid the noise of auditing
+      every PR branch. **Checked whether it fired for this incident: no
+      `[CI Audit]`-labeled issue exists covering any point in the
+      16:08-18:31 window or the ~2 hours after it** — the most recent one
+      before this incident is #4929 (02:57:35Z), the next one after it is
+      from a later, unrelated push. Traced one `ci-error-audit.yml` run
+      that happened to land in the window (id `33906565834`) down to its
+      `check-trigger` job's actual literal `run_id`/`head_branch` output
+      (not the outer run's own `head_sha`/`head_branch`, which reflects
+      whatever `main`'s tip was *at trigger time*, not the commit the
+      underlying failure is about — a real trap when reading this
+      workflow_run-triggered workflow's own run metadata) and found it was
+      reacting to a **different** `CI/CD Pipeline` run entirely — one on a
+      PR branch (`claude/c69-loguru-extra-fix`), correctly skipped by the
+      `head_branch == 'main'` gate. That confirms the gate itself works
+      correctly for the one case checked; it does **not** explain why none
+      of the 14 actual main-push failures produced an issue — that
+      required checking each of the ~72 `ci-error-audit.yml` runs in the
+      window's own `check-trigger` output individually (not just the
+      outer run's context fields, per the trap above), which this session
+      did not finish before deciding further root-causing was out of scope
+      for today. **Not root-caused. Flagged, not fixed.**
+    - Given a real, confirmed gap in the existing safety net (whatever its
+      exact cause) and separately that `ci.yml`'s own `notify-failure` job
+      depends on the `SLACK_WEBHOOK` secret being configured (its fallback
+      on a missing secret is a `::warning::` annotation on that one run,
+      easy to miss), added a small, deliberately simpler, secret-
+      independent backstop: `.github/workflows/main-branch-guard.yml`.
+      Reacts to `CI/CD Pipeline`'s own `push`-triggered completion on
+      `main` and maintains a single persistent tracking issue (updated in
+      place across every red push, closed automatically on the next green
+      one) rather than one issue per failing run. Cross-references any
+      open `ci-audit`-labeled issue in its body rather than duplicating or
+      ignoring that system's output. Reviewed by `spinr-cicd-infra-reviewer`
+      before merge (verdict: correct trigger scoping, correct action pin,
+      sound injection hygiene, genuinely additive/isolated, not a required
+      check — flagged a missing `actions: read` permission that would have
+      silently degraded the failed-jobs list, a missing `concurrency` group
+      that could race-duplicate issues on back-to-back reds, and the
+      `ci-error-audit.yml` overlap this note documents; all three
+      addressed before merge).
+    - **This does not close C21** — it's a detection improvement for a
+      distinct, adjacent gap (a real backend regression sitting unflagged
+      on `main`), not the branch-protection/bypass fix C21's own acceptance
+      criteria still require. **New follow-up, not yet filed as its own
+      item:** root-cause why `ci-error-audit.yml` produced zero issues for
+      14 real main-branch failures despite its own `head_branch == 'main'`
+      gate design intent — the one run traced above only proved the gate
+      correctly *excludes* a PR-branch case, not that it correctly
+      *includes* every main-push case.
 
 ### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — CLOSED (2026-09-04)
 

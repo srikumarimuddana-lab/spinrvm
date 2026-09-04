@@ -28,6 +28,7 @@ import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 import {
   isPersonalStepValid,
   isVehicleYearValid,
@@ -460,13 +461,14 @@ export default function BecomeDriverScreen() {
                 <Text style={styles.reviewRow}><Text style={{ fontWeight: 'bold' }}>Docs Set:</Text> {Object.values(docs).filter(d => d.front).length} / {requirements.length}</Text>
               </View>
 
-              <TouchableOpacity
-                style={[styles.primaryButton, isLoading && styles.disabledButton]}
-                onPress={handleSubmit}
-                disabled={isLoading}
-              >
-                {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Submit Application</Text>}
-              </TouchableOpacity>
+              {/* Extracted to shared Button (design-audit follow-up — was
+                  styles.primaryButton at 30px radius, one of the three CTA
+                  implementations the audit cited). Same handler, same
+                  loading/disabled wiring; radius now matches the shared
+                  lg-size token instead of this screen's old local value. */}
+              <Button variant="primary" size="lg" onPress={handleSubmit} loading={isLoading}>
+                Submit Application
+              </Button>
             </View>
           )}
 
@@ -525,7 +527,6 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center', marginTop: 20, flexDirection: 'row', justifyContent: 'center', gap: 8,
     },
     driverAppButton: { backgroundColor: '#1D4ED8' },
-    disabledButton: { opacity: 0.7 },
     primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
     downloadLink: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

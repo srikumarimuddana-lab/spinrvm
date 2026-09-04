@@ -63,12 +63,19 @@ register(
 
 ## 2. Mandatory PII scrubbing — know what it does NOT cover
 
-`ai/pii.py`'s `scrub_pii()` is applied to the user's typed message and to the
-assistant's final reply **before persistence** — it is not applied to tool
-*results*. Whatever your handler returns goes to the configured LLM provider
-essentially verbatim. This is not a bug to route around; it's why every
-existing tool hand-whitelists its output fields instead of returning a raw
-DB row:
+`ai/pii.py` scrubs at three egress boundaries (ADR-012,
+`docs/adr/012-ai-egress-trust-boundaries.md`): the user's typed message and
+the assistant's persisted reply (`ScrubPolicy.AI_CHAT`), the MODEL-facing
+portion of every tool result in `tools.py::_cap_result` (also `AI_CHAT` —
+phone/email/card/SIN/free-text GPS redacted; postal codes and bracketed
+trip pins deliberately kept because the street address and coordinates
+already egress), and the whole `/mcp` response (`ScrubPolicy.STRICT`). Two
+things it never does: it cannot catch a person's name, a government ID or
+another user's data (no regex shape), and it never touches `_client_action`
+— your card goes to the rider's own app untouched, so build it only from
+data the rider may see. The scrub is a backstop for six identifier shapes,
+not a filter you can return a raw DB row through; that is why every existing
+tool hand-whitelists its output fields:
 
 - Return only named, whitelisted fields (`_pick(row, _SOME_FIELDS)` pattern
   throughout `tools_rides.py`/`tools_account.py`) — never `return dict(row)`

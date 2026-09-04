@@ -41,13 +41,22 @@ Verify **separately**, one at a time:
 - `backend/ai/providers/openai_adapter.py` — same, independently
 - `backend/ai/providers/gemini_adapter.py` — same, independently
 - `backend/ai/tools_rides.py`, `tools_booking.py`, `tools_support.py`,
-  `tools_driver.py`, `tools_account.py` — any tool result that gets appended
-  back into conversation history (and thus re-sent to the provider on the
-  next turn) must not carry unscrubbed PII forward, even if the *initial*
-  user message was scrubbed
+  `tools_driver.py`, `tools_account.py` — the MODEL-facing portion of every
+  tool result is scrubbed in `tools.py::_cap_result` under
+  `ScrubPolicy.AI_CHAT` (phone/email/card/SIN/free-text GPS redacted;
+  postal codes and bracketed trip pins deliberately kept — ADR-012). That
+  regex backstop cannot catch a person's name, a government ID, or another
+  user's data, so verify each handler whitelists fields at the source. The
+  `_client_action` card is **never** scrubbed — it goes to the rider's own
+  app — so a card must be built only from data the rider may see; do not
+  accept "the scrub will clean it" for a card. Any diff that mentions
+  `AI_CHAT` outside `ai/pii.py`, `ai/orchestrator.py`, `ai/tools.py` fails
+  `test_ai_chat_policy_optin_sites_are_enumerated` by design.
 - `backend/ai/mcp_server.py` — a **separate entry point** into the tool
-  layer (`/mcp`); confirm it applies the same scrubbing as the chat path
-  rather than assuming shared code means shared behavior
+  layer (`/mcp`) and a third-party egress: confirm `_call_tool` still
+  serializes through `_serialize_tool_payload` (whole payload, card
+  included, `ScrubPolicy.STRICT`) rather than `json.dumps` directly. It gets
+  no trip-location exemption.
 - `backend/ai/response_cache.py` — cached responses are a persistence sink
   too; a scrub added to the live path but not backfilled into what gets
   cached/replayed is exactly this bug class
@@ -116,13 +125,14 @@ Checks:
 
 ## 4. Rate limiting and cost controls on every AI entry point
 - Rider path: `backend/routes/ai.py` — confirm `ai_chat_limit` is present.
-  AI1 (open) already flags this limiter is **per-IP, not per-user**, and
-  that the per-user daily cap in `orchestrator.py` **fails OPEN on Redis
-  errors** — treat AI1 as still-open ground truth, don't re-verify it's
-  fixed unless the diff touches `routes/ai.py:130`, `orchestrator.py`'s
-  `_over_daily_cap`, or `utils/rate_limiter.py`'s `ai_chat_limit`. If it
-  does, verify whether the fix moved to user-keyed + fail-closed, or is
-  still fail-open — call out either explicitly.
+  AI1/AI1b are **closed**: the limiter is keyed per-user
+  (`utils/rate_limiter.py`'s `get_ai_chat_key`, 10/min) and the per-user
+  daily cap in `orchestrator.py` falls back to the bounded process-local
+  cap in `ai/guardrails.py` on Redis errors instead of failing open. On any
+  diff touching `routes/ai.py`, `orchestrator.py`'s `_over_daily_cap`,
+  `ai/guardrails.py`, or `utils/rate_limiter.py`'s `ai_chat_limit`, verify
+  neither regressed to per-IP or fail-open — call out either explicitly.
+  (This section previously said the opposite; corrected 2026-09-04.)
 - Admin path: `backend/routes/admin/ai_console.py` — AI12 added
   `admin_ai_console_limit` (20/min). Confirm any new admin AI endpoint gets
   an equivalent limiter, not just the console's existing one.
@@ -141,12 +151,16 @@ grep -n "ai_chat_limit\|admin_ai_console_limit\|MAX_TOOL_CALLS_PER_ITERATION" ba
 ```
 
 ## 5. No new tool ships without an eval case
-As of this review, there is **no dedicated eval harness** in this repo for
-AI tool/prompt behavior — `backend/tests/test_ai_tools_*.py` covers unit-level
-correctness (mocked Supabase, deterministic inputs) but nothing exercises
-prompt-driven tool-selection quality, injection resistance, or multi-turn
-conversation behavior against a model. Say so plainly on every review, don't
-let it pass silently:
+A red-team eval harness exists at `backend/evals/promptfoo/` (prompt
+injection, role override, impersonation, bulk-PII exfiltration, plus one
+positive baseline) — deliberately **not** wired into CI (needs a real
+session and a real provider, costs money, drifts with the model). It covers
+injection resistance only: nothing exercises prompt-driven tool-selection
+quality, the booking/quote flow, or multi-turn behavior against a model.
+`backend/tests/test_ai_tools_*.py` covers unit-level correctness (mocked
+Supabase, deterministic inputs). Say so plainly on every review, don't let
+it pass silently (this section previously said no harness existed at all;
+corrected 2026-09-04):
 - If a diff adds a new tool (new `ToolSpec`/`register(...)` call in any
   `tools_*.py`) or a new prompt rule in `prompts.py`, and the diff includes
   only unit tests (mocked handler logic) — flag this as a **blocking gap**:

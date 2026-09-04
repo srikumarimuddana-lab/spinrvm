@@ -15257,26 +15257,64 @@ record of what was assumed vs. what was actually true</summary>
       deliberately scopes `[CI Audit]`-labeled issue creation to
       `head_branch == 'main'` specifically to avoid the noise of auditing
       every PR branch. **Checked whether it fired for this incident: no
-      `[CI Audit]`-labeled issue exists covering any point in the
-      16:08-18:31 window or the ~2 hours after it** — the most recent one
-      before this incident is #4929 (02:57:35Z), the next one after it is
-      from a later, unrelated push. Traced one `ci-error-audit.yml` run
-      that happened to land in the window (id `33906565834`) down to its
-      `check-trigger` job's actual literal `run_id`/`head_branch` output
-      (not the outer run's own `head_sha`/`head_branch`, which reflects
-      whatever `main`'s tip was *at trigger time*, not the commit the
-      underlying failure is about — a real trap when reading this
-      workflow_run-triggered workflow's own run metadata) and found it was
-      reacting to a **different** `CI/CD Pipeline` run entirely — one on a
-      PR branch (`claude/c69-loguru-extra-fix`), correctly skipped by the
-      `head_branch == 'main'` gate. That confirms the gate itself works
-      correctly for the one case checked; it does **not** explain why none
-      of the 14 actual main-push failures produced an issue — that
-      required checking each of the ~72 `ci-error-audit.yml` runs in the
-      window's own `check-trigger` output individually (not just the
-      outer run's context fields, per the trap above), which this session
-      did not finish before deciding further root-causing was out of scope
-      for today. **Not root-caused. Flagged, not fixed.**
+      *new* `[CI Audit]`-labeled issue exists covering the 16:08-18:31
+      window** — the most recent one *created* before this incident is
+      #4929 (02:57:35Z). Traced one `ci-error-audit.yml` run that happened
+      to land in the window (id `33906565834`) down to its `check-trigger`
+      job's actual literal `run_id`/`head_branch` output (not the outer
+      run's own `head_sha`/`head_branch`, which reflects whatever `main`'s
+      tip was *at trigger time*, not the commit the underlying failure is
+      about — a real trap when reading this workflow_run-triggered
+      workflow's own run metadata) and found it was reacting to a
+      **different** `CI/CD Pipeline` run — one on a PR branch
+      (`claude/c69-loguru-extra-fix`), correctly skipped by the
+      `head_branch == 'main'` gate. That proved the gate works correctly
+      for the one case checked, but did not explain the other 14 — logged
+      as unfinished below at the time.
+      **2026-09-04, same-day, root-caused — the "gap" was a
+      misread, not a bug.** Asked to root-cause it properly. Pulled each of
+      the 14 main-push `CI/CD Pipeline` runs' own precise completion
+      timestamp (`actions_get(get_workflow_run)`, not the outer
+      `ci-error-audit.yml` run-list's unreliable `head_sha`/`created_at`
+      proxy used in the first pass) and matched each one to the
+      `ci-error-audit.yml` run created 1-6 seconds later — confirmed by
+      reading `check-trigger`'s literal, substituted script output, which
+      showed `run_id=<the exact matching ci.yml run id>` and
+      `head_branch=main` for every one sampled (first of the 14 and last
+      of the 14 both confirmed directly; the timing match is exact enough
+      across all 14 that the pattern holds). **`create-audit-issues`
+      actually ran successfully every time** — not skipped. Its own log
+      output explains everything:
+      `Fingerprint 5a36407b29f202e7 matches open issue #4925 — commenting
+      instead of creating a new issue…`. `scripts/ci-audit/
+      create_github_issue.py` fingerprints each failure and, when an
+      **open** issue with a matching fingerprint marker
+      (`<!-- ci-audit-fingerprint: HASH -->`) already exists, comments on
+      it instead of opening a new one — exactly the anti-issue-spam
+      dedup CR #4612 was written to add. Issue #4925 (`[CI Audit] CI/CD
+      Pipeline — P1 — 1 error(s) on main (run 33816149971)`) was opened at
+      00:21 UTC that same day for an *earlier, unrelated* `backend-test`
+      failure and has stayed open since; by day's end it carried **29
+      comments** and an `updated_at` of 18:56:45Z — seconds after the last
+      (14th) of this incident's own failures completed, confirming every
+      one of the 14 landed there as a comment, not silence. **So
+      `ci-error-audit.yml` did not miss this incident** — the system
+      worked exactly as CR #4612 designed it to. The real, narrower finding
+      is that its fingerprint is coarser than the failure content: it
+      appears keyed to job+category+surface (`backend-test` / `test` /
+      `backend`), not the specific error signature, so a *genuinely
+      different* `backend-test` failure (this incident's stale-mock +
+      loguru-convention bug) gets silently folded into the same long-lived
+      issue as an *unrelated* earlier one, rather than surfacing as
+      something new. That's a real, worth-fixing refinement (tighten the
+      fingerprint, or re-open/flag when a matching-fingerprint issue's
+      *content* has clearly changed) — but it is a precision gap in an
+      already-working system, not the "zero issues created, safety net
+      apparently didn't fire" gap this note previously and incorrectly
+      described. Correcting the record: my earlier "not root-caused,
+      flagged not fixed" conclusion above was itself wrong — reached by
+      searching for *new* issue creation rather than checking whether
+      existing issues had picked up the activity as comments.
     - Given a real, confirmed gap in the existing safety net (whatever its
       exact cause) and separately that `ci.yml`'s own `notify-failure` job
       depends on the `SLACK_WEBHOOK` secret being configured (its fallback
@@ -15298,13 +15336,22 @@ record of what was assumed vs. what was actually true</summary>
       addressed before merge).
     - **This does not close C21** — it's a detection improvement for a
       distinct, adjacent gap (a real backend regression sitting unflagged
-      on `main`), not the branch-protection/bypass fix C21's own acceptance
-      criteria still require. **New follow-up, not yet filed as its own
-      item:** root-cause why `ci-error-audit.yml` produced zero issues for
-      14 real main-branch failures despite its own `head_branch == 'main'`
-      gate design intent — the one run traced above only proved the gate
-      correctly *excludes* a PR-branch case, not that it correctly
-      *includes* every main-push case.
+      on `main` until *someone* checks CI, human or bot), not the
+      branch-protection/bypass fix C21's own acceptance criteria still
+      require. The `ci-error-audit.yml` root-cause follow-up flagged above
+      is now closed (see the same-day update immediately above) — the
+      system wasn't missing these failures, it was consolidating them
+      under #4925 by design. `main-branch-guard.yml` stays a legitimate,
+      independent complement regardless: it does not depend on
+      `SLACK_WEBHOOK` being configured, and it surfaces "is `main` red
+      *right now*" as a live open/closed issue state rather than requiring
+      someone to scroll a 29-comment thread to find out. **One genuine,
+      smaller follow-up remains, not yet filed as its own item:**
+      `create_github_issue.py`'s fingerprint is coarser than the failure
+      content (job+category+surface, not the specific error) — tightening
+      it, or re-opening/re-flagging when a matching-fingerprint issue's
+      underlying cause has clearly changed, would stop unrelated
+      `backend-test` failures from reading as "still the same open issue."
 
 ### C22. `scripts/migrate.py`'s tracking table doesn't match what's actually live on the production Supabase project — the runner may never have successfully recorded a migration against it — CLOSED (2026-09-04)
 

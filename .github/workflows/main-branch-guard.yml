@@ -22,16 +22,20 @@ name: Main Branch Guard
 # changing this file): that workflow is the primary, much richer system —
 # root-cause classification, severity, fix recommendations — and per CR
 # #4612 it already deliberately scopes issue creation to `head_branch ==
-# 'main'` for exactly this reason. It was NOT redundant to add this file:
-# checked, and no `[CI Audit]`-labeled issue exists for the 2026-09-04
-# 16:08-18:31 incident above despite 14 main-branch pushes actually being
-# red across that window — a real gap in the existing system, not fully
-# root-caused by this session (see ACTION_ITEMS.md C21's 2026-09-04
-# update for what was checked). This workflow is deliberately simpler,
-# depends on no secret, and maintains a single persistent issue (updated
-# in place, not one per red push) rather than duplicating that system's
-# per-run issue volume. On firing, it cross-references any open
-# `ci-audit`-labeled issue rather than ignoring that system's output.
+# 'main'` for exactly this reason. Correction (2026-09-04, same day):
+# an earlier version of this comment claimed ci-error-audit.yml produced
+# *no* tracking issue for the 16:08-18:31 incident above -- traced further
+# and that was wrong. It ran correctly for all 14 failures and, per its own
+# fingerprint-based dedup (working as CR #4612 designed), *commented* on
+# an already-open issue (#4925) instead of opening a new one -- which a
+# search scoped to new issue *creation* missed. See ACTION_ITEMS.md C21's
+# 2026-09-04 root-cause update for the full trail. This file's own
+# rationale stands independent of that correction: it doesn't depend on
+# the SLACK_WEBHOOK secret, and it answers "is main red right now" as a
+# single open/closed issue rather than requiring someone to read a
+# multi-comment thread accumulated across unrelated failures. On firing,
+# it cross-references any open `ci-audit`-labeled issue rather than
+# ignoring that system's output.
 #
 # This is a detection backstop, not a merge gate — it cannot block the next
 # merge from landing on a red `main` (only branch protection can do that,

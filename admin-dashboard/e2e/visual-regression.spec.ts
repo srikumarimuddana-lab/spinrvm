@@ -8,13 +8,18 @@ import { setupAdminMocks } from './admin-mocks';
  * set (epic #2785 Phase 1 prerequisite); expand incrementally the same way
  * e2e/a11y-baseline.json's route coverage can grow over time.
  *
- * Baselines for 5 of these 6 pages were seeded 2026-09-02 — see
+ * All 6 baselines seeded 2026-09-02/03 — see
  * docs/change-log/2026-09-02-seed-visual-regression-baselines.md.
- * `dashboard-rides` is not yet seeded: capturing it first surfaced a
- * mock-fixture gap (admin-mocks.ts's generic /api/** fallback shape doesn't
- * match what getRides() expects), now fixed — it needs one more run of
- * update-visual-baselines.yml (see that workflow) to pick up a corrected
- * screenshot before it can be added.
+ * `dashboard-rides` needed a follow-up: its first capture surfaced a
+ * mock-fixture gap (admin-mocks.ts's generic /api/** fallback shape didn't
+ * match what getRides() expects), fixed, then re-captured.
+ *
+ * `dashboard-monitoring` is a known flake risk, not yet mocked: its map
+ * panel fetches live vector tiles from tiles.openfreemap.org
+ * (src/lib/map/maplibre-base.ts) with no page.route() stub here, so its
+ * comparison depends on the CI runner actually reaching that host at
+ * capture/compare time — see the `continue-on-error` comment on
+ * `visual-regression-test` in ci.yml for why that job isn't blocking yet.
  */
 
 const PAGES = [

@@ -493,13 +493,23 @@ jobs:
           retention-days: 7
 
   # Visual regression — separate from e2e-test above and always
-  # continue-on-error: no baselines are committed yet (see
-  # .github/workflows/update-visual-baselines.yml), so every run currently
-  # fails "no baseline found" by design. Flip continue-on-error off once
-  # baselines are seeded and this should start actually gating. Runs the
-  # `visual-regression` Playwright project only — explicitly excluded from
-  # the e2e-test job above via playwright.config.ts's testIgnore, so it
-  # can't accidentally start failing that already-meaningful job.
+  # continue-on-error. All 6 baselines are now seeded (2026-09-03, see
+  # docs/change-log/2026-09-02-seed-visual-regression-baselines.md and its
+  # follow-up commit), but continue-on-error stays on deliberately: seeding
+  # dashboard-monitoring's baseline surfaced that its map panel fetches live
+  # vector tiles from tiles.openfreemap.org (src/lib/map/maplibre-base.ts,
+  # MAP_STYLE_URL) with no mock in admin-mocks.ts — two runs on the same
+  # commit rendered a normal empty basemap once and "Failed to load map
+  # style. Check network / tile provider." the other time, purely from CI
+  # runner network variance, not a code change. Flipping this to blocking
+  # now would make CI intermittently red for reasons unrelated to any PR's
+  # diff. Flip it off once that page's spec mocks/stubs the tile fetch
+  # (page.route() on tiles.openfreemap.org, mirroring the /api/** mocking
+  # this file's specs already do) so the comparison no longer depends on
+  # live network reachability. Runs the `visual-regression` Playwright
+  # project only — explicitly excluded from the e2e-test job above via
+  # playwright.config.ts's testIgnore, so it can't accidentally start
+  # failing that already-meaningful job.
   visual-regression-test:
     name: Visual regression (Playwright)
     runs-on: ubuntu-latest

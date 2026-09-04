@@ -523,7 +523,7 @@ export default function UsersPage() {
                                         </TableRow>
                                     ) : (
                                         sortedUsers.map((user) => (
-                                            <TableRow key={user.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedUser(user)} tabIndex={0} aria-label={`${user.name}, view details`} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedUser(user); } }}>
+                                            <TableRow key={user.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedUser(user)} tabIndex={0} aria-label={`${user.name}, view details`} onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedUser(user); } }}>
                                                 <TableCell>
                                                     <div>
                                                         <p className="font-medium flex items-center gap-1.5">

@@ -536,7 +536,7 @@ export default function AuditLogsPage() {
                                                     onClick={isLong ? () => setExpandedRow(isExpanded ? null : log.id) : undefined}
                                                     tabIndex={isLong ? 0 : undefined}
                                                     aria-label={isLong ? `${log.action}, press Enter to ${isExpanded ? "collapse" : "expand"} details` : undefined}
-                                                    onKeyDown={isLong ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedRow(isExpanded ? null : log.id); } } : undefined}
+                                                    onKeyDown={isLong ? (e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedRow(isExpanded ? null : log.id); } } : undefined}
                                                 >
                                                     <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                                                         {formatDate(log.created_at)}

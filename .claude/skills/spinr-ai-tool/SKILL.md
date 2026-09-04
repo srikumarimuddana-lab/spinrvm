@@ -117,19 +117,21 @@ around a slow tool; fix the tool's latency instead.
 
 ## 5. The eval requirement
 
-**No dedicated eval harness exists in this repo as of this skill's
-introduction.** `backend/tests/test_ai_tools_*.py` covers unit-level
-handler correctness (mocked Supabase, deterministic inputs) — it does not
-exercise whether a real model, given a realistic prompt, actually selects
-and calls your new tool correctly, resists being talked out of a guardrail,
-or behaves across a multi-turn conversation. Do not treat unit-test
+**A red-team eval harness exists at `backend/evals/promptfoo/`** (prompt
+injection, role override, impersonation, bulk-PII exfiltration, one
+positive baseline) — deliberately **not** wired into CI (real session, real
+provider, real cost). It covers injection resistance only. Nothing
+exercises whether a real model, given a realistic prompt, actually selects
+and calls your new tool correctly or behaves across a multi-turn
+conversation. `backend/tests/test_ai_tools_*.py` covers unit-level handler
+correctness (mocked Supabase, deterministic inputs). Do not treat unit-test
 coverage as eval coverage; they test different things.
 
 - A new tool ships with unit tests for its handler (required, same as any
   other backend code) **and** a plain-language note in the PR description
-  stating that no eval harness verifies the model's tool-selection
-  behavior — this is a known, standing gap, not something to silently
-  paper over.
+  stating that no eval case verifies the model's tool-selection behavior
+  for it — this is a known, standing gap, not something to silently paper
+  over.
 - `spinr-ai-guardrail-reviewer` enforces this at review time (its §5). This
   skill is the authoring-time reminder; that agent is the check.
 - If you're the one building the eval harness itself: it must actually

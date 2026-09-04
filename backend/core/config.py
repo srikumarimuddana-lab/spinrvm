@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
 
+    # iOS ride-offer push as a Critical Alert (bypasses silent mode/DND, can
+    # loop) instead of a standard one-shot alert. MUST stay False until BOTH:
+    #   1. Apple has actually granted the com.apple.developer.usernotifications
+    #      .critical-alerts entitlement for the driver app, and
+    #   2. a driver-app build with that entitlement compiled in has shipped
+    #      and is adopted widely enough that drivers aren't left on an old
+    #      binary — the entitlement itself is native/build-time and cannot be
+    #      toggled by this flag.
+    # Sending aps.sound as a CriticalSound without a held entitlement is
+    # documented by Apple to fail/be rejected by APNs — flipping this on
+    # prematurely risks breaking the ride-offer alert for iOS drivers
+    # entirely, not just failing to add the enhancement. See
+    # docs/change-log/2026-09-04-ios-critical-alerts-scaffolding.md.
+    IOS_CRITICAL_ALERTS_ENABLED: bool = False
+
     # Database settings
     SUPABASE_URL: str = ""
     # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md

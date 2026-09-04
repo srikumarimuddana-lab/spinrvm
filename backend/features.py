@@ -33,6 +33,7 @@ def _q2(v: Decimal) -> Decimal:
 
 try:
     from . import db_supabase
+    from .core.config import settings
     from .dependencies import get_admin_user, get_current_user
     from .geo_utils import get_service_area_polygon
     from .models.ride_status import RideStatus
@@ -44,6 +45,7 @@ try:
     from .utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
+    from core.config import settings
     from dependencies import get_admin_user, get_current_user
     from geo_utils import get_service_area_polygon
     from models.ride_status import RideStatus
@@ -1336,7 +1338,17 @@ async def _deliver_push_now(
             _apns_payload = messaging.APNSPayload(
                 aps=messaging.Aps(
                     alert=messaging.ApsAlert(title=title, body=body),
-                    sound="ride_offer.caf",
+                    # CriticalSound bypasses silent mode/DND and can loop —
+                    # only valid if the driver app holds Apple's critical-
+                    # alerts entitlement. settings.IOS_CRITICAL_ALERTS_ENABLED
+                    # must stay False until that's confirmed shipped (see
+                    # core/config.py) — sending this without the entitlement
+                    # is documented to fail/be rejected by APNs outright.
+                    sound=(
+                        messaging.CriticalSound(name="ride_offer.caf", critical=True, volume=1.0)
+                        if settings.IOS_CRITICAL_ALERTS_ENABLED
+                        else "ride_offer.caf"
+                    ),
                     category="ride-offer",
                     content_available=True,
                     mutable_content=True,

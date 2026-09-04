@@ -17346,8 +17346,15 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   ops decision gated on an actual staging rehearsal this session cannot
   perform (no staging environment — see C1/E1), not an engineering task
   left undone. No code change needed; correcting the stale item.
-- [ ] **D2. Distributed tracing** — request-ID propagation exists (`X-Request-ID`);
-  full OpenTelemetry only if multi-replica latency debugging becomes painful.
+- [x] **D2. Distributed tracing** — 2026-09-04: recorded as a deliberate
+  deferral, not silently left unbuilt. [ADR-014](adr/014-distributed-tracing-deferred.md)
+  documents the reasoning (request-ID propagation already covers
+  single-replica debugging; ADR-010 already evaluated and declined full
+  OpenTelemetry for the metrics-aggregation decision; no incident/debugging
+  session on record has actually been blocked by tracing's absence) and
+  names the two trigger conditions that would reopen this as an active
+  build. No code changed — this checkbox marks the *decision* as made, not
+  the feature as built.
 - [x] **D3. Driver destination mode** — backend was already fully built
   (`backend/routes/drivers/profile.py` L428-497: `POST/GET/DELETE
   /drivers/destination`; `backend/services/dispatch_service.py` L151-209

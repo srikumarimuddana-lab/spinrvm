@@ -1030,7 +1030,22 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 for driver, eta_sec, _ in ranked:
                     if len(claimed_drivers) >= max_offers:
                         break
-                    fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+                    try:
+                        fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
+                    except Exception as e:
+                        # C54: mirror the ride_offers-insert failure handler below —
+                        # a raise here (e.g. a transient DatabaseError) must not leave
+                        # every driver claimed by EARLIER iterations of this same loop
+                        # stuck is_available=false until the orphan-claim reaper's
+                        # ~150s worst-case window. Release them before re-raising so
+                        # the outer recovery shell's retry sees them available again
+                        # immediately, not minutes later.
+                        logger.error(
+                            f"[DISPATCH] claim_driver_atomic failed for driver {driver['id']}: {e}", exc_info=True
+                        )
+                        for d, _ in claimed_drivers:
+                            await _deps.db_supabase.set_driver_available(d["id"], True)
+                        raise
                     if fresh:
                         # The claim's own UPDATE returns the post-claim row, so no follow-up
                         # get_driver_by_id is needed — and that read was guaranteed uncached

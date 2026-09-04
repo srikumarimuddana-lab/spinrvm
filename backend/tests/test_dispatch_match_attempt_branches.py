@@ -234,6 +234,50 @@ async def test_ride_offers_insert_failure_releases_claims_and_reraises():
     mock_db.set_driver_available.assert_awaited_once_with("drv-1", True)
 
 
+async def test_claim_loop_exception_releases_earlier_claims_and_reraises():
+    """C54: a claim_driver_atomic exception on candidate N (a transient
+    DatabaseError, say) must not leave drivers claimed at candidates 1..N-1
+    stuck is_available=false until the orphan-claim reaper's cycle -- mirrors
+    the ride_offers-insert failure handler's release-then-reraise pattern,
+    just one phase earlier in the same attempt."""
+    from backend.routes.rides.matching import _match_driver_to_ride_attempt
+
+    ride = _make_ride(service_area_id=None)
+    driver_1 = _make_driver("drv-1")
+    driver_2 = _make_driver("drv-2")
+    fresh_driver_1 = {**driver_1, "is_online": True, "is_verified": True, "status": "active"}
+
+    with (
+        patch("backend.routes.rides.matching._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+        ),
+        patch(
+            "backend.routes.rides.matching._deps.filter_and_rank_drivers",
+            side_effect=lambda ride, drivers, *a, **kw: [(d, 1.0) for d in drivers],
+        ),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            AsyncMock(return_value=(set(), False)),
+        ),
+        patch("backend.utils.redis_client.redis_mget", AsyncMock(return_value=[None, None])),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=[driver_1, driver_2])
+        mock_db.find_one = AsyncMock(return_value=None)
+        mock_db.claim_driver_atomic = AsyncMock(side_effect=[fresh_driver_1, RuntimeError("transient claim failure")])
+        mock_db.set_driver_available = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="transient claim failure"):
+            await _match_driver_to_ride_attempt("ride-1", ride=ride)
+
+    # drv-1 (claimed at candidate 1) must be released before the exception at
+    # candidate 2 propagates; drv-2 itself never reached a claimed state, so
+    # it must not be released (release-what-you-claimed, not the whole pool).
+    mock_db.set_driver_available.assert_awaited_once_with("drv-1", True)
+
+
 async def test_no_eligible_drivers_after_filters_schedules_retry():
     from backend.routes.rides.matching import _match_driver_to_ride_attempt
 

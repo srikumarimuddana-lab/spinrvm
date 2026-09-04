@@ -121,18 +121,34 @@ async def test_fail_closed_still_503s_when_the_claim_release_also_fails():
 
 
 @pytest.mark.anyio
-async def test_settle_corporate_explicit_false_still_503s():
-    """Regression guard: the flag explicitly set to False must keep working
-    exactly as before -- this change only touches the read-error branch."""
-    with patch(
-        "backend.settings_loader.get_app_settings",
-        AsyncMock(return_value={"corporate_billing_enabled": False}),
+async def test_settle_corporate_explicit_false_503s_and_releases_the_claim():
+    """The flag explicitly off must 503 *and* release the settlement claim.
+
+    This branch had the same stranding bug the fail-closed branch was fixed
+    for, and it is arguably worse: flipping the kill switch off is its
+    *intended* use, so every in-flight guest-corporate ride would stick at
+    payment_status='processing' the moment an operator used it -- and would
+    still be stuck after the switch was turned back on, because the
+    guest-corporate sweep polls only 'pending' and stripe_reconcile's healer
+    bails without a payment_intent_id, which a company_allowance ride never
+    has. Found by a review pass over this PR, which noticed the fail-closed
+    branch's comment claimed "every other failure branch does this" while its
+    immediate neighbour did not.
+    """
+    update_ride_mock = AsyncMock()
+    with (
+        patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"corporate_billing_enabled": False}),
+        ),
+        patch("backend.services.payment_service.db_supabase.update_ride", update_ride_mock),
     ):
         result = await settle_corporate(_RIDE, "ride_1", Decimal("20.00"), Decimal("0.00"))
 
     assert result.success is False
     assert result.status_code == 503
     assert result.error == "Corporate billing is temporarily disabled"
+    update_ride_mock.assert_awaited_once_with("ride_1", {"payment_status": "pending"})
 
 
 @pytest.mark.anyio

@@ -150,6 +150,27 @@ conditional-update optimistic-lock pattern for the equivalent problem.
         raise HTTPException(status_code=409, detail="Ride state changed before the cancel could be applied — refresh and retry")
 ```
 
+## 7b. Post-review correction (2026-09-04)
+
+A second review pass caught a **regression introduced by this very fix**. The
+first version returned 409 whenever the conditional update matched 0 rows and
+the re-read showed anything other than `status_from` — including `cancelled`.
+But `update_one` runs under `run_sync`'s default `"read"` retry policy (3
+attempts), so a write that lands and then loses its response to a dropped H2
+connection is retried, and the retry matches 0 rows because the row it just
+wrote no longer holds `status_from`. That path 409'd **after** the ride was
+already cancelled in the DB but **before** the driver release, the
+`ride_cancelled` WS/push and the audit row — driver stuck `is_available=False`
+until the orphan reaper, rider stuck on "Finding driver". Precisely the failure
+this endpoint exists to prevent, and one the *old* verify-by-re-read handled
+correctly.
+
+The 0-rows path now distinguishes three cases, not two: already-`cancelled` is
+idempotent **success** and falls through to the side effects (using the
+re-read row as the source of `driver_id`); status unchanged is still the loud
+500 silent-no-op; anything else is the 409 race. Regression test:
+`test_already_cancelled_completes_side_effects_instead_of_409`.
+
 ## 8. Rollback plan
 
 `git revert` is sufficient: no migration, no stored data shape change, and

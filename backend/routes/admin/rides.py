@@ -663,16 +663,37 @@ async def admin_cancel_ride(
             raise
 
     if updated is None:
-        # 0 rows matched. Two very different causes, and they must not be
-        # reported the same way: either the ride genuinely moved on (a real
-        # race — expected, 409, info), or the row still holds the status we
-        # filtered on and the write silently did nothing (RLS/service-role
-        # misconfiguration — the "silent no-op" this endpoint has surfaced
-        # loudly since it was first reported). One extra read, on the failure
-        # path only, is what separates them.
+        # 0 rows matched. Three very different causes, and they must not be
+        # reported the same way. One extra read, on the failure path only, is
+        # what separates them.
         current = await db_supabase.get_ride(ride_id)
         current_status = (current or {}).get("status")
-        if current is not None and current_status == status_from:
+        if current is not None and current_status == "cancelled":
+            # ALREADY CANCELLED — treat as success and fall through, do NOT
+            # 409. update_one runs under run_sync's default "read" policy (3
+            # attempts), so a write that lands and then loses its response to a
+            # dropped H2 connection is retried, and the retry matches 0 rows
+            # because the row it just wrote no longer has status=status_from.
+            # Returning here would leave the ride cancelled in the DB while
+            # skipping the driver release, the ride_cancelled WS/push and the
+            # audit row — driver stuck is_available=False until the orphan
+            # reaper, rider stuck on "Finding driver": precisely the failure
+            # this endpoint exists to prevent, and one the old
+            # verify-by-re-read handled correctly. A concurrent second cancel
+            # lands here too; re-running the side effects is idempotent enough
+            # (a duplicate ride_cancelled push) and strictly safer than
+            # stranding them. `current` becomes the post-write row the driver
+            # release below reads driver_id from.
+            logger.info(
+                f"admin_cancel_ride: ride {ride_id} already cancelled at write time "
+                f"(retry or concurrent cancel) — completing side effects idempotently"
+            )
+            updated = current
+        elif current is not None and current_status == status_from:
+            # Row still holds the status we filtered on and the write silently
+            # did nothing — RLS/service-role misconfiguration, the "silent
+            # no-op" this endpoint has surfaced loudly since it was first
+            # reported. Not concurrency; must not be reported as a 409.
             logger.error(
                 f"admin_cancel_ride: silent no-op on {ride_id} — conditional update matched 0 rows "
                 f"but the ride is still status={status_from!r} (RLS or service-role misconfiguration?)"
@@ -681,14 +702,17 @@ async def admin_cancel_ride(
                 status_code=500,
                 detail="Cancel did not persist — see backend logs.",
             )
-        logger.info(
-            f"admin_cancel_ride: ride_state_changed ride_id={ride_id} "
-            f"admin_id={admin_user.get('id')} expected_status={status_from} current_status={current_status}"
-        )
-        raise HTTPException(
-            status_code=409,
-            detail="Ride state changed before the cancel could be applied — refresh and retry",
-        )
+        else:
+            # Genuinely raced to some other state (driver accepted/arrived,
+            # trip started) — the cancel must not be applied over it.
+            logger.info(
+                f"admin_cancel_ride: ride_state_changed ride_id={ride_id} "
+                f"admin_id={admin_user.get('id')} expected_status={status_from} current_status={current_status}"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Ride state changed before the cancel could be applied — refresh and retry",
+            )
 
     driver_user_id: str | None = None
     # Read driver_id from the row the conditional update RETURNED, not from the

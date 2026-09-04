@@ -287,6 +287,21 @@ function DriverArrivingScreenContent() {
   // Regina Ave 2026-08-28). Panning pauses following; resumes automatically.
   const didInitialFitRef = useRef(false);
   const followPausedUntilRef = useRef(0);
+  // CarMarker's own reported position (route-snapped, PLAYBACK_DELAY_MS-
+  // delayed) — the follow camera below anchors on THIS, not the raw
+  // currentDriver.lat/lng fix. Same root cause driver-app diagnosed and
+  // fixed for its own follow camera (2026-08-31, "icon missing" at speed):
+  // anchoring on the raw fix while the icon renders delayed lets the two
+  // drift apart at driving speed, pushing the car icon toward the edge of
+  // (or outside) the visible map. Falls back to the raw fix before
+  // CarMarker's first tick has reported one (e.g. right after mount).
+  const markerPosRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const handleMarkerPositionChange = useCallback(
+    (coord: { latitude: number; longitude: number }) => {
+      markerPosRef.current = coord;
+    },
+    [],
+  );
   // Re-frame when the assigned driver changes (re-assignment) or the screen
   // orientation changes the usable map area.
   useEffect(() => {
@@ -310,8 +325,11 @@ function DriverArrivingScreenContent() {
           );
         } else if (Date.now() >= followPausedUntilRef.current) {
           // Keep the rider's zoom; glide the center to the approaching car.
+          // Anchor on CarMarker's own reported (delayed, route-snapped)
+          // position when available, not the raw fix — see markerPosRef above.
+          const center = markerPosRef.current ?? { latitude: currentDriver.lat, longitude: currentDriver.lng };
           mapRef.current.animateCamera(
-            { center: { latitude: currentDriver.lat, longitude: currentDriver.lng } },
+            { center },
             { duration: 800 },
           );
         }
@@ -512,6 +530,7 @@ function DriverArrivingScreenContent() {
             <CarMarker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
               heading={(currentDriver as any).heading}
               routeCoordinates={driverRouteCoords.length > 1 ? driverRouteCoords : null}
+              onPositionChange={handleMarkerPositionChange}
               size={44} zIndex={105}
               // Single marker on this screen (the assigned driver) — safe
               // to pulse. Matches the same "en route to pickup" amber used

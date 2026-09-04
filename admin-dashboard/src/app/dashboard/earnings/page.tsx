@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getEarnings, getEarningsOverview, getEarningsRides, getServiceAreas, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type EarningsRide, type MetricWithDelta } from "@/lib/api";
+import { getEarnings, getEarningsOverview, getEarningsRides, getServiceAreas, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type EarningsRide } from "@/lib/api";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -17,7 +17,7 @@ import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, Search, Radar, Flag, CalendarClock } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, Search, Radar, Flag, CalendarClock } from "lucide-react";
 import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -32,6 +32,7 @@ import {
 import { useTheme } from "next-themes";
 import { chartColors } from "@/components/analytics/chart-palette";
 import { PERIOD_OPTIONS, fmtMoney, fmtCount, fmtPct, fmtHours, fmtPeriodKey } from "./_components/earnings-format";
+import { MetricCard } from "./_components/metric-card";
 
 export default function EarningsPage() {
     const { allowed } = useRequireModule("earnings");
@@ -103,60 +104,6 @@ export default function EarningsPage() {
 }
 
 // ─── Ride Earnings Tab (existing) ───
-
-function DeltaChip({ pct }: { pct: number | null }) {
-    if (pct === null) return <span className="text-[11px] text-muted-foreground">—</span>;
-    if (pct === 0) return <span className="text-[11px] text-muted-foreground">±0.0%</span>;
-    const up = pct > 0;
-    const Icon = up ? TrendingUp : TrendingDown;
-    const color = up
-        ? "text-success bg-success/10"
-        : "text-destructive bg-destructive/10";
-    return (
-        <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${color}`}>
-            <Icon className="h-3 w-3" />
-            {up ? "+" : ""}{pct.toFixed(1)}%
-        </span>
-    );
-}
-
-function MetricCard({
-    icon: Icon,
-    label,
-    metric,
-    format,
-    accent,
-    loading,
-}: {
-    icon: any;
-    label: string;
-    metric: MetricWithDelta | undefined;
-    format: (n: number) => string;
-    accent?: string;
-    loading: boolean;
-}) {
-    return (
-        <Card className="border-border/50">
-            <CardContent className="p-4">
-                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
-                    <Icon className="h-3.5 w-3.5" />
-                    <span className="truncate">{label}</span>
-                </div>
-                {loading || !metric ? (
-                    <div className="mt-2 h-7 w-24 bg-muted rounded animate-pulse" />
-                ) : (
-                    <>
-                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${accent || ""}`}>{format(metric.current)}</p>
-                        <div className="flex items-center gap-1.5 mt-1">
-                            <DeltaChip pct={metric.delta_pct} />
-                            <span className="text-[10px] text-muted-foreground">vs {format(metric.previous)}</span>
-                        </div>
-                    </>
-                )}
-            </CardContent>
-        </Card>
-    );
-}
 
 function CeoMetricsHeader({
     overview,

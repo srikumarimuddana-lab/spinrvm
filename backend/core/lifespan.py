@@ -553,6 +553,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import stale P3 closer loop: {e}")
 
+    # Insurance-period reconciler (WS-12 §3, C55) — every 10 min, self-heals a
+    # missing/wrong open driver_insurance_periods row by deriving the expected
+    # period from ride state (pending offer / assigned-accepted-arrived ride
+    # -> P2, in_progress ride -> P3, online with no active ride -> P1). Only
+    # ever opens a new correct row via the existing record_period_transition
+    # RPC (append-only intact); downgrading an open P2/3 row to P1 is gated
+    # behind insurance_period_reconciler_downgrade_enabled (default off,
+    # alert-first — see the module docstring). Single replica via Redis
+    # leader lock.
+    try:
+        from utils.insurance_period_reconciler import insurance_period_reconciler_loop
+
+        _spawn("insurance_period_reconciler (10min)", insurance_period_reconciler_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import insurance period reconciler loop: {e}")
+
     # T4A annual issuance — runs on the last day of February each year at
     # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
     # each a push notification that their T4A slip is available, and logs
@@ -763,6 +779,8 @@ async def lifespan(app: FastAPI):
             # them in the same watchdog-coverage pass); these two are new.
             "stale_p3_closer (15min)",
             "driver_daily_rollup (30min)",
+            # WS-12 §3 / C55: self-heals missed insurance-period opens.
+            "insurance_period_reconciler (10min)",
         ]
     )
 

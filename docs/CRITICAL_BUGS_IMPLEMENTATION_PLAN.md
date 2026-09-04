@@ -18,7 +18,8 @@ Scope: C3 (insurance-period atomicity) plus findings 1–16 from the critical-bu
 | WS-5 allowance ride_debit sign | 16 | ✅ done — migration 248 + `ride_debit` / `ride_debit_reversal` |
 | WS-6 wallet_apply_delta RPC | 2, 3, 8, 10 | ✅ done — migration 249; all four lost-update sites now share one locked RPC |
 | WS-7 payout reserve-then-transfer | 4 | ⏳ next (migration 250) |
-| WS-8..12, WS-13..20 | remainder | ⏳ pending |
+| WS-12 insurance-period reconciler + alert | C3 | ✅ done — §1/§2 (migration 253 + thin RPC call) done earlier; §3/§4 (reconciler loop + tests, alert rule) done 2026-09-04, ACTION_ITEMS.md C55 |
+| WS-8..11, WS-13..20 | remainder | ⏳ pending |
 
 Full open-work breakdown, including items that need a human rather than a code
 change, lives in `CRITICAL_BUGS_PENDING_WORK.md`.
@@ -370,6 +371,28 @@ every allowance-covered corporate ride currently credits the company instead of 
    resets the flag and corporate join is re-gated.
 
 **WS-12: Atomic insurance-period transitions + ride-based reconciler (C3)**
+
+✅ §1/§2 done (migration 253 + the thin RPC call in `insurance_periods.py`).
+✅ §3/§4 done 2026-09-04 (ACTION_ITEMS.md C55) —
+`backend/utils/insurance_period_reconciler.py` + its Grafana alert rule
+(`metrics-agent/grafana/alert-rules.yaml`). Two deliberate deviations from
+the spec below, both documented in the module's own docstring: (a) no
+`reconciled=true` marker column was added — the existing RPC has no
+parameter for one and adding it would need its own migration; the
+`spinr_insurance_period_reconciled_total{action=opened|corrected}` metric
+plus the reconciler's own log lines already distinguish a self-healed row
+from a normal one, so this was judged sufficient without a schema change;
+(b) the "open row exists for a driver with no active ride and
+`is_online=false` → leave alone" case from the spec is exactly what
+happens (those drivers are simply never in either candidate set, so
+nothing about them is ever queried or written) — but the *online*-idle
+case that the spec's third bullet doesn't separately call out (an online
+driver whose open row still says Period 2/3) is a genuine downgrade risk
+if this loop's own ride/offer scan missed something, so it is gated
+behind `insurance_period_reconciler_downgrade_enabled` (default off,
+alert-first) rather than corrected unconditionally like the spec's other
+two bullets. See `docs/change-log/2026-09-04-c55-insurance-period-alerting-reconciler.md`.
+
 1. Migration `253_insurance_period_transition_rpc.sql`:
    `record_insurance_period_transition(p_driver_id, p_new_period, p_ride_id)` —
    single transaction: close the open row (`ended_at = now()` where `ended_at IS NULL`)

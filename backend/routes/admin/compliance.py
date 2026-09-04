@@ -43,6 +43,7 @@ except ImportError:
     from services.stripe_kyc_sync import get_legal_name_and_address_from_stripe  # type: ignore
     from settings_loader import get_app_settings
     from utils import metrics, report_branding
+    from utils.datetime_utils import parse_iso_utc
     from utils.legacy_rides import is_legacy_ride
     from utils.rate_limiter import default_limiter as limiter
 

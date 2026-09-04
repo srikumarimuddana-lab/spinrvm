@@ -21,6 +21,7 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
+import { isTicketSubjectValid } from "@/lib/createTicketFormSchema";
 import {
     Table,
     TableBody,
@@ -169,7 +170,7 @@ export default function TicketListPage() {
     const setF = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
     const create = async () => {
-        if (!form.subject.trim()) return;
+        if (!isTicketSubjectValid(form.subject)) return;
         setCreating(true);
         try {
             const [first, ...rest] = form.name.trim().split(" ");
@@ -329,7 +330,7 @@ export default function TicketListPage() {
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-                        <Button onClick={create} disabled={creating || !form.subject.trim()}>
+                        <Button onClick={create} disabled={creating || !isTicketSubjectValid(form.subject)}>
                             {creating ? "Creating…" : "Create ticket"}
                         </Button>
                     </DialogFooter>

@@ -25,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
+import { isReplyContentValid, isNoteContentValid } from "@/lib/ticketReplyFormSchema";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/ui/rich-text-editor";
@@ -267,7 +268,7 @@ export default function TicketDetailPage() {
 
     const sendReply = async () => {
         const html = DOMPurify.sanitize(reply).trim();
-        if (!toText(html).trim()) return;
+        if (!isReplyContentValid(toText(html))) return;
         setSending(true);
         try {
             await replyDeskTicket(id, { content: html, to: ticket?.email || ticket?.contact?.email });
@@ -282,7 +283,7 @@ export default function TicketDetailPage() {
     };
 
     const sendNote = async () => {
-        if (!note.trim()) return;
+        if (!isNoteContentValid(note)) return;
         // Notes are sent as HTML — escape and convert newlines so multi-line
         // notes don't collapse into a single line.
         const html = note
@@ -494,7 +495,7 @@ export default function TicketDetailPage() {
                             <CardContent className="space-y-2">
                                 <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a private note (not sent to the requester)…" />
                                 <div className="flex justify-end">
-                                    <Button variant="outline" onClick={sendNote} disabled={sending || !note.trim()}>
+                                    <Button variant="outline" onClick={sendNote} disabled={sending || !isNoteContentValid(note)}>
                                         <StickyNote className="mr-2 h-4 w-4" /> Add note
                                     </Button>
                                 </div>

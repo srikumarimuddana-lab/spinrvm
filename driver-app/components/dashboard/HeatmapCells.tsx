@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { Polygon } from 'react-native-maps';
+import { Platform } from 'react-native';
+import { Circle, Heatmap } from 'react-native-maps';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 
@@ -10,6 +11,14 @@ import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 const DEFAULT_CELL_LAT = 0.004;
 const DEFAULT_CELL_LNG = 0.006;
 const MAX_POLYGONS = 200;
+// The soft-blob (Circle-ring) renderer draws 2 shapes per cell — cap tighter
+// than MAX_POLYGONS so iOS/non-Google-Maps builds don't push 400+ overlapping
+// translucent circles through the native bridge every poll.
+const MAX_BLOBS = 60;
+// Metres per degree of latitude — used to size blob radii off the server's
+// own grid cell size rather than a hardcoded metre value, so denser grids
+// (smaller service areas) automatically get smaller, tighter blobs.
+const METERS_PER_LAT_DEG = 111_320;
 
 interface HeatmapCellsProps {
   cells: HeatmapCell[];
@@ -19,15 +28,10 @@ interface HeatmapCellsProps {
   cellLngDeg?: number | null;
 }
 
-function cellToCorners(lat: number, lng: number, cellLat: number, cellLng: number) {
+function cellCenter(lat: number, lng: number, cellLat: number, cellLng: number) {
   const baseLat = Math.floor(lat / cellLat) * cellLat;
   const baseLng = Math.floor(lng / cellLng) * cellLng;
-  return [
-    { latitude: baseLat, longitude: baseLng },
-    { latitude: baseLat + cellLat, longitude: baseLng },
-    { latitude: baseLat + cellLat, longitude: baseLng + cellLng },
-    { latitude: baseLat, longitude: baseLng + cellLng },
-  ];
+  return { latitude: baseLat + cellLat / 2, longitude: baseLng + cellLng / 2 };
 }
 
 function weightToRampIndex(weight: number, maxWeight: number): number {
@@ -47,6 +51,16 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// react-native-maps' native <Heatmap> (true gradient density layer) is only
+// backed on Android and on iOS-with-Google-Maps — this app deliberately runs
+// Apple Maps on iOS (see app.config.ts's comment on why), so the gradient
+// component silently no-ops there. HM-GRAD-1: split the renderer instead of
+// shipping the same hard-edged grid everywhere — Android gets the real thing,
+// iOS gets a softened stand-in (concentric translucent circles per cell
+// instead of one flat-edged rectangle) rather than the flat square-box look
+// this was reported as looking like.
+const USE_NATIVE_GRADIENT = Platform.OS === 'android';
+
 export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
   ({ cells, region, cellLatDeg, cellLngDeg }) => {
   const { colors } = useTheme();
@@ -57,10 +71,10 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
   const visibleCells = useMemo(() => {
     if (!cells.length) return [];
 
-    // Drop anything that would produce NaN/Infinity corners. react-native-maps
+    // Drop anything that would produce NaN/Infinity coordinates. react-native-maps
     // hands coordinates straight to the native map, and a non-finite one is an
-    // app CRASH on Android, not a missing rectangle — so a single corrupted
-    // cache row or a partial payload must never reach the Polygon below.
+    // app CRASH on Android, not a missing shape — so a single corrupted
+    // cache row or a partial payload must never reach the renderers below.
     let filtered = cells.filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lng) && Number.isFinite(c.weight));
 
     if (region) {
@@ -87,24 +101,64 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
 
   if (!visibleCells.length) return null;
 
+  if (USE_NATIVE_GRADIENT) {
+    const points = visibleCells.map((cell) => {
+      const { latitude, longitude } = cellCenter(cell.lat, cell.lng, cellLat, cellLng);
+      return { latitude, longitude, weight: cell.weight };
+    });
+    // Even spacing across the 5-step brand ramp (quiet -> busy), same colors
+    // the collapsed legend swatch uses, so the gradient and the legend never
+    // disagree about what a given shade means.
+    const gradientColors = colors.heatmapRamp;
+    const startPoints = gradientColors.map((_, i) => i / (gradientColors.length - 1));
+    return (
+      <Heatmap
+        points={points}
+        radius={45}
+        opacity={0.75}
+        gradient={{
+          colors: gradientColors,
+          startPoints,
+          colorMapSize: 256,
+        }}
+      />
+    );
+  }
+
+  // iOS (Apple Maps) polish path — no native gradient layer available, so
+  // fake the same soft, edgeless "heat" read with two concentric,
+  // low-opacity circles per cell instead of one hard-edged Polygon square.
+  // Radii are derived from the server's own grid size so denser grids (small
+  // service areas) get proportionally smaller blobs rather than overlapping
+  // into one blob.
+  const outerRadiusM = cellLat * METERS_PER_LAT_DEG * 0.62;
+  const innerRadiusM = outerRadiusM * 0.5;
+  const blobCells = visibleCells.slice(0, MAX_BLOBS);
+
   return (
     <>
-      {visibleCells.map((cell) => {
+      {blobCells.map((cell) => {
         const idx = weightToRampIndex(cell.weight, maxWeight);
         const color = colors.heatmapRamp[idx];
-        const isTop = idx === 4;
+        const center = cellCenter(cell.lat, cell.lng, cellLat, cellLng);
         return (
-          <Polygon
-            // Keyed on the cell's own coordinates, not its array index. The
-            // list is re-sorted by weight on every poll, so an index-prefixed
-            // key changed for most cells whenever demand shifted — React then
-            // tore down and recreated native views that had only moved.
-            key={`hm-${cell.lat}-${cell.lng}`}
-            coordinates={cellToCorners(cell.lat, cell.lng, cellLat, cellLng)}
-            fillColor={hexToRgba(color, 0.4)}
-            strokeColor={isTop ? hexToRgba(color, 0.7) : 'transparent'}
-            strokeWidth={isTop ? 1 : 0}
-          />
+          // Keyed on the cell's own coordinates, not array index — the list
+          // is re-sorted by weight on every poll, so an index-prefixed key
+          // would churn native views for cells that had only moved position.
+          <React.Fragment key={`hm-${cell.lat}-${cell.lng}`}>
+            <Circle
+              center={center}
+              radius={outerRadiusM}
+              fillColor={hexToRgba(color, 0.14)}
+              strokeWidth={0}
+            />
+            <Circle
+              center={center}
+              radius={innerRadiusM}
+              fillColor={hexToRgba(color, idx === 4 ? 0.5 : 0.32)}
+              strokeWidth={0}
+            />
+          </React.Fragment>
         );
       })}
     </>

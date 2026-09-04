@@ -46,36 +46,82 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
   const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [infoOpen, setInfoOpen] = useState(false);
+  // Collapsed by default — previously this rendered as a permanent pill
+  // sitting over the top of the map (live-reported: "remove the heatmap
+  // pill on the top of the screen"). Now it's a single small icon button
+  // the driver can tap to see the legend/layer picker, matching the
+  // tap-to-reveal pattern MapControls already uses for its own toggles —
+  // nothing sits open over the map by default.
+  const [expanded, setExpanded] = useState(false);
 
   if (!visible) return null;
 
+  // Icon + tint shown on the collapsed button so a glance still communicates
+  // *something* is available (data flowing vs. quiet vs. unavailable)
+  // without needing the pill open.
+  const collapsedIcon =
+    status === 'error' ? 'cloud-offline-outline'
+    : status === 'empty' ? 'map-outline'
+    : status === 'loading' ? 'ellipse-outline'
+    : 'flame';
+  const collapsedTint =
+    status === 'ready' ? colors.heatmapRamp[3]
+    : status === 'stale' ? colors.warning
+    : colors.textDim;
+
+  if (!expanded) {
+    return (
+      <TouchableOpacity
+        style={styles.toggleBtn}
+        onPress={() => setExpanded(true)}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={t('heatmap.legend.expand')}
+      >
+        <Ionicons name={collapsedIcon} size={20} color={collapsedTint} />
+      </TouchableOpacity>
+    );
+  }
+
   if (status === 'loading') {
     return (
-      <View style={styles.pill}>
+      <TouchableOpacity style={styles.pill} onPress={() => setExpanded(false)} activeOpacity={0.8}>
         <View style={styles.shimmerRow}>
           {colors.heatmapRamp.map((_, i) => (
             <View key={i} style={[styles.swatch, { backgroundColor: colors.border }]} />
           ))}
         </View>
-      </View>
+      </TouchableOpacity>
     );
   }
 
   if (status === 'empty') {
     return (
-      <View style={styles.pill}>
+      <TouchableOpacity
+        style={styles.pill}
+        onPress={() => setExpanded(false)}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel={t('heatmap.legend.collapse')}
+      >
         <Ionicons name="map-outline" size={14} color={colors.textDim} />
         <Text style={styles.statusText}>{t('heatmap.empty')}</Text>
-      </View>
+      </TouchableOpacity>
     );
   }
 
   if (status === 'error') {
     return (
-      <View style={styles.pill}>
+      <TouchableOpacity
+        style={styles.pill}
+        onPress={() => setExpanded(false)}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel={t('heatmap.legend.collapse')}
+      >
         <Ionicons name="cloud-offline-outline" size={14} color={colors.textDim} />
         <Text style={styles.statusText}>{t('heatmap.unavailable')}</Text>
-      </View>
+      </TouchableOpacity>
     );
   }
 
@@ -95,6 +141,15 @@ export const DemandLegend: React.FC<DemandLegendProps> = ({
           )}
           <TouchableOpacity onPress={() => setInfoOpen(true)} hitSlop={8} style={{ marginLeft: 6 }}>
             <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setExpanded(false)}
+            hitSlop={8}
+            style={{ marginLeft: 4 }}
+            accessibilityRole="button"
+            accessibilityLabel={t('heatmap.legend.collapse')}
+          >
+            <Ionicons name="chevron-up-circle-outline" size={16} color={colors.textDim} />
           </TouchableOpacity>
         </View>
 
@@ -146,6 +201,24 @@ const createStyles = (colors: ThemeColors) =>
     container: {
       alignItems: 'center',
       gap: 4,
+    },
+    // Matches MapControls' round-icon-button footprint (44px, blurred
+    // surface, subtle shadow) so the collapsed heatmap toggle reads as part
+    // of the same map-chrome language rather than a new, inconsistent shape.
+    toggleBtn: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.overlay,
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.12,
+      shadowRadius: 6,
+      elevation: 3,
     },
     pill: {
       flexDirection: 'row',

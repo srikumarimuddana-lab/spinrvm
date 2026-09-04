@@ -11,7 +11,7 @@ The cascade branch already handled this correctly (test_dispatch_cascade.py);
 these tests pin the same contract on the primary path.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -88,6 +88,23 @@ async def _run_match(presence_result, drivers, ranked_pools, mget_raises=False, 
     with (
         patch("backend.db_supabase.get_rows", AsyncMock(return_value=drivers)),
         patch("backend.db_supabase.find_one", AsyncMock(return_value=service_area)),
+        # Pin the dispatch geo provider to `legacy` for these tests.
+        #
+        # This file is about the PRESENCE filter's fail-open behaviour, and it
+        # models the candidate read with a single `db_supabase.get_rows` mock.
+        # That mock only sits on the path `legacy` takes. Migration 404 flipped
+        # the global default to `postgis`, whose provider (the
+        # drivers_nearby_location_geog RPC + a batched id re-read) never calls
+        # the mocked `get_rows`, so the pool came back empty and every
+        # assertion here failed for a reason that had nothing to do with Redis.
+        #
+        # Pinning `legacy` keeps these tests testing what they were written to
+        # test. Provider selection itself is covered by
+        # test_dispatch_candidates.py.
+        patch(
+            "backend.routes.rides._deps.get_app_settings",
+            AsyncMock(return_value={"dispatch_geo_provider": "legacy"}),
+        ),
         patch("backend.routes.rides._deps.filter_and_rank_drivers", side_effect=_record_rank),
         patch("backend.routes.rides.matching._dispatch_retry", new_callable=AsyncMock),
         # side_effect closes the spawned coroutine instead of leaking it (A8).

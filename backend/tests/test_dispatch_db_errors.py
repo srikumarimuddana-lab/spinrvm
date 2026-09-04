@@ -77,7 +77,7 @@ async def test_candidate_fetch_failure_schedules_retry():
         patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
         patch(
             "backend.routes.rides._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False, 500)),
         ),
         patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
         patch("backend.routes.rides._deps.spawn", spawn_mock),
@@ -135,7 +135,9 @@ async def test_post_fetch_failure_rearms_with_backoff():
     spawn_mock = MagicMock()
 
     with (
-        patch.object(rides_mod.matching, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("mid-claim boom"))),
+        patch.object(
+            rides_mod.matching, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("mid-claim boom"))
+        ),
         patch.object(rides_mod.matching, "_dispatch_retry", retry_mock),
         patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),  # no pending offers
         patch("backend.routes.rides._deps.spawn", spawn_mock),

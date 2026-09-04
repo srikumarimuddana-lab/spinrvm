@@ -57,6 +57,15 @@ VALID_ALGORITHMS = ("nearest", "rating_based", "combined", "round_robin")
 DEFAULT_MIN_RATING = 4.0
 DEFAULT_SEARCH_RADIUS_KM = 10.0
 DEFAULT_MAX_SIMULTANEOUS_OFFERS = 3
+#: Candidate-pool cap for the dispatch driver read. 500 is the value that was
+#: hardcoded at both ``routes/rides/matching.py`` read sites before migration
+#: 404 made it configurable; keeping it as the default means an un-migrated /
+#: unset deployment behaves exactly as before.
+DEFAULT_MAX_CANDIDATE_POOL = 500
+#: DB CHECK bounds from migration 404, mirrored here so an out-of-range value
+#: written by some other path cannot reach the query as-is.
+MIN_CANDIDATE_POOL = 50
+MAX_CANDIDATE_POOL = 500
 
 
 def rank_by_eta_with_acceptance(
@@ -296,10 +305,10 @@ class DispatchService:
         *,
         app_settings: Optional[Dict[str, Any]] = None,
         area: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, float, float, int, bool]:
+    ) -> Tuple[str, float, float, int, bool, int]:
         """
         Return ``(algorithm, min_rating, search_radius_km,
-        max_offers, use_eta)`` for this ride.
+        max_offers, use_eta, max_candidate_pool)`` for this ride.
 
         Reads ``service_areas`` first (the area can override matching
         behaviour), then falls back to the global ``app_settings``.
@@ -336,6 +345,21 @@ class DispatchService:
             or app_settings.get("max_simultaneous_offers", DEFAULT_MAX_SIMULTANEOUS_OFFERS)
         )
         max_offers = max(1, min(max_offers, 10))
+        # Candidate-pool cap: same area-overrides-global precedence as the
+        # fields above. Clamped to migration 404's CHECK range (50..500) so a
+        # value written outside the admin API can never widen the hot dispatch
+        # read past its historical 500, nor shrink it to something that cannot
+        # fill a single offer batch. A bad/zero value falls back to the default
+        # rather than clamping to 50 — `or` catches 0, None and "".
+        try:
+            max_candidate_pool = int(
+                area_settings.get("max_candidate_pool")
+                or app_settings.get("max_candidate_pool", DEFAULT_MAX_CANDIDATE_POOL)
+                or DEFAULT_MAX_CANDIDATE_POOL
+            )
+        except (TypeError, ValueError):
+            max_candidate_pool = DEFAULT_MAX_CANDIDATE_POOL
+        max_candidate_pool = max(MIN_CANDIDATE_POOL, min(max_candidate_pool, MAX_CANDIDATE_POOL))
         # Global false always wins: an operator disabling ETA ranking globally
         # must not have service-area DEFAULT true (set by migration 100) silently
         # re-enable it. Only a service-area explicit true can override a global true.
@@ -346,7 +370,7 @@ class DispatchService:
             use_eta = bool(area_settings["use_eta_ranking"])
         else:
             use_eta = bool(global_eta) if global_eta is not None else True
-        return algorithm, min_rating, search_radius_km, max_offers, use_eta
+        return algorithm, min_rating, search_radius_km, max_offers, use_eta, max_candidate_pool
 
     async def find_candidate_drivers(
         self,

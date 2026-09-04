@@ -115,7 +115,7 @@ async def test_subscription_filter_db_error_fails_closed_and_retries():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
@@ -150,7 +150,7 @@ async def test_quota_filter_db_error_fails_open_and_keeps_dispatching():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -209,7 +209,7 @@ async def test_ride_offers_insert_failure_releases_claims_and_reraises():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -244,7 +244,7 @@ async def test_no_eligible_drivers_after_filters_schedules_retry():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -287,7 +287,7 @@ async def test_cascade_subscription_subfilter_drops_non_subscribers():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",
@@ -342,7 +342,7 @@ async def test_cascade_subscription_subfilter_exception_fails_closed():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
@@ -382,7 +382,7 @@ async def test_cascade_lookup_outer_exception_is_non_fatal():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
@@ -445,7 +445,7 @@ async def test_service_area_row_is_read_once_per_attempt():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
@@ -552,7 +552,7 @@ async def test_pass_required_area_reads_driver_subscriptions_once():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
@@ -600,7 +600,7 @@ async def test_claim_returns_the_row_so_no_follow_up_driver_read():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",
@@ -641,7 +641,7 @@ async def test_claim_row_failing_revalidation_releases_the_driver():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",

@@ -3,7 +3,8 @@
 Applied to every user-authored message BEFORE it is sent to any third-party
 LLM provider and BEFORE it is persisted to ai_messages. Extracted from
 routes/support.py so the rider AI mode and the legacy driver support chat
-share one implementation.
+share one implementation. Every caller names the egress boundary it is
+protecting via ScrubPolicy (below); the default is the strict one.
 
 Names cannot be scrubbed reliably with regex; mitigate via data-minimization:
 system prompts never ask for names, and the patterns below cover the
@@ -14,11 +15,14 @@ data-minimization mitigation — see the pattern list below for specifics.
 """
 
 import re
+from enum import Enum
 from typing import Any
 
-_PII_PATTERNS: list[tuple[re.Pattern, str]] = [
+# (category, pattern, replacement). The category tag is what a ScrubPolicy
+# skips by (see _POLICY_SKIPS) so this list stays the single source of truth.
+_PII_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     # North American phone numbers with separators (+1 optional)
-    (re.compile(r"(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}"), "[PHONE]"),
+    ("phone", re.compile(r"(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}"), "[PHONE]"),
     # E.164 / bare 10- or 11-digit North American numbers (no separators) —
     # this is how the system stores them (+13065551234), which the
     # separator-requiring pattern above missed entirely. Digit boundaries stop
@@ -38,18 +42,19 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     #   +\d{10,11}   explicit international prefix (+13065551234, +3065551234)
     #   1\d{10}      11 digits with the country code (13065551234)
     #   [2-9]\d{9}   bare 10-digit with a valid area code (3065551234)
-    (re.compile(r"(?<![\d+])(?:\+1?\d{10}|1\d{10}|[2-9]\d{9})(?!\d)"), "[PHONE]"),
+    ("phone", re.compile(r"(?<![\d+])(?:\+1?\d{10}|1\d{10}|[2-9]\d{9})(?!\d)"), "[PHONE]"),
     # Email addresses
-    (re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"), "[EMAIL]"),
+    ("email", re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"), "[EMAIL]"),
     # GPS coordinates — labelled "lat=… lng=…" (any of =/:/space separators).
     # The comma-only pattern below missed this shape, which is exactly how the
     # coordinate log sites formatted them.
     (
+        "coords",
         re.compile(r"lat\s*[=:]\s*-?\d{1,2}\.\d{2,}[\s,;/]+lng\s*[=:]\s*-?\d{1,3}\.\d{2,}", re.IGNORECASE),
         "[COORDS]",
     ),
     # GPS coordinates — bare "lat,lng" or "lat/lng" pairs (±90/±180 range).
-    (re.compile(r"-?\d{1,2}\.\d{2,}\s*[,/]\s*-?\d{1,3}\.\d{2,}"), "[COORDS]"),
+    ("coords", re.compile(r"-?\d{1,2}\.\d{2,}\s*[,/]\s*-?\d{1,3}\.\d{2,}"), "[COORDS]"),
     # GPS coordinates inside a mapping repr — "{'lat': 52.1332, 'lng': -106.67}".
     #
     # This is the shape that actually leaked (T1: a log line interpolating a DB row),
@@ -65,6 +70,7 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     #
     # The lookbehind stops `flat=1.5` / `latency=12.34` matching on a `lat` substring.
     (
+        "coords",
         re.compile(
             r"""(?<![A-Za-z_])(['"]?)(lat|latitude|lng|lon|longitude)\1\s*[=:]\s*-?\d{1,3}\.\d{2,}""",
             re.IGNORECASE,
@@ -72,7 +78,7 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
         r"\2=[COORD]",
     ),
     # Canadian postal codes (A1A 1A1 or A1A1A1)
-    (re.compile(r"\b[A-Za-z]\d[A-Za-z][\s-]?\d[A-Za-z]\d\b"), "[POSTAL]"),
+    ("postal", re.compile(r"\b[A-Za-z]\d[A-Za-z][\s-]?\d[A-Za-z]\d\b"), "[POSTAL]"),
     # Payment card numbers (PAN). Prefix-gated the same way the NANP phone fix
     # above is: an ungated 13-19 digit run would collide with this codebase's
     # own ride/order/session ids (the exact regression documented above for
@@ -90,6 +96,7 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     # for the case a rider pastes one into an AI chat message or support
     # ticket while troubleshooting a declined card.
     (
+        "card",
         re.compile(
             r"(?<!\d)(?:"
             r"4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Visa 16
@@ -116,41 +123,99 @@ _PII_PATTERNS: list[tuple[re.Pattern, str]] = [
     # regulatory-sk.md) with no fixed shape to gate on. Mitigated the same way
     # as names (see module docstring): prompts.py never asks for a SIN, DL
     # number, or other government ID.
-    (re.compile(r"(?<!\d)\d{3}[\s-]\d{3}[\s-]\d{3}(?!\d)"), "[GOVID]"),
+    ("govid", re.compile(r"(?<!\d)\d{3}[\s-]\d{3}[\s-]\d{3}(?!\d)"), "[GOVID]"),
 ]
 
-# App-generated trip-endpoint coordinates — "[50.40790,-104.65010]" — written
-# into user messages by the quote-card tap and the map-pin picker. The AI chat
-# message path opts in to keeping them (keep_trip_pins=True): the model must
-# receive them verbatim (scrubbing them re-introduced the re-geocode drift the
-# bracketed format exists to prevent), and as trip endpoints they are the same
-# data class the rides table stores openly and tool traffic already carries to
-# the provider. They are not the rider's live device location.
-#
-# The exemption is opt-in, NOT the default, because scrub_pii is shared:
-# utils/sentry_scrub.py runs it over exception messages and breadcrumbs, and
-# raw GPS must never reach Sentry (PIPEDA hard rule) — a bracketed pair inside
-# an error string gets no pass there. Callers that are not the chat-message
-# path must never set keep_trip_pins.
+
+class ScrubPolicy(Enum):
+    """Which egress boundary a scrub is protecting. Full model and rationale:
+    docs/adr/012-ai-egress-trust-boundaries.md.
+
+    STRICT  -- the default. Telemetry and third parties that have no business
+               seeing location data at all: log lines (utils/log_guard.py),
+               Sentry (utils/sentry_scrub.py), support tickets
+               (routes/support.py, ai/support_assistant.py), the anonymous
+               web assistant (ai/public_assistant.py) and the /mcp response
+               serializer (ai/mcp_server.py). Every pattern category is
+               redacted, bracketed trip pins included.
+
+    AI_CHAT -- the authenticated in-app assistant only: ai/orchestrator.py's
+               user-message and reply-persistence path, and ai/tools.py's
+               model-facing tool-result cap. Identifiers (phone, email, card,
+               SIN, free-text GPS) are still redacted, but trip-LOCATION data
+               is kept: app-generated bracketed "[lat,lng]" trip pins and
+               Canadian postal codes. Both are components of the trip
+               endpoints this path already carries to the provider (the
+               street address beside them was never regex-scrubbable and the
+               coordinates ride the tool traffic as floats), so redacting them
+               buys no privacy and costs fidelity -- the 2026-09-04 regression
+               rewrote every postal code in the rider-facing cards, the
+               tapped-card message, the model's prose and ultimately
+               rides.pickup_address to the literal "[POSTAL]". Accepted
+               trip-endpoint exception: docs/compliance/pia-ai-surfaces-
+               2026-08.md Section 3.
+
+    A policy is an explicit per-call-site opt-in, never a default, because
+    scrub_pii is shared: raw GPS must never reach Sentry (PIPEDA hard rule),
+    and tests/test_ai_pii.py enumerates every file that opts in to AI_CHAT.
+    """
+
+    STRICT = "strict"
+    AI_CHAT = "ai_chat"
+
+
+# Pattern categories a policy leaves unredacted, keyed by the category tag on
+# each _PII_PATTERNS entry.
+_POLICY_SKIPS: dict[ScrubPolicy, frozenset[str]] = {
+    ScrubPolicy.STRICT: frozenset(),
+    ScrubPolicy.AI_CHAT: frozenset({"postal"}),
+}
+
+# App-generated trip-endpoint coordinates -- "[50.40790,-104.65010]" -- written
+# into user messages by the quote-card tap and the map-pin picker. Under
+# ScrubPolicy.AI_CHAT they are stashed before the pattern pass and restored
+# after it: the model must receive them verbatim (scrubbing them re-introduced
+# the re-geocode drift the bracketed format exists to prevent), and as trip
+# endpoints they are the same data class the rides table stores openly and
+# tool traffic already carries to the provider. They are not the rider's live
+# device location. Under STRICT a bracketed pair inside an error string gets
+# no pass. Free-text coordinates are scrubbed under both policies.
 _BRACKETED_COORDS = re.compile(r"\[-?\d{1,3}\.\d+,\s*-?\d{1,3}\.\d+\]")
 
 
-def scrub_pii(text: str, *, keep_trip_pins: bool = False) -> str:
+def _check_policy(policy: Any) -> None:
+    # Raise, never coerce. scrub_pii_deep swallows exceptions from the pattern
+    # pass by design (a scrub failure must not break a chat turn), so a wrong-
+    # typed policy has to be rejected BEFORE that guard -- otherwise it would
+    # silently hand the value back unscrubbed, which is a privacy regression
+    # dressed up as resilience.
+    # Membership in _POLICY_SKIPS is checked too: a future enum member added
+    # without a skip-set row would otherwise KeyError inside the pattern pass
+    # and be swallowed the same way.
+    if not isinstance(policy, ScrubPolicy) or policy not in _POLICY_SKIPS:
+        raise TypeError(f"policy must be a ScrubPolicy with a _POLICY_SKIPS entry, got {policy!r}")
+
+
+def scrub_pii(text: str, *, policy: ScrubPolicy = ScrubPolicy.STRICT) -> str:
     """Replace high-risk identifiers with redaction tokens.
 
-    keep_trip_pins=True preserves app-generated bracketed "[lat,lng]" trip
-    endpoints (AI chat messages only — see module comment). Free-text
-    coordinates are scrubbed either way.
+    ``policy`` names the egress boundary being protected (see ScrubPolicy).
+    STRICT is the default; only the authenticated in-app assistant passes
+    AI_CHAT, which keeps bracketed trip pins and Canadian postal codes.
     """
+    _check_policy(policy)
+    skips = _POLICY_SKIPS[policy]
     protected: list[str] = []
 
     def _stash(match: re.Match) -> str:
         protected.append(match.group(0))
         return f"\x00{len(protected) - 1}\x00"
 
-    if keep_trip_pins:
+    if policy is ScrubPolicy.AI_CHAT:
         text = _BRACKETED_COORDS.sub(_stash, text)
-    for pattern, token in _PII_PATTERNS:
+    for category, pattern, token in _PII_PATTERNS:
+        if category in skips:
+            continue
         text = pattern.sub(token, text)
     for index, original in enumerate(protected):
         text = text.replace(f"\x00{index}\x00", original)
@@ -184,14 +249,16 @@ def filter_tool_leakage(text: str) -> str:
 # 2026-08-18 fleet audit: scrub_pii above was only ever applied to the user's
 # own chat message and the model's final reply text -- never to a tool
 # RESULT, which re-enters the model context on the very next turn of the
-# same tool loop (orchestrator.py) and is also returned verbatim over /mcp
-# (mcp_server.py). Both paths call execute_tool()/_cap_result() in tools.py,
-# so scrub_pii_deep is wired in there as the single choke point that covers
-# both surfaces at once.
+# same tool loop (orchestrator.py). scrub_pii_deep is wired into tools.py's
+# _cap_result for the MODEL-facing portion of every result (ScrubPolicy.
+# AI_CHAT). The rider-facing ``_client_action`` card is exempt there -- it
+# goes back to the data subject, not to a third party -- and /mcp, whose
+# client IS a third party, re-scrubs its whole response under STRICT in
+# mcp_server._serialize_tool_payload (2026-09-04, ADR 012).
 _MAX_SCRUB_DEPTH = 6
 
 
-def scrub_pii_deep(value: Any, depth: int = 0) -> Any:
+def scrub_pii_deep(value: Any, depth: int = 0, *, policy: ScrubPolicy = ScrubPolicy.STRICT) -> Any:
     """Recursively apply scrub_pii to every string leaf in a JSON-like tool
     result (nested dicts/lists/tuples). Value-pattern scrubbing only --
     deliberately NOT key-name-based like utils/sentry_scrub.py's _scrub_deep,
@@ -206,17 +273,25 @@ def scrub_pii_deep(value: Any, depth: int = 0) -> Any:
     known to leak.
 
     Bounded recursion so a pathological/cyclic result can never spin the
-    scrubber. Never raises -- a scrub failure must not break the chat turn.
+    scrubber. Never raises on content -- a scrub failure must not break the
+    chat turn. A wrong-typed or unmapped ``policy`` DOES raise, deliberately,
+    once at the top level and outside that guard (see _check_policy); the
+    recursion below runs unchecked so the check is never inside the swallow.
     """
+    _check_policy(policy)
+    return _scrub_deep(value, depth, policy)
+
+
+def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
     if depth >= _MAX_SCRUB_DEPTH:
         return value
     try:
         if isinstance(value, str):
-            return scrub_pii(value)
+            return scrub_pii(value, policy=policy)
         if isinstance(value, dict):
-            return {k: scrub_pii_deep(v, depth + 1) for k, v in value.items()}
+            return {k: _scrub_deep(v, depth + 1, policy) for k, v in value.items()}
         if isinstance(value, (list, tuple)):
-            return type(value)(scrub_pii_deep(v, depth + 1) for v in value)
+            return type(value)(_scrub_deep(v, depth + 1, policy) for v in value)
     except Exception:  # noqa: BLE001 - never let scrubbing break a tool result
         return value
     return value

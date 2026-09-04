@@ -6,9 +6,11 @@ behaviour that routes/support.py relied on before the extraction, plus the
 rider-AI cases (coordinates pasted from the app, postal codes in addresses).
 """
 
+from unittest.mock import patch
+
 import pytest
 
-from backend.ai.pii import filter_tool_leakage, scrub_pii
+from backend.ai.pii import _POLICY_SKIPS, ScrubPolicy, filter_tool_leakage, scrub_pii, scrub_pii_deep
 
 
 class TestPhoneNumbers:
@@ -96,29 +98,33 @@ class TestCoordinates:
         # Scrubbing them re-introduced the re-geocode drift the bracketed
         # format exists to prevent (rule 6/6b coordinates arrived as
         # "[COORDS]" and the model silently re-geocoded the trip). Only the
-        # chat-message path opts in via keep_trip_pins.
+        # authenticated chat path opts in via ScrubPolicy.AI_CHAT.
         text = "Book the Economy from 4325 Wakeling St [50.42140,-104.66410] to 4500 Gordon Rd [50.40790,-104.65010], total $5.27."
-        assert scrub_pii(text, keep_trip_pins=True) == text
+        assert scrub_pii(text, policy=ScrubPolicy.AI_CHAT) == text
 
-    def test_tapped_suggestion_message_keeps_coordinates(self):
+    def test_tapped_suggestion_message_keeps_coordinates_and_postal_code(self):
         # The location-suggestion tap message ("Use <address> [lat,lng] as my
         # dropoff.") must keep its bracketed pair — losing it forces the model
         # to re-geocode the address text, which re-trips the imprecise_address
-        # gate (the "check the exact street address" loop). The postal code is
-        # still scrubbed; that is accepted — the coordinates, not the label,
-        # are what the model books on.
+        # gate (the "check the exact street address" loop). The postal code
+        # must survive too: an earlier version of this test "accepted" it
+        # being scrubbed because only the coordinates matter for booking, but
+        # the scrubbed label is what the model echoes in prose and passes back
+        # as pickup_address/dropoff_address, and it ended up as the literal
+        # "[POSTAL]" in rides.pickup_address (2026-09-04 change-log).
         scrubbed = scrub_pii(
             "Use 655 Albert St, Regina, SK S4T 1A1 [50.44079,-104.61802] as my dropoff.",
-            keep_trip_pins=True,
+            policy=ScrubPolicy.AI_CHAT,
         )
         assert "[50.44079,-104.61802]" in scrubbed
-        assert "[POSTAL]" in scrubbed
+        assert "S4T 1A1" in scrubbed
+        assert "[POSTAL]" not in scrubbed
         assert "655 Albert St" in scrubbed
 
     def test_bracketed_exemption_is_narrow(self):
         # Free-text coordinates still scrub even when a bracketed pair is in
         # the same message; brackets without a coordinate pair get no pass.
-        scrubbed = scrub_pii("pin [50.40790,-104.65010] but I'm at 52.131802, -106.660767", keep_trip_pins=True)
+        scrubbed = scrub_pii("pin [50.40790,-104.65010] but I'm at 52.131802, -106.660767", policy=ScrubPolicy.AI_CHAT)
         assert "[50.40790,-104.65010]" in scrubbed
         assert "[COORDS]" in scrubbed
         assert "52.13" not in scrubbed
@@ -132,24 +138,31 @@ class TestCoordinates:
         assert "[COORDS]" in scrubbed
         assert "50.40790" not in scrubbed
 
-    def test_orchestrator_is_the_only_trip_pin_optin(self):
-        # The keep_trip_pins exemption must never quietly spread to Sentry or
-        # support scrubbing. Enumerate every call site: only the chat-message
-        # path (orchestrator) opts in — it may opt in more than once within
-        # that one file (e.g. once for the user message, once for the
-        # assistant reply), so this checks the *set* of files, not a raw
-        # occurrence count.
+    def test_ai_chat_policy_optin_sites_are_enumerated(self):
+        # The AI_CHAT exemption (trip pins + postal codes kept) must never
+        # quietly spread to Sentry, support, the public web assistant or the
+        # /mcp serializer. Enumerate every mention of the policy member in
+        # non-test source: ai/pii.py defines it, and the only opt-ins are the
+        # authenticated chat path (orchestrator: user message + persisted
+        # reply) and the model-facing tool-result cap (tools.py). The word is
+        # matched bare (not the `ScrubPolicy.AI_CHAT` spelling) so an alias
+        # or a re-export can't dodge the check; the cost is that comments
+        # outside these files must not use the token either.
         import re as _re
         from pathlib import Path
 
         backend = Path(__file__).resolve().parents[1]
+        # Vendored / generated trees are not source: a local venv would make
+        # this walk read thousands of site-packages files and can hold
+        # non-UTF-8 .py files that would turn the check into a decode error.
+        skip = {"tests", "__pycache__", ".venv", "venv", "site-packages", "node_modules", "htmlcov"}
         opt_in_files = set()
         for path in backend.rglob("*.py"):
-            if "tests" in path.parts or "__pycache__" in path.parts:
+            if skip & set(path.parts):
                 continue
-            if _re.search(r"scrub_pii\([^)]*keep_trip_pins\s*=\s*True", path.read_text()):
+            if _re.search(r"\bAI_CHAT\b", path.read_text(encoding="utf-8", errors="ignore")):
                 opt_in_files.add(path.relative_to(backend).as_posix())
-        assert opt_in_files == {"ai/orchestrator.py"}
+        assert opt_in_files == {"ai/pii.py", "ai/orchestrator.py", "ai/tools.py"}
 
 
 class TestPostalCodes:
@@ -161,6 +174,78 @@ class TestPostalCodes:
     def test_ordinary_words_survive(self):
         text = "when is my T4A available"
         assert scrub_pii(text) == text
+
+
+class TestScrubPolicy:
+    """ScrubPolicy names the egress boundary a scrub protects (ADR 012).
+    STRICT is telemetry / third parties; AI_CHAT is the authenticated in-app
+    assistant, where trip-location data (bracketed pins, postal codes) is the
+    booking payload and must survive."""
+
+    TEXT = "Use 655 Albert St, Regina, SK S4T 1A1 [50.44079,-104.61802] as my dropoff, call 306-555-1234 or jane@x.ca"
+
+    def test_default_is_strict(self):
+        assert scrub_pii(self.TEXT) == scrub_pii(self.TEXT, policy=ScrubPolicy.STRICT)
+
+    def test_strict_redacts_postal_codes_and_bracketed_pins(self):
+        scrubbed = scrub_pii(self.TEXT, policy=ScrubPolicy.STRICT)
+        assert "[POSTAL]" in scrubbed
+        assert "[COORDS]" in scrubbed
+        assert "S4T 1A1" not in scrubbed
+        assert "50.44079" not in scrubbed
+
+    def test_ai_chat_keeps_postal_codes_and_bracketed_pins(self):
+        scrubbed = scrub_pii(self.TEXT, policy=ScrubPolicy.AI_CHAT)
+        assert "S4T 1A1" in scrubbed
+        assert "[50.44079,-104.61802]" in scrubbed
+        assert "[POSTAL]" not in scrubbed
+        assert "[COORDS]" not in scrubbed
+
+    def test_ai_chat_still_redacts_identifiers(self):
+        scrubbed = scrub_pii(self.TEXT, policy=ScrubPolicy.AI_CHAT)
+        assert "[PHONE]" in scrubbed and "555-1234" not in scrubbed
+        assert "[EMAIL]" in scrubbed and "jane@x.ca" not in scrubbed
+        # Free-text coordinates (not app-generated bracketed pins) are still
+        # scrubbed — the exemption is the bracketed shape only.
+        assert "[COORDS]" in scrub_pii("I'm at 52.131802, -106.660767", policy=ScrubPolicy.AI_CHAT)
+        assert "[CARD]" in scrub_pii("card 4111 1111 1111 1111", policy=ScrubPolicy.AI_CHAT)
+        assert "[GOVID]" in scrub_pii("sin 123-456-789", policy=ScrubPolicy.AI_CHAT)
+
+    @pytest.mark.parametrize("bad", [True, "ai_chat", None, 1])
+    def test_non_enum_policy_raises_instead_of_being_swallowed(self, bad):
+        # scrub_pii_deep deliberately swallows exceptions from the pattern
+        # pass; a wrong-typed policy must be rejected BEFORE that guard, or
+        # the value would come back unscrubbed and nobody would know.
+        with pytest.raises(TypeError):
+            scrub_pii("S7K 3R5", policy=bad)
+        with pytest.raises(TypeError):
+            scrub_pii_deep({"address": "S7K 3R5"}, policy=bad)
+
+    def test_every_policy_has_a_skip_set_entry(self):
+        # A member added to the enum without a _POLICY_SKIPS row would be
+        # rejected by _check_policy (next test) -- this one makes the
+        # omission itself the visible failure.
+        assert set(_POLICY_SKIPS) == set(ScrubPolicy)
+
+    def test_unmapped_policy_raises_instead_of_returning_unscrubbed(self):
+        # Simulate the "new enum member, no skip-set row" mistake. Without the
+        # membership check the KeyError would be raised inside scrub_pii_deep's
+        # swallow-all guard and the value returned unscrubbed.
+        with patch.dict(_POLICY_SKIPS, {ScrubPolicy.STRICT: frozenset()}, clear=True):
+            with pytest.raises(TypeError):
+                scrub_pii_deep({"address": "S7K 3R5"}, policy=ScrubPolicy.AI_CHAT)
+            with pytest.raises(TypeError):
+                scrub_pii("S7K 3R5", policy=ScrubPolicy.AI_CHAT)
+
+    def test_deep_threads_the_policy_through_dicts_and_lists(self):
+        # find_place returns candidates as a LIST of dicts — the list branch
+        # of the recursion must honour the policy too, not only the dict one.
+        result = {"candidates": [{"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7"}], "phone": "306-555-1234"}
+        chat = scrub_pii_deep(result, policy=ScrubPolicy.AI_CHAT)
+        assert chat["candidates"][0]["address"].endswith("S4V 2Z7")
+        assert chat["phone"] == "[PHONE]"
+        strict = scrub_pii_deep(result)
+        assert strict["candidates"][0]["address"].endswith("[POSTAL]")
 
 
 class TestCardNumbers:
@@ -352,14 +437,58 @@ class TestCapResultScrubsToolResults:
         result = _cap_result({"driver_phone": "306-555-1234", "ok": True})
         assert result == {"driver_phone": "[PHONE]", "ok": True}
 
-    def test_cap_result_scrubs_client_action_too(self):
-        """/mcp serializes _client_action verbatim with no further
-        processing (mcp_server.py's _call_tool), so it must be scrubbed
-        here too, not just the model-facing portion."""
+    def test_cap_result_never_scrubs_client_action(self):
+        """The card is the rider's own data going back to the rider's own
+        app, not a third-party egress (ADR 012). Scrubbing it here is what
+        put the literal "[POSTAL]" into every dropoff-choice card, the
+        tapped-card message, the model's prose and rides.pickup_address
+        (2026-09-04 change-log). /mcp -- the one consumer that IS a third
+        party -- re-scrubs its whole response in
+        mcp_server._serialize_tool_payload instead."""
         from backend.ai.tools import _cap_result
 
-        result = _cap_result({"ok": True, "_client_action": {"contact_email": "jane@example.ca"}})
-        assert result["_client_action"] == {"contact_email": "[EMAIL]"}
+        card = {
+            "type": "location_suggestions",
+            "candidates": [{"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7", "phone": "306-555-1234"}],
+        }
+        handler_result = {"ok": True, "_client_action": card}
+        result = _cap_result(handler_result)
+        assert result["_client_action"] == card
+        assert result["_client_action"] is card  # same object, never copied through the scrubber
+        # The handler's own dict is left alone (find_place aliases the same
+        # candidate dicts in its model-facing list; an in-place split would
+        # corrupt the card through that alias).
+        assert handler_result == {"ok": True, "_client_action": card}
+
+    def test_cap_result_strict_policy_for_the_web_audience(self):
+        """The anonymous web assistant has no booking flow and no
+        authenticated data subject, so its tool results stay STRICT like its
+        message text. The card exemption is unchanged (the web path strips
+        the card anyway)."""
+        from backend.ai.tools import _cap_result, _policy_for_audience
+
+        assert _policy_for_audience("web") is ScrubPolicy.STRICT
+        assert _policy_for_audience("rider") is ScrubPolicy.AI_CHAT
+        assert _policy_for_audience("driver") is ScrubPolicy.AI_CHAT
+        card = {"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7"}
+        result = _cap_result(
+            {"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7", "_client_action": card},
+            policy=ScrubPolicy.STRICT,
+        )
+        assert result["address"] == "2150 Prince of Wales Dr, Regina, SK [POSTAL]"
+        assert result["_client_action"] is card
+
+    def test_cap_result_model_portion_keeps_postal_codes(self):
+        """ScrubPolicy.AI_CHAT on the model-facing portion: identifiers go,
+        trip-location data (postal code beside a street address) stays --
+        otherwise the model echoes "[POSTAL]" in prose and passes it back
+        into get_fare_quote / propose_ride_booking as the address."""
+        from backend.ai.tools import _cap_result
+
+        result = _cap_result(
+            {"address": "1855 Victoria Ave #304, Regina, SK S4P 3T7, Canada", "driver_phone": "306-555-1234"}
+        )
+        assert result == {"address": "1855 Victoria Ave #304, Regina, SK S4P 3T7, Canada", "driver_phone": "[PHONE]"}
 
     def test_cap_result_scrub_survives_truncation(self):
         from backend.ai.tools import TOOL_RESULT_MAX_CHARS, _cap_result

@@ -135,6 +135,14 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 ## P0 — Launch gating (code)
 
 ### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline — CLOSED (2026-09-04 status correction), 2 named residual follow-ups remain
+> **Regression note (2026-09-04):** the fix for this audit's ranked blocker
+> #5/#6 (`scrub_pii_deep` wired into `tools.py::_cap_result`) also scrubbed
+> the rider-facing `_client_action` card, which put the literal `[POSTAL]`
+> into customer-facing addresses and, via the tapped-card message, into
+> `rides.pickup_address`. Its change-log's "no downstream code reads a tool
+> result after `_cap_result`" was wrong — the SSE `action` frame is that
+> code. Fixed under **AI16** / ADR-012.
+
 > Companion to A34 above — A34 tracks the Part B dual-run cutover seam audit;
 > this tracks Part A, the whole-app fleet audit (all 21 `spinr-*` reviewers,
 > not a diff). Full report: `docs/audit/2026-08-18-full-fleet-whole-app-audit.md`.
@@ -17155,6 +17163,82 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   path. Verified with a full `pytest` run post-merge (76/76 passing in
   `test_ai_pii.py` + `test_log_guard.py`, including 16 new tests). See
   `docs/change-log/2026-08-01-ai-pii-card-govid-coverage.md`.
+
+- [x] **AI16. AI chat showed `[POSTAL]` in customer-facing addresses; "Yes"
+  after a no-drivers result got "I don't have an active quote"** —
+  `tools.py::_cap_result` ran the STRICT PII scrub over the WHOLE tool
+  result, `_client_action` included, so every Canadian postal code in the
+  dropoff-choice / quote / booking cards reached the rider as the literal
+  token; the app built the tapped-card message from the scrubbed label, the
+  model echoed it in prose and passed it back into `get_fare_quote` /
+  `propose_ride_booking`, and on Confirm it landed in `rides.pickup_address`.
+  Regression introduced by A40's 2026-08-18 tool-result scrub, whose
+  change-log asserted "no downstream code reads a tool result after
+  `_cap_result`" — the SSE `action` card path was that downstream code, and
+  `test_cap_result_scrubs_client_action_too` pinned the bug as intended.
+  Root design flaw: one scrubber built for telemetry egress applied at a
+  choke point that also feeds the rider's own app. Done (2026-09-04, branch
+  `claude/ai-chat-postal-code-bug-nx9tun`): `ScrubPolicy` (STRICT default;
+  AI_CHAT for the authenticated chat path, keeping trip pins and postal
+  codes because the street address and coordinates already egress) replaces
+  `keep_trip_pins`; `_cap_result` never scrubs the card; `/mcp` re-scrubs
+  its whole response under STRICT in `_serialize_tool_payload`; end-to-end
+  regression tests through the real `execute_tool`; the no-drivers branch
+  now pins the endpoints and the orchestrator replays them as a
+  re-quote-only "LAST FARE CHECK" block so "yes" re-checks the fare. Stale
+  statements in `spinr-ai-guardrail-reviewer.md` (per-IP limiter, fail-open
+  cap, "no eval harness") and `spinr-ai-tool/SKILL.md` ("tool results are
+  not scrubbed") corrected in the same PR. See ADR-012 and
+  `docs/change-log/2026-09-04-ai-chat-postal-code-card-scrub.md`.
+  **Review round 1 (2026-09-04, same branch):** three read-only reviewers
+  found and the branch fixed — the Zoho escalation transcript copying
+  `AI_CHAT`-persisted rows verbatim (now STRICT-scrubbed per line at the
+  boundary), the anonymous web audience getting `AI_CHAT` on tool results
+  (now STRICT via `_policy_for_audience`), an unmapped `ScrubPolicy`
+  member escaping into the swallow-all guard, two new tests that would have
+  failed in CI (nearest-first candidate order; `quoted_total` present in the
+  core prompt), and a no-drivers pin overwriting a priced pin (kept
+  most-recent-wins deliberately, documented in ADR-012, transition test
+  added). One pre-existing finding was deferred to **AI18**.
+
+- [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
+  found while root-causing AI16, deliberately not shipped in that PR; each
+  is its own scoped change. (F1) `filter_tool_leakage` runs on the
+  *persisted* reply only (`orchestrator.py`) — a tool name or internal
+  identifier the model prints is seen live by the rider; needs a
+  word-boundary-buffered stream filter in `ai/pii.py` applied at the token
+  yield, behind a `settings` flag (migration + `schemas.py` +
+  `routes/admin/settings.py` + `test_admin_settings_write_allowlist_drift`),
+  default off. (F2) `shared/utils/aiLocationMessages.ts` embeds the raw
+  `vehicle_type_id` UUID in the rider-visible tapped-quote bubble — add a
+  `displayContent` on the local echo (store + screen + admin console
+  mirror) so the model still gets the id and the rider sees prose. (F3)
+  `rider-app/store/aiChatStore.ts` renders the raw server `message` for any
+  unmapped error code — map `conversation_busy`, `provider_error`,
+  `ai_misconfigured`, `not_found` and drop the passthrough. (F4) the
+  assistant hides the fare entirely when no drivers are online, while
+  `rider-app/app/ride-options.tsx` shows prices under a "No cars available"
+  banner — product decision on parity (backend `tools_booking.py` +
+  `FareQuoteCard.tsx` + shared types + prompt, flagged). (F5) nothing clears
+  `ai:quote:{conversation_id}` on "new conversation" or
+  `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
+
+- [ ] **AI18. Anonymous web assistant's tool path is dead in production** —
+  found during AI16's review round, pre-existing and unrelated to that fix.
+  `backend/ai/public_assistant.py` deliberately builds its synthetic
+  `tool_user` with NO `id` key ("so any handler that reached for one would
+  raise loudly"), but `backend/ai/tools.py::_execute_tool_inner` fails
+  closed on a missing `user["id"]` *before* any handler runs
+  (`logger.error("ai tool blocked: no authenticated user id")` →
+  `{"error": "not authorized"}`). Every anonymous `search_faqs` /
+  `get_company_info` call therefore returns "not authorized" and emits an
+  error log; the model answers from the prompt alone. Not caught by
+  `tests/test_ai_public_assistant.py`, which mocks `execute_tool`. Fix
+  needs its own design — an explicit anonymous-scope allow-list on the
+  `ToolSpec` (e.g. `allow_anonymous=True` for the two web tools, honoured
+  only for audience `web`), never a blanket relaxation of the fail-closed
+  identity check — plus an integration test through the real
+  `execute_tool`. Until then the public site's assistant is prompt-only.
 
 - [x] **D1. PostGIS surge query** — stale, already substantially done by
   another session before this pass. `utils/surge_engine.py` already: (1)

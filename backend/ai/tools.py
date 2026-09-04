@@ -26,10 +26,10 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 try:
     from .. import db_supabase
-    from .pii import scrub_pii_deep
+    from .pii import ScrubPolicy, scrub_pii_deep
 except ImportError:  # pragma: no cover — top-level run
     import db_supabase
-    from ai.pii import scrub_pii_deep  # type: ignore
+    from ai.pii import ScrubPolicy, scrub_pii_deep  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +225,19 @@ def validate_args(schema: Dict[str, Any], args: Dict[str, Any]) -> List[str]:
 _GUARDRAIL_KEYS = ("note", "needs_confirmation", "needs_correction", "imprecise_address", "error")
 
 
-def _cap_result(result: Dict[str, Any]) -> Dict[str, Any]:
+def _policy_for_audience(audience: str) -> ScrubPolicy:
+    """Which scrub policy the MODEL-facing portion of a tool result gets.
+
+    The authenticated in-app assistant (rider/driver) keeps trip-location
+    data because the street address and coordinates already egress on that
+    path. The anonymous web assistant (audience "web", public_assistant.py)
+    has no booking flow and no authenticated data subject, so it stays on
+    the default STRICT policy for tool results exactly as it does for the
+    visitor's message text (ADR-012)."""
+    return ScrubPolicy.STRICT if audience == "web" else ScrubPolicy.AI_CHAT
+
+
+def _cap_result(result: Dict[str, Any], *, policy: ScrubPolicy = ScrubPolicy.AI_CHAT) -> Dict[str, Any]:
     """Cap the MODEL-facing portion of a result. ``_client_action`` is popped
     by the orchestrator before the result enters the model context, so it
     neither counts against the budget nor gets destroyed by truncation —
@@ -235,15 +247,29 @@ def _cap_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
     2026-08-18 fleet audit: this is the single choke point both consumers
     (execute_tool -> orchestrator's tool loop, and /mcp's _call_tool) funnel
-    through, so scrub_pii_deep runs here on the WHOLE result (including
-    _client_action, which /mcp serializes verbatim with no further
-    processing) before anything else happens to it. Regex-detectable PII
-    only (phone/email/GPS/card/SIN/postal) -- a plain name is NOT caught,
-    see scrub_pii_deep's own docstring; tools returning a person's name must
-    data-minimize at the source instead (tools_rides.py::_driver_public)."""
+    through, so scrub_pii_deep runs here on the MODEL-facing portion under
+    ``policy`` (ScrubPolicy.AI_CHAT for the in-app assistant, STRICT for the
+    anonymous web audience — see _policy_for_audience). Regex-detectable PII
+    only (phone/email/GPS/card/
+    SIN) -- a plain name is NOT caught, see scrub_pii_deep's own docstring;
+    tools returning a person's name must data-minimize at the source instead
+    (tools_rides.py::_driver_public).
+
+    2026-09-04 (ADR 012): ``_client_action`` is deliberately NOT scrubbed.
+    It is the rider's own data going back to the rider's own app -- not an
+    egress to a third party -- and scrubbing it here rewrote every Canadian
+    postal code in the dropoff-choice cards, the tapped-card message, the
+    model's prose and ultimately rides.pickup_address to the literal
+    "[POSTAL]". The /mcp surface, whose client IS a third party, re-scrubs
+    its whole response under STRICT in mcp_server._serialize_tool_payload.
+    The split below must stay non-mutating: find_place's card aliases the
+    same candidate dicts as its model-facing "candidates" list, so an in-
+    place scrub of one would corrupt the other."""
     if isinstance(result, dict):
-        result = scrub_pii_deep(result)
-    client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
+        client_action = result.get("_client_action")
+        result = scrub_pii_deep({k: v for k, v in result.items() if k != "_client_action"}, policy=policy)
+    else:
+        client_action = None
     serialized = json.dumps(result, default=str)
     if len(serialized) > TOOL_RESULT_MAX_CHARS:
         preserved = {k: result[k] for k in _GUARDRAIL_KEYS if isinstance(result, dict) and k in result}
@@ -409,4 +435,4 @@ async def _execute_tool_inner(
         logger.error("ai tool failed", exc_info=True, extra={"tool": name, "user_id": user.get("id")})
         return {"error": "the lookup failed — try again or contact support"}, False
 
-    return _cap_result(result), True
+    return _cap_result(result, policy=_policy_for_audience(audience)), True

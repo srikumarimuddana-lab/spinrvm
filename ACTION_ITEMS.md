@@ -20606,11 +20606,17 @@ how much they de-risk a public launch._
   file *in a comment* is enough to pull it into the scan and turn the gate
   red (this happened once during that PR and was caught before push).
 
-### C66. Admin ride-mutation endpoints: `admin_complete_ride` has no optimistic lock and both admin endpoints can open Period 1 for an offline driver
+### C66. Admin ride-mutation endpoints: `admin_complete_ride` has no optimistic lock and both admin endpoints can open Period 1 for an offline driver — CLOSED (2026-09-04)
 
-- [ ] **Status:** open — found 2026-09-03 by `spinr-insurance-period-auditor`
-  reviewing PR #4909, which fixed the equivalent gaps in `admin_cancel_ride`
-  only.
+- [x] **Status:** closed (2026-09-04) — both gaps ported from
+  `admin_cancel_ride` to `admin_complete_ride` in PR #4909: the write is now a
+  conditional `update_one` scoped to the status just read, with the same
+  three-way 0-rows split (already-`completed` = idempotent success that falls
+  through to the side effects, unchanged status = loud 500 silent-no-op,
+  anything else = 409); `driver_id` comes from the post-write row; and the
+  Period-1 transition is guarded on the release actually making the driver
+  available. Tests: `TestAdminCompleteRideGuards` in
+  `backend/tests/test_admin_rides_cancel_state.py`.
 - **Issue/gap:** two residual gaps in `backend/routes/admin/rides.py`:
   1. `admin_complete_ride` still writes via `update_ride(ride_id, payload)` —
      filtered on `id` alone, with no conditional/optimistic guard. It is the
@@ -20666,10 +20672,17 @@ how much they de-risk a public launch._
 - **Files:** `backend/services/payment_service.py`,
   `backend/tests/test_guest_auto_settle.py`.
 
-### C68. admin-dashboard cancel buttons don't gate on the backend's pre-trip-only cancel rule
+### C68. admin-dashboard cancel buttons don't gate on the backend's pre-trip-only cancel rule — CLOSED (2026-09-04)
 
-- [ ] **Status:** open — found 2026-09-04 by a review pass over PR #4909, the
-  PR that added the backend guard.
+- [x] **Status:** closed (2026-09-04) — both call sites gated in PR #4909.
+  `ride-panel.tsx` hides Cancel when `status === "in_progress"`; its
+  `MonitoringRide.status` union has only 4 members and excludes the terminal
+  states, so comparing against "completed"/"cancelled" there would be a TS2367
+  no-overlap error — the `.includes()` form was kept in the modal instead,
+  where the type is looser. **Caveat: `npm run build` could NOT be run** — the
+  authoring environment has no npm registry access and no `node_modules`, so
+  per CLAUDE.md's admin-dashboard gate this is verified by type reading and
+  brace-balance checks only, not by a real build. Re-verify before merge.
 - **Issue/gap:** `admin_cancel_ride` now rejects any non-pre-trip status with
   400 (`_ADMIN_CANCELLABLE_STATUSES`), but neither admin-dashboard call site
   reflects that. `admin-dashboard/src/app/dashboard/monitoring/ride-panel.tsx`

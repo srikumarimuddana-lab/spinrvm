@@ -7,9 +7,31 @@ on:
     paths:
       - 'backend/**'
       - 'railway.json'
+      - 'deploy/backend-required-env.txt'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
+# Serialize deploys, mirroring deploy-fly.yml: queue, never cancel an in-flight
+# rollout, never skip a commit's deploy.
+concurrency:
+  group: deploy-railway-${{ github.ref }}
+  cancel-in-progress: false
+
+# Railway is the WARM STANDBY for the Fly.io primary (ADR-007). This workflow
+# is the only thing that keeps it in sync with main — when it fails, Railway
+# silently drifts and a fail-over lands on a stale build (ACTION_ITEMS.md C5).
+# It therefore fails LOUDLY and EARLY on the three things that actually broke
+# it historically, before spending a build:
+#   1. RAILWAY_TOKEN missing or INVALID (revoked/expired/wrong scope) — every
+#      run from at least 2026-09-04 back failed at `railway up` with
+#      "Invalid RAILWAY_TOKEN", ~30 s per push, unnoticed for weeks because
+#      the diagnostic step swallowed the error with `|| true`.
+#   2. A required variable missing on the Railway service — Fly gets
+#      ENV/SUPABASE_REGION from fly.toml [env]; Railway has to have them set by
+#      hand, and a Railway service without ENV=production boots in DEV mode.
+#   3. The deploy "succeeding" without the new commit actually serving — the
+#      post-deploy step now compares the running build SHA to github.sha.
+#
 # Authentication setup (one-time):
 #   Railway v4 requires a project-scoped token (NOT an account/personal token).
 #   Steps:
@@ -20,16 +42,30 @@ on:
 # The --ci flag was removed in Railway CLI v4. Non-interactive mode is
 # automatic when RAILWAY_TOKEN is set in the environment.
 #
+# Optional GitHub secrets:
+#   BACKEND_HEALTH_URL  — https://<service>.up.railway.app; enables the
+#                         post-deploy /health probe + rollback.
+#   METRICS_AUTH_TOKEN  — the backend's own METRICS_AUTH_TOKEN value; with
+#                         BACKEND_HEALTH_URL, also enables the "is the new SHA
+#                         actually serving" check via /deploy-info.
+#
 # Alternative (no tokens needed at all):
 #   Connect Railway directly to this repo via:
 #   Railway Dashboard → Service → Settings → Source → Connect Repo → main
 #   Railway will auto-deploy on every push to main, making this workflow
-#   file unnecessary for deployments.
+#   file unnecessary for deployments. (You would lose checks 2 and 3 above —
+#   the standby-parity-monitor workflow still runs them daily.)
 
 jobs:
   deploy:
     name: Deploy to Railway
     runs-on: ubuntu-latest
+    env:
+      RAILWAY_SERVICE: spinr-backend
+      # Hoisted to job env because the `secrets` context is not available in a
+      # step `if:` conditional.
+      HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+      METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -53,25 +89,69 @@ jobs:
       - name: Show Railway CLI version
         run: railway --version
 
-      # Diagnostic: print the list of services in this project.
-      # Service name is assumed to be "spinr-backend" based on the test-env
-      # URL (spinr-backend-test.up.railway.app). If deploy fails with
-      # "Service not found", check this output for the exact name.
-      - name: List Railway services (diagnostic)
+      # A set-but-invalid token is the failure mode that actually happened
+      # (see header). `railway status` is the cheapest authenticated call;
+      # fail the job HERE with an actionable message instead of at `railway up`.
+      - name: Verify RAILWAY_TOKEN is valid (railway status)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          echo "===== railway status ====="
-          railway status || true
-          echo ""
-          echo "===== railway status --json ====="
-          railway status --json || true
-          echo ""
+          set -euo pipefail
+          if ! out=$(railway status --json 2>&1); then
+            echo "::error title=Invalid RAILWAY_TOKEN::railway status failed: ${out}"
+            echo ""
+            echo "The token is set but Railway rejects it — it was revoked, expired,"
+            echo "or is the wrong type (must be a PROJECT token for this project)."
+            echo "Fix: Railway Dashboard → project → Settings → Tokens → New Token"
+            echo "     (type: Project Token), then update the RAILWAY_TOKEN GitHub secret."
+            echo "Until then the Railway standby is NOT being deployed and is drifting"
+            echo "from main — see ACTION_ITEMS.md C5 / docs/runbooks/railway-fly-failover.md."
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN is valid. Project:"
+          echo "${out}" | jq -r '"  name=\(.name // "?")  environment=\(.environments.edges[0].node.name // "?")"' 2>/dev/null || true
           echo "===== railway service list ====="
           railway service list || true
 
+      # Presence check only — names, never values. Fly's bootstrap-fly.yml does
+      # the same for Fly secrets; Railway never had one, which is how ENV and
+      # SUPABASE_REGION (fly.toml [env] on Fly, dashboard variables on Railway)
+      # can be silently absent here. `railway variables --json` returns
+      # {"NAME":"value",...}; it is piped straight into `jq 'keys'` and never
+      # printed, so a value cannot reach the job log.
+      - name: Verify required Railway variables are set (names only)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          present="$(railway variables --service "${RAILWAY_SERVICE}" --json | jq -r 'keys[]')"
+          required="$(grep -vE '^\s*(#|$)' deploy/backend-required-env.txt | awk '$2=="both" || $2=="railway" {print $1}')"
+          missing=0
+          for k in ${required}; do
+            if ! printf '%s\n' "${present}" | grep -qx "${k}"; then
+              echo "::error title=Missing Railway variable::${k} is not set on service ${RAILWAY_SERVICE}. Set it in Railway → service → Variables (scope + reason: deploy/backend-required-env.txt)."
+              missing=1
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            echo "Refusing to deploy a standby that cannot boot in production mode."
+            exit 1
+          fi
+          echo "All required variables present on ${RAILWAY_SERVICE} ($(printf '%s\n' "${required}" | wc -l) checked)."
+
+      # Stamp the commit into the image so the running replica can report it
+      # (backend/utils/build_info.py → GET /deploy-info). This is what lets the
+      # standby-parity monitor tell that Railway is behind Fly. Written into
+      # backend/ because that directory is the Docker build context.
+      - name: Stamp build info
+        run: |
+          printf '{"sha":"%s","ref":"%s","built_at":"%s","provider":"railway"}\n' \
+            "${GITHUB_SHA}" "${GITHUB_REF}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > backend/build_info.json
+          cat backend/build_info.json
+
       - name: Deploy to Railway
-        run: railway up --service spinr-backend
+        run: railway up --service "${RAILWAY_SERVICE}"
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
@@ -81,8 +161,6 @@ jobs:
       # repo secrets (or leave unset to skip the probe in forks/staging).
       - name: Health check
         id: health
-        env:
-          HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
         run: |
           if [ -z "$HEALTH_URL" ]; then
             echo "BACKEND_HEALTH_URL not set — skipping health check probe."
@@ -102,10 +180,30 @@ jobs:
           echo "::error::Health check timed out after 3 minutes."
           exit 1
 
+      # A green /health only proves *something* is serving. This proves it is
+      # THIS commit: /deploy-info returns the build stamp written above. Skipped
+      # (not failed) when either optional secret is absent, and reported as such.
+      - name: Verify the deployed build SHA is serving
+        if: ${{ env.HEALTH_URL != '' && env.METRICS_AUTH_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do
+            running=$(curl -sf --max-time 5 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN}" \
+              "${HEALTH_URL}/deploy-info" | jq -r '.build.sha // empty' 2>/dev/null || true)
+            echo "  attempt ${i}/12 → running sha: ${running:-<none>}"
+            if [ "${running}" = "${GITHUB_SHA}" ]; then
+              echo "Railway is serving ${GITHUB_SHA}."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Stale build serving::Railway /deploy-info reports sha '${running:-<none>}', expected ${GITHUB_SHA}. The deploy did not take, or an older deployment is still active — check the Railway dashboard deployments list."
+          exit 1
+
       - name: Rollback on health check failure
         if: failure() && steps.health.outcome == 'failure'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           echo "::warning::Health check failed — rolling back to previous deployment."
-          railway rollback --service spinr-backend || true
+          railway rollback --service "${RAILWAY_SERVICE}" || true

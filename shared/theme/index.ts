@@ -1,13 +1,13 @@
 /**
  * Spinr Design System — Color Palettes
  *
- * Two palettes derived from the canonical SpinrConfig.theme.colors keys.
- * All consumers call useTheme() to get the active palette — never import
- * SpinrConfig.theme.colors directly in UI components.
+ * The single source of truth for color tokens. All consumers call
+ * useTheme() to get the active palette.
  *
- * Structure mirrors SpinrConfig.theme.colors exactly so existing consumers
- * can swap `SpinrConfig.theme.colors` for `colors` from useTheme() with a
- * one-line import change.
+ * (Until 2026-09-04, `shared/config/spinr.config.ts` also carried a
+ * `theme.colors` block this file's structure mirrored — it had drifted
+ * out of sync with the values here and was removed once confirmed unused
+ * by any live UI. This is now the only palette definition.)
  */
 
 export type ThemeColors = {

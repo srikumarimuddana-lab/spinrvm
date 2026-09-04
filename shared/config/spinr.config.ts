@@ -95,15 +95,6 @@ const enforceHttps = (url: string): string => {
   return PRODUCTION_BACKEND_URL;
 };
 
-// Base color tokens. Aliases below reference these instead of re-typing the
-// hex literal, so each color has exactly one source of truth — previously
-// `accent`/`accentDim`/`danger` duplicated `primary`/`primaryDark`/`error`'s
-// hex strings verbatim, which meant a rebrand had to update the same color
-// in two places (and silently wouldn't, if only one was caught).
-const PRIMARY = '#FF3B30'; // Vibrant Red
-const PRIMARY_DARK = '#D32F2F';
-const ERROR = '#DC2626';
-
 export const SpinrConfig = {
   backendUrl: enforceHttps(getBackendUrl()),
   // App Info
@@ -114,29 +105,16 @@ export const SpinrConfig = {
   },
 
   // Design System
+  // `colors` used to live here and was removed 2026-09-04: it had drifted
+  // from shared/theme/index.ts (the real, canonical, useTheme()-served
+  // palette — e.g. this block's `warning: '#FFCC00'` vs. theme/index.ts's
+  // `warning: '#d97706'`/`'#F59E0B'`, same token holding two different
+  // values). Traced every consumer first: nothing in either app's live,
+  // rendered UI read colors from here — the only reader was
+  // driver-app/components/DriverTopBar.tsx, a dead file never imported
+  // anywhere (removed in the same change). Colors now have exactly one
+  // source of truth: shared/theme/index.ts via useTheme().
   theme: {
-    colors: {
-      primary: PRIMARY,
-      primaryDark: PRIMARY_DARK,
-      background: '#FFFFFF',
-      surface: '#FFFFFF',
-      surfaceLight: '#F5F5F5',
-      text: '#1A1A1A',
-      textDim: '#666666',
-      textSecondary: '#6B7280',
-      border: '#E5E7EB',
-      error: ERROR,
-      success: '#34C759', // Green for success
-      warning: '#FFCC00',
-
-      // Aliases & Legacy Support
-      accent: PRIMARY,
-      accentDim: PRIMARY_DARK,
-      danger: ERROR,
-      orange: '#FF9500',
-      gold: '#FFD700',
-      overlay: 'rgba(255, 255, 255, 0.95)',
-    },
     borderRadius: 16,
     fontFamily: 'PlusJakartaSans',
   },

@@ -19,3 +19,4 @@ ADRs capture the context, decision, and consequences of significant technical ch
 | [ADR-011](011-flag-read-failure-semantics.md) | Flag read failure semantics on money paths (per-flag fail-open vs. fail-closed) | Accepted |
 | [ADR-012](012-ai-egress-trust-boundaries.md) | AI assistant egress trust boundaries — scrub at the boundary, never at the source | Accepted |
 | [ADR-013](013-zod-incremental-risk-first-form-validation.md) | Zod, adopted incrementally and risk-ordered, for frontend form validation | Accepted |
+| [ADR-014](014-distributed-tracing-deferred.md) | Full distributed tracing (OpenTelemetry) deferred until multi-replica latency debugging is actually painful | Accepted |

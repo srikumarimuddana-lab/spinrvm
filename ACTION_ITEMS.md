@@ -134,7 +134,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ## P0 — Launch gating (code)
 
-### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline
+### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline — CLOSED (2026-09-04 status correction), 2 named residual follow-ups remain
 > Companion to A34 above — A34 tracks the Part B dual-run cutover seam audit;
 > this tracks Part A, the whole-app fleet audit (all 21 `spinr-*` reviewers,
 > not a diff). Full report: `docs/audit/2026-08-18-full-fleet-whole-app-audit.md`.
@@ -163,17 +163,50 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   does not use the cascade phrasing (its "Payment source selection ...
   happens at fare settlement" line lists the four sources without implying
   a fallback order) so was left unchanged.
-- [ ] **Status:** open, 2 of 17 baseline blockers fixed 2026-08-18 (same day,
-  later sessions), plus the finding #11 unpinned-actions regression fixed
-  2026-08-19 — see below. Of the baseline's 17 ranked blockers as
-  originally reported: 13 STILL-OPEN unchanged (no commits touching them
-  since 08-15), 2 now FIXED 2026-08-18 (below), 1 REGRESSED-then-FIXED
-  2026-08-19 (finding #11, below),
-  both remaining "partially mitigated" items now RESOLVED as of this
-  correction (2026-08-22): the corporate PDF tax-line fallback (below) is
-  confirmed a non-issue, and emergency-contacts (below) was already fixed
-  2026-08-21. Of the original 17, everything is now either FIXED,
-  RESOLVED, or explicitly STILL-OPEN with no ambiguous middle state left.
+- [x] **Status:** CLOSED 2026-09-04 (status correction) — this entry's own
+  summary line had gone stale: it still read "13 STILL-OPEN" from the
+  08-18/08-19 point-in-time snapshot, but every one of the entry's own
+  appended `FIXED`/`RESOLVED`/`APPLIED` sub-updates below (dated
+  2026-08-18 through 2026-08-22) had already closed out the full 30-item
+  ranked-blocker register from the underlying audit doc — the "13
+  STILL-OPEN" count was simply never revised down as those fixes landed.
+  Re-read the entire entry end-to-end (all appended sub-updates, not just
+  the header) and cross-checked the two residual items it names against
+  current `main` before closing:
+  - **#10's 3rd sub-check (3-year minimum driving experience) — confirmed
+    still not implemented.** No `license_issue_date`/`licensed_since`-style
+    field exists anywhere in `backend/migrations/` or the `drivers`
+    routes (grepped). This was flagged as a required follow-up when #10
+    was fixed 2026-08-19 (license-class + vehicle-age recheck shipped;
+    the experience sub-check was explicitly out of scope pending a schema
+    field), not silently dropped — remains open, tracked below as its own
+    named residual item rather than reopening the whole entry.
+  - **WS `location_batch` handler still checks only the last point of a
+    batch — confirmed still true.** `backend/routes/websocket.py`'s
+    `location_batch`/`driver_location_batch` handler calls
+    `check_location_integrity()` only on `last_pt` (line ~1005); earlier
+    points in the same WS batch still bypass the plausibility check the
+    2026-08-19 fix added to the REST v2 batch path's breadcrumb persist.
+    This was explicitly named as a related, out-of-scope gap when the
+    REST-path fix shipped (the audit only named the REST v2 path) — not
+    silently missed, remains open as its own named residual item.
+  - **#24/N9's fare-estimate 3.5s Directions-wait decision** — no longer
+    open. Recorded elsewhere in this file's history as **Decided
+    2026-08-21: accepted as a permanent SLA exception**, and reflected in
+    root `CLAUDE.md`'s Performance SLAs section today ("This is no longer
+    an open decision"). The 2026-08-19 sub-update below still says "the
+    underlying accept-vs-ceiling decision remains explicitly open" —
+    that phrasing is itself now stale; the decision was made 2 days later.
+  - Every other numbered finding (#1–#30, N2/N5/N6/N7/N9/N11/N13/N14/N15/N16)
+    in the appended sub-updates below is `FIXED`/`RESOLVED`/`APPLIED` with
+    its own change-log link — not re-verified line-by-line against current
+    `main` in this pass (that would be re-running the whole audit, out of
+    scope for a status-doc correction), but no contradicting evidence
+    found while reading the entry end-to-end.
+  - **Not fixed by this correction** — this pass is documentation-only,
+    reconciling the doc with work already done by other sessions. The two
+    residual items above are real, current gaps; picking them up is
+    separate follow-up work, not closed by this entry.
   **RESOLVED 2026-08-22** (was: "corporate PDF tax-line fallback now
   logged/Sentry-alerted but still ships — the underlying data gap, rides
   missing `tax_breakdown`, is still unaddressed and needs a backfill-vs-
@@ -20445,6 +20478,72 @@ how much they de-risk a public launch._
   sweep script (see this session's transcript for the exact `git fetch` /
   `git patch-id` commands) against a wider commit window is the way to
   extend coverage.
+
+### C63. `go_online` eligibility recheck never validates 3-year minimum driving experience
+- [ ] **Status:** open — split out 2026-09-04 from A40's ranked blocker #10
+  while correcting that entry's stale status. #10 shipped a license-class
+  (Class 5, or Class 1-4 with `drivers.sgi_approved`) and vehicle-age
+  (<10yr) recheck on `go_online` (2026-08-19, gated dark behind
+  `app_settings.enforce_driver_eligibility_recheck`, default `false`); the
+  3rd Saskatchewan eligibility sub-check (CLAUDE.md's Saskatchewan
+  Regulatory section: "Minimum 3 years licensed driving experience") was
+  explicitly flagged as not implemented at the time, not silently
+  skipped — this item tracks that follow-up separately so it isn't lost
+  inside a now-closed parent entry.
+- **Issue/gap:** no schema field anywhere in `backend/migrations/` or the
+  `drivers` table records a license-issue date or "licensed since" date
+  (confirmed via grep — no `license_issue_date`/`licensed_since`-style
+  column exists). Without that field, `go_online`'s eligibility recheck
+  cannot verify the 3-year minimum at all, onboarding or recheck time.
+- **Action:** add a nullable `drivers.license_issue_date` (or equivalent)
+  column via a new migration; backfill it for existing drivers where
+  derivable (onboarding document metadata, if captured) or leave `NULL`
+  for pre-existing drivers who onboarded before this field existed (a
+  `NULL` should not retroactively lock out an already-active driver —
+  gate the new sub-check to skip the check when the field is `NULL`,
+  same fail-safe direction #10's other two sub-checks already use); wire
+  the check into the same `go_online` eligibility-recheck path #10 added,
+  behind the same `enforce_driver_eligibility_recheck` flag.
+- **Files:** new migration under `backend/migrations/`; the `go_online`
+  eligibility-recheck code path (see #10's fix,
+  `docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md`,
+  for the exact call site).
+- **Acceptance:** a driver whose `license_issue_date` implies <3 years
+  licensed experience fails the recheck (flag on) the same way the
+  license-class/vehicle-age sub-checks already fail it; a driver with
+  `NULL` `license_issue_date` is not rejected; new regression tests
+  mirroring #10's existing eligibility-recheck test coverage.
+
+### C64. WebSocket `location_batch` handler only integrity-checks the last point in a batch, not every point
+- [ ] **Status:** open — split out 2026-09-04 from A40's finding #7 while
+  correcting that entry's stale status. #7's 2026-08-19 fix added
+  `check_location_integrity()`/`evaluate_gps_plausibility()` coverage to
+  the REST v2 location-batch path (both the live-marker write and the
+  breadcrumb persist); the WS `location_batch`/`driver_location_batch`
+  handler was explicitly named as a related, out-of-scope gap at the
+  time (the audit only named the REST v2 path) — not silently missed,
+  this item tracks it separately.
+- **Issue/gap:** `backend/routes/websocket.py`'s `location_batch`/
+  `driver_location_batch` handler calls `check_location_integrity()` only
+  on `last_pt` (the most recent point in the batch, used for the live
+  marker) — confirmed still true as of 2026-09-04. Every earlier point in
+  the same WS batch is persisted via `persist_ride_breadcrumbs` with no
+  spoofing/plausibility check at all, unlike the REST v2 path's
+  breadcrumb persist, which now runs `evaluate_gps_plausibility()` across
+  every consecutive point pair in the batch.
+- **Action:** apply the same `evaluate_gps_plausibility()` sweep the REST
+  v2 path's breadcrumb persist uses (see
+  `docs/change-log/2026-08-19-v2-location-batch-spoofing-fix.md` for the
+  exact pattern) to the WS handler's batch before
+  `persist_ride_breadcrumbs`, so a spoofed/implausible point earlier in a
+  WS batch can't slip into the regulatory GPS-trace record unchecked.
+- **Files:** `backend/routes/websocket.py` (`location_batch`/
+  `driver_location_batch` handler).
+- **Acceptance:** a WS batch with an implausible non-last point is
+  rejected (or that point excluded) the same way the REST v2 path already
+  handles it; new regression test mirroring the REST v2 path's existing
+  plausibility-check test coverage; no behavior change to the live-marker
+  write (already covered by `check_location_integrity()` on `last_pt`).
 
 ## Recently completed (do not redo)
 

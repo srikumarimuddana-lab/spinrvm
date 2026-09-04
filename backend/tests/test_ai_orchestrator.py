@@ -151,6 +151,33 @@ class TestHappyPaths:
         assert "_client_action" not in adapter.seen_messages[1][-1]["content"]
 
     @pytest.mark.anyio
+    async def test_action_frame_is_the_tools_own_card_and_model_copy_keeps_postal_codes(self):
+        """This suite mocks execute_tool, so the real tools.py::_cap_result
+        never runs here -- this one test routes the handler result through
+        it to prove the SSE `action` frame the rider's app receives is the
+        tool's own card (postal code intact, nothing redacted) while the
+        model-visible tool_result is scrubbed under the chat policy: postal
+        code kept, phone number redacted. 2026-09-04 regression, ADR 012."""
+        from backend.ai.tools import _cap_result
+
+        call = ToolCall(id="t1", name="find_place", arguments={})
+        card = {
+            "type": "location_suggestions",
+            "candidates": [
+                {"address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7", "lat": 50.4497, "lng": -104.5345}
+            ],
+        }
+        handler_result = {"candidates": card["candidates"], "support_phone": "306-555-1234", "_client_action": card}
+        adapter = FakeAdapter([[_end(stop="tool_use", tool_calls=[call])], [_text("Pick one."), _end()]])
+        frames, _ = await _run(adapter, tool_result=(_cap_result(handler_result), True))
+        actions = [p for n, p in frames if n == "action"]
+        assert actions == [card]
+        model_visible = adapter.seen_messages[1][-1]["content"]
+        assert "S4V 2Z7" in model_visible and "[POSTAL]" not in model_visible
+        assert "[PHONE]" in model_visible and "306-555-1234" not in model_visible
+        assert "_client_action" not in model_visible
+
+    @pytest.mark.anyio
     async def test_persistence_user_scrubbed_assistant_with_tool_names(self):
         call = ToolCall(id="t1", name="get_wallet_balance", arguments={})
         adapter = FakeAdapter(

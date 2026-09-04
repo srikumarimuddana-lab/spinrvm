@@ -641,6 +641,9 @@ class TestFindPlace:
         assert len(addresses) == 10
         assert len(set(addresses)) == len(addresses)
         assert "100 Test Rd, Regina, SK" in addresses
+        # Card and model-facing list stay identical: the card is never
+        # scrubbed, and the model-facing copy keeps postal codes under the
+        # chat scrub policy (see TestCardsKeepPostalCodes).
         assert result["_client_action"]["candidates"] == result["candidates"]
 
     @pytest.mark.anyio
@@ -2219,3 +2222,96 @@ class TestDropoffLabelGuard:
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
         assert result["_client_action"]["type"] == "booking_proposal"
+
+
+class TestCardsKeepPostalCodes:
+    """2026-09-04 regression (ADR 012): tools.py::_cap_result used to run the
+    STRICT PII scrub over the whole tool result, card included, so every
+    Canadian postal code in a dropoff-choice / quote / booking card reached
+    the rider as the literal "[POSTAL]" -- and, via the tapped-card message
+    and the booking proposal, ended up in rides.pickup_address. The
+    orchestrator suite mocks execute_tool and so never sees _cap_result;
+    these run the real tools through execute_tool and pin that the card AND
+    the model-facing copy both carry the postal code verbatim."""
+
+    PICKUP = "1855 Victoria Ave #304, Regina, SK S4P 3T7, Canada"
+    DROPOFF = "2150 Prince of Wales Dr, Regina, SK S4V 2Z7, Canada"
+    PLACES_WITH_POSTAL = {
+        "places": [
+            {
+                "displayName": {"text": "Walmart Garden Centre"},
+                "formattedAddress": DROPOFF,
+                "location": {"latitude": 50.4497, "longitude": -104.5345},
+            },
+            {
+                "displayName": {"text": "Walmart Wireless"},
+                "formattedAddress": "4500 Gordon Rd, Regina, SK S4W 0B7, Canada",
+                "location": {"latitude": 50.4079, "longitude": -104.6501},
+            },
+        ]
+    }
+
+    @pytest.mark.anyio
+    async def test_find_place_suggestion_card_keeps_postal_codes(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(self.PLACES_WITH_POSTAL),
+            _patch_area(),
+            patch.object(
+                tools_booking,
+                "_rank_named_place_candidates_by_route",
+                AsyncMock(side_effect=lambda candidates, *_args: (candidates, False)),
+            ),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place",
+                {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65, "location_role": "dropoff"},
+                user=RIDER,
+            )
+        assert ok
+        assert result["_client_action"]["type"] == "location_suggestions"
+        card_addresses = [c["address"] for c in result["_client_action"]["candidates"]]
+        assert card_addresses == [self.DROPOFF, "4500 Gordon Rd, Regina, SK S4W 0B7, Canada"]
+        # The model-facing list (what the model echoes in prose and passes
+        # back as dropoff_address) keeps the postal code too.
+        assert [c["address"] for c in result["candidates"]] == card_addresses
+        assert "[POSTAL]" not in str(result)
+
+    @pytest.mark.anyio
+    async def test_fare_quote_card_keeps_postal_codes(self):
+        args = dict(TestFareQuote.ARGS, pickup_address=self.PICKUP, dropoff_address=self.DROPOFF)
+        with (
+            _patch_estimates(ESTIMATES),
+            _patch_promos([]),
+            _patch_settings(key=""),
+            _patch_area(),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+        ):
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
+        assert ok
+        card = result["_client_action"]
+        assert card["type"] == "fare_quote"
+        assert card["pickup_address"] == self.PICKUP
+        assert card["dropoff_address"] == self.DROPOFF
+        assert result["pickup_address"] == self.PICKUP
+        assert result["dropoff_address"] == self.DROPOFF
+        assert "[POSTAL]" not in str(result)
+
+    @pytest.mark.anyio
+    async def test_booking_proposal_card_keeps_postal_codes(self):
+        args = dict(TestProposal.ARGS, pickup_address=self.PICKUP, dropoff_address=self.DROPOFF)
+        with (
+            _patch_area(),
+            patch("backend.db_supabase.insert_one", AsyncMock(), create=True),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        # This is the exact string BookingProposalCard hands to createRide()
+        # and therefore what lands in rides.pickup_address / dropoff_address.
+        assert proposal["pickup_address"] == self.PICKUP
+        assert proposal["dropoff_address"] == self.DROPOFF
+        assert "[POSTAL]" not in str(result)

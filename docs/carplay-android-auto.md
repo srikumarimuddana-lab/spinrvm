@@ -344,10 +344,10 @@ as the policy being silently ignored:
   applied on the *next* relaunch, not to an already-running session. No staged-rollout percentage
   is configured in this repo, so (unless `eas update` was invoked with an explicit rollout flag
   outside this repo's tracked config) it shipped to the full channel at once, not a canary slice.
-- **Hardware re-check status: ⏳ PENDING.** Per the "always validate before treating a fix as
-  closed" rule, this OTA doesn't count as confirmed until it's re-checked on a real head unit
-  (Grand Highlander or DHU) — the exact gap C70 exists to close. Update this line with the result
-  once available; don't let this become a fourth unrecorded hardware fix.
+- **Hardware re-check status: ✅ CONFIRMED (2026-09-04).** Re-tested on the same Toyota Grand
+  Highlander MMIC — the marker tracked correctly along the route in both directions of travel,
+  clean pass, no other issues found. This closes the loop this OTA left open: the fix is now
+  hardware-validated, not just JS-level-tested.
 
 ---
 

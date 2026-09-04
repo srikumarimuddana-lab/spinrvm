@@ -330,7 +330,9 @@
   "heatmap": {
     "legend": {
       "quiet": "Tranquilo",
-      "busy": "Concurrido"
+      "busy": "Concurrido",
+      "expand": "Mostrar información de demanda",
+      "collapse": "Ocultar información de demanda"
     },
     "layer": {
       "all": "Todo",

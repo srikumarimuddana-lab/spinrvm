@@ -488,7 +488,9 @@
   "heatmap": {
     "legend": {
       "quiet": "Calme",
-      "busy": "Achalandé"
+      "busy": "Achalandé",
+      "expand": "Afficher les infos de demande",
+      "collapse": "Masquer les infos de demande"
     },
     "layer": {
       "all": "Tout",

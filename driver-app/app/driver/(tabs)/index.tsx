@@ -1182,9 +1182,15 @@ function DriverDashboard() {
         </View>
       )}
 
-      {/* Demand legend pill — above the top bar (HM-04 + HM-12 layer selector) */}
+      {/* Demand legend toggle (HM-04 + HM-12 layer selector) — a small
+          top-right icon the driver taps to reveal the legend/layer picker,
+          not a pill sitting open over the map. Top-right is free during
+          `idle` (the only state this renders in): the SOS shield/button use
+          the same corner but only during navigating_to_pickup /
+          arrived_at_pickup / trip_in_progress, which are mutually exclusive
+          with idle. */}
       {rideState === 'idle' && heatmapVisible && (
-        <View style={{ position: 'absolute', top: insets.top + 4, alignSelf: 'center', zIndex: 60 }}>
+        <View style={{ position: 'absolute', top: insets.top + 4, right: 16, zIndex: 60 }}>
           <DemandLegend
             status={heatmapStatus}
             visible={heatmapVisible}

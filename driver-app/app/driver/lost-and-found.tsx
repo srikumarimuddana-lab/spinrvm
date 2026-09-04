@@ -71,13 +71,22 @@ export default function DriverLostAndFoundScreen() {
   const [cases, setCases] = useState<LostFoundCase[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Distinct fetch-failed state, same shape as ActivityView.tsx's earnings
+  // error/retry pattern. Only surfaced when there's nothing already on
+  // screen (cases.length === 0 at render time) — a background refresh
+  // failure with existing cases still keeps the stale list, matching the
+  // prior "keep stale data" behavior; it just no longer masquerades as a
+  // real empty state ("No cases yet") when the fetch actually failed.
+  const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const res = await api.get<{ cases: LostFoundCase[] }>('/lost-and-found');
       setCases(res.data?.cases ?? []);
+      setError(false);
     } catch {
       // keep stale data
+      setError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -141,6 +150,22 @@ export default function DriverLostAndFoundScreen() {
         <View style={styles.center}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
+      ) : error && cases.length === 0 ? (
+        <View style={styles.center}>
+          <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
+          <Text style={styles.emptyTitle}>Couldn&apos;t load your cases</Text>
+          <Text style={styles.emptyHint}>Something went wrong reaching our servers. Please try again.</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            activeOpacity={0.8}
+            onPress={load}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading lost and found cases"
+          >
+            <Ionicons name="refresh" size={18} color="#fff" />
+            <Text style={styles.retryBtnText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
       ) : cases.length === 0 ? (
         <View style={styles.center}>
           <Ionicons name="bag-handle-outline" size={56} color={colors.textDim} />
@@ -172,6 +197,19 @@ function createStyles(colors: ThemeColors) {
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },
     emptyTitle: { fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     emptyHint: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
+    // Fetch-error retry button — same shape as ActivityView.tsx's errorState.
+    retryBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 8,
+      backgroundColor: colors.primary,
+      paddingHorizontal: 24,
+      paddingVertical: 12,
+      borderRadius: 25,
+      minHeight: 44,
+    },
+    retryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
     list: { padding: 16, gap: 12 },
     card: {
       flexDirection: 'row',

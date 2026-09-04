@@ -580,7 +580,17 @@ async def cancel_ride_rider(
     _deps.spawn(send_live_activity_update({"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
     try:
         await _deps.manager.broadcast_to_admins(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"}
+            {
+                "type": "ride_cancelled",
+                "ride_id": ride_id,
+                "reason": "rider_cancelled",
+                # Same "flag scheduled cancellations for follow-up" signal the
+                # driver-cancel path already sends (routes/drivers/ride_cancel.py) —
+                # was missing here, so a rider cancelling their own scheduled
+                # ride showed the generic "Ride cancelled" alert with no
+                # follow-up flag, silently defeating that feature for this path.
+                "is_scheduled": bool((ride or {}).get("is_scheduled")),
+            }
         )
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"rider cancel admin broadcast failed: {_exc}")
@@ -771,6 +781,26 @@ async def cancel_scheduled_ride(
                 reason="rider_cancelled",
                 is_scheduled=True,
             )
+            # broadcast_ride_status (above) sends admins a "ride_status_changed"
+            # event, which the monitoring dashboard's cancellation alert-feed
+            # does not read (it specifically listens for "ride_cancelled" — see
+            # admin-dashboard/src/app/dashboard/monitoring/page.tsx). Without
+            # this, a rider cancelling a scheduled ride BEFORE it dispatches
+            # never surfaced the "⚠ Scheduled ride cancelled" admin alert at
+            # all — not just missing the is_scheduled flag, unlike the
+            # dispatched-ride path in cancel_ride_rider() below, which does
+            # send this event type (now with is_scheduled included too).
+            try:
+                await _deps.manager.broadcast_to_admins(
+                    {
+                        "type": "ride_cancelled",
+                        "ride_id": ride_id,
+                        "reason": "rider_cancelled",
+                        "is_scheduled": True,
+                    }
+                )
+            except Exception as _exc:  # pragma: no cover - best effort
+                logger.warning(f"scheduled rider cancel admin broadcast failed: {_exc}")
             return {"success": True}
         # Zero rows: the dispatch loop (or a concurrent cancel) won the race
         # since the read above. Re-read and fall through to the live-ride

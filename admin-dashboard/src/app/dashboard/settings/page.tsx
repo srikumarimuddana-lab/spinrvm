@@ -80,23 +80,66 @@ export default function SettingsPage() {
     };
 
     const [deliverability, setDeliverability] = useState<any>(null);
+    // Empty-catch fetch failures (below) previously left every affected card
+    // silently blank/stuck-loading, or — for MFA specifically — actively
+    // misreported the account's security state (mfaEnabled stayed at its
+    // initial `false` on a fetch failure, showing "MFA not enabled" for an
+    // account that actually has it on). settingsLoadError tracks the one
+    // failure severe enough to collapse the whole page (getSettings) so it
+    // can render a retryable error instead of a page that's just a header
+    // and a Save button with nothing to save.
+    const [settingsLoadError, setSettingsLoadError] = useState(false);
     useEffect(() => {
         getEmailDeliverability(7).then(setDeliverability).catch(() => setDeliverability(null));
     }, []);
 
-    useEffect(() => {
+    // Plain fetch, no synchronous setState before it — safe to call directly
+    // from the mount effect below (loading/settingsLoadError already start
+    // at their correct values: true/false). The Retry button uses the
+    // separate retrySettings() below, which resets both first since a retry
+    // can happen long after mount.
+    const fetchSettingsData = () => {
         getSettings()
-            .then(setSettings)
-            .catch(() => { })
+            .then((d) => { setSettings(d); setSettingsLoadError(false); })
+            .catch(() => {
+                setSettingsLoadError(true);
+                toast({
+                    title: "Couldn't load settings",
+                    description: "The settings page could not reach the server. Try again.",
+                    variant: "destructive",
+                });
+            })
             .finally(() => setLoading(false));
+    };
+
+    const retrySettings = () => {
+        setLoading(true);
+        setSettingsLoadError(false);
+        fetchSettingsData();
+    };
+
+    useEffect(() => {
+        fetchSettingsData();
 
         getAiCatalog()
             .then((d) => setAiCatalog(d.providers ?? []))
-            .catch(() => { });
+            .catch(() => {
+                toast({
+                    title: "AI provider catalog unavailable",
+                    description: "The AI Assistant card's provider list may be incomplete until you reload.",
+                    variant: "destructive",
+                });
+            });
 
         getHeatMapSettings()
             .then(setHeatMapSettings)
-            .catch(() => { });
+            .catch(() => {
+                toast({
+                    title: "Couldn't load heat map settings",
+                    description: "The Heat Map Configuration card could not reach the server. Reload to try again.",
+                    variant: "destructive",
+                });
+            });
 
         mfaStatus()
             .then((d) => {
@@ -104,7 +147,19 @@ export default function SettingsPage() {
                 setMfaAvailable(d.available !== false);
                 setMfaEnforced(d.enforced === true);
             })
-            .catch(() => { })
+            .catch(() => {
+                // Deliberately does NOT touch mfaEnabled/mfaAvailable/mfaEnforced —
+                // a fetch failure must not be allowed to misreport account
+                // security state (e.g. showing "MFA not enabled" for an account
+                // that has it on, just because this call failed). The Security
+                // tab keeps its last-known state and the operator is told the
+                // status shown may be stale.
+                toast({
+                    title: "Couldn't refresh MFA status",
+                    description: "The Security tab may be showing stale two-factor status. Reload to confirm.",
+                    variant: "destructive",
+                });
+            })
             .finally(() => setMfaLoading(false));
     }, []);
 
@@ -227,7 +282,19 @@ export default function SettingsPage() {
                 }
             />
 
+            {!settings && settingsLoadError && (
+                <div className="flex flex-col items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-8 text-center">
+                    <p className="text-sm text-destructive">
+                        Couldn&apos;t load settings — the server didn&apos;t respond. Nothing below is available to edit until this loads.
+                    </p>
+                    <Button variant="outline" size="sm" onClick={retrySettings}>
+                        Retry
+                    </Button>
+                </div>
+            )}
+
             {settings && (
+                <fieldset disabled={saving} className="min-w-0 border-0 p-0 m-0">
                 <Tabs defaultValue="integrations" className="space-y-6">
                 <TabsList className="h-auto flex-wrap">
                     <TabsTrigger value="integrations">Integrations</TabsTrigger>
@@ -551,7 +618,7 @@ export default function SettingsPage() {
                                                     id="ai_daily_message_cap"
                                                     type="number" min={1} max={500}
                                                     value={settings.ai_daily_message_cap ?? 50}
-                                                    onChange={(e) => update("ai_daily_message_cap", parseInt(e.target.value))}
+                                                    onChange={(e) => update("ai_daily_message_cap", e.target.value === "" ? null : parseInt(e.target.value))}
                                                 />
                                             </div>
                                             <div className="space-y-2">
@@ -560,7 +627,7 @@ export default function SettingsPage() {
                                                     id="ai_max_output_tokens"
                                                     type="number" min={128} max={4096}
                                                     value={settings.ai_max_output_tokens ?? 1024}
-                                                    onChange={(e) => update("ai_max_output_tokens", parseInt(e.target.value))}
+                                                    onChange={(e) => update("ai_max_output_tokens", e.target.value === "" ? null : parseInt(e.target.value))}
                                                 />
                                             </div>
                                         </div>
@@ -584,7 +651,7 @@ export default function SettingsPage() {
                                                 id="ai_mcp_daily_tool_cap"
                                                 type="number" min={0} max={5000}
                                                 value={settings.ai_mcp_daily_tool_cap ?? 0}
-                                                onChange={(e) => update("ai_mcp_daily_tool_cap", parseInt(e.target.value))}
+                                                onChange={(e) => update("ai_mcp_daily_tool_cap", e.target.value === "" ? null : parseInt(e.target.value))}
                                             />
                                             <p className="text-xs text-muted-foreground">
                                                 0 = use the chat daily-message cap above.
@@ -951,7 +1018,7 @@ export default function SettingsPage() {
                                         type="number"
                                         min={1} max={10}
                                         value={settings.max_simultaneous_offers ?? 3}
-                                        onChange={(e) => update("max_simultaneous_offers", parseInt(e.target.value))}
+                                        onChange={(e) => update("max_simultaneous_offers", e.target.value === "" ? null : parseInt(e.target.value))}
                                     />
                                     <p className="text-xs text-muted-foreground">Drivers offered per ride (1–10)</p>
                                 </div>
@@ -962,7 +1029,7 @@ export default function SettingsPage() {
                                         type="number"
                                         min={5} max={60}
                                         value={settings.ride_offer_timeout_seconds ?? 15}
-                                        onChange={(e) => update("ride_offer_timeout_seconds", parseInt(e.target.value))}
+                                        onChange={(e) => update("ride_offer_timeout_seconds", e.target.value === "" ? null : parseInt(e.target.value))}
                                     />
                                     <p className="text-xs text-muted-foreground">Seconds before offer expires (5–60)</p>
                                 </div>
@@ -975,7 +1042,7 @@ export default function SettingsPage() {
                                         type="number"
                                         min={1} max={100}
                                         value={settings.search_radius_km ?? 10}
-                                        onChange={(e) => update("search_radius_km", parseFloat(e.target.value))}
+                                        onChange={(e) => update("search_radius_km", e.target.value === "" ? null : parseFloat(e.target.value))}
                                     />
                                 </div>
                                 <div className="space-y-2">
@@ -985,7 +1052,7 @@ export default function SettingsPage() {
                                         type="number"
                                         min={1} max={5} step={0.1}
                                         value={settings.min_driver_rating ?? 4.0}
-                                        onChange={(e) => update("min_driver_rating", parseFloat(e.target.value))}
+                                        onChange={(e) => update("min_driver_rating", e.target.value === "" ? null : parseFloat(e.target.value))}
                                     />
                                 </div>
                             </div>
@@ -1166,12 +1233,12 @@ export default function SettingsPage() {
                                 <div className="space-y-2">
                                     <Label htmlFor="heat-map-radius">Radius (px)</Label>
                                     <Input id="heat-map-radius" type="number" value={heatMapSettings.heat_map_radius || 25}
-                                        onChange={(e) => updateHeatMap("heat_map_radius", parseInt(e.target.value))} />
+                                        onChange={(e) => updateHeatMap("heat_map_radius", e.target.value === "" ? null : parseInt(e.target.value))} />
                                 </div>
                                 <div className="space-y-2">
                                     <Label htmlFor="heat-map-blur">Blur (px)</Label>
                                     <Input id="heat-map-blur" type="number" value={heatMapSettings.heat_map_blur || 15}
-                                        onChange={(e) => updateHeatMap("heat_map_blur", parseInt(e.target.value))} />
+                                        onChange={(e) => updateHeatMap("heat_map_blur", e.target.value === "" ? null : parseInt(e.target.value))} />
                                 </div>
                             </div>
                             <div className="space-y-4 pt-2">
@@ -1697,6 +1764,7 @@ export default function SettingsPage() {
                     </Card>
                 </TabsContent>
                 </Tabs>
+                </fieldset>
             )}
 
             <MfaEnrollDialog

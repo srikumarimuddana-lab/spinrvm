@@ -209,9 +209,20 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                 if (data.type === "error") {
                     clearAuthAckTimer();
                     setStatus("error");
+                    // Every backend `{type: "error"}` message used to be labeled
+                    // "auth error" regardless of cause — misleading for the many
+                    // non-auth codes this same message type carries post-auth
+                    // (e.g. "snapshot_failed" when the drivers/rides DB query
+                    // itself throws, "not_ride_participant", "message_too_large").
+                    // Only the codes in FATAL_ERROR_MESSAGES are actually
+                    // auth-related (and the only ones that stop reconnection
+                    // below); everything else is a generic backend error.
+                    const isAuthError = data.message ? FATAL_ERROR_MESSAGES.has(data.message) : false;
                     setLastError(
                         data.message
-                            ? `Backend WebSocket auth error: ${data.message}`
+                            ? isAuthError
+                                ? `Backend WebSocket auth error: ${data.message}`
+                                : `Backend WebSocket error: ${data.message}`
                             : "Backend WebSocket returned an error.",
                     );
                     if (data.message && FATAL_ERROR_MESSAGES.has(data.message)) {
@@ -242,6 +253,23 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                 wsRef.current = null;
                 if (!shouldReconnectRef.current || !token) {
                     setStatus("error");
+                    return;
+                }
+                // Backend keys admin WS connections by admin_{user_id}, not per
+                // tab (routes/websocket.py, socket_manager.py's
+                // WS_CLOSE_REPLACED_BY_NEW_CONNECTION = 4409) — opening this
+                // page in a second tab/window closes the first with this exact
+                // code. Reconnecting here would just evict the second tab
+                // right back, and that tab's own reconnect would evict this
+                // one again — an infinite eviction ping-pong between the two,
+                // each showing a flickering "reconnecting…" banner. Stop
+                // trying and say what actually happened instead.
+                if (event?.code === 4409) {
+                    shouldReconnectRef.current = false;
+                    setStatus("error");
+                    setLastError(
+                        "This session was opened in another tab or window. Close that one, or reload this page to take over here.",
+                    );
                     return;
                 }
                 setStatus("disconnected");

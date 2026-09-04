@@ -134,7 +134,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ## P0 — Launch gating (code)
 
-### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline
+### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline — CLOSED (2026-09-04 status correction), 2 named residual follow-ups remain
 > Companion to A34 above — A34 tracks the Part B dual-run cutover seam audit;
 > this tracks Part A, the whole-app fleet audit (all 21 `spinr-*` reviewers,
 > not a diff). Full report: `docs/audit/2026-08-18-full-fleet-whole-app-audit.md`.
@@ -163,17 +163,50 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   does not use the cascade phrasing (its "Payment source selection ...
   happens at fare settlement" line lists the four sources without implying
   a fallback order) so was left unchanged.
-- [ ] **Status:** open, 2 of 17 baseline blockers fixed 2026-08-18 (same day,
-  later sessions), plus the finding #11 unpinned-actions regression fixed
-  2026-08-19 — see below. Of the baseline's 17 ranked blockers as
-  originally reported: 13 STILL-OPEN unchanged (no commits touching them
-  since 08-15), 2 now FIXED 2026-08-18 (below), 1 REGRESSED-then-FIXED
-  2026-08-19 (finding #11, below),
-  both remaining "partially mitigated" items now RESOLVED as of this
-  correction (2026-08-22): the corporate PDF tax-line fallback (below) is
-  confirmed a non-issue, and emergency-contacts (below) was already fixed
-  2026-08-21. Of the original 17, everything is now either FIXED,
-  RESOLVED, or explicitly STILL-OPEN with no ambiguous middle state left.
+- [x] **Status:** CLOSED 2026-09-04 (status correction) — this entry's own
+  summary line had gone stale: it still read "13 STILL-OPEN" from the
+  08-18/08-19 point-in-time snapshot, but every one of the entry's own
+  appended `FIXED`/`RESOLVED`/`APPLIED` sub-updates below (dated
+  2026-08-18 through 2026-08-22) had already closed out the full 30-item
+  ranked-blocker register from the underlying audit doc — the "13
+  STILL-OPEN" count was simply never revised down as those fixes landed.
+  Re-read the entire entry end-to-end (all appended sub-updates, not just
+  the header) and cross-checked the two residual items it names against
+  current `main` before closing:
+  - **#10's 3rd sub-check (3-year minimum driving experience) — confirmed
+    still not implemented.** No `license_issue_date`/`licensed_since`-style
+    field exists anywhere in `backend/migrations/` or the `drivers`
+    routes (grepped). This was flagged as a required follow-up when #10
+    was fixed 2026-08-19 (license-class + vehicle-age recheck shipped;
+    the experience sub-check was explicitly out of scope pending a schema
+    field), not silently dropped — remains open, tracked below as its own
+    named residual item rather than reopening the whole entry.
+  - **WS `location_batch` handler still checks only the last point of a
+    batch — confirmed still true.** `backend/routes/websocket.py`'s
+    `location_batch`/`driver_location_batch` handler calls
+    `check_location_integrity()` only on `last_pt` (line ~1005); earlier
+    points in the same WS batch still bypass the plausibility check the
+    2026-08-19 fix added to the REST v2 batch path's breadcrumb persist.
+    This was explicitly named as a related, out-of-scope gap when the
+    REST-path fix shipped (the audit only named the REST v2 path) — not
+    silently missed, remains open as its own named residual item.
+  - **#24/N9's fare-estimate 3.5s Directions-wait decision** — no longer
+    open. Recorded elsewhere in this file's history as **Decided
+    2026-08-21: accepted as a permanent SLA exception**, and reflected in
+    root `CLAUDE.md`'s Performance SLAs section today ("This is no longer
+    an open decision"). The 2026-08-19 sub-update below still says "the
+    underlying accept-vs-ceiling decision remains explicitly open" —
+    that phrasing is itself now stale; the decision was made 2 days later.
+  - Every other numbered finding (#1–#30, N2/N5/N6/N7/N9/N11/N13/N14/N15/N16)
+    in the appended sub-updates below is `FIXED`/`RESOLVED`/`APPLIED` with
+    its own change-log link — not re-verified line-by-line against current
+    `main` in this pass (that would be re-running the whole audit, out of
+    scope for a status-doc correction), but no contradicting evidence
+    found while reading the entry end-to-end.
+  - **Not fixed by this correction** — this pass is documentation-only,
+    reconciling the doc with work already done by other sessions. The two
+    residual items above are real, current gaps; picking them up is
+    separate follow-up work, not closed by this entry.
   **RESOLVED 2026-08-22** (was: "corporate PDF tax-line fallback now
   logged/Sentry-alerted but still ships — the underlying data gap, rides
   missing `tax_breakdown`, is still unaddressed and needs a backfill-vs-
@@ -11025,7 +11058,20 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B38. admin-dashboard's visual-regression CI job has zero committed baselines — it has been a documented no-op since it was added
 
-- [ ] **Status:** open. Found 2026-08-22 during the same coverage/validation
+- [ ] **Status:** open, partially closed 2026-09-02 — 5 of 6 baselines seeded
+  (`login`, `dashboard-home`, `dashboard-drivers`, `dashboard-monitoring`,
+  `dashboard-settings`; see `docs/change-log/2026-09-02-seed-visual-regression-baselines.md`).
+  Full acceptance below still not met: `dashboard-rides` is unseeded (its
+  first capture surfaced a real mock-fixture bug, now fixed — needs one
+  more `update-visual-baselines.yml` run to pick up a corrected shot before
+  it can be added), and `continue-on-error` on `visual-regression-test` in
+  `ci.yml` deliberately stays `true` until all 6 are seeded. The
+  403-blocked-from-this-session finding below is now resolved too: the
+  workflow can be triggered from the GitHub web UI by an account with
+  Actions-dispatch access (confirmed working 2026-09-02) — this session's
+  own GitHub App integration still lacks that scope, but that's no longer
+  the blocker it was when this item was filed.
+- **Original finding (2026-08-22):** found during the same coverage/validation
   audit as B37 — distinct surface from B25 (which covers Maestro
   real-device mobile E2E for rider-app/driver-app); this is
   admin-dashboard's own visual-regression Playwright job.
@@ -17352,6 +17398,66 @@ how much they de-risk a public launch._
   is real monitoring: a human picks a vendor, creates the account, wires the
   actual checks, and creates a real PagerDuty service (the integration key in
   the YAML is a placeholder string, never a real credential).
+- [ ] **E13. Leading-indicator ops monitoring (certs, domain, renewals, secret
+  rotation, capacity)** — found via a 2026-09-03 gap sweep after
+  `api-spinr.spinr.ca` went unreachable in production: its Fly-managed TLS
+  certificate was never provisioned as its own hostname (only an orphaned
+  `*.spinr.ca` wildcard existed, stuck "Pending validation" for weeks,
+  nobody watching it) — confirmed by repo-wide grep that **nothing** checked
+  cert expiry, domain registration expiry, vendor/plan renewal dates, or
+  secret rotation age anywhere in this repo before this entry. Landed
+  2026-09-03 (see `docs/change-log/2026-09-03-e5-leading-indicator-monitoring.md`
+  for the full Change Impact Log):
+  - `.github/workflows/cert-domain-monitor.yml` — daily, checks live TLS
+    cert expiry (openssl, all production hostnames) + domain WHOIS expiry
+    for `spinr.ca`; idempotent tracked GitHub issue, same pattern as
+    `subprocessor-monitor.yml`. **Known limitation, stated in the workflow's
+    own comments**: this catches an issued-but-expiring cert, not a cert
+    stuck un-issued like the one that actually caused the outage — that
+    failure mode needs E4's live-reachability probes, still not live.
+  - `docs/runbooks/renewal-calendar.md` + `.github/workflows/renewal-calendar-monitor.yml`
+    — vendor/plan renewal-date tracker (Fly, Railway, Supabase, Cloudflare,
+    domain registrar, Vercel, Expo, Sentry, GitHub, etc.) + weekly lead-time
+    alert. **All dates are TBD placeholders** — no vendor account access
+    existed to fill in real dates; a human must audit and fill these in
+    before the check covers anything.
+  - `docs/runbooks/secret-rotation.md` + `.github/workflows/secret-rotation-monitor.yml`
+    — rotation-cadence tracker for every credential found in
+    `backend/core/config.py`'s `Settings` and the deploy workflows'
+    `secrets.*` usage (JWT_SECRET, ADMIN_PASSWORD, SUPABASE_SERVICE_ROLE_KEY,
+    FIREBASE_SERVICE_ACCOUNT_JSON, Stripe/Twilio/Maps keys, FLY_API_TOKEN,
+    RAILWAY_TOKEN, VERCEL_TOKEN, EXPO_TOKEN) + monthly overdue-rotation
+    alert. Metadata only (dates/cadence) — never a secret value. **All
+    "Last rotated" dates are TBD** — same caveat as the renewal calendar.
+  - `.github/workflows/supabase-capacity-monitor.yml` — optional, gated
+    behind `SUPABASE_ACCESS_TOKEN`/`SUPABASE_PROJECT_REF` (unset today, so
+    currently a no-op every run); once configured, polls DB size via the
+    Supabase Management API as an approximation of disk-usage percentage.
+    Explicitly documented as an *approximation*, not a direct read of
+    Supabase's real disk ceiling (see the workflow's own limitation
+    comment and `capacity-scaling.md` §9).
+  - `docs/runbooks/synthetic-monitoring.md` extended with a stack-wide
+    health-check coverage audit table (admin-dashboard, mobile apps, Redis,
+    Supabase, Fly/Railway) and a flag that `capacity_watchdog`'s
+    `ALERT_WEBHOOK_URL`/`ALERT_EMAIL_TO` wiring could not be confirmed from
+    this session (no Fly access) — needs a human check.
+  **Follow-up landed same day**: `.github/workflows/billing-usage-monitor.yml`
+  — daily Stripe balance + Twilio balance check (both optional/gated, same
+  no-secrets-no-op pattern), covering the usage-based-service risk class
+  (spend spike / suspended account) that the renewal-calendar tracker can't
+  express since these services have no renewal date. **Deliberately does
+  NOT cover Google Maps or Firebase** — real spend/budget tracking there
+  needs the GCP Billing Budgets API (service account + billing.budgets
+  scope + a configured budget object), a materially bigger setup; tracked
+  as an open gap in `renewal-calendar.md`'s Google Maps/Firebase rows, not
+  silently assumed covered. See
+  `docs/change-log/2026-09-03-e13-billing-usage-monitoring.md`.
+  **Still open after this entry**: every TBD date in the two trackers,
+  confirming `capacity_watchdog`'s alert secrets are actually set, deciding
+  whether to activate the optional Supabase capacity and Stripe/Twilio
+  billing checks (all need a human to create the underlying API
+  credentials), GCP Billing Budgets coverage for Google Maps/Firebase, and
+  E4 itself (still no live external synthetic monitor).
 - [x] **E5. Kill switches / feature flags** — CLOSED (2026-08-11). Correction
   found while scoping this: the "no documented kill switches" premise was only
   3/4 true — `scheduled_dispatch_enabled` already existed and gated
@@ -19868,22 +19974,29 @@ how much they de-risk a public launch._
   green except the one pre-existing, confirmed-unrelated
   `test_email_deliverability.py` failure (item 7 above).
 
-### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle
-- [x] **Status:** closed (2026-09-03) — fixed as WS-1 subtask 3 of
-  `plans/2026-09-03-path-to-a-implementation-plan.md`. The postgrest claim
-  loop in `_match_driver_to_ride_attempt` (`backend/routes/rides/
-  matching.py`) is now wrapped in `try/except Exception`: on any exception,
-  every driver already appended to `claimed_drivers` is released via
-  `set_driver_available(d["id"], True)` before the exception is logged
-  (`error`, `exc_info=True`) and re-raised, mirroring the existing
-  `ride_offers` insert failure handler's pattern exactly. Regression test
-  `test_postgrest_claim_loop_releases_prior_claims_and_reraises` in
-  `backend/tests/test_dispatch_db_errors.py` (not
-  `test_dispatch_match_attempt_branches.py` as originally suggested below —
-  same effective coverage, grouped with this repo's other dispatch-DB-error
-  regression tests per the implementation plan) claims 2 of 3 candidates,
-  raises on the 3rd, and asserts both earlier claims are released and the
-  exception still propagates. See
+### C54. Dispatch batch-claim loop: mid-iteration exception leaves earlier-claimed drivers unreleased until the orphan-claim reaper cycle — CLOSED (2026-09-04)
+- [x] **Status:** closed twice, in parallel. PR #4919 landed the fix on `main`
+  first (wrapping the `claim_driver_atomic` call); PR #4909 developed the same
+  fix independently as WS-1 subtask 3 of
+  `plans/2026-09-03-path-to-a-implementation-plan.md` and, on merging `main`
+  in, kept its own version because #4909's review pass had found two defects
+  in the shared approach that #4919's merged version still carries:
+  (1) `logger.error(..., exc_info=True)` captures no traceback in this module
+  — `logger` here is loguru via the `_deps` re-export, so `exc_info` is
+  swallowed as a `str.format` keyword and the loguru→Sentry bridge sends a
+  stack-less `capture_message` (the C60 defect class, invisible here because
+  `tests/test_loguru_call_conventions.py` selects files by loguru's direct
+  import line — see C65); and (2) the release loop was unguarded, so a failed
+  release aborts the remaining releases AND replaces the original exception,
+  losing the root cause — likely, since the DB blip that broke the claim
+  breaks the release too. The merged resolution also spans the whole loop
+  rather than the claim call alone, covering a failure of the inline
+  revalidation release. Regression tests exist on both sides and both pass
+  against the kept implementation: `test_claim_loop_releases_earlier_claims`
+  (#4919, `test_dispatch_match_attempt_branches.py`, 2 candidates) and
+  `test_postgrest_claim_loop_releases_prior_claims_and_reraises` (#4909,
+  `test_dispatch_db_errors.py`, 3 candidates). See
+  `docs/change-log/2026-09-04-dispatch-claim-loop-orphan-release.md` and
   `docs/change-log/2026-09-03-ws1-correctness.md`.
   Originally — found during C50's T2 retro `spinr-dispatch-reviewer`
   pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
@@ -19923,10 +20036,28 @@ how much they de-risk a public launch._
   claimed driver is released.
 - **Files:** `backend/routes/rides/matching.py` (the claim loop),
   `backend/tests/test_dispatch_match_attempt_branches.py` (new test).
+- **Fix:** the PostgREST claim loop's `claim_driver_atomic` call is now
+  wrapped in `try/except`; on exception it logs at `error` with the full
+  traceback, releases every driver already appended to `claimed_drivers`
+  via `set_driver_available(d["id"], True)`, then re-raises — the exact
+  pattern the `ride_offers` insert failure handler a few lines below
+  already used. Note: this fix applies to the PostgREST claim path only
+  (`_direct_pool_enabled=False`); the direct-pool path (C50 Phase 2's
+  `dispatch_claim_batch` RPC) claims + inserts + writes insurance in one
+  Postgres transaction, so a mid-call failure there rolls back the whole
+  transaction server-side — nothing is left claimed to release, per that
+  branch's own comment.
 - **Acceptance:** a `claim_driver_atomic` exception on candidate N releases
   every driver claimed at candidates 1..N-1 before the exception reaches the
   `match_driver_to_ride` recovery shell; new regression test passes; no
   behavior change to the successful-claim or `ride_offers`-failure paths.
+  Verified: new test `test_claim_loop_exception_releases_earlier_claims_and_reraises`
+  (2 candidates, 2nd raises, asserts only the 1st is released via
+  `set_driver_available`) plus the full existing
+  `test_dispatch_match_attempt_branches.py` (14/14, including the
+  `ride_offers`-failure sibling test unmodified) and a broader dispatch/
+  matching sweep (489 passed, 4 skipped, 0 failed). `ruff check`/`ruff
+  format --check` clean on both touched files.
 
 ### C55. Insurance-period write-failure alerting: no confirmed live Grafana/Sentry rule; no Period-2 reconciler (only Period-3 has one)
 - [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
@@ -19976,8 +20107,8 @@ how much they de-risk a public launch._
   WS-12 §3 spec (kill the RPC mid-transition → reconciler restores the open
   period on next tick) — whichever the team decides is the actual bar.
 
-### C56. `claim_driver_atomic`'s `run_sync` call uses the default read retry policy, not an explicit write policy
-- [ ] **Status:** open — found during C50's T2 retro `spinr-dispatch-reviewer`
+### C56. `claim_driver_atomic`'s `run_sync` call uses the default read retry policy, not an explicit write policy — CLOSED (2026-09-03)
+- [x] **Status:** closed. Found during C50's T2 retro `spinr-dispatch-reviewer`
   pass, `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`.
 - **Issue/gap:** `backend/repositories/_base.py`'s `run_sync(func,
   retry_policy: RetryPolicy = "read")` gates retry behavior by policy:
@@ -20007,33 +20138,49 @@ how much they de-risk a public launch._
   likely too generous for a claim sitting inside the offer-latency SLA).
   Add a comment explaining the choice, consistent with this file's existing
   convention.
+- **Fix:** `claim_driver_atomic`'s `run_sync(_claim)` call now passes
+  `retry_policy="idempotent_write"` explicitly, with a comment stating the
+  same safety analysis from this entry (the `.eq("is_available", True)`
+  guard makes a retry-after-success a safe no-op, not a double-claim).
 - **Files:** `backend/repositories/driver_repo.py` (`claim_driver_atomic`).
 - **Acceptance:** an explicit `retry_policy` argument is passed with a
   one-line rationale comment; existing `claim_driver_atomic` tests in
   `test_driver_repo_coverage.py` still pass unmodified (the policy choice
   must not change claim-won/claim-lost semantics, only retry count/timing
-  on a genuine transient failure).
+  on a genuine transient failure). Verified: `pytest
+  tests/test_driver_repo_coverage.py tests/test_dispatch_db_errors.py
+  tests/test_dispatch_match_attempt_branches.py -q` → 61/61 passed,
+  unmodified. `ruff check backend/repositories/driver_repo.py` clean.
 
-### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip — reopened (fix written 2026-09-03, lost in a squash-merge, resubmitting)
-- [ ] **Status:** the fix below was written, verified 61/61 locally (twice),
-  and pushed as PR #4887's final commit (`2457622`) — but GitHub's
-  squash-merge of #4887 onto `main` (commit `dbcebe0`) captured a **stale**
-  snapshot of the branch that stopped at the prior commit (`48d0553`, the
-  C58 fix): `git show dbcebe0:backend/tests/rls/conftest.py` has none of
-  this fix's content, and `main`'s own next CI run (33728094406, same
-  commit `dbcebe0`) reproduced the exact original 24 RLS failures /
-  2 direct_pool failures, byte-for-byte, proving the fix never actually
-  shipped despite the PR showing "merged." Discovered while investigating
-  a follow-up request to look into the "5 CI-only RLS failures" this entry
-  had flagged as unreproducible — the real finding turned out to be this,
-  not a 6th RLS mystery. This is the second time in this session's history
-  a GitHub squash-merge has silently dropped a late-pushed commit (see the
-  PR #4879 lost-commit recovery earlier in this session) — push-then-merge
-  races on this repo's merge tooling appear to be a recurring, not
-  one-off, risk. Recovering via the standard "PR already merged" protocol:
-  restart the branch from `main`, re-land the same diff, open a fresh PR.
+### C57. `tests/rls/conftest.py` never applies migration 399 (outbox) — `backend-test` is red on `main`'s own tip — CLOSED (2026-09-03, re-landed in PR #4896)
+- [x] **Status:** re-landed and merged. The fix was originally written,
+  verified 61/61 locally (twice), and pushed as PR #4887's final commit
+  (`2457622`) — but GitHub's squash-merge of #4887 onto `main` (commit
+  `dbcebe0`) captured a **stale** snapshot of the branch that stopped at
+  the prior commit (`48d0553`, the C58 fix): `git show
+  dbcebe0:backend/tests/rls/conftest.py` had none of this fix's content,
+  and `main`'s own next CI run (33728094406, same commit `dbcebe0`)
+  reproduced the exact original 24 RLS failures / 2 direct_pool failures,
+  byte-for-byte, proving the fix never actually shipped despite the PR
+  showing "merged." Discovered while investigating a follow-up request to
+  look into the "5 CI-only RLS failures" this entry had flagged as
+  unreproducible — the real finding turned out to be this, not a 6th RLS
+  mystery. This is the second time in this session's history a GitHub
+  squash-merge has silently dropped a late-pushed commit (see the PR #4879
+  lost-commit recovery earlier in this session) — push-then-merge races on
+  this repo's merge tooling appear to be a recurring, not one-off, risk.
+  Recovered via the standard "PR already merged" protocol: restarted the
+  branch from `main`, re-landed the same diff plus the self-healing-role
+  fix below, merged as `ea9e4db46` (PR #4896).
   (C59, bundled in the same lost commit, is unaffected — `main` already
   has an independent, better fix for that one; see C59.)
+  **Verified live on `main`'s current tip** (2026-09-03, this entry's own
+  close-out check, independent of PR #4896's own verification): CI run
+  [33811415765](https://github.com/srikumarimuddana-lab/spinrvm/actions/runs/33811415765),
+  commit `1cdea73c` — `backend-test`'s "Run RLS role-level tests (real
+  Postgres)" step is `success`. `backend/tests/rls/conftest.py` on `main`
+  contains the `399_transactional_outbox.sql` apply (confirmed via
+  `git show`, not assumed from the PR description).
 - **Fix content below is unchanged and still accurate** — only the
   shipping status changed. Found while babysitting PR #4887 (C53 finding
   4); confirmed via GitHub Actions run 33711534411 that `backend-test`
@@ -20245,97 +20392,6 @@ how much they de-risk a public launch._
 - **Acceptance:** `pytest tests/test_loguru_call_conventions.py -q` passes
   once all 9 sites use `logger.opt(exception=True).error(...)`.
 
-### C63. `test_loguru_call_conventions.py` selects files by the literal loguru import line — modules that take `logger` from a re-export are never scanned
-
-- [ ] **Status:** open — found 2026-09-03 during the WS-1 self-review
-  (PR #4909), immediately after C60 fixed 9 real offenders that this gate
-  *did* catch.
-- **Issue/gap:** `_loguru_modules()` selects files with
-  `if "from loguru import logger" in src`. A module that obtains loguru's
-  `logger` indirectly — e.g. `backend/routes/rides/matching.py`, which takes
-  it from `routes/rides/_deps.py`'s re-export — never matches, so none of its
-  loguru calls are checked. Measured by temporarily making the file match:
-  the scan then reported **~20 `exc_info=` offenders and ~10+ `%s`-style
-  offenders in `matching.py` alone**, all pre-existing and all invisible to
-  CI today. Both defect classes are exactly what C60 documents as silent:
-  `exc_info` is swallowed as a `str.format` kwarg so no traceback is
-  captured and the loguru→Sentry bridge sends a stack-less
-  `capture_message`; `%s` placeholders emit literally and drop every argument.
-  `matching.py` is the dispatch hot path, so the affected lines include the
-  ERROR logs an operator would rely on during a dispatch incident.
-- **Why it matters:** the gate reads as repo-wide but is not; its own
-  non-vacuity guard (`test_scan_actually_sees_the_backend`, >20 modules /
-  >200 calls) passes comfortably while missing a whole class of file, so
-  nothing signals the gap. This is the CI-gate-decay case CLAUDE.md's
-  pre-merge gate #8 says to file rather than work around.
-- **Action:** widen the selector to detect the re-exported `logger` (resolve
-  `from ._deps import logger`-style indirection, or simply scan any module
-  whose `logger` name resolves to loguru), then fix the offenders it newly
-  surfaces — `matching.py` first. Expect the fix to be mechanical
-  (`exc_info=True` → `logger.opt(exception=True)`, `%s` → `{}`) but large;
-  do it as its own PR, not bundled with a behavior change.
-- **Files:** `backend/tests/test_loguru_call_conventions.py` (selector),
-  `backend/routes/rides/matching.py` (largest known offender), plus whatever
-  else the widened scan reports.
-- **Note:** WS-1 (PR #4909) fixed only the call sites it introduced, using
-  `logger.opt(exception=True)`, and did **not** touch the pre-existing ones —
-  deliberately out of scope. Beware: adding the literal import string to a
-  file *in a comment* is enough to pull it into the scan and turn the gate
-  red (this happened once during that PR and was caught before push).
-
-### C64. Admin ride-mutation endpoints: `admin_complete_ride` has no optimistic lock and both admin endpoints can open Period 1 for an offline driver
-
-- [ ] **Status:** open — found 2026-09-03 by `spinr-insurance-period-auditor`
-  reviewing PR #4909, which fixed the equivalent gaps in `admin_cancel_ride`
-  only.
-- **Issue/gap:** two residual gaps in `backend/routes/admin/rides.py`:
-  1. `admin_complete_ride` still writes via `update_ride(ride_id, payload)` —
-     filtered on `id` alone, with no conditional/optimistic guard. It is the
-     symmetric sibling of `admin_cancel_ride`, which PR #4909 converted to a
-     status-scoped conditional `update_one`; the same read-then-blind-write
-     race remains open on the complete path.
-  2. `admin_complete_ride`'s `record_period_transition(driver_id, 1)` fires
-     unconditionally after `set_driver_available(driver_id, True)`, with no
-     check that the release actually made the driver available.
-     `set_driver_available` clamps `is_available` to False for a driver who
-     went offline or was suspended while assigned (their go-offline already
-     logged Period 0), so this can open a Period 1 — TNC contingent
-     liability — for a driver who is really Period 0, personal auto only.
-     PR #4909 added the guarded form (`if isinstance(released, dict) and
-     released.get("is_available")`) to `admin_cancel_ride`, matching
-     `routes/rides/matching.py`'s offer-timeout handler; `admin_complete_ride`
-     was left as-is (out of scope).
-- **Action:** port both fixes from `admin_cancel_ride` (PR #4909) to
-  `admin_complete_ride`, with a test per gap.
-- **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
-
-### C65. `settle_corporate`'s explicit kill-switch-off branch strands a guest-corporate ride at `payment_status='processing'`
-
-- [ ] **Status:** open — found 2026-09-03 by `spinr-money-auditor` reviewing
-  PR #4909, which fixed the identical gap in the adjacent fail-closed branch.
-- **Issue/gap:** when `corporate_billing_enabled` is explicitly `False`,
-  `settle_corporate` returns a 503 `PaymentResult` **without** resetting
-  `payment_status` to `pending`, unlike its five other failure branches.
-  `auto_settle_guest_corporate` claims the ride `pending|failed → processing`
-  before calling it and relies on that reset (its own except-branch fires only
-  on a raise, and this path returns), so flipping the kill switch off strands
-  every in-flight guest-corporate ride at `processing`: the guest-corporate
-  sweep in `utils/payment_retry.py` polls only `pending`, and
-  `stripe_reconcile`'s healer bails on a ride with no `payment_intent_id`,
-  which a `company_allowance` ride never has. Recovery is manual, and the
-  trigger is deliberately flipping the incident kill switch — i.e. it fires
-  when the system is already degraded.
-- **Action:** reset `payment_status` to `pending` in that branch too (the
-  fail-closed branch immediately below it now does this, PR #4909), or make
-  `auto_settle_guest_corporate` release its own claim on any
-  `not result.success` rather than only on a raise. Add a test through the
-  `auto_settle_guest_corporate` → `settle_corporate` seam —
-  `tests/test_guest_auto_settle.py` currently stubs `settle_corporate` out
-  entirely, which is why neither this nor the PR #4909 blocker was caught by
-  the existing suite.
-- **Files:** `backend/services/payment_service.py`,
-  `backend/tests/test_guest_auto_settle.py`.
-
 ### C61. `test_referral_analytics.py::test_funnel_counts_and_amounts` red on `main`'s own tip — `assert 0 == 2` — CLOSED (2026-09-03)
 
 - [x] **Status:** fixed and root-caused. Found 2026-09-03 alongside C60,
@@ -20445,6 +20501,163 @@ how much they de-risk a public launch._
   sweep script (see this session's transcript for the exact `git fetch` /
   `git patch-id` commands) against a wider commit window is the way to
   extend coverage.
+
+### C63. `go_online` eligibility recheck never validates 3-year minimum driving experience
+- [ ] **Status:** open — split out 2026-09-04 from A40's ranked blocker #10
+  while correcting that entry's stale status. #10 shipped a license-class
+  (Class 5, or Class 1-4 with `drivers.sgi_approved`) and vehicle-age
+  (<10yr) recheck on `go_online` (2026-08-19, gated dark behind
+  `app_settings.enforce_driver_eligibility_recheck`, default `false`); the
+  3rd Saskatchewan eligibility sub-check (CLAUDE.md's Saskatchewan
+  Regulatory section: "Minimum 3 years licensed driving experience") was
+  explicitly flagged as not implemented at the time, not silently
+  skipped — this item tracks that follow-up separately so it isn't lost
+  inside a now-closed parent entry.
+- **Issue/gap:** no schema field anywhere in `backend/migrations/` or the
+  `drivers` table records a license-issue date or "licensed since" date
+  (confirmed via grep — no `license_issue_date`/`licensed_since`-style
+  column exists). Without that field, `go_online`'s eligibility recheck
+  cannot verify the 3-year minimum at all, onboarding or recheck time.
+- **Action:** add a nullable `drivers.license_issue_date` (or equivalent)
+  column via a new migration; backfill it for existing drivers where
+  derivable (onboarding document metadata, if captured) or leave `NULL`
+  for pre-existing drivers who onboarded before this field existed (a
+  `NULL` should not retroactively lock out an already-active driver —
+  gate the new sub-check to skip the check when the field is `NULL`,
+  same fail-safe direction #10's other two sub-checks already use); wire
+  the check into the same `go_online` eligibility-recheck path #10 added,
+  behind the same `enforce_driver_eligibility_recheck` flag.
+- **Files:** new migration under `backend/migrations/`; the `go_online`
+  eligibility-recheck code path (see #10's fix,
+  `docs/change-log/2026-08-19-go-online-sk-eligibility-recheck-fix.md`,
+  for the exact call site).
+- **Acceptance:** a driver whose `license_issue_date` implies <3 years
+  licensed experience fails the recheck (flag on) the same way the
+  license-class/vehicle-age sub-checks already fail it; a driver with
+  `NULL` `license_issue_date` is not rejected; new regression tests
+  mirroring #10's existing eligibility-recheck test coverage.
+
+### C64. WebSocket `location_batch` handler only integrity-checks the last point in a batch, not every point
+- [ ] **Status:** open — split out 2026-09-04 from A40's finding #7 while
+  correcting that entry's stale status. #7's 2026-08-19 fix added
+  `check_location_integrity()`/`evaluate_gps_plausibility()` coverage to
+  the REST v2 location-batch path (both the live-marker write and the
+  breadcrumb persist); the WS `location_batch`/`driver_location_batch`
+  handler was explicitly named as a related, out-of-scope gap at the
+  time (the audit only named the REST v2 path) — not silently missed,
+  this item tracks it separately.
+- **Issue/gap:** `backend/routes/websocket.py`'s `location_batch`/
+  `driver_location_batch` handler calls `check_location_integrity()` only
+  on `last_pt` (the most recent point in the batch, used for the live
+  marker) — confirmed still true as of 2026-09-04. Every earlier point in
+  the same WS batch is persisted via `persist_ride_breadcrumbs` with no
+  spoofing/plausibility check at all, unlike the REST v2 path's
+  breadcrumb persist, which now runs `evaluate_gps_plausibility()` across
+  every consecutive point pair in the batch.
+- **Action:** apply the same `evaluate_gps_plausibility()` sweep the REST
+  v2 path's breadcrumb persist uses (see
+  `docs/change-log/2026-08-19-v2-location-batch-spoofing-fix.md` for the
+  exact pattern) to the WS handler's batch before
+  `persist_ride_breadcrumbs`, so a spoofed/implausible point earlier in a
+  WS batch can't slip into the regulatory GPS-trace record unchecked.
+- **Files:** `backend/routes/websocket.py` (`location_batch`/
+  `driver_location_batch` handler).
+- **Acceptance:** a WS batch with an implausible non-last point is
+  rejected (or that point excluded) the same way the REST v2 path already
+  handles it; new regression test mirroring the REST v2 path's existing
+  plausibility-check test coverage; no behavior change to the live-marker
+  write (already covered by `check_location_integrity()` on `last_pt`).
+
+### C65. `test_loguru_call_conventions.py` selects files by the literal loguru import line — modules that take `logger` from a re-export are never scanned
+
+- [ ] **Status:** open — found 2026-09-03 during the WS-1 self-review
+  (PR #4909), immediately after C60 fixed 9 real offenders that this gate
+  *did* catch.
+- **Issue/gap:** `_loguru_modules()` selects files with
+  `if "from loguru import logger" in src`. A module that obtains loguru's
+  `logger` indirectly — e.g. `backend/routes/rides/matching.py`, which takes
+  it from `routes/rides/_deps.py`'s re-export — never matches, so none of its
+  loguru calls are checked. Measured by temporarily making the file match:
+  the scan then reported **~20 `exc_info=` offenders and ~10+ `%s`-style
+  offenders in `matching.py` alone**, all pre-existing and all invisible to
+  CI today. Both defect classes are exactly what C60 documents as silent:
+  `exc_info` is swallowed as a `str.format` kwarg so no traceback is
+  captured and the loguru→Sentry bridge sends a stack-less
+  `capture_message`; `%s` placeholders emit literally and drop every argument.
+  `matching.py` is the dispatch hot path, so the affected lines include the
+  ERROR logs an operator would rely on during a dispatch incident.
+- **Why it matters:** the gate reads as repo-wide but is not; its own
+  non-vacuity guard (`test_scan_actually_sees_the_backend`, >20 modules /
+  >200 calls) passes comfortably while missing a whole class of file, so
+  nothing signals the gap. This is the CI-gate-decay case CLAUDE.md's
+  pre-merge gate #8 says to file rather than work around.
+- **Action:** widen the selector to detect the re-exported `logger` (resolve
+  `from ._deps import logger`-style indirection, or simply scan any module
+  whose `logger` name resolves to loguru), then fix the offenders it newly
+  surfaces — `matching.py` first. Expect the fix to be mechanical
+  (`exc_info=True` → `logger.opt(exception=True)`, `%s` → `{}`) but large;
+  do it as its own PR, not bundled with a behavior change.
+- **Files:** `backend/tests/test_loguru_call_conventions.py` (selector),
+  `backend/routes/rides/matching.py` (largest known offender), plus whatever
+  else the widened scan reports.
+- **Note:** WS-1 (PR #4909) fixed only the call sites it introduced, using
+  `logger.opt(exception=True)`, and did **not** touch the pre-existing ones —
+  deliberately out of scope. Beware: adding the literal import string to a
+  file *in a comment* is enough to pull it into the scan and turn the gate
+  red (this happened once during that PR and was caught before push).
+
+### C66. Admin ride-mutation endpoints: `admin_complete_ride` has no optimistic lock and both admin endpoints can open Period 1 for an offline driver
+
+- [ ] **Status:** open — found 2026-09-03 by `spinr-insurance-period-auditor`
+  reviewing PR #4909, which fixed the equivalent gaps in `admin_cancel_ride`
+  only.
+- **Issue/gap:** two residual gaps in `backend/routes/admin/rides.py`:
+  1. `admin_complete_ride` still writes via `update_ride(ride_id, payload)` —
+     filtered on `id` alone, with no conditional/optimistic guard. It is the
+     symmetric sibling of `admin_cancel_ride`, which PR #4909 converted to a
+     status-scoped conditional `update_one`; the same read-then-blind-write
+     race remains open on the complete path.
+  2. `admin_complete_ride`'s `record_period_transition(driver_id, 1)` fires
+     unconditionally after `set_driver_available(driver_id, True)`, with no
+     check that the release actually made the driver available.
+     `set_driver_available` clamps `is_available` to False for a driver who
+     went offline or was suspended while assigned (their go-offline already
+     logged Period 0), so this can open a Period 1 — TNC contingent
+     liability — for a driver who is really Period 0, personal auto only.
+     PR #4909 added the guarded form (`if isinstance(released, dict) and
+     released.get("is_available")`) to `admin_cancel_ride`, matching
+     `routes/rides/matching.py`'s offer-timeout handler; `admin_complete_ride`
+     was left as-is (out of scope).
+- **Action:** port both fixes from `admin_cancel_ride` (PR #4909) to
+  `admin_complete_ride`, with a test per gap.
+- **Files:** `backend/routes/admin/rides.py`, `backend/tests/test_admin_rides_coverage.py`.
+
+### C67. `settle_corporate`'s explicit kill-switch-off branch strands a guest-corporate ride at `payment_status='processing'`
+
+- [ ] **Status:** open — found 2026-09-03 by `spinr-money-auditor` reviewing
+  PR #4909, which fixed the identical gap in the adjacent fail-closed branch.
+- **Issue/gap:** when `corporate_billing_enabled` is explicitly `False`,
+  `settle_corporate` returns a 503 `PaymentResult` **without** resetting
+  `payment_status` to `pending`, unlike its five other failure branches.
+  `auto_settle_guest_corporate` claims the ride `pending|failed → processing`
+  before calling it and relies on that reset (its own except-branch fires only
+  on a raise, and this path returns), so flipping the kill switch off strands
+  every in-flight guest-corporate ride at `processing`: the guest-corporate
+  sweep in `utils/payment_retry.py` polls only `pending`, and
+  `stripe_reconcile`'s healer bails on a ride with no `payment_intent_id`,
+  which a `company_allowance` ride never has. Recovery is manual, and the
+  trigger is deliberately flipping the incident kill switch — i.e. it fires
+  when the system is already degraded.
+- **Action:** reset `payment_status` to `pending` in that branch too (the
+  fail-closed branch immediately below it now does this, PR #4909), or make
+  `auto_settle_guest_corporate` release its own claim on any
+  `not result.success` rather than only on a raise. Add a test through the
+  `auto_settle_guest_corporate` → `settle_corporate` seam —
+  `tests/test_guest_auto_settle.py` currently stubs `settle_corporate` out
+  entirely, which is why neither this nor the PR #4909 blocker was caught by
+  the existing suite.
+- **Files:** `backend/services/payment_service.py`,
+  `backend/tests/test_guest_auto_settle.py`.
 
 ## Recently completed (do not redo)
 

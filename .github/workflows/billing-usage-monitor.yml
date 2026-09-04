@@ -1,0 +1,271 @@
+name: Billing / usage cost monitor (optional)
+
+# Follow-up to .github/workflows/{cert-domain,renewal-calendar,secret-rotation,
+# supabase-capacity}-monitor.yml (ACTION_ITEMS.md E13,
+# docs/change-log/2026-09-03-e5-leading-indicator-monitoring.md). Those cover
+# subscription-style renewal dates; this covers the other risk class —
+# USAGE-based services with no renewal date at all, where the actual failure
+# mode is a spend spike or an unpaid/negative balance quietly suspending the
+# account (e.g. Twilio stops sending OTP SMS mid-day with no code-level
+# error — it just silently fails at the provider).
+#
+# Gated per-service behind OPTIONAL secrets — each check independently
+# skips with a no-op if its own secrets are unset, same pattern as
+# supabase-capacity-monitor.yml / deploy-fly.yml's FLY_HEALTH_URL. No
+# secret is created by this change; a human must create each one.
+#
+# HONEST SCOPE LIMITATION (do not remove this comment when editing):
+# This workflow covers Stripe and Twilio, which both expose a simple
+# REST balance endpoint reachable with just an API key. Google Maps
+# Platform and Firebase (Blaze plan) do NOT have an equivalent — their
+# real spend/budget signal lives behind the GCP Billing Budgets API,
+# which needs a service account with billing.budgets scope and a
+# configured budget object, a materially bigger setup than "paste an API
+# key." That is intentionally NOT built here — see
+# docs/runbooks/renewal-calendar.md's Google Maps / Firebase rows for the
+# tracked gap. Do not silently claim GCP coverage by extending this
+# workflow's name/scope without actually adding that integration.
+
+on:
+  schedule:
+    # Daily 13:00 UTC.
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+    inputs:
+      force_open_issue:
+        description: "Open/update the tracked issue even if healthy (manual override, for testing)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  # Twilio: alert if balance drops below this many (whole) units of the
+  # account's currency. Twilio SMS OTP delivery is CLAUDE.md's
+  # highest-criticality Twilio use — a suspended account fails OTP sends
+  # silently, not as a code-level error, so this threshold should stay
+  # generous rather than tight.
+  TWILIO_WARN_BALANCE: "20"
+  TWILIO_CRITICAL_BALANCE: "5"
+  ISSUE_LABEL: "billing-usage-monitor"
+
+jobs:
+  check-and-notify:
+    name: Billing / usage check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Stripe balance
+        id: stripe
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+        run: |
+          set -uo pipefail
+          if [ -z "${STRIPE_SECRET_KEY}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "⏭️  STRIPE_SECRET_KEY not set — skipping Stripe balance check."
+            echo "   Create a restricted key with only the Balance:Read permission"
+            echo "   (Stripe Dashboard → Developers → API keys → Create restricted key)."
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+          response=$(curl -sS --max-time 15 -u "${STRIPE_SECRET_KEY}:" "https://api.stripe.com/v1/balance")
+
+          # Stripe's balance is an ARRAY per currency (multi-currency accounts
+          # are normal). A negative "available" amount for any currency means
+          # Stripe owes riders/drivers less than it's already paid out —
+          # Stripe will debit the connected bank account to cover the gap.
+          findings=$(echo "$response" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          if 'error' in d:
+              print('ERROR: ' + d['error'].get('message', 'unknown Stripe API error'))
+              sys.exit(0)
+          lines = []
+          any_negative = False
+          for bucket in d.get('available', []):
+              amt = bucket['amount'] / 100
+              cur = bucket['currency'].upper()
+              flag = ''
+              if bucket['amount'] < 0:
+                  flag = ' 🔴 NEGATIVE — Stripe will debit the connected bank account to cover this'
+                  any_negative = True
+              lines.append(f\"- Available: {amt:.2f} {cur}{flag}\")
+          for bucket in d.get('pending', []):
+              amt = bucket['amount'] / 100
+              cur = bucket['currency'].upper()
+              lines.append(f\"- Pending: {amt:.2f} {cur}\")
+          print('ANY_NEGATIVE=' + ('true' if any_negative else 'false'))
+          print('\n'.join(lines))
+          ")
+
+          if echo "$findings" | grep -q "^ERROR:"; then
+            {
+              echo "findings<<EOF"
+              echo "$findings"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "alert=true" >> "$GITHUB_OUTPUT"
+          else
+            any_negative=$(echo "$findings" | grep "^ANY_NEGATIVE=" | cut -d= -f2)
+            body=$(echo "$findings" | grep -v "^ANY_NEGATIVE=")
+            {
+              echo "findings<<EOF"
+              echo "$body"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "alert=${any_negative}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check Twilio balance
+        id: twilio
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${TWILIO_ACCOUNT_SID}" ] || [ -z "${TWILIO_AUTH_TOKEN}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "⏭️  TWILIO_ACCOUNT_SID and/or TWILIO_AUTH_TOKEN not set — skipping Twilio balance check."
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+          response=$(curl -sS --max-time 15 \
+            -u "${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}" \
+            "https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Balance.json")
+
+          result=$(echo "$response" | python3 -c "
+          import sys, json, os
+          d = json.load(sys.stdin)
+          if 'code' in d and 'balance' not in d:
+              print('ERROR: ' + d.get('message', 'unknown Twilio API error'))
+              sys.exit(0)
+          bal = float(d['balance'])
+          cur = d['currency']
+          warn = float(os.environ['TWILIO_WARN_BALANCE'])
+          crit = float(os.environ['TWILIO_CRITICAL_BALANCE'])
+          if bal <= crit:
+              sev = 'CRITICAL'
+          elif bal <= warn:
+              sev = 'WARN'
+          else:
+              sev = 'OK'
+          print(f'SEVERITY={sev}')
+          print(f'Balance: {bal:.2f} {cur}')
+          " )
+
+          if echo "$result" | grep -q "^ERROR:"; then
+            {
+              echo "findings<<EOF"
+              echo "$result"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "alert=true" >> "$GITHUB_OUTPUT"
+          else
+            sev=$(echo "$result" | grep "^SEVERITY=" | cut -d= -f2)
+            body=$(echo "$result" | grep -v "^SEVERITY=")
+            {
+              echo "findings<<EOF"
+              echo "$body (severity: ${sev})"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            if [ "$sev" = "OK" ]; then
+              echo "alert=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "alert=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Check for existing open tracked issue
+        id: existing
+        if: steps.stripe.outputs.configured == 'true' || steps.twilio.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list \
+            --repo "${REPO}" \
+            --state open \
+            --label "${ISSUE_LABEL}" \
+            --json number \
+            --jq '.[0].number // empty')
+          echo "existing=${existing}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update tracked issue
+        if: steps.stripe.outputs.alert == 'true' || steps.twilio.outputs.alert == 'true' || github.event.inputs.force_open_issue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          STRIPE_CONFIGURED: ${{ steps.stripe.outputs.configured }}
+          STRIPE_FINDINGS: ${{ steps.stripe.outputs.findings }}
+          TWILIO_CONFIGURED: ${{ steps.twilio.outputs.configured }}
+          TWILIO_FINDINGS: ${{ steps.twilio.outputs.findings }}
+          EXISTING_ISSUE: ${{ steps.existing.outputs.existing }}
+        run: |
+          set -euo pipefail
+
+          stripe_section="Not checked — STRIPE_SECRET_KEY not configured."
+          if [ "${STRIPE_CONFIGURED}" = "true" ]; then
+            stripe_section="${STRIPE_FINDINGS}"
+          fi
+
+          twilio_section="Not checked — TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN not configured."
+          if [ "${TWILIO_CONFIGURED}" = "true" ]; then
+            twilio_section="${TWILIO_FINDINGS}"
+          fi
+
+          body=$(cat <<EOF
+          # Billing / usage cost check — action needed
+
+          Automated daily check (\`.github/workflows/billing-usage-monitor.yml\`).
+          Covers Stripe balance and Twilio balance only — Google Maps and
+          Firebase billing are a documented, tracked gap (need the GCP
+          Billing Budgets API, not built here — see
+          \`docs/runbooks/renewal-calendar.md\`).
+
+          ## Stripe
+          ${stripe_section}
+
+          ## Twilio
+          ${twilio_section}
+
+          ## Next step
+          - Stripe negative balance: Stripe will debit the connected bank
+            account automatically — confirm that account has sufficient funds,
+            don't assume Stripe blocks on this.
+          - Twilio low balance: top up before it hits 0 — a suspended Twilio
+            account fails OTP SMS sends silently (no application-level error),
+            directly breaking rider/driver sign-in.
+
+          ---
+          *Auto-generated by \`.github/workflows/billing-usage-monitor.yml\`.*
+          EOF
+          )
+
+          if [ -n "$EXISTING_ISSUE" ]; then
+            gh issue edit "$EXISTING_ISSUE" --repo "${REPO}" --body "$body" --title "Billing/usage cost check — action needed ($(date -u +%Y-%m-%d))"
+          else
+            gh issue create \
+              --repo "${REPO}" \
+              --title "Billing/usage cost check — action needed ($(date -u +%Y-%m-%d))" \
+              --body "$body" \
+              --label "${ISSUE_LABEL}"
+          fi
+
+      - name: No-op summary
+        if: steps.stripe.outputs.alert != 'true' && steps.twilio.outputs.alert != 'true' && github.event.inputs.force_open_issue != 'true'
+        env:
+          STRIPE_CONFIGURED: ${{ steps.stripe.outputs.configured }}
+          TWILIO_CONFIGURED: ${{ steps.twilio.outputs.configured }}
+        run: |
+          echo "✅ No billing/usage alerts."
+          echo "Stripe configured: ${STRIPE_CONFIGURED:-false}"
+          echo "Twilio configured: ${TWILIO_CONFIGURED:-false}"

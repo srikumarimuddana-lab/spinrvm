@@ -1296,7 +1296,25 @@ async def websocket_endpoint(
                         rides = await fetch_monitoring_rides()
                         await websocket.send_json({"type": "rides_snapshot", "rides": rides})
                 except Exception as _snap_exc:
-                    logger.warning(f"[WS] snapshot fetch failed for {connection_key}: {_snap_exc}")
+                    # Was logger.warning — a DB-read failure that breaks the
+                    # live monitoring map/list for every connected admin is a
+                    # user-visible error, not a recoverable anomaly. warning
+                    # level meant it wasn't reliably captured/alerted on, so
+                    # this failure mode could (and did) go unnoticed while
+                    # admins saw a mislabeled "auth error" with no real detail
+                    # in the UI. error level + Sentry match the Observability
+                    # Conventions rule: user-visible errors → Sentry + error log.
+                    logger.error(f"[WS] snapshot fetch failed for {connection_key}: {_snap_exc}")
+                    try:
+                        import sentry_sdk  # type: ignore
+
+                        with sentry_sdk.push_scope() as scope:
+                            scope.set_tag("domain", "admin")
+                            scope.set_tag("surface", "backend")
+                            scope.set_tag("ws_snapshot_type", data["type"])
+                            sentry_sdk.capture_exception(_snap_exc)
+                    except Exception as _sentry_err:  # pragma: no cover - best-effort telemetry only
+                        logger.debug(f"[WS] snapshot-failure Sentry capture skipped: {_sentry_err}")
                     await websocket.send_json({"type": "error", "message": "snapshot_failed"})
 
             else:

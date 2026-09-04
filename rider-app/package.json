@@ -107,6 +107,7 @@
     "jest": "30.3.0",
     "jest-expo": "~57.0.5",
     "patch-package": "^8.0.1",
+    "serve": "^14.2.6",
     "typescript": "~5.9.2"
   },
   "overrides": {

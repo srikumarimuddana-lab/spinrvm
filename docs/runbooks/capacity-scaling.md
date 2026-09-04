@@ -389,3 +389,29 @@ Stated plainly so nobody plans against numbers that were never observed:
 
 Treat every number here as a planning estimate until the loadtest harness has
 somewhere to run.
+
+---
+
+## 9. Automated disk/compute polling (optional, off by default)
+
+`.github/workflows/supabase-capacity-monitor.yml` (added 2026-09-03, see
+`docs/change-log/2026-09-03-e5-leading-indicator-monitoring.md`) can poll
+Supabase's Management API for disk-usage percentage on a schedule, closing
+the "Disk size" row's manual-check gap noted in §5's automatic-vs-manual
+table above. It is **gated behind two optional GitHub secrets**
+(`SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`) and skips cleanly with a
+no-op if either is unset — same pattern as `deploy-fly.yml`'s
+`FLY_HEALTH_URL`. Nobody has created a Supabase Management API token for
+this yet; until one exists, this section is a no-op every run and disk/
+compute still require the manual dashboard check in §5.
+
+To activate: create a Management API token (Supabase Dashboard → Account →
+Access Tokens — org-level, keep scope minimal), the project ref (from the
+project URL or Settings → General), and set both as GitHub repo secrets.
+No code change is needed after that — the workflow picks them up on its
+next scheduled run.
+
+This does not replace `capacity_watchdog`'s existing real-time alerting in
+§6 (DB queue depth, connection saturation) — it only adds the one signal
+that loop doesn't cover: raw disk-usage percentage against the Supabase
+plan ceiling, checked once a day rather than continuously.

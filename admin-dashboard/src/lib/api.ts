@@ -606,6 +606,7 @@ export {
     downloadInsuranceBillingSgi,
     downloadInsuranceBillingKnightArcher,
     downloadAirportTrips,
+    downloadSaskatoonCityTripLog,
     listDataTransferJobs,
     getDataTransferJob,
     regenerateDataTransferJobDownload,

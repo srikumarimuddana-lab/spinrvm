@@ -605,9 +605,7 @@ class TestPeriod1InformationalRows:
             return []
 
         with _patch_get_rows(get_rows_side):
-            rows, total_km, groups, truncated = asyncio.run(
-                compliance._period1_informational_rows(_START, _END)
-            )
+            rows, total_km, groups, truncated = asyncio.run(compliance._period1_informational_rows(_START, _END))
 
         assert not truncated
         assert total_km == Decimal("12.5")
@@ -745,3 +743,265 @@ class TestPeriod1InformationalRows:
         assert not p1_queries
         assert all(r["phase"] != "Period 1 — contingent, not billed" for r in captured["rows"])
         assert "Periods 2+3 only" in captured["subtitle"][0]
+
+
+class TestSaskatoonCityTripLogRows:
+    """_saskatoon_city_trip_log_rows — City of Saskatoon monthly trip log:
+    completed rides, plus rides cancelled by the rider or driver after a
+    driver had already accepted, scoped to the Saskatoon service area."""
+
+    def _get_rows_side(self, rides, saskatoon_areas=None, drivers=None):
+        areas = saskatoon_areas if saskatoon_areas is not None else [{"id": "sk1", "name": "Saskatoon"}]
+        driver_rows = drivers if drivers is not None else []
+
+        async def side(table, filters=None, **kw):
+            if table == "service_areas":
+                return areas
+            if table == "rides":
+                return rides
+            if table == "drivers":
+                return driver_rows
+            return []
+
+        return side
+
+    @staticmethod
+    def _passthrough_decrypt():
+        """_decrypt_driver_pii round-trips through a Vault RPC this unit
+        test has no business calling — patch it to identity so the test
+        exercises this module's own lookup/mapping logic, not the vault
+        client, matching how _patch_get_rows isolates the Supabase query
+        layer the same way."""
+        return patch("backend.routes.admin.compliance._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d))
+
+    def test_completed_ride_included_with_full_timeline(self):
+        rides = [
+            {
+                "id": "r1",
+                "status": "completed",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": "2026-07-05T10:10:00Z",
+                "ride_completed_at": "2026-07-05T10:30:00Z",
+                "cancelled_at": None,
+                "cancelled_by": None,
+                "driver_id": "d1",
+            }
+        ]
+        drivers = [{"id": "d1", "license_number": "SK-DL-778899"}]
+        with (
+            _patch_get_rows(self._get_rows_side(rides, drivers=drivers)),
+            self._passthrough_decrypt(),
+        ):
+            rows, truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert not truncated
+        assert rows == [
+            {
+                "Request_Timestamp": "2026-07-05 10:00 UTC",
+                "Accept_Timestamp": "2026-07-05 10:02 UTC",
+                "Begin_Timestamp": "2026-07-05 10:10 UTC",
+                "End_Timestamp": "2026-07-05 10:30 UTC",
+                "Passenger_Wait_Time (Mins)": "10",
+                "Trip_Status": "Completed",
+                "Driver_License_Number": "SK-DL-778899",
+            }
+        ]
+
+    def test_cancelled_before_acceptance_excluded(self):
+        """Rider/driver can cancel while still searching / offer-pending —
+        no driver has accepted yet, so this is out of scope."""
+        rides = [
+            {
+                "id": "r2",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": None,
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:01:00Z",
+                "cancelled_by": "rider",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == []
+
+    def test_cancelled_after_acceptance_by_rider_included_with_blank_timeline(self):
+        rides = [
+            {
+                "id": "r3",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:05:00Z",
+                "cancelled_by": "rider",
+                "driver_id": "d3",
+            }
+        ]
+        drivers = [{"id": "d3", "license_number": "SK-DL-111222"}]
+        with (
+            _patch_get_rows(self._get_rows_side(rides, drivers=drivers)),
+            self._passthrough_decrypt(),
+        ):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == [
+            {
+                "Request_Timestamp": "2026-07-05 10:00 UTC",
+                "Accept_Timestamp": "2026-07-05 10:02 UTC",
+                "Begin_Timestamp": "",
+                "End_Timestamp": "",
+                "Passenger_Wait_Time (Mins)": "",
+                "Trip_Status": "Cancelled by Rider",
+                "Driver_License_Number": "SK-DL-111222",
+            }
+        ]
+
+    def test_cancelled_after_acceptance_by_driver_included(self):
+        rides = [
+            {
+                "id": "r4",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:06:00Z",
+                "cancelled_by": "driver",
+                "driver_id": "d4",
+            }
+        ]
+        drivers = [{"id": "d4", "license_number": "SK-DL-333444"}]
+        with (
+            _patch_get_rows(self._get_rows_side(rides, drivers=drivers)),
+            self._passthrough_decrypt(),
+        ):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert len(rows) == 1
+        assert rows[0]["Trip_Status"] == "Cancelled by Driver"
+        assert rows[0]["Driver_License_Number"] == "SK-DL-333444"
+
+    def test_driver_lookup_only_queries_kept_rows_driver_ids(self):
+        """A ride excluded from the report (cancelled before acceptance)
+        must not trigger a drivers lookup for its driver_id — the batched
+        $in query is built from the *kept* rows only."""
+        rides = [
+            {
+                "id": "r_excluded",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T09:00:00Z",
+                "driver_accepted_at": None,
+                "cancelled_by": "rider",
+                "driver_id": "d_excluded",
+            },
+            {
+                "id": "r_kept",
+                "status": "completed",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": "2026-07-05T10:10:00Z",
+                "ride_completed_at": "2026-07-05T10:30:00Z",
+                "driver_id": "d_kept",
+            },
+        ]
+        captured = {}
+
+        async def side(table, filters=None, **kw):
+            if table == "service_areas":
+                return [{"id": "sk1", "name": "Saskatoon"}]
+            if table == "rides":
+                return rides
+            if table == "drivers":
+                captured["drivers"] = filters
+                return [{"id": "d_kept", "license_number": "SK-DL-555"}]
+            return []
+
+        with _patch_get_rows(side), self._passthrough_decrypt():
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert captured["drivers"] == {"id": {"$in": ["d_kept"]}}
+        assert len(rows) == 1
+        assert rows[0]["Driver_License_Number"] == "SK-DL-555"
+
+    def test_system_auto_cancel_excluded_even_if_driver_had_accepted(self):
+        """Out of scope by spec (rider/driver cancellations only), so
+        excluded regardless of driver_accepted_at — a system auto-cancel
+        (no_drivers_found) can't really carry one, but the exclusion must
+        not silently depend on that."""
+        rides = [
+            {
+                "id": "r5",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "ride_started_at": None,
+                "ride_completed_at": None,
+                "cancelled_at": "2026-07-05T10:06:00Z",
+                "cancelled_by": "system",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == []
+
+    def test_admin_cancel_excluded(self):
+        rides = [
+            {
+                "id": "r6",
+                "status": "cancelled",
+                "ride_requested_at": "2026-07-05T10:00:00Z",
+                "driver_accepted_at": "2026-07-05T10:02:00Z",
+                "cancelled_by": "admin",
+            }
+        ]
+        with _patch_get_rows(self._get_rows_side(rides)):
+            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert rows == []
+
+    def test_scoped_to_saskatoon_service_area_and_request_date(self):
+        captured = {}
+
+        async def side(table, filters=None, **kw):
+            captured[table] = filters
+            if table == "service_areas":
+                return [{"id": "sk1", "name": "Saskatoon"}]
+            return []
+
+        with _patch_get_rows(side):
+            asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+        assert captured["service_areas"] == {"name": {"$regex": "Saskatoon"}}
+        assert captured["rides"]["service_area_id"] == {"$in": ["sk1"]}
+        assert captured["rides"]["status"] == {"$in": ["completed", "cancelled"]}
+        assert captured["rides"]["ride_requested_at"] == {"$gte": _START.isoformat(), "$lte": _END.isoformat()}
+        # No rides -> no driver ids -> the drivers table must never be queried.
+        assert "drivers" not in captured
+
+    def test_raises_loudly_when_saskatoon_area_is_missing(self):
+        """Never silently falls back to 'every area' (CLAUDE.md: don't mask
+        a failing lookup behind a generic fallback) — a City-of-Saskatoon
+        report that quietly included every service area would misstate the
+        filing."""
+        with _patch_get_rows(self._get_rows_side([], saskatoon_areas=[])):
+            with pytest.raises(RuntimeError, match="Saskatoon"):
+                asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
+
+
+class TestReportMinutesBetween:
+    def test_normal_case_rounds_to_nearest_minute(self):
+        assert compliance._report_minutes_between("2026-07-05T10:00:00Z", "2026-07-05T10:04:40Z") == 5
+
+    def test_missing_either_end_returns_none(self):
+        assert compliance._report_minutes_between(None, "2026-07-05T10:04:40Z") is None
+        assert compliance._report_minutes_between("2026-07-05T10:00:00Z", None) is None
+
+    def test_non_positive_duration_returns_none(self):
+        assert compliance._report_minutes_between("2026-07-05T10:05:00Z", "2026-07-05T10:05:00Z") is None
+        assert compliance._report_minutes_between("2026-07-05T10:05:00Z", "2026-07-05T10:00:00Z") is None

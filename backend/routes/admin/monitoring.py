@@ -160,28 +160,28 @@ async def fetch_monitoring_drivers() -> List[Dict[str, Any]]:
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
     driver_ids = [d["id"] for d in drivers]
 
-    users_res, rides_res, present_ids = await asyncio.gather(
-        run_sync(
-            lambda: (
-                supabase.table("users")
-                .select("id, first_name, last_name, phone, profile_image")
-                .in_("id", user_ids)
-                .execute()
-            )
+    # Batched: a bare `.in_()` puts every id in the URL as a `col=in.(...)`
+    # query param, and the edge proxy in front of PostgREST rejects that past
+    # roughly 840 ids with a plain-text 400 that never reaches PostgREST's own
+    # logs (see repositories/_base.py's get_rows_batched_in docstring). At
+    # _MONITORING_ROW_CAP up to 2000 drivers, both user_ids and driver_ids can
+    # exceed that threshold — this is the most likely real cause behind a
+    # live-reported "snapshot_failed" WS error with no further detail.
+    users_list, active_rides, present_ids = await asyncio.gather(
+        db_supabase.get_rows_batched_in(
+            "users", "id", user_ids, columns="id, first_name, last_name, phone, profile_image"
         ),
-        run_sync(
-            lambda: (
-                supabase.table("rides")
-                .select("id, driver_id")
-                .in_("status", ON_RIDE_STATUSES)
-                .in_("driver_id", driver_ids)
-                .execute()
-            )
+        db_supabase.get_rows_batched_in(
+            "rides",
+            "driver_id",
+            driver_ids,
+            extra_filters={"status": {"$in": ON_RIDE_STATUSES}},
+            columns="id, driver_id",
         ),
         present_driver_ids(driver_ids),
     )
-    users_by_id = {u["id"]: u for u in _rows_from_res(users_res)}
-    active_ride_by_driver = {r["driver_id"]: r["id"] for r in _rows_from_res(rides_res)}
+    users_by_id = {u["id"]: u for u in users_list}
+    active_ride_by_driver = {r["driver_id"]: r["id"] for r in active_rides}
 
     result = []
     for d in drivers:
@@ -249,26 +249,24 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
     rider_ids = list({r["rider_id"] for r in rides if r.get("rider_id")})
     driver_ids = list({r["driver_id"] for r in rides if r.get("driver_id")})
 
-    riders_res, drivers_map_res = await asyncio.gather(
-        run_sync(
-            lambda: (
-                supabase.table("users")
-                .select("id, first_name, last_name, phone, profile_image")
-                .in_("id", rider_ids)
-                .execute()
-            )
+    # Batched — same reasoning as fetch_monitoring_drivers above: a bare
+    # `.in_()` risks a URL-length rejection from the edge proxy once the id
+    # list grows with the fleet (rider_ids/driver_ids here scale with
+    # _MONITORING_ROW_CAP, up to 2000 rides).
+    riders_list, drivers_rows = await asyncio.gather(
+        db_supabase.get_rows_batched_in(
+            "users", "id", rider_ids, columns="id, first_name, last_name, phone, profile_image"
         ),
-        run_sync(lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()),
+        db_supabase.get_rows_batched_in("drivers", "id", driver_ids, columns="id, user_id, lat, lng"),
     )
-    riders_by_id = {u["id"]: u for u in _rows_from_res(riders_res)}
-    drivers_rows = _rows_from_res(drivers_map_res)
+    riders_by_id = {u["id"]: u for u in riders_list}
     drivers_by_id = {d["id"]: d for d in drivers_rows}
 
     driver_user_ids = [d["user_id"] for d in drivers_rows if d.get("user_id")]
-    driver_users_res = await run_sync(
-        lambda: supabase.table("users").select("id, first_name, last_name, phone").in_("id", driver_user_ids).execute()
+    driver_users_list = await db_supabase.get_rows_batched_in(
+        "users", "id", driver_user_ids, columns="id, first_name, last_name, phone"
     )
-    driver_users_by_id = {u["id"]: u for u in _rows_from_res(driver_users_res)}
+    driver_users_by_id = {u["id"]: u for u in driver_users_list}
 
     result = []
     for r in rides:

@@ -58,3 +58,16 @@ dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions
 60a0552a4a4448b8a6e859e537a3a5fa360d8dba:.gitleaksignore:spinr-driver-export-pii:33
 60a0552a4a4448b8a6e859e537a3a5fa360d8dba:.gitleaksignore:spinr-driver-export-pii:39
 60a0552a4a4448b8a6e859e537a3a5fa360d8dba:.gitleaksignore:spinr-driver-export-pii:42
+
+# PR #4913: .github/workflows/billing-usage-monitor.yml's Stripe balance
+# check runs `curl -u "${STRIPE_SECRET_KEY}:"` -- Stripe's own documented
+# basic-auth convention (secret key as username, empty password). Gitleaks'
+# curl-auth-user rule flags any `-u "$VAR:"` shell-interpolated curl
+# invocation regardless of whether the value is a literal or a variable
+# reference; there is no literal secret in the diff (confirmed: the
+# gitleaks job's own --redact output shows only "REDACTED", and the source
+# line is a shell variable expansion, not a hardcoded string). Not present
+# in the equivalent Twilio check on the same line pattern (`-u
+# "${SID}:${TOKEN}"`) -- the rule apparently only matches the
+# empty-password form.
+9e579dc67bf82e839637985698fdacf3cb2d7d1e:.github/workflows/billing-usage-monitor.yml:curl-auth-user:78

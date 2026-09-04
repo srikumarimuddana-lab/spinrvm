@@ -316,3 +316,108 @@ iternio's Nitro codegen builds on our exact stack (Expo SDK 55 / RN 0.85.2), and
 + the route-map surface actually render on an Android Auto head unit. Until that build passes,
 treat the integration as unproven — do not merge to a release branch. Per the repo's "surface
 loudly, don't mask" rule, the residual risk is stated, not hidden.
+
+**Update (2026-09-04):** first real-hardware pass completed — Toyota Grand Highlander MMIC. Map
+and template rendered correctly; found (and reportedly fixed, on a branch not yet in this repo as
+of this writing) a vehicle-icon-at-90° bug — the marker pointed perpendicular to the direction of
+travel instead of along it. This is exactly the class of bug `carSurface.tsx`'s own header warns
+about (marker heading vs. camera bearing, same family as the 2026-08-20/21/28 fixes). **Before the
+next build:** confirm that fix landed as a real commit with a change-log entry — nothing in this
+repo currently documents the Grand Highlander session, the bug, or the fix, which risks repeating
+the "shipped a hardware-only fix with no record" pattern already seen three times on this surface.
+
+---
+
+## OTA vs. native build — policy, not a per-change judgment call
+
+**Every Android Auto surface change ships via a full EAS build (`android-auto` profile) → DHU or
+real-hardware validation → Play internal-track resubmission. Never via EAS Update (OTA), even for
+a JS-only diff.**
+
+Two independent reasons:
+
+1. **Technical fence already in the repo.** `driver-app/app.config.ts`'s `runtimeVersion` is a
+   literal pinned string (`'2.7.0'`, not a policy like `appVersion`) specifically because
+   `@iternio/react-native-auto-play` is a compiled native module — a JS/native mismatch doesn't
+   crash, it silently disables Android Auto for the driver (`register.ts` degrades to "car support
+   disabled"). A same-`runtimeVersion` OTA that only touches JS/TSX in `lib/androidAuto/` is
+   technically *eligible* to ship under Expo's own rules — eligible is not the same as safe here.
+2. **Sideloading doesn't reach a real car at all.** Per "External approvals" above: Android Auto's
+   developer-mode "Unknown sources" toggle does not apply to this app type — a locally-built or
+   `preview`-channel APK will never appear in a connected vehicle regardless of OTA/update channel.
+   The only path onto a real head unit is the `android-auto` build profile → Play internal track.
+   An OTA can't route around this even if someone wanted it to.
+
+The car surface is also the one part of the app nobody can see or interact with while it's live in
+a moving vehicle — a bad phone-screen OTA gets screenshotted and reported same-day; a bad
+Android-Auto OTA (like the 90° icon) drives silently until a driver happens to notice. Treat this
+as a standing rule, not a per-PR decision.
+
+---
+
+## UX & design guidance for the car surface (2026-09-04)
+
+Recommendations below are grounded in what's actually implemented today (`shared/components/RouteLine.tsx`,
+`shared/constants/routeMapStyle.ts`, `.claude/context/brand-spinr.md`) plus Android Auto's own
+platform constraints — not invented from scratch. Cite the file when changing any of this so the
+next person can verify the same way.
+
+**Route color — keep the existing orange→red gradient, don't switch to green.**
+`RouteLine.tsx` is one component shared by every map in the app (phone *and* car), specifically so
+"every map reads the same" (its own docstring). Its gradient
+(`ROUTE_GRADIENT_START = '#FF9500'` → `ROUTE_GRADIENT_END = '#EE2B2B'`, `routeMapStyle.ts`) already
+matches Spinr's actual brand red/orange (`brand-spinr.md`: primary red `#FF3B30`, orange accent
+`#FF9500`) — it's deliberate brand use, not a placeholder. Green would (a) desync car vs. phone for
+the same trip, (b) move off-brand (`brand-spinr.md` explicitly: "Spinr is not a teal/green or amber
+brand"), and (c) sit next to the existing red dropoff pin (`#EF4444`) — red/green adjacency is the
+single worst color pair for deuteranopia/protanopia (~8% of men). If a future multi-route-choice
+feature needs a "selected vs. alternate" cue, differentiate by **stroke weight + opacity**, not
+hue — colorblind-safe and matches the mental model every Google/Apple Maps user already has.
+
+**Trip-completion / receipt accent — reuse `#F59E0B`, don't invent a new orange.**
+`ROUTE_PIN_COLORS.completion = '#F59E0B'` (`routeMapStyle.ts`) already IS Spinr's semantic
+"trip complete" color, and it matches `brand-spinr.md`'s dark-mode Warning token exactly (light
+mode: `#d97706`). Use it for any receipt/fare-summary accent instead of picking a new amber — free
+consistency already paid for. Caveat: dense fare text is driver-distraction-restricted content on
+the car screen mid-drive; this only applies to the phone-app/email receipt unless the fare summary
+is explicitly shown only once parked.
+
+**No animation on the car surface — it's a hard platform rule, not a preference.** Per "No
+animation, ever" above: Google's Car App Quality guidelines forbid animated elements on a connected
+head unit and Play enforces it at review. A "playful end-of-trip" moment has to live on the
+**phone app** (`driver-app`'s own trip-complete/earnings screen) instead — same personality, zero
+Play-review risk, and arguably better UX anyway (nobody should be watching an animation while
+parked waiting to pull away).
+
+**Genuine differentiators already shipped, worth calling out rather than burying:**
+- **Live demand heatmap rendered on the car screen itself** (`carSurface.tsx`, HM-30, idle-state
+  only) — most rideshare Android Auto integrations are rider-facing-only or bare nav; a
+  driver-facing heatmap on the *car* screen, not just the phone, is uncommon.
+- **SOS reachable from the car head unit** (`register.ts`'s `sosAction`, deliberately non-primary
+  so it's never crowded out by the leg-progress button) — full flow: header action → confirm
+  dialog → notifies safety team + emergency contacts. A real safety differentiator, not cosmetic.
+
+**Strategic option, not a quick change: `MapTemplate` vs. `NavigationTemplate`.** Every file in
+`lib/androidAuto/` uses Android's car-app-library `MapTemplate` (generic map + buttons); none use
+`NavigationTemplate` (the dedicated turn-by-turn class, the only one that unlocks
+instrument-cluster/HUD mirroring on supporting vehicles and native maneuver banners). Cosmetic
+polish on `MapTemplate` has a ceiling; true Uber/Lyft-level "integrated nav" feel requires migrating
+to `NavigationTemplate`'s `Navigator`/trip-update APIs — a real engineering project with a different
+lifecycle, not a color or copy change. Worth its own scoped decision once the current
+retest/rebuild cycle is done, not bundled into it.
+
+**Screen-size responsiveness.** `MapTemplate` itself scales natively to whatever the head unit
+reports — that part is Android's job. What Spinr controls and must test manually is everything
+drawn on top (`CarOfferPanel`, `CarTripCard`, heatmap polygons, the marker). Don't treat any one
+vehicle (e.g. the Grand Highlander) as the reference device — build a small DHU test matrix across
+2-3 aspect ratios (standard widescreen, a narrower/older unit, one large newer display) before
+each real-hardware pass.
+
+**Route-progress latency.** The camera already interpolates over a fixed 700ms
+(`CAMERA_ANIM_MS`, `carSurface.tsx`) — correct only if the GPS fix cadence feeding it
+(`carLocationTask.ts`) is roughly matched or slower. Not measured as of this writing; verify
+empirically on the next real-hardware pass rather than assuming it's fine.
+
+**rider-app has no Android Auto surface — believed intentional, not a gap.** A passenger doesn't
+need a car-screen app in someone else's vehicle, and Uber/Lyft don't build rider-side Android Auto
+either. Flagging only so this reads as a decision, not an oversight, if it's ever questioned.

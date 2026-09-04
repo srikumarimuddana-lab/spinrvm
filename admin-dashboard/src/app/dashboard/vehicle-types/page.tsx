@@ -22,7 +22,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
-import { Car, Plus, Pencil, Trash2, Users, Image as ImageIcon } from "lucide-react";
+import { Car, CarFront, Bus, BusFront, Plus, Pencil, Trash2, Users, Image as ImageIcon } from "lucide-react";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -49,6 +49,24 @@ interface VehicleType {
     // precedence over marker_variant in the apps; "" clears it.
     marker_image_url?: string;
     created_at?: string;
+}
+
+// `icon` stores an Ionicons name (see backend/seed_vehicle_types.py) consumed
+// by the mobile apps' <Ionicons name={...}> — lucide-react (what the admin
+// dashboard uses) has no equivalent lookup-by-name, so this maps the known
+// seeded names to a same-shaped lucide icon purely for a readable dashboard
+// preview. An unrecognized/custom icon name (an admin can free-type this
+// field) falls back to the generic Car glyph, same as before this mapping
+// existed.
+const VEHICLE_ICON_MAP: Record<string, typeof Car> = {
+    "car-compact": Car,
+    "car-sport": CarFront,
+    "bus": Bus,
+    "bus-outline": BusFront,
+};
+
+function vehicleIconLabel(icon: string): string {
+    return icon.replace(/-outline$/, "").split("-").map((w) => w[0]?.toUpperCase() + w.slice(1)).join(" ");
 }
 
 // Mirrors the icons bundled in the mobile apps (shared/components/CarMarker
@@ -282,7 +300,10 @@ export default function VehicleTypesPage() {
                                         className="h-full w-full object-contain p-4"
                                     />
                                 ) : (
-                                    <Car className="h-16 w-16 text-muted-foreground/30" />
+                                    (() => {
+                                        const FallbackIcon = VEHICLE_ICON_MAP[vt.icon] || Car;
+                                        return <FallbackIcon className="h-16 w-16 text-muted-foreground/30" />;
+                                    })()
                                 )}
                             </div>
 
@@ -303,9 +324,12 @@ export default function VehicleTypesPage() {
                                         <Users className="h-3.5 w-3.5" />
                                         {vt.capacity} seats
                                     </span>
-                                    <span className="flex items-center gap-1">
-                                        <Car className="h-3.5 w-3.5" />
-                                        {vt.icon}
+                                    <span className="flex items-center gap-1" title={vt.icon}>
+                                        {(() => {
+                                            const TypeIcon = VEHICLE_ICON_MAP[vt.icon] || Car;
+                                            return <TypeIcon className="h-3.5 w-3.5" />;
+                                        })()}
+                                        {vehicleIconLabel(vt.icon)}
                                     </span>
                                     <span className="flex items-center gap-1" title="Map marker">
                                         <img

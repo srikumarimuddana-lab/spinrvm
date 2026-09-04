@@ -132,6 +132,21 @@ def test_stripe_secret_key_masked_preview_roundtrip_passes_validation():
 
 
 @pytest.mark.unit
+def test_stripe_secret_key_masked_preview_with_mismatched_prefix_still_passes_validation():
+    """Reproduces the reported bug: a stored key whose prefix doesn't match
+    the current environment (e.g. sk_live_ sitting in a non-production
+    app_settings row) masks to 'sk_live_*****' on GET. Any settings save --
+    even one only touching an unrelated field like admin_theme_v2_enabled --
+    round-trips that preview unchanged and used to fail the whole request
+    with 'stripe_secret_key must start with sk_test_ outside production'
+    before the mask-roundtrip guard in admin_update_settings ever got a
+    chance to drop the field. The preview must pass validation regardless of
+    prefix; it's still stripped from the persisted payload downstream."""
+    req = admin_settings.SettingsUpdateRequest(stripe_secret_key="sk_live_*****")
+    assert req.stripe_secret_key == "sk_live_*****"
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "field,raw,expected",
     [

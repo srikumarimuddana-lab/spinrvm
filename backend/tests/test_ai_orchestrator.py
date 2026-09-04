@@ -302,6 +302,43 @@ class TestPinnedQuoteContext:
             await _run(adapter)
         assert _PIN_MARKER not in adapter.system
 
+    @pytest.mark.anyio
+    async def test_no_drivers_pin_renders_a_requote_only_block(self):
+        """Reported 2026-09-04: after "no drivers available" the rider said
+        "Yes" to trying again and the model answered that it had no active
+        quote. get_fare_quote's no-drivers branch now pins the endpoints with
+        no_drivers=True; the replay must carry the exact coordinates for a
+        re-quote and must NOT read as the bookable "LAST QUOTE" block rule
+        6c's booking shortcut keys on."""
+        adapter = self._SystemCapturingAdapter()
+        pinned = {
+            "no_drivers": True,
+            "pickup_lat": 50.4501,
+            "pickup_lng": -104.6178,
+            "pickup_address": "1855 Victoria Ave #304, Regina, SK S4P 3T7",
+            "dropoff_lat": 50.4497,
+            "dropoff_lng": -104.5345,
+            "dropoff_address": "2150 Prince of Wales Dr, Regina, SK S4V 2Z7",
+        }
+        with self._patch_pin(pinned):
+            await _run(adapter)
+        assert "LAST FARE CHECK IN THIS CONVERSATION" in adapter.system
+        assert _PIN_MARKER not in adapter.system
+        assert "[50.45010,-104.61780]" in adapter.system
+        assert "[50.44970,-104.53450]" in adapter.system
+        assert "2150 Prince of Wales Dr, Regina, SK S4V 2Z7" in adapter.system
+        assert "call get_fare_quote" in adapter.system
+        assert "do NOT call propose_ride_booking" in adapter.system
+        assert "quoted_total" not in adapter.system
+
+    def test_rule_6c_tells_the_model_what_a_fare_check_block_means(self):
+        from backend.ai.prompts import build_system_prompt
+
+        prompt = build_system_prompt({}, "rider")
+        assert 'A "LAST FARE CHECK IN THIS CONVERSATION"' in prompt
+        assert "never say you have no quote to work from" in prompt
+        assert "never book from that block directly" in prompt
+
 
 class TestGuards:
     @pytest.mark.anyio

@@ -108,6 +108,21 @@ async def _pinned_quote_context(conversation_id: str) -> str:
     dropoff_lat, dropoff_lng = _coord(pinned.get("dropoff_lat")), _coord(pinned.get("dropoff_lng"))
     if not all((pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)):
         return ""
+    if pinned.get("no_drivers"):
+        # Pinned by get_fare_quote's no-drivers branch: endpoints only, no
+        # vehicle or total, so this block is a re-quote instruction and must
+        # never read as a bookable trip (rule 6c's booking shortcut keys on
+        # the "LAST QUOTE" wording, which this deliberately does not use).
+        return "\n".join(
+            [
+                "\n\nLAST FARE CHECK IN THIS CONVERSATION (no drivers were available, so nothing was priced):",
+                f"- pickup: {pinned.get('pickup_address') or 'unnamed'} [{pickup_lat},{pickup_lng}]",
+                f"- dropoff: {pinned.get('dropoff_address') or 'unnamed'} [{dropoff_lat},{dropoff_lng}]",
+                "If the rider says yes to re-checking or asks to try again, call get_fare_quote with exactly "
+                "these coordinates and addresses — do NOT re-resolve them, and do NOT call "
+                "propose_ride_booking from this block: there is no priced trip to book.",
+            ]
+        )
     bits = [
         "\n\nLAST QUOTE IN THIS CONVERSATION (you priced this trip — reuse it, do NOT re-resolve it):",
         f"- pickup: {pinned.get('pickup_address') or 'unnamed'} [{pickup_lat},{pickup_lng}]",

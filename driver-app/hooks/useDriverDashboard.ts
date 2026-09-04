@@ -186,7 +186,7 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
 // _layout.tsx covers the fully-killed case; Notifee dedupes by notification id,
 // so calling this too never yields a duplicate.
 // Dismissal is handled by the rideState effect inside the hook.
-function _surfaceOfferNotification(data: any): void {
+function _surfaceOfferNotification(data: any, forceSilent = false): void {
   const display = _displayRideOfferNotification;
   if (!display) return;
   const _num = (v: unknown): number | undefined => {
@@ -198,7 +198,16 @@ function _surfaceOfferNotification(data: any): void {
   // visible and useRideOfferSound is already looping the tone, so a channel
   // sound here would double-ring. Backgrounded-but-alive (WS still connected)
   // keeps the audible heads-up since the in-app loop can't be heard.
-  const silent = AppState.currentState === 'active';
+  //
+  // forceSilent overrides that inference for callers that KNOW the in-app tone
+  // is already playing. AppState is only a reliable proxy for the WS/FCM
+  // callers, which by construction only run while the app is foregrounded. The
+  // resume path (consumePendingOffer) can run at mount — during launch,
+  // AppState.currentState is not yet 'active' on either platform — and
+  // inferring `silent: false` there would post the LOUD channel with
+  // loopSound while the in-app tone is already looping: the exact double-ring
+  // this path exists to prevent.
+  const silent = forceSilent || AppState.currentState === 'active';
   // Settings → Sound & Haptics → Sound Effects: suppress the channel/APNs
   // sound (audio only — the card and full-screen wake still fire).
   const muted = !useAlertPrefsStore.getState().soundEffects;
@@ -1677,10 +1686,46 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Android Auto car session needs the identical behaviour on a car-only launch
   // where this hook never mounts. The buzz stays here: it is the phone's way of
   // announcing an offer, and the head unit raises its own alert instead.
-  const consumePendingOffer = useCallback(
-    () => consumePendingRideOffer({ onOffer: () => Vibration.vibrate([0, 500, 200, 500]) }),
-    [],
-  );
+  const consumePendingOffer = useCallback(async () => {
+    // consumePendingRideOffer() resolves true only when a still-live offer was
+    // actually surfaced into the store (see pendingRideOffer.ts) — never for an
+    // expired one or when a ride is already active. Ring + surface the native
+    // notification ONLY in that case. Unlike the WS/FCM handlers above, this
+    // AsyncStorage-hydration path (an offer that arrived while backgrounded or
+    // killed) previously only vibrated — it never started the in-app tone or
+    // touched the still-looping native/Notifee notification, which otherwise
+    // keeps ringing on its own timer while the driver looks at a silent offer
+    // card. If the WS reconnect below also replays the same offer, its guard
+    // (rideState !== 'idle') now finds the state this call already claimed and
+    // skips re-processing — so exactly one of the two paths ever rings.
+    // offerSound.play() is idempotent and _surfaceOfferNotification() re-posts
+    // the same notification id onto the silent channel while foreground, so
+    // calling both here always collapses to exactly one audible source,
+    // however the offer actually reached the driver.
+    const surfaced = await consumePendingRideOffer({
+      // Gated on the driver's own Settings → Sound & Haptics → Vibration
+      // preference, matching the WS and FCM handlers above. This path used to
+      // buzz unconditionally, so a driver who turned vibration off still got
+      // buzzed on every resume.
+      onOffer: () => {
+        if (useAlertPrefsStore.getState().vibration) {
+          Vibration.vibrate([0, 500, 200, 500]);
+        }
+      },
+    });
+    if (surfaced) {
+      offerSound.play();
+      const offer = useDriverStore.getState().incomingRide;
+      // forceSilent: the in-app tone is authoritative here by construction —
+      // play() fired on the line above. Never let AppState decide, since this
+      // runs at mount too (see _surfaceOfferNotification's own comment).
+      if (offer) _surfaceOfferNotification(offer, true);
+      // Same as the WS/FCM handlers: bring the offer panel to the front. The
+      // dashboard tab can still be mounted while a sibling tab is focused, so
+      // without this the driver hears the tone with no offer UI to act on.
+      router.replace('/driver/' as any);
+    }
+  }, [offerSound]);
 
   // ─── Crash recovery + background-push hydration ──────────────────
   // 1. Surface any offer received while backgrounded/killed — on mount AND on

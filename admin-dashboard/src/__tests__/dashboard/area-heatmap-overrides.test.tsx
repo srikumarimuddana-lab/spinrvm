@@ -70,7 +70,7 @@ const CONFIG = {
 };
 
 async function mountForm() {
-  const { AreaHeatmapOverrides } = await import("@/app/dashboard/service-areas/page");
+  const { AreaHeatmapOverrides } = await import("@/app/dashboard/service-areas/_components/area-heatmap-overrides");
   await act(async () => {
     render(
       <AreaHeatmapOverrides

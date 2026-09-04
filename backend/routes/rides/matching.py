@@ -136,7 +136,7 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
         # ending it here would strand the ride in `searching` until the
         # stuck-ride sweeper cancels it. The attempt cap above bounds this;
         # the escalating delay stops a broad outage becoming a retry storm.
-        logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[DISPATCH] retry failed for {ride_id}: {e}")
         _deps.spawn(_dispatch_retry(ride_id, delay=_dispatch_error_delay(attempt), attempt=attempt + 1))
 
 
@@ -180,9 +180,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     try:
         await _match_driver_to_ride_attempt(ride_id, ride=ride, attempt=attempt)
     except Exception:
-        logger.error(
+        logger.opt(exception=True).error(
             f"[DISPATCH] attempt {attempt} failed mid-dispatch for ride {ride_id} — re-arming retry with backoff",
-            exc_info=True,
         )
         try:
             _pending = await _deps.db_supabase.get_rows(
@@ -226,7 +225,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         # so this only ever skips a genuinely stale (already-accepted) ride.
         if ride.get("status") != RideStatus.SEARCHING:
             logger.info(
-                "[DISPATCH] skipping dispatch for ride %s — status is %s, not searching",
+                "[DISPATCH] skipping dispatch for ride {} — status is {}, not searching",
                 ride_id,
                 ride.get("status"),
             )
@@ -291,12 +290,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 _ride_area = await _deps.db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}) or {}
             except Exception:
                 _area_lookup_failed = True
-                logger.error(
-                    "[DISPATCH] service-area lookup failed for ride_id=%s area=%s — "
+                logger.opt(exception=True).error(
+                    "[DISPATCH] service-area lookup failed for ride_id={} area={} — "
                     "re-raising via resolve_matching_config rather than dispatching on global defaults",
                     ride_id,
                     ride.get("service_area_id"),
-                    exc_info=True,
                 )
 
         _parent_area_box: Dict[str, Any] = {}
@@ -317,10 +315,9 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 try:
                     row = await _deps.db_supabase.find_one("service_areas", {"id": _pid}) or {}
                 except Exception:
-                    logger.error(
-                        "[DISPATCH] parent service-area lookup failed for area=%s — treating as unset",
+                    logger.opt(exception=True).error(
+                        "[DISPATCH] parent service-area lookup failed for area={} — treating as unset",
                         ride.get("service_area_id"),
-                        exc_info=True,
                     )
             _parent_area_box["row"] = row
             return row
@@ -393,7 +390,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             if _area_ids is not None:
                 _dispatch_filter.update(build_driver_area_filter(_area_ids, allow_unassigned=_allow_unassigned_area))
                 logger.info(
-                    "[DISPATCH] service-area guard: ride area=%s → %d compatible driver area(s), unassigned_allowed=%s",
+                    "[DISPATCH] service-area guard: ride area={} → {} compatible driver area(s), unassigned_allowed={}",
                     ride.get("service_area_id"),
                     len(_area_ids),
                     _allow_unassigned_area,
@@ -581,16 +578,15 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         _before = len(all_drivers)
                         all_drivers = [d for d in all_drivers if d["id"] in _subscribed_ids]
                         logger.info(
-                            "[DISPATCH] subscription filter: area=%s kept %d/%d drivers",
+                            "[DISPATCH] subscription filter: area={} kept {}/{} drivers",
                             ride["service_area_id"],
                             len(all_drivers),
                             _before,
                         )
                 except Exception:
-                    logger.error(
-                        "[DISPATCH] subscription filter failed for area=%s — aborting dispatch attempt",
+                    logger.opt(exception=True).error(
+                        "[DISPATCH] subscription filter failed for area={} — aborting dispatch attempt",
                         ride.get("service_area_id"),
-                        exc_info=True,
                     )
                     all_drivers = []  # fail closed; the no-drivers path below schedules a retry
 
@@ -649,17 +645,16 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             _q_before = len(all_drivers)
                             all_drivers = [d for d in all_drivers if d["id"] not in _q_exhausted]
                             logger.info(
-                                "[DISPATCH] quota filter: area=%s kept %d/%d drivers (%d quota-exhausted)",
+                                "[DISPATCH] quota filter: area={} kept {}/{} drivers ({} quota-exhausted)",
                                 ride["service_area_id"],
                                 len(all_drivers),
                                 _q_before,
                                 len(_q_exhausted),
                             )
                 except Exception:
-                    logger.error(
-                        "[DISPATCH] quota filter failed for area=%s — dispatching unfiltered by quota",
+                    logger.opt(exception=True).error(
+                        "[DISPATCH] quota filter failed for area={} — dispatching unfiltered by quota",
                         ride.get("service_area_id"),
-                        exc_info=True,
                     )
 
             # Pure filter+rank: drops orphan/no-location/low-rated drivers and
@@ -696,7 +691,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     )
                     if _casc_to:
                         logger.info(
-                            "[DISPATCH] cascade: ride %s — no %s drivers, trying upgrade types %s",
+                            "[DISPATCH] cascade: ride {} — no {} drivers, trying upgrade types {}",
                             ride_id,
                             ride["vehicle_type_id"],
                             _casc_to,
@@ -745,7 +740,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                                 _casc_pool = [d for d in _casc_pool if d["id"] in _casc_present_set]
                             else:
                                 logger.warning(
-                                    "[DISPATCH] cascade: Redis unavailable — presence filter skipped for ride %s",
+                                    "[DISPATCH] cascade: Redis unavailable — presence filter skipped for ride {}",
                                     ride_id,
                                 )
                             # Skip drivers who already timed-out / declined this ride
@@ -753,7 +748,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             _casc_skip_vals = await _casc_mget(_casc_skip_keys)
                             _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
                         except Exception as _casc_redis_exc:
-                            logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
+                            logger.warning("[DISPATCH] cascade Redis filter skipped (unavailable): {}", _casc_redis_exc)
                         # Fix 2: apply subscription filter to cascade pool when the service area
                         # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
                         if _sub_required and _casc_pool:
@@ -795,16 +790,15 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                                 _casc_before_sub = len(_casc_pool)
                                 _casc_pool = [d for d in _casc_pool if d["id"] in _casc_subscribed]
                                 logger.info(
-                                    "[DISPATCH] cascade subscription filter: kept %d/%d drivers for ride %s",
+                                    "[DISPATCH] cascade subscription filter: kept {}/{} drivers for ride {}",
                                     len(_casc_pool),
                                     _casc_before_sub,
                                     ride_id,
                                 )
                             except Exception:
-                                logger.error(
-                                    "[DISPATCH] cascade subscription filter failed for area=%s — failing closed",
+                                logger.opt(exception=True).error(
+                                    "[DISPATCH] cascade subscription filter failed for area={} — failing closed",
                                     ride.get("service_area_id"),
-                                    exc_info=True,
                                 )
                                 _casc_pool = []  # fail closed; non-subscriber cascade would bypass the gate
                         drivers_with_distance = _deps.filter_and_rank_drivers(
@@ -818,14 +812,14 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         )
                         if drivers_with_distance:
                             logger.info(
-                                "[DISPATCH] cascade found %d eligible driver(s) for ride %s",
+                                "[DISPATCH] cascade found {} eligible driver(s) for ride {}",
                                 len(drivers_with_distance),
                                 ride_id,
                             )
                         else:
-                            logger.info("[DISPATCH] cascade also found no eligible drivers for ride %s", ride_id)
+                            logger.info("[DISPATCH] cascade also found no eligible drivers for ride {}", ride_id)
                 except Exception:
-                    logger.error("[DISPATCH] cascade lookup failed for ride %s", ride_id, exc_info=True)
+                    logger.opt(exception=True).error("[DISPATCH] cascade lookup failed for ride {}", ride_id)
 
             if not drivers_with_distance:
                 logger.info(
@@ -859,7 +853,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     )
                     ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
                 except Exception as e:
-                    logger.error(f"[DISPATCH] ETA ranking failed, falling back to haversine: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[DISPATCH] ETA ranking failed, falling back to haversine: {e}")
                     ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
             else:
                 ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
@@ -1027,41 +1021,75 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         )
             else:
                 _metric_inc("spinr_dispatch_claim_path_total", labels={"path": "postgrest"})
-                for driver, eta_sec, _ in ranked:
-                    if len(claimed_drivers) >= max_offers:
-                        break
-                    try:
+                try:
+                    for driver, eta_sec, _ in ranked:
+                        if len(claimed_drivers) >= max_offers:
+                            break
                         fresh = await _deps.db_supabase.claim_driver_atomic(driver["id"])
-                    except Exception as e:
-                        # C54: mirror the ride_offers-insert failure handler below —
-                        # a raise here (e.g. a transient DatabaseError) must not leave
-                        # every driver claimed by EARLIER iterations of this same loop
-                        # stuck is_available=false until the orphan-claim reaper's
-                        # ~150s worst-case window. Release them before re-raising so
-                        # the outer recovery shell's retry sees them available again
-                        # immediately, not minutes later.
-                        logger.error(
-                            f"[DISPATCH] claim_driver_atomic failed for driver {driver['id']}: {e}", exc_info=True
-                        )
-                        for d, _ in claimed_drivers:
+                        if fresh:
+                            # The claim's own UPDATE returns the post-claim row, so no follow-up
+                            # get_driver_by_id is needed — and that read was guaranteed uncached
+                            # anyway, because claim_driver_atomic invalidates the cache entry on
+                            # both sides of the update. Up to max_offers of those per attempt.
+                            #
+                            # Revalidate the FULL eligibility set on the freshly-read row, not
+                            # just is_online. claim_driver_atomic only guards id + is_available,
+                            # so an admin who suspended the driver or flipped them back to
+                            # needs_review between the candidate read and the claim would
+                            # otherwise still get offered — the exact stale-status case the
+                            # candidate filter (is_verified + status='active') is meant to stop.
+                            if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
+                                claimed_drivers.append((fresh, eta_sec))
+                            else:
+                                await _deps.db_supabase.set_driver_available(driver["id"], True)
+                except Exception as e:
+                    # C54: mirror the ride_offers-insert failure handler below — a
+                    # raise here (e.g. a transient DatabaseError) must not leave every
+                    # driver claimed by EARLIER iterations of this same loop stuck
+                    # is_available=false until the orphan-claim reaper's ~150s
+                    # worst-case window. Release them before re-raising so the outer
+                    # recovery shell's retry sees them available again immediately,
+                    # not minutes later.
+                    #
+                    # MERGE NOTE (PR #4909 vs #4919): #4919 landed this same C54 fix
+                    # on main first, wrapping only the claim_driver_atomic call. This
+                    # is that fix with two corrections found in #4909's review, kept
+                    # deliberately over main's version:
+                    #   1. logger.opt(exception=True), NOT exc_info=True. `logger`
+                    #      here is loguru (re-exported via _deps), which swallows
+                    #      exc_info as a str.format keyword — no traceback is
+                    #      captured and the loguru→Sentry bridge sends a stack-less
+                    #      capture_message, i.e. the diagnostic this handler exists
+                    #      for is lost. Not caught by
+                    #      tests/test_loguru_call_conventions.py: that gate selects
+                    #      files by searching for loguru's direct import line, which
+                    #      this module does not have. See ACTION_ITEMS.md C60/C65.
+                    #   2. Each release is individually guarded. The most likely
+                    #      trigger for the claim failing at all is a DB blip, which
+                    #      makes set_driver_available just as likely to fail — an
+                    #      unguarded loop aborts at the first failed release
+                    #      (stranding the rest) AND replaces the original exception,
+                    #      losing the root cause. The reaper stays the backstop for
+                    #      any release that genuinely cannot be written here.
+                    # The try also spans the whole loop rather than the claim call
+                    # alone, so a failure of the inline revalidation release above
+                    # still reaches this handler and still releases everything in
+                    # claimed_drivers. Note the precise limit: the driver whose OWN
+                    # inline release raised was claimed but failed revalidation, so
+                    # it was never appended to claimed_drivers and is therefore not
+                    # re-released here — the orphan-claim reaper is its backstop.
+                    # Tracking it would mean appending a driver we deliberately did
+                    # not offer, so the reaper is the right owner for that case.
+                    logger.opt(exception=True).error(f"[DISPATCH] postgrest claim loop failed for ride {ride_id}: {e}")
+                    for d, _ in claimed_drivers:
+                        try:
                             await _deps.db_supabase.set_driver_available(d["id"], True)
-                        raise
-                    if fresh:
-                        # The claim's own UPDATE returns the post-claim row, so no follow-up
-                        # get_driver_by_id is needed — and that read was guaranteed uncached
-                        # anyway, because claim_driver_atomic invalidates the cache entry on
-                        # both sides of the update. Up to max_offers of those per attempt.
-                        #
-                        # Revalidate the FULL eligibility set on the freshly-read row, not
-                        # just is_online. claim_driver_atomic only guards id + is_available,
-                        # so an admin who suspended the driver or flipped them back to
-                        # needs_review between the candidate read and the claim would
-                        # otherwise still get offered — the exact stale-status case the
-                        # candidate filter (is_verified + status='active') is meant to stop.
-                        if fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
-                            claimed_drivers.append((fresh, eta_sec))
-                        else:
-                            await _deps.db_supabase.set_driver_available(driver["id"], True)
+                        except Exception:
+                            logger.opt(exception=True).error(
+                                f"[DISPATCH] failed to release driver {d['id']} after claim-loop error "
+                                f"for ride {ride_id} — orphan-claim reaper will recover it"
+                            )
+                    raise
 
             if not claimed_drivers:
                 logger.info(f"[DISPATCH] no drivers could be claimed for ride {ride_id}")
@@ -1092,7 +1120,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         lambda: _deps.db_supabase.supabase.table("ride_offers").insert(offer_rows).execute()
                     )
                 except Exception as e:
-                    logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[DISPATCH] ride_offers insert failed: {e}")
                     for d, _ in claimed_drivers:
                         await _deps.db_supabase.set_driver_available(d["id"], True)
                     # Re-raise after releasing the claims: no offers exist, so the
@@ -1135,7 +1163,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 try:
                     return await _deps.db_supabase.get_user_by_id(ride["rider_id"])
                 except Exception as e:
-                    logger.error(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}")
                     return None
 
             async def _fetch_incentives() -> tuple[list, float]:
@@ -1146,7 +1174,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 try:
                     return incentive_display_payload(await match_ride_incentives(_deps.db_supabase, ride))
                 except Exception as e:
-                    logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
+                    logger.opt(exception=True).error(f"[DISPATCH] incentive lookup failed: {e}")
                     return [], 0.0
 
             async def _fetch_service_area_polygon() -> Optional[list]:
@@ -1159,7 +1187,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     poly = get_service_area_polygon(_ride_area)
                     return poly or None
                 except Exception as e:
-                    logger.error("[DISPATCH] service_area polygon parse failed: %s", e, exc_info=True)
+                    logger.opt(exception=True).error("[DISPATCH] service_area polygon parse failed: {}", e)
                     return None
 
             rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
@@ -1219,8 +1247,8 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             "reward_amount": float(_q.get("reward_amount") or 0),
                         }
                 except Exception as e:
-                    logger.error(
-                        f"Failed to fetch quest progress for {len(_quest_uids)} claimed driver(s): {e}", exc_info=True
+                    logger.opt(exception=True).error(
+                        f"Failed to fetch quest progress for {len(_quest_uids)} claimed driver(s): {e}"
                     )
 
             # ── Notify each claimed driver ────────────────────────────────
@@ -1238,7 +1266,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     )
                     _offer_card_url = f"{_deps._settings.PUBLIC_API_BASE_URL.rstrip('/')}/api/v1/offer-cards/{ride_id}.png?t={_oc_token}"
                 except Exception as e:
-                    logger.warning("[DISPATCH] offer-card URL build failed for ride %s: %s", ride_id, e)
+                    logger.warning("[DISPATCH] offer-card URL build failed for ride {}: {}", ride_id, e)
 
                 dispatch_payload = {
                     "type": "new_ride_assignment",
@@ -1335,7 +1363,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                             )
                         )
                     except Exception as e:
-                        logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)
+                        logger.opt(exception=True).error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}")
 
             # ── Batch timeout handler (no grace period) ───────────────────
             _deps.spawn(
@@ -1392,8 +1420,42 @@ async def _offer_timeout_handler(
         if not ride:
             return
 
-        # Only act if the ride hasn't progressed past assignment.
+        # Only act if the ride hasn't progressed past assignment. This is a
+        # cheap pre-check to skip wasted work in the common case, but is NOT
+        # itself race-safe — the driver can still accept between this read
+        # and the conditional update below, so that update (not this check)
+        # is the real guard for everything else in this function.
         if ride.get("status") != RideStatus.DRIVER_ASSIGNED or ride.get("driver_id") != driver_id:
+            return
+
+        # Conditional revert to searching, scoped to the exact state just
+        # observed — the same optimistic-lock pattern
+        # routes/drivers/ride_flow.py:331 uses for driver-side accept. 0 rows
+        # means the driver accepted in the same window: nothing below this
+        # point may run. Incrementing the miss streak, releasing the driver
+        # back to the available pool, or auto-offlining them would all be
+        # acting on a driver who just became correctly obligated to this
+        # ride (insurance Period 2), not one who missed the offer — and
+        # re-dispatching (below) would search for a second driver on a ride
+        # that already has one. See ACTION_ITEMS.md C54 /
+        # plans/2026-09-03-path-to-a-implementation-plan.md WS-1.
+        reverted = await _deps.db.update_one(
+            "rides",
+            {"id": ride_id, "status": RideStatus.DRIVER_ASSIGNED, "driver_id": driver_id},
+            {
+                "$set": {
+                    "status": RideStatus.SEARCHING,
+                    "driver_id": None,
+                    "driver_notified_at": None,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+        if reverted is None:
+            logger.info(
+                f"[DISPATCH] Offer timeout for ride {ride_id} driver {driver_id} lost the race — "
+                "accepted in the same window, skipping revert/notify/re-dispatch"
+            )
             return
 
         logger.info(
@@ -1440,21 +1502,6 @@ async def _offer_timeout_handler(
             # online/commercial-insurance window for an offline driver.
             if isinstance(released, dict) and released.get("is_available"):
                 await _deps.record_period_transition(driver_id, 1)
-
-        # Put the ride back in the searching state so it can be
-        # re-dispatched or picked up by the next dispatch cycle.
-        await _deps.db.update_one(
-            "rides",
-            {"id": ride_id},
-            {
-                "$set": {
-                    "status": RideStatus.SEARCHING,
-                    "driver_id": None,
-                    "driver_notified_at": None,
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
 
         # Notify rider via WebSocket.
         if rider_id:
@@ -1518,9 +1565,8 @@ async def _offer_timeout_handler(
         await match_driver_to_ride(ride_id)
 
     except Exception as e:
-        logger.error(
+        logger.opt(exception=True).error(
             f"[DISPATCH] Offer timeout handler error for ride {ride_id}: {e}",
-            exc_info=True,
         )
 
 
@@ -1675,7 +1721,7 @@ async def _batch_offer_timeout_handler(
         await match_driver_to_ride(ride_id)
 
     except Exception as e:
-        logger.error(f"[DISPATCH] Batch timeout handler error for ride {ride_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"[DISPATCH] Batch timeout handler error for ride {ride_id}: {e}")
 
 
 async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
@@ -1708,9 +1754,9 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 try:
                     _released = await _deps.cancel_authorization(ride_id=r_id, payment_intent_id=_booking_pi)
                     if _released:
-                        logger.info("[AUTO-CANCEL] released pre-auth hold ride_id=%s pi=%s", r_id, _booking_pi)
+                        logger.info("[AUTO-CANCEL] released pre-auth hold ride_id={} pi={}", r_id, _booking_pi)
                 except Exception as _rel_exc:
-                    logger.error("[AUTO-CANCEL] pre-auth release failed ride_id=%s: %s", r_id, _rel_exc, exc_info=True)
+                    logger.opt(exception=True).error("[AUTO-CANCEL] pre-auth release failed ride_id={}: {}", r_id, _rel_exc)
 
             now = datetime.now(timezone.utc)
             base_update = {
@@ -1736,7 +1782,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     },
                 )
             except Exception as _col_exc:
-                logger.error(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
+                logger.opt(exception=True).error(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
                 await _deps.db_supabase.update_ride(r_id, base_update)
             # 2026-08-18 fleet audit: ride-state-transition metric — one of
             # the most common real cancellation reasons ("no drivers found"),
@@ -1787,4 +1833,4 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 _deps.spawn(notify_guest_cancelled(dict(current_ride)))
             logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
     except Exception as e:
-        logger.error(f"Ride timeout handler error for {r_id}: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Ride timeout handler error for {r_id}: {e}")

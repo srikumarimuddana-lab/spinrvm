@@ -1041,7 +1041,13 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 className="flex items-center gap-1.5 text-xs font-semibold text-warning hover:bg-warning/10 px-3 py-2 rounded-lg border border-warning/30 transition-colors">
                                                 <FileWarning className="h-3.5 w-3.5" /> Raise Complaint
                                             </button>
-                                            {ride.status && !["completed", "cancelled"].includes(ride.status) && (
+                                            {/* in_progress is excluded too: the backend rejects a
+                                                cancel from that state with 400 so the trip's insurance
+                                                Period 3 is closed by a force-complete instead. Kept as
+                                                an array .includes() (not === comparisons) so adding a
+                                                status the ride type's union may not declare stays
+                                                type-safe. */}
+                                            {ride.status && !["completed", "cancelled", "in_progress"].includes(ride.status) && (
                                                 <button onClick={() => { setCancelReason("Cancelled by admin"); setShowCancelDialog(true); }}
                                                     className="flex items-center gap-1.5 text-xs font-semibold text-destructive hover:bg-destructive/15 px-3 py-2 rounded-lg border border-destructive/40 transition-colors ml-auto">
                                                     <Ban className="h-3.5 w-3.5" /> Force Cancel

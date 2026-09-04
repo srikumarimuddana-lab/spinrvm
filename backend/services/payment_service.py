@@ -923,8 +923,13 @@ async def settle_corporate(
     # movement for an incident. Does NOT gate corporate_wallet_service.py's
     # low-level apply_topup/apply_adjustment/apply_refund directly -- those
     # are also how an admin manually corrects/refunds during the very
-    # incident that caused this switch to be flipped off. Fail-open on a
-    # settings-read error, same convention as every other kill switch here.
+    # incident that caused this switch to be flipped off.
+    #
+    # Fails CLOSED on a settings-read error — deliberately NOT the fail-open
+    # convention the platform-availability kill switches use. A switch whose
+    # whole job is to stop corporate money movement during an incident cannot
+    # be trusted if a degraded settings read silently reopens it. See
+    # docs/adr/011-flag-read-failure-semantics.md.
     # Lazy dual import: the module-level except-branch import list is
     # managed by a formatter hook that strips additions -- see
     # _atomic_settle_enabled's identical pattern above.
@@ -933,15 +938,76 @@ async def settle_corporate(
     except ImportError:
         from settings_loader import get_app_settings  # type: ignore
     try:
+        from ..utils.metrics import inc as _metric_inc
+    except ImportError:
+        from utils.metrics import inc as _metric_inc  # type: ignore
+    try:
         settings = await get_app_settings()
         if not settings.get("corporate_billing_enabled", True):
+            # Release the settlement claim before returning, same as the
+            # fail-closed branch below and every other failure branch here.
+            # Without it, deliberately flipping the kill switch off during an
+            # incident strands every in-flight guest-corporate ride at
+            # payment_status='processing' — auto_settle_guest_corporate claims
+            # the ride before calling us, its retry sweep polls only 'pending',
+            # and stripe_reconcile's healer bails without a payment_intent_id,
+            # which a company_allowance ride never has. The rides would then
+            # fail to settle even after the switch was turned back on.
+            try:
+                await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            except Exception:
+                logger.opt(exception=True).error(
+                    "[PAYMENT] could not release settlement claim for ride {} while corporate billing is disabled",
+                    ride_id,
+                )
             return PaymentResult(
                 success=False,
                 error="Corporate billing is temporarily disabled",
                 status_code=503,
             )
     except Exception as settings_err:
-        logger.warning("[PAYMENT] app_settings lookup failed ({}), proceeding as enabled", settings_err)
+        # Fail CLOSED: a settings-read error must not silently let money move
+        # under a kill switch we couldn't actually check. The prior behaviour
+        # (log a warning, then proceed as if the flag were enabled) defeated
+        # the entire purpose of an incident kill switch — see ACTION_ITEMS.md
+        # C54 and plans/2026-09-03-path-to-a-implementation-plan.md WS-1.
+        # logger.opt(exception=True), not exc_info=True: this module logs via
+        # loguru, which has no exc_info parameter — it is swallowed as a
+        # str.format keyword and no traceback is ever captured (ACTION_ITEMS.md
+        # C60; gated by tests/test_loguru_call_conventions.py).
+        logger.opt(exception=True).error(
+            "[PAYMENT] app_settings lookup failed ({}), failing closed on corporate_billing_enabled",
+            settings_err,
+        )
+        _metric_inc(
+            "spinr_payment_settings_read_failed_total",
+            {"flag": "corporate_billing_enabled"},
+        )
+        # Release the settlement claim, exactly as every other failure branch
+        # in this function does. auto_settle_guest_corporate (:1376) claims the
+        # ride pending/failed → 'processing' BEFORE calling us and, per its own
+        # comment, relies on settle_corporate resetting payment_status on its
+        # known failure paths — its except-branch only fires on a raise, and
+        # this branch returns. Without this reset the ride sticks at
+        # 'processing' forever: the guest-corporate retry sweep only polls
+        # 'pending' (utils/payment_retry.py), and stripe_reconcile's healer
+        # bails on a ride with no payment_intent_id, which a company_allowance
+        # ride never has. Guarded because the very failure that got us here is
+        # a degraded settings/DB read, which can take this write down too — a
+        # failed release must not mask the 503.
+        try:
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+        except Exception:
+            logger.opt(exception=True).error(
+                "[PAYMENT] could not release settlement claim for ride {} after failing closed "
+                "— ride may be left in payment_status='processing' for the reconciler",
+                ride_id,
+            )
+        return PaymentResult(
+            success=False,
+            error="Corporate billing is temporarily unavailable",
+            status_code=503,
+        )
 
     company_id = ride.get("corporate_account_id")
     if not company_id:
@@ -1484,7 +1550,16 @@ async def _write_display_fields(ride_id: str, fields: Dict[str, Any]) -> bool:
 
 
 async def _atomic_settle_enabled() -> bool:
-    """Read the ledger_atomic_settle_enabled flag. Off on any read failure."""
+    """Read the ledger_atomic_settle_enabled flag. Off on any read failure.
+
+    Deliberately asymmetric with settle_corporate's kill-switch above: this
+    flag gates which of two *already-safe* settlement code paths runs (RPC
+    vs. legacy), so a read failure falling back to the legacy path keeps a
+    settle from failing outright — unlike corporate_billing_enabled, whose
+    whole purpose is to stop money movement during an incident. See
+    docs/adr/011-flag-read-failure-semantics.md and
+    plans/2026-09-03-path-to-a-implementation-plan.md WS-1 subtask 2.
+    """
     # Lazy dual import: the module-level except-branch import list is managed
     # by a formatter hook that strips additions — see the settings_loader
     # pattern used across routes/. Cost after first import is a dict lookup.
@@ -1493,10 +1568,23 @@ async def _atomic_settle_enabled() -> bool:
     except ImportError:
         from settings_loader import get_app_settings  # type: ignore
     try:
+        from ..utils.metrics import inc as _metric_inc
+    except ImportError:
+        from utils.metrics import inc as _metric_inc  # type: ignore
+    try:
         cfg = await get_app_settings()
         return bool(cfg.get("ledger_atomic_settle_enabled", False))
     except Exception as err:
-        logger.warning("[PAYMENT] could not read ledger_atomic_settle_enabled, assuming off: {}", err)
+        # loguru: logger.opt(exception=True), never exc_info=True — see the
+        # settle_corporate call site above and ACTION_ITEMS.md C60.
+        logger.opt(exception=True).error(
+            "[PAYMENT] could not read ledger_atomic_settle_enabled, assuming off: {}",
+            err,
+        )
+        _metric_inc(
+            "spinr_payment_settings_read_failed_total",
+            {"flag": "ledger_atomic_settle_enabled"},
+        )
         return False
 
 

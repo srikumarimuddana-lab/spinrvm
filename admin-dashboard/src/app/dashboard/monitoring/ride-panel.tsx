@@ -329,14 +329,23 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide, o
                         <CheckCircle className="h-3.5 w-3.5" /> Complete Ride
                     </Button>
                 )}
-                <Button
-                    variant="destructive"
-                    size="sm"
-                    className="w-full gap-1.5 text-xs"
-                    onClick={() => onCancelRide(ride.id)}
-                >
-                    <XCircle className="h-3.5 w-3.5" /> Cancel Ride
-                </Button>
+                {/* An in-progress ride cannot be cancelled — the backend
+                    rejects it with 400 so the trip's insurance Period 3 is
+                    closed by a force-*complete* instead (the button above).
+                    MonitoringRide.status is a 4-member union that excludes the
+                    terminal states, so `!== "in_progress"` is the whole rule
+                    here; comparing against "completed"/"cancelled" would be a
+                    TS2367 no-overlap error. */}
+                {ride.status !== "in_progress" && (
+                    <Button
+                        variant="destructive"
+                        size="sm"
+                        className="w-full gap-1.5 text-xs"
+                        onClick={() => onCancelRide(ride.id)}
+                    >
+                        <XCircle className="h-3.5 w-3.5" /> Cancel Ride
+                    </Button>
+                )}
             </div>
         </div>
     );

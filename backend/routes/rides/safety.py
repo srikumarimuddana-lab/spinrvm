@@ -158,9 +158,8 @@ async def trigger_emergency(
             # Never let the dedup lookup block the alert: a failed read must
             # fall through to the normal path (at worst a duplicate incident,
             # which is strictly better than a dropped SOS).
-            logger.error(
+            logger.opt(exception=True).error(
                 f"[SOS] Idempotency lookup failed ride_id={ride_id} user_id={current_user['id']}: {exc}",
-                exc_info=True,
             )
             _prior = None
         if _prior:
@@ -246,11 +245,10 @@ async def trigger_emergency(
             try:
                 await _deps.db_supabase.insert_one("safety_incidents", incident)
                 _recovered_id = incident["id"]
-                logger.error(
+                logger.opt(exception=True).error(
                     f"[SOS] Insert with sos_idempotency_key failed for ride {ride_id}; "
                     f"succeeded without it. Migration 315 is likely not applied on this "
                     f"database -- dedup is INACTIVE. Original error: {exc}",
-                    exc_info=True,
                 )
             except Exception:  # pragma: no cover - fall through to the 503 below
                 _recovered_id = None
@@ -262,9 +260,8 @@ async def trigger_emergency(
             # this call and only shows its persistent FAILED/"call 911" state
             # once all attempts are exhausted, so a clean 503 here is what makes
             # that retry path actually fire instead of a bare unhandled 500.
-            logger.error(
+            logger.opt(exception=True).error(
                 f"[SOS] Failed to persist emergency incident ride_id={ride_id} user_id={current_user['id']}: {exc}",
-                exc_info=True,
             )
             raise HTTPException(
                 status_code=503, detail="Unable to send emergency alert. Please try again or call 911."
@@ -287,7 +284,7 @@ async def trigger_emergency(
     try:
         await _deps.manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})
     except Exception as _exc:  # pragma: no cover - best effort
-        logger.error(f"emergency_alert admin broadcast failed: {_exc}", exc_info=True)
+        logger.opt(exception=True).error(f"emergency_alert admin broadcast failed: {_exc}")
     logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
 
     # Email the safety distribution list + CRITICAL log line.
@@ -298,9 +295,8 @@ async def trigger_emergency(
     try:
         await notify_safety_team(incident)
     except Exception:  # pragma: no cover — best effort, never block the SMS path below
-        logger.error(
+        logger.opt(exception=True).error(
             f"notify_safety_team failed for rider SOS ride={ride_id} incident={incident['id']}",
-            exc_info=True,
         )
 
     # Real on-call paging (ACTION_ITEMS.md B15(b)). Additive fourth channel
@@ -315,9 +311,8 @@ async def trigger_emergency(
     try:
         await page_sos_on_call(incident)
     except Exception:  # pragma: no cover — best effort, never block the SMS path below
-        logger.error(
+        logger.opt(exception=True).error(
             f"page_sos_on_call failed for rider SOS ride={ride_id} incident={incident['id']}",
-            exc_info=True,
         )
 
     # Confirm receipt to the rider/driver who triggered the alert (ACTION_ITEMS.md
@@ -349,9 +344,8 @@ async def trigger_emergency(
             )
         )
     except Exception:  # pragma: no cover - best effort, never block the SMS path below
-        logger.error(
+        logger.opt(exception=True).error(
             f"SOS confirmation push failed to spawn for ride={ride_id} incident={incident['id']}",
-            exc_info=True,
         )
 
     # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
@@ -401,10 +395,9 @@ async def trigger_emergency(
                     c.get("id") for c, suppressed in zip(_sms_targets, _suppression_flags, strict=False) if suppressed
                 }
             except Exception:
-                logger.error(
+                logger.opt(exception=True).error(
                     "[SOS] Suppression check step failed unexpectedly -- failing open "
                     "(sending SOS SMS to all contacts)",
-                    exc_info=True,
                 )
                 _suppressed_ids = set()
 
@@ -446,7 +439,7 @@ async def trigger_emergency(
                 f"SOS: notified {contacts_notified}/{len(contacts)} emergency contacts for user {current_user['id']}"
             )
     except Exception as e:
-        logger.error(f"SOS emergency contact notification failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"SOS emergency contact notification failed: {e}")
         return {
             "success": True,
             "incident_id": incident["id"],
@@ -575,9 +568,8 @@ async def trigger_emergency_rideless(
                 limit=1,
             )
         except Exception as exc:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"[SOS-rideless] Idempotency lookup failed user_id={current_user['id']}: {exc}",
-                exc_info=True,
             )
             _prior = None
         if _prior:
@@ -644,20 +636,18 @@ async def trigger_emergency_rideless(
             try:
                 await _deps.db_supabase.insert_one("safety_incidents", incident)
                 _recovered_id = incident["id"]
-                logger.error(
+                logger.opt(exception=True).error(
                     f"[SOS-rideless] Insert with sos_idempotency_key failed for user "
                     f"{current_user['id']}; succeeded without it. Migration 315 is "
                     f"likely not applied on this database -- dedup is INACTIVE. "
                     f"Original error: {exc}",
-                    exc_info=True,
                 )
             except Exception:  # pragma: no cover - fall through to the 503 below
                 _recovered_id = None
 
         if _recovered_id is None:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"[SOS-rideless] Failed to persist emergency incident user_id={current_user['id']}: {exc}",
-                exc_info=True,
             )
             raise HTTPException(
                 status_code=503, detail="Unable to send emergency alert. Please try again or call 911."
@@ -670,23 +660,21 @@ async def trigger_emergency_rideless(
     try:
         await _deps.manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})
     except Exception as _exc:  # pragma: no cover - best effort
-        logger.error(f"emergency_alert admin broadcast failed (rideless): {_exc}", exc_info=True)
+        logger.opt(exception=True).error(f"emergency_alert admin broadcast failed (rideless): {_exc}")
     logger.critical(f"RIDELESS EMERGENCY ALERT TRIGGERED by user {current_user['id']}")
 
     try:
         await notify_safety_team(incident)
     except Exception:  # pragma: no cover — best effort, never block the SMS path below
-        logger.error(
+        logger.opt(exception=True).error(
             f"notify_safety_team failed for rideless SOS incident={incident['id']}",
-            exc_info=True,
         )
 
     try:
         await page_sos_on_call(incident)
     except Exception:  # pragma: no cover — best effort, never block the SMS path below
-        logger.error(
+        logger.opt(exception=True).error(
             f"page_sos_on_call failed for rideless SOS incident={incident['id']}",
-            exc_info=True,
         )
 
     # Confirmation push. Copy is identical to trigger_emergency's -- it never
@@ -706,9 +694,8 @@ async def trigger_emergency_rideless(
             )
         )
     except Exception:  # pragma: no cover - best effort, never block the SMS path below
-        logger.error(
+        logger.opt(exception=True).error(
             f"SOS confirmation push failed to spawn (rideless) for incident={incident['id']}",
-            exc_info=True,
         )
 
     # Notify emergency contacts via SMS. Copy corrected from trigger_emergency's
@@ -757,10 +744,9 @@ async def trigger_emergency_rideless(
                     c.get("id") for c, suppressed in zip(_sms_targets, _suppression_flags, strict=False) if suppressed
                 }
             except Exception:
-                logger.error(
+                logger.opt(exception=True).error(
                     "[SOS-rideless] Suppression check step failed unexpectedly -- failing open "
                     "(sending SOS SMS to all contacts)",
-                    exc_info=True,
                 )
                 _suppressed_ids = set()
 
@@ -799,7 +785,7 @@ async def trigger_emergency_rideless(
                 f"for user {current_user['id']}"
             )
     except Exception as e:
-        logger.error(f"SOS-rideless emergency contact notification failed: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"SOS-rideless emergency contact notification failed: {e}")
         return {
             "success": True,
             "incident_id": incident["id"],

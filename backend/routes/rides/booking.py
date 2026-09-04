@@ -114,10 +114,9 @@ async def _resolve_auth_buffer(grand_total: Decimal) -> Decimal:
     except Exception as e:
         # Assume UNLOCKED on lookup failure: over-holding is recoverable (the
         # excess is released at capture), under-holding fails settlement.
-        logger.error(
-            "[preauth] fare-lock lookup failed, sizing buffer as if unlocked: %s",
+        logger.opt(exception=True).error(
+            "[preauth] fare-lock lookup failed, sizing buffer as if unlocked: {}",
             e,
-            exc_info=True,
         )
         fare_locked = False
 
@@ -186,7 +185,7 @@ async def _attach_preauthorized_hold(
     # we cannot attach a client-supplied PI when we have no customer to check it
     # against (e.g. a crafted work_profile card request). Reject rather than skip.
     if not stripe_customer_id:
-        logger.error("[preauth][security] no Stripe customer to verify PI ownership for ride=%s", ride_id)
+        logger.error("[preauth][security] no Stripe customer to verify PI ownership for ride={}", ride_id)
         raise HTTPException(
             status_code=402,
             detail={"code": "CARD_DECLINED", "message": "No payment method on file. Please add a card first."},
@@ -203,10 +202,10 @@ async def _attach_preauthorized_hold(
     except Exception as e:
         # Fail OPEN here is acceptable: ownership + amount are still enforced
         # against Stripe below, so a degraded reuse-lookup can't bypass security.
-        logger.error("[preauth] PI-reuse lookup failed for ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        logger.error("[preauth] PI-reuse lookup failed for ride={} pi={}: {}", ride_id, payment_intent_id, e)
         existing = []
     if existing and existing[0].get("id") != ride_id:
-        logger.error("[preauth][security] PI already attached to ride=%s (declining)", existing[0].get("id"))
+        logger.error("[preauth][security] PI already attached to ride={} (declining)", existing[0].get("id"))
         raise HTTPException(
             status_code=402,
             detail={
@@ -229,7 +228,7 @@ async def _attach_preauthorized_hold(
             "auth_status": "authorized",
         }
     if outcome.status == "declined":
-        logger.info("[preauth] on-device auth not completed for ride=%s pi=%s", ride_id, payment_intent_id)
+        logger.info("[preauth] on-device auth not completed for ride={} pi={}", ride_id, payment_intent_id)
         raise HTTPException(
             status_code=402,
             detail={
@@ -239,7 +238,7 @@ async def _attach_preauthorized_hold(
         )
     # unconfigured (dev) / failed (ops) — degrade to no hold; post-trip settles.
     logger.error(
-        "[preauth] verify hold failed for ride=%s pi=%s: %s", ride_id, payment_intent_id, outcome.error_message
+        "[preauth] verify hold failed for ride={} pi={}: {}", ride_id, payment_intent_id, outcome.error_message
     )
     return {}
 
@@ -312,9 +311,9 @@ async def _preauthorize_ride_card(
         # confirm on-device, then re-book passing the PI back. Scheduled dispatch
         # (block_on_decline=False) can't drive an on-device sheet → degrade.
         if not block_on_decline:
-            logger.info("[preauth] SCA needed at scheduled dispatch for ride=%s — degrading to post-trip", ride_id)
+            logger.info("[preauth] SCA needed at scheduled dispatch for ride={} — degrading to post-trip", ride_id)
             return _PreauthOutcome()
-        logger.info("[preauth] card requires SCA at booking for ride=%s — returning client_secret", ride_id)
+        logger.info("[preauth] card requires SCA at booking for ride={} — returning client_secret", ride_id)
         return _PreauthOutcome(
             requires_action=True,
             client_secret=outcome.client_secret,
@@ -338,7 +337,7 @@ async def _preauthorize_ride_card(
             )
             if fare_outcome.status == "authorized":
                 logger.info(
-                    "[preauth] buffered hold declined (insufficient_funds); fare-only hold placed for ride=%s",
+                    "[preauth] buffered hold declined (insufficient_funds); fare-only hold placed for ride={}",
                     ride_id,
                 )
                 return _PreauthOutcome(
@@ -358,19 +357,19 @@ async def _preauthorize_ride_card(
                     payment_intent_id=fare_outcome.payment_intent_id,
                 )
             if fare_outcome.status == "declined":
-                logger.info("[preauth] fare-only hold also declined for ride=%s", ride_id)
+                logger.info("[preauth] fare-only hold also declined for ride={}", ride_id)
                 return _card_declined_result(fare_outcome.decline_code, block_on_decline)
             # fare-only hit ops / unconfigured — degrade to no hold.
             return _PreauthOutcome()
 
         # Hard decline (lost/stolen/generic) — a smaller hold won't help.
-        logger.info("[preauth] hard card decline (code=%s) for ride=%s", outcome.decline_code, ride_id)
+        logger.info("[preauth] hard card decline (code={}) for ride={}", outcome.decline_code, ride_id)
         return _card_declined_result(outcome.decline_code, block_on_decline)
 
     # failed (Stripe ops) / unconfigured — proceed without a hold; the post-trip
     # settlement path (and its retry loop) remains the safety net.
     if outcome.status == "failed":
-        logger.error("[preauth] authorization ops error for ride=%s: %s", ride_id, outcome.error_message)
+        logger.error("[preauth] authorization ops error for ride={}: {}", ride_id, outcome.error_message)
     return _PreauthOutcome()
 
 
@@ -614,7 +613,7 @@ async def create_ride(
     try:
         all_areas = await _deps.db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
     except Exception as e:
-        logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to fetch service areas: {e}")
         raise HTTPException(
             status_code=503,
             detail="Unable to verify service area. Please try again.",
@@ -635,7 +634,7 @@ async def create_ride(
     # checked below with the same service-area matcher.
     if matched_area is None and all_areas:
         logger.info(
-            "[geofence] reject pickup=%s — outside %d active service area(s)",
+            "[geofence] reject pickup={} — outside {} active service area(s)",
             _deps.geohash(body.pickup_lat, body.pickup_lng),
             len(all_areas),
         )
@@ -660,7 +659,7 @@ async def create_ride(
         )
         if _dropoff_area is None:
             logger.info(
-                "[geofence] reject dropoff=%s — outside service areas",
+                "[geofence] reject dropoff={} — outside service areas",
                 _deps.geohash(body.dropoff_lat, body.dropoff_lng),
             )
             raise HTTPException(
@@ -683,7 +682,7 @@ async def create_ride(
             _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, all_areas)
             if _stop_area is None:
                 logger.info(
-                    "[geofence] reject stop[%d]=%s — outside service areas",
+                    "[geofence] reject stop[{}]={} — outside service areas",
                     idx,
                     _deps.geohash(s_lat, s_lng),
                 )
@@ -746,7 +745,7 @@ async def create_ride(
 
     if not fare_info:
         logger.info(
-            "[create_ride] reject vehicle_type_id=%s — not configured for pickup service area",
+            "[create_ride] reject vehicle_type_id={} — not configured for pickup service area",
             body.vehicle_type_id,
         )
         raise HTTPException(status_code=400, detail="Invalid vehicle type for this service area")
@@ -900,7 +899,7 @@ async def create_ride(
             _matched_area=matched_area,
         )
     except Exception as e:
-        logger.error(f"Failed to calculate area fees: {e}", exc_info=True)
+        logger.opt(exception=True).error(f"Failed to calculate area fees: {e}")
         raise HTTPException(
             status_code=503,
             detail="Unable to calculate fees and taxes. Please try again.",
@@ -1299,7 +1298,7 @@ async def create_ride(
             )
             _deps._metric_inc("spinr_rides_booked_distance_suspect_total", {"reason": _suspect_reason})
     except Exception:
-        logger.error("booking distance sanity check failed for ride %s", fresh_ride.get("id"), exc_info=True)
+        logger.opt(exception=True).error("booking distance sanity check failed for ride {}", fresh_ride.get("id"))
 
     # ── Apply promo code if provided ──
     if body.promo_code:
@@ -1370,7 +1369,7 @@ async def create_ride(
                 fresh_ride["grand_total"] = discounted_grand
         except HTTPException as he:
             logger.warning(
-                "create_ride: promo '%s' rejected for rider %s on ride %s: %s",
+                "create_ride: promo '{}' rejected for rider {} on ride {}: {}",
                 body.promo_code,
                 current_user["id"],
                 ride.id,
@@ -1378,9 +1377,8 @@ async def create_ride(
             )
             fresh_ride["promo_error"] = he.detail if isinstance(he.detail, str) else str(he.detail)
         except Exception as e:
-            logger.error(
+            logger.opt(exception=True).error(
                 f"create_ride: promo application failed for code={body.promo_code}: {e}",
-                exc_info=True,
             )
             fresh_ride["promo_error"] = "Promo could not be applied"
 
@@ -1404,7 +1402,7 @@ async def create_ride(
         )
         fresh_ride["fare_breakdown_snapshot"] = fare_snapshot
     except Exception as snap_err:
-        logger.error(f"create_ride: fare snapshot save failed: {snap_err}", exc_info=True)
+        logger.opt(exception=True).error(f"create_ride: fare snapshot save failed: {snap_err}")
 
     # ── Route snapshot at creation ──
     # Generate a PNG map of the planned route and upload to Supabase
@@ -1438,7 +1436,7 @@ async def create_ride(
                 )
                 logger.info(f"create_ride: planned route snapshot completed for ride {ride.id}")
             except Exception as exc:
-                logger.error(f"create_ride: planned route snapshot failed: {exc}", exc_info=True)
+                logger.opt(exception=True).error(f"create_ride: planned route snapshot failed: {exc}")
 
         _deps.spawn(_create_planned_snapshot())
 
@@ -1642,7 +1640,7 @@ async def _prep_and_dispatch(
                 )
                 fresh_ride["pickup_nav_lat"], fresh_ride["pickup_nav_lng"] = _snapped
         except Exception:
-            logger.warning("pickup snap_to_road failed; using original pin", exc_info=True)
+            logger.opt(exception=True).warning("pickup snap_to_road failed; using original pin")
 
         # Server-side planned_route_polyline: only when the rider-app didn't
         # send one (race between booking tap and Directions finishing, or no
@@ -1666,12 +1664,12 @@ async def _prep_and_dispatch(
                         await _deps.db_supabase.update_ride(ride_id, {"planned_route_polyline": _computed})
                         fresh_ride["planned_route_polyline"] = _computed
                         logger.info(
-                            "create_ride: server-computed polyline (%d pts) stored for ride %s",
+                            "create_ride: server-computed polyline ({} pts) stored for ride {}",
                             len(_computed),
                             ride_id,
                         )
             except Exception as _poly_err:
-                logger.warning("create_ride: polyline computation failed (non-fatal): %s", _poly_err)
+                logger.warning("create_ride: polyline computation failed (non-fatal): {}", _poly_err)
 
         if dispatch:
             # Pass the fresh ride through so the dispatch path doesn't
@@ -1680,4 +1678,4 @@ async def _prep_and_dispatch(
     except Exception:
         # A failure here strands the ride in 'searching' with no offers —
         # dispatch-domain errors must never vanish into a dropped task.
-        logger.error(f"[DISPATCH] post-booking pipeline failed for ride {ride_id}", exc_info=True)
+        logger.opt(exception=True).error(f"[DISPATCH] post-booking pipeline failed for ride {ride_id}")

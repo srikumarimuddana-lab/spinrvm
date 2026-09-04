@@ -358,15 +358,12 @@ async def run_sync(
         # not be traced to an endpoint or a cause. A deadline already expired
         # *before* the first DB call means the budget was spent upstream —
         # client clock skew, slow transit, or a slow pre-DB step — not the DB.
-        logger.warning(
-            "[DB] Rejected before submission: client deadline already expired",
-            extra={
-                "reason": "deadline_exhausted",
-                "stage": "pre_submit",
-                "retry_policy": retry_policy,
-                "overdue_seconds": round(-remaining, 3),
-            },
-        )
+        logger.bind(
+            reason="deadline_exhausted",
+            stage="pre_submit",
+            retry_policy=retry_policy,
+            overdue_seconds=round(-remaining, 3),
+        ).warning("[DB] Rejected before submission: client deadline already expired")
         raise ServiceUnavailableException("database")
 
     if not _breaker.should_allow():
@@ -384,16 +381,13 @@ async def run_sync(
             remaining = _remaining_seconds()
             if remaining is not None and remaining <= 0:
                 _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_exhausted"})
-                logger.warning(
-                    "[DB] Rejected mid-retry: client deadline expired between attempts",
-                    extra={
-                        "reason": "deadline_exhausted",
-                        "stage": "retry_loop",
-                        "retry_policy": retry_policy,
-                        "attempt": attempt,
-                        "overdue_seconds": round(-remaining, 3),
-                    },
-                )
+                logger.bind(
+                    reason="deadline_exhausted",
+                    stage="retry_loop",
+                    retry_policy=retry_policy,
+                    attempt=attempt,
+                    overdue_seconds=round(-remaining, 3),
+                ).warning("[DB] Rejected mid-retry: client deadline expired between attempts")
                 _breaker.release_probe()
                 raise ServiceUnavailableException("database")
 
@@ -457,16 +451,13 @@ async def run_sync(
                     raise
                 future.cancel()
                 _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_timeout"})
-                logger.error(
-                    "[DB] Executor wait exceeded the request deadline",
-                    extra={
-                        "reason": "deadline_timeout",
-                        "stage": "executor_wait",
-                        "retry_policy": retry_policy,
-                        "attempt": attempt,
-                        "waited_seconds": round(remaining, 3) if remaining is not None else None,
-                    },
-                )
+                logger.bind(
+                    reason="deadline_timeout",
+                    stage="executor_wait",
+                    retry_policy=retry_policy,
+                    attempt=attempt,
+                    waited_seconds=round(remaining, 3) if remaining is not None else None,
+                ).error("[DB] Executor wait exceeded the request deadline")
                 _breaker.release_probe()
                 raise ServiceUnavailableException("database") from None
             finally:

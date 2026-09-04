@@ -375,7 +375,11 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
             if _PG_UNIQUE_VIOLATION in msg or "duplicate key" in msg or "already exists" in msg:
                 try:
                     existing = (
-                        supabase.table("stripe_events").select("processed_at").eq("event_id", event_id).limit(1).execute()
+                        supabase.table("stripe_events")
+                        .select("processed_at")
+                        .eq("event_id", event_id)
+                        .limit(1)
+                        .execute()
                     )
                     if existing.data and existing.data[0].get("processed_at") is None:
                         logger.critical(
@@ -421,13 +425,12 @@ async def mark_stripe_event_processed(event_id: str) -> None:
     try:
         await run_sync(_fn)
     except Exception as e:  # noqa: BLE001
-        logger.error(
+        logger.bind(domain="payments", event_id=event_id).error(
             f"Failed to stamp processed_at on stripe event {event_id}: {e!r}. "
             "This event will remain stuck at processed_at=NULL until the "
             "daily stripe_reconcile sweep surfaces it for manual review "
             "(Stripe already got a 2xx and will not retry) -- "
-            "see ACTION_ITEMS.md C10.",
-            extra={"domain": "payments", "event_id": event_id},
+            "see ACTION_ITEMS.md C10."
         )
 
 

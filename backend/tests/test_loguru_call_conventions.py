@@ -21,10 +21,17 @@ information:
    errors reached Sentry as a bare ``capture_message`` with no stack. 112 call
    sites had it.
 
-Both are asserted statically over the source: neither defect is observable at
-runtime without asserting on log *text*, and a unit test per call site would be
-absurd. Only loguru modules are inspected — stdlib ``logging`` uses %-style
-correctly and ``exc_info`` legitimately, so it must not be caught here.
+3. **`extra=`.** loguru also has no `extra` parameter; the stdlib spelling is
+   ``logger.bind(**kwargs)``. Passing ``extra={...}`` hands a dict to
+   ``str.format`` as a single keyword no message field ever references, so it
+   is silently dropped — the structured context (e.g. an undercharge amount,
+   a Stripe event id) never reaches the log line or the loguru → Sentry
+   bridge. 6 call sites had it (ACTION_ITEMS.md C69).
+
+All three are asserted statically over the source: neither defect is observable
+at runtime without asserting on log *text*, and a unit test per call site would
+be absurd. Only loguru modules are inspected — stdlib ``logging`` uses %-style,
+``exc_info``, and ``extra=`` correctly, so it must not be caught here.
 
 **Selecting those modules is the hard part, and getting it wrong is silent.**
 This scan originally picked files with the substring ``from loguru import
@@ -251,6 +258,21 @@ def test_no_exc_info_kwarg_in_loguru_calls():
     )
 
 
+def test_no_extra_kwarg_in_loguru_calls():
+    offenders = []
+    for path, src in _loguru_modules():
+        for call, _func in _logger_calls(ast.parse(src)):
+            for kw in call.keywords:
+                if kw.arg == "extra":
+                    rel = path.relative_to(BACKEND)
+                    offenders.append(f"{rel}:{call.lineno}")
+
+    assert not offenders, (
+        "loguru has no extra parameter — it is swallowed as a str.format keyword and the "
+        "structured context is silently dropped. Use logger.bind(**kwargs) instead:\n" + "\n".join(offenders)
+    )
+
+
 def test_scan_actually_sees_the_backend():
     """Non-vacuity guard: the two tests above pass trivially on an empty scan."""
     modules = _loguru_modules()
@@ -297,15 +319,17 @@ def test_every_logger_binding_resolves():
 
 
 def test_detectors_catch_the_original_defects():
-    """Both detectors must fire on the exact code that shipped."""
+    """All three detectors must fire on the exact code that shipped."""
     sample = ast.parse(
         'logger.warning("CSRF token mismatch: %s %s origin=%s", method, path, origin)\n'
         'logger.error("[PAYMENT] settle failed for ride %s", ride_id, exc_info=True)\n'
+        'logger.error("[estimate] billing haversine (undercharge)", extra={"haversine_km": km})\n'
     )
     calls = list(_logger_calls(sample))
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert PLACEHOLDER.findall(calls[0][0].args[0].value) == ["%s", "%s", "%s"]
     assert any(kw.arg == "exc_info" for kw in calls[1][0].keywords)
+    assert any(kw.arg == "extra" for kw in calls[2][0].keywords)
 
 
 def test_percent_without_conversion_is_not_flagged():

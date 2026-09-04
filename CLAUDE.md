@@ -303,6 +303,7 @@ Full conventions (append-only rule, RLS pattern, table naming, index rules): see
 
 Logging:
 - Python: `logger = logging.getLogger(__name__)` per module. Use structured context via `extra={...}`.
+- **~50 backend modules use loguru instead of stdlib `logging`** (`from loguru import logger`, directly or via a package-local re-export like `routes/rides/_deps.py`). loguru has no `extra=` parameter and no `exc_info=` parameter — both are silently swallowed as `str.format` keywords with no error, so the structured context / traceback never reaches the log line or the loguru→Sentry bridge (ACTION_ITEMS.md C60/C65/C69). On a loguru logger use `logger.bind(**kwargs).<level>(msg)` for context and `logger.opt(exception=True).<level>(msg)` for a traceback. `backend/tests/test_loguru_call_conventions.py` statically scans every loguru module for these misuses (plus `%s`-style placeholders, which loguru also doesn't support — use `{}`) and fails the suite if one slips in; it also resolves `logger` bindings through re-exports, so a module that takes `logger` from a local `_deps` module is scanned according to what that module actually imports, not assumed stdlib.
 - Log levels: `error` for actionable failures, `warning` for recoverable anomalies, `info` for state transitions, `debug` gated behind env flag.
 - Never `print()` in production code. Never `logger.warning(...)` and continue on a DB/auth/payment error.
 

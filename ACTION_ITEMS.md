@@ -18843,9 +18843,17 @@ how much they de-risk a public launch._
   Do not run `--apply` against staging or production until that is
   explicitly lifted.
 
-### C44. Production Supabase migrations are stale — 363-369 (7 files, including 364 `legacy_ride_badge_enabled`) never ran
+### C44. Production Supabase migrations are stale — 363-369 (7 files, including 364 `legacy_ride_badge_enabled`) never ran — CLOSED (2026-09-04)
 
-- [ ] **Status:** open, found 2026-08-27, **corrected 2026-08-27 later the
+- [x] **Status:** closed (2026-09-04) — see the dated update at the end of
+  this item. All 7 target files (363-369) confirmed applied via a real
+  `run_migrations.py --dry-run`-equivalent pass against live production.
+  Someone (or some process) ran them between this item's filing
+  (2026-08-27) and now, outside this session. Two new, unrelated findings
+  surfaced by the same pass — a fresh pending list and a checksum
+  bookkeeping anomaly — are logged there too, filed separately rather than
+  folded into this now-resolved item's own scope.
+- **(historical) Status:** open, found 2026-08-27, **corrected 2026-08-27 later the
   same day** after re-querying `schema_migrations` directly (previous
   entry below was wrong about the boundary — see correction).
 - **Correction:** the original write-up of this item claimed
@@ -18910,6 +18918,50 @@ how much they de-risk a public launch._
   for the same reason (365-369 audited by content above, but no broader
   sweep of all `app_settings`-gated features was done). No production
   write attempted from this session — read-only verification only.
+- **2026-09-04 update — closed, plus two new findings filed separately.**
+  Ran the real `run_migrations.py --dry-run`/`--status` classification
+  logic (imported the actual script's `_discover_migrations`/`_classify`/
+  `_checksum`/`NEVER_APPLY` — not a reimplementation) against a fresh,
+  read-only `SELECT filename, checksum FROM schema_migrations` pulled via
+  Supabase MCP (no `DATABASE_URL` configured in this session, same
+  `--tracked-json`-style fallback the 2026-08-31 C22 audit used; no write
+  made).
+  - **All 7 of this item's target files (363-369) show `APPLIED`, checksums
+    matching.** Confirms the item is resolved — closing on this basis.
+    Whoever/whatever applied them did so between this item's filing
+    (2026-08-27) and now, outside any session with access to this
+    conversation.
+  - **New, unrelated pending list surfaced by the same pass (7 files, none
+    overlapping 363-369) — filed here as a pointer, not analyzed further,
+    since it's outside this item's original scope**:
+    `379_enable_rls_settings_document_files_driver_imports.sql`,
+    `400_seed_deactivation_appeals_policy.sql`,
+    `401_settings_dispatch_direct_pool_enabled.sql`,
+    `402_dispatch_claim_batch.sql`, `403_dispatch_claim_batch_v2.sql`,
+    `404_dispatch_candidate_pool_and_provider_default.sql` (401-404 are
+    C50's dispatch-geo-provider-feature prerequisites),
+    `405_drivers_license_issue_date.sql` (this session's own C63 fix,
+    PR #4964 — merged to `main` same-day but not yet applied to
+    production). Same "needs a human with `DATABASE_URL`, run through the
+    documented tooling" constraint as this item's own resolved gap — a
+    fresh instance of the same underlying pattern (merged migrations
+    lagging live application), not itself part of C44's scope. Worth its
+    own tracked item if it isn't picked up by the next
+    `run_migrations.py` invocation someone runs.
+  - **Checksum bookkeeping anomaly, also unrelated to this item's scope**:
+    `377_zoho_desk_tickets_sla_breach_alerted.sql`'s recorded `checksum`
+    (`dc751cdd37f9757e1fd3518eb1a5f438`, 32 hex chars — MD5-length) doesn't
+    match `run_migrations.py`'s real `_checksum()` (SHA-256,
+    `413798656db38f1671989a8797d276b94b2719145411e6917bb93d5c953f81a0`, 64
+    hex chars) for the current file content. `applied_by='claude-code-manual'`
+    on that row indicates it was applied through some out-of-band path, not
+    the real script, which is almost certainly why the checksum is the
+    wrong algorithm/length rather than evidence of actual post-apply
+    tampering — the live schema was independently verified (2026-09-04's
+    C22 follow-up #2) to match this file's `sla_breach_alerted_at`
+    column + `idx_zdt_sla_breach_pending` index exactly. Flagged here as a
+    bookkeeping-hygiene item for whoever next touches `schema_migrations`
+    row-by-row, not a live bug.
 
 ### C45. `backend-test` was red on `main` — 3 pytest failures, all fixed 2026-08-27
 

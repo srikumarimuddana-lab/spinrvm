@@ -1182,9 +1182,15 @@ function DriverDashboard() {
         </View>
       )}
 
-      {/* Demand legend pill — above the top bar (HM-04 + HM-12 layer selector) */}
+      {/* Demand legend toggle (HM-04 + HM-12 layer selector) — a small
+          top-right icon the driver taps to reveal the legend/layer picker,
+          not a pill sitting open over the map. Top-right is free during
+          `idle` (the only state this renders in): the SOS shield/button use
+          the same corner but only during navigating_to_pickup /
+          arrived_at_pickup / trip_in_progress, which are mutually exclusive
+          with idle. */}
       {rideState === 'idle' && heatmapVisible && (
-        <View style={{ position: 'absolute', top: insets.top + 4, alignSelf: 'center', zIndex: 60 }}>
+        <View style={{ position: 'absolute', top: insets.top + 4, right: 16, zIndex: 60 }}>
           <DemandLegend
             status={heatmapStatus}
             visible={heatmapVisible}
@@ -1282,16 +1288,19 @@ function DriverDashboard() {
         )
       )}
 
-      {/* Current speed — GPS-derived (coords.speed, m/s), shown while
-          online and actually moving. Throttled location state is fine for a
-          readout; hidden when stationary to keep the map minimal.
-          MIN_DISPLAYED_SPEED_MPS (not a bare 1.5 here) — a stationary
-          vehicle was live-reported showing ~8 km/h from GPS speed noise
-          alone; see locationDisplayGate.ts for the reasoning. */}
-      {isOnline && (location.coords.speed ?? 0) >= MIN_DISPLAYED_SPEED_MPS && (
+      {/* Current speed — GPS-derived (coords.speed, m/s), shown at all times
+          while online so the readout doesn't pop in/out as speed crosses the
+          threshold. Below MIN_DISPLAYED_SPEED_MPS the RAW value is GPS speed
+          noise, not real motion — a stationary vehicle was live-reported
+          showing ~8 km/h from that noise alone (see locationDisplayGate.ts)
+          — so the DISPLAYED value is clamped to a literal 0 rather than
+          showing the noisy figure or hiding the chip entirely. */}
+      {isOnline && (
         <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
           <Text style={styles.speedChipValue} allowFontScaling={false}>
-            {Math.round((location.coords.speed ?? 0) * 3.6)}
+            {(location.coords.speed ?? 0) >= MIN_DISPLAYED_SPEED_MPS
+              ? Math.round((location.coords.speed ?? 0) * 3.6)
+              : 0}
           </Text>
           <Text style={styles.speedChipUnit} allowFontScaling={false}>km/h</Text>
         </View>

@@ -533,7 +533,9 @@
   "heatmap": {
     "legend": {
       "quiet": "Quiet",
-      "busy": "Busy"
+      "busy": "Busy",
+      "expand": "Show demand info",
+      "collapse": "Hide demand info"
     },
     "layer": {
       "all": "All",

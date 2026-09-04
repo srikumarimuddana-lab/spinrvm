@@ -1268,11 +1268,34 @@ async def get_fare_quote(
             "no_drivers": True,
             "note": (
                 "No drivers are available near this pickup right now — tell the rider "
-                "plainly and suggest trying again in a few minutes."
+                "plainly, suggest trying again in a few minutes, and offer to re-check "
+                'now. If they agree ("yes", "try again"), call get_fare_quote again '
+                "on the same pickup and dropoff — the LAST FARE CHECK block at the end "
+                "of your instructions carries their exact coordinates and addresses. "
+                "Never tell the rider you have no active quote to work from."
             ),
         }
         if pickup_note:
             no_drivers["pickup_note"] = pickup_note
+        # Pin the endpoints even though nothing was priced. Tool results never
+        # survive into the next turn, so a rider who answers "yes" to "try
+        # again in a few minutes?" would otherwise leave the model with no
+        # coordinates — and rule 6 forbids reusing older bracketed ones — so
+        # it told the rider it had no active quote (reported 2026-09-04). No
+        # vehicle_type_id or total is pinned: nothing can be BOOKED from this
+        # pin, and the orchestrator renders it as a re-quote-only block.
+        await _pin_quote(
+            user.get("_conversation_id"),
+            {
+                "no_drivers": True,
+                "pickup_lat": pickup_lat,
+                "pickup_lng": pickup_lng,
+                "pickup_address": shared.get("pickup_address") or pickup_address,
+                "dropoff_lat": dropoff_lat,
+                "dropoff_lng": dropoff_lng,
+                "dropoff_address": shared.get("dropoff_address") or dropoff_address,
+            },
+        )
         return no_drivers
 
     recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))

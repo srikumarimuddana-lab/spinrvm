@@ -326,6 +326,29 @@ next build:** confirm that fix landed as a real commit with a change-log entry �
 repo currently documents the Grand Highlander session, the bug, or the fix, which risks repeating
 the "shipped a hardware-only fix with no record" pattern already seen three times on this surface.
 
+**Update (2026-09-04, later same day) — deliberate OTA exception, not a policy violation.** The
+90° icon-heading fix above was shipped via EAS Update (OTA) rather than the "always build" policy
+two sections below. Recorded here as a reasoned exception, with the reasoning, so it doesn't read
+as the policy being silently ignored:
+- **Why OTA was technically sound here:** JS-only change (`carSurface.tsx`'s heading logic), no
+  native module, no `runtimeVersion` bump — the same JS bundle drives both the phone screen and the
+  Android Auto surface (`carSurface.tsx` renders into the native `MapTemplate` via iternio's JS
+  bridge, not separate native code), so the fix genuinely can reach the car surface this way.
+- **Why it's still an exception, not the new default:** the "always build" policy exists because
+  the car surface can't be watched live and because Google's car-app review is meant to catch
+  exactly this class of rendering bug — an OTA routes around that review even when it's technically
+  permitted. Treat future Android Auto changes as build-required by default; this one was a
+  deliberate, reasoned call to get an already-confirmed regression fixed fast, not a precedent.
+- **Rollout mechanics that applied:** no custom `updates.checkAutomatically` override in
+  `app.config.ts`, so Expo's default applies — the update is checked for on app cold start and
+  applied on the *next* relaunch, not to an already-running session. No staged-rollout percentage
+  is configured in this repo, so (unless `eas update` was invoked with an explicit rollout flag
+  outside this repo's tracked config) it shipped to the full channel at once, not a canary slice.
+- **Hardware re-check status: ✅ CONFIRMED (2026-09-04).** Re-tested on the same Toyota Grand
+  Highlander MMIC — the marker tracked correctly along the route in both directions of travel,
+  clean pass, no other issues found. This closes the loop this OTA left open: the fix is now
+  hardware-validated, not just JS-level-tested.
+
 ---
 
 ## OTA vs. native build — policy, not a per-change judgment call

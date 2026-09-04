@@ -175,7 +175,9 @@ class TestSerializeToolPayload:
         out = json.loads(mcp_server._serialize_tool_payload(payload))
         assert out["address"] == "2150 Prince of Wales Dr, Regina, SK [POSTAL]"
         assert out["_client_action"] == {"contact_email": "[EMAIL]", "address": "655 Albert St, Regina, SK [POSTAL]"}
-        assert "S4V 2Z7" not in json.dumps(out) and "jane@example.ca" not in json.dumps(out)
+        serialized = json.dumps(out)
+        assert "S4V 2Z7" not in serialized
+        assert "jane@example.ca" not in serialized
 
     def test_error_payloads_pass_through(self):
         assert json.loads(mcp_server._serialize_tool_payload({"error": "unknown tool: x"})) == {

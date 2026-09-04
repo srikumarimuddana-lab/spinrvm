@@ -1340,6 +1340,53 @@ class TestFareQuote:
         assert "vehicle_type_id" not in pinned and "total" not in pinned
 
     @pytest.mark.anyio
+    async def test_no_drivers_pin_overwrites_a_priced_pin_most_recent_wins(self):
+        """One pin per conversation, most recent request wins (deliberate —
+        see ADR-012 consequences): a no-drivers check after a priced quote
+        replaces it with a re-quote-only pin, and a later successful quote
+        replaces that again with a bookable one. The replay block tells the
+        model an earlier trip must be re-quoted, never booked from memory."""
+        store: dict = {}
+
+        async def fake_set(key, value, ttl=None):
+            store[key] = value
+
+        async def fake_get(key):
+            return store.get(key)
+
+        all_unavailable = {
+            "estimates": [dict(ESTIMATES["estimates"][0], available=False, eta_minutes=None, driver_count=0)],
+            "route_polyline": None,
+        }
+        args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
+        user = dict(RIDER, _conversation_id="conv-1")
+        with (
+            _patch_promos([]),
+            _patch_settings(key=""),
+            _patch_area(),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+            patch.object(tools_booking, "redis_set", fake_set),
+            patch.object(tools_booking, "redis_get", fake_get),
+        ):
+            with _patch_estimates(ESTIMATES):
+                _, ok = await execute_tool("get_fare_quote", args, user=user)
+            assert ok
+            priced = await tools_booking.load_pinned_quote("conv-1")
+            assert priced["total"] == "18.48" and "no_drivers" not in priced
+
+            with _patch_estimates(all_unavailable):
+                _, ok = await execute_tool("get_fare_quote", args, user=user)
+            assert ok
+            checked = await tools_booking.load_pinned_quote("conv-1")
+            assert checked["no_drivers"] is True and "total" not in checked
+
+            with _patch_estimates(ESTIMATES):
+                _, ok = await execute_tool("get_fare_quote", args, user=user)
+            assert ok
+            repriced = await tools_booking.load_pinned_quote("conv-1")
+            assert repriced["total"] == "18.48" and "no_drivers" not in repriced
+
+    @pytest.mark.anyio
     async def test_promo_failure_does_not_kill_quote(self):
         with _patch_estimates(ESTIMATES), _patch_promos(error=RuntimeError("promo db down")):
             result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
@@ -2304,15 +2351,18 @@ class TestCardsKeepPostalCodes:
             ),
             patch.object(tools_booking, "record_call", AsyncMock()),
         ):
+            # near_* is the rider's point beside the Prince of Wales store;
+            # candidates are re-sorted nearest-first, and this test is about
+            # scrubbing, not ranking, so the address check below is a set.
             result, ok = await execute_tool(
                 "find_place",
-                {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65, "location_role": "dropoff"},
+                {"query": "walmart", "near_lat": 50.45, "near_lng": -104.53, "location_role": "dropoff"},
                 user=RIDER,
             )
         assert ok
         assert result["_client_action"]["type"] == "location_suggestions"
         card_addresses = [c["address"] for c in result["_client_action"]["candidates"]]
-        assert card_addresses == [self.DROPOFF, "4500 Gordon Rd, Regina, SK S4W 0B7, Canada"]
+        assert set(card_addresses) == {self.DROPOFF, "4500 Gordon Rd, Regina, SK S4W 0B7, Canada"}
         # The model-facing list (what the model echoes in prose and passes
         # back as dropoff_address) keeps the postal code too.
         assert [c["address"] for c in result["candidates"]] == card_addresses
@@ -2342,6 +2392,10 @@ class TestCardsKeepPostalCodes:
     async def test_booking_proposal_card_keeps_postal_codes(self):
         args = dict(TestProposal.ARGS, pickup_address=self.PICKUP, dropoff_address=self.DROPOFF)
         with (
+            # Maps unavailable → _reconcile_pickup keeps the supplied address
+            # verbatim; without this the assertion below would depend on the
+            # ambient settings fixture.
+            _patch_settings(key=""),
             _patch_area(),
             patch("backend.db_supabase.insert_one", AsyncMock(), create=True),
             patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),

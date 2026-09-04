@@ -24,14 +24,19 @@ from the actual code, not invented. Fidelity is intentionally split:
   borders, placeholder bars, hand-written (`Architects Daughter` font)
   annotations. Structure and real copy only, not visual polish.
 
-Two screenshots below, taken directly from the live canvas, show one
-artboard from each fidelity tier — the on-brand **Login** + **Dashboard**
-hi-fi screens, and the **Promotions** wireframe (Create Code dialog
-expanded) as a representative low-fi example:
+Three screenshots below, taken directly from the live canvas, show one
+artboard from the hi-fi tier and two from the wireframe tier — the
+on-brand **Login** + **Dashboard** hi-fi screens, the **Promotions**
+wireframe (Create Code dialog expanded), and the **Support & Issues ·
+Legal tab** wireframe (Rider audience, Terms of Service doc type), the
+latter two illustrating the low-fi tier's range from a form-and-table
+layout to a tabbed doc editor:
 
 ![Login and Dashboard hi-fi screens — on-brand mockups matching the real app's design tokens](./2026-09-04-admin-portal-hifi-screens.png)
 
 ![Promotions wireframe — grayscale, dashed borders, hand-written annotation line, real field/table structure](./2026-09-04-admin-portal-wireframe-example.png)
+
+![Support & Issues · Legal tab wireframe — 7-tab nav, Rider/Driver audience toggle, doc-type dropdown, document editor card](./2026-09-04-admin-portal-legal-wireframe-example.png)
 
 ---
 

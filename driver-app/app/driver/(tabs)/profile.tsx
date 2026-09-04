@@ -34,6 +34,7 @@ import { showToast } from '../../../hooks/useToast';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { ScreenHeader } from '../../../components/ScreenHeader';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { isProfileFieldsComplete, getProfileFormError } from '../../../utils/driverProfileSchema';
@@ -562,7 +563,7 @@ function ProfileScreenInner() {
                 {docRequirements.length === 0 ? (
                 <View style={styles.cardRow}>
                     <Ionicons name="document-text-outline" size={16} color={colors.textDim} />
-                    <Text style={[styles.cardValueDim, { marginLeft: 8 }]}>No document requirements found</Text>
+                    <Text style={[styles.cardValueDim, { marginLeft: SPACING.sm }]}>No document requirements found</Text>
                 </View>
                 ) : docRequirements.map((req, i) => {
                 const icon: any = 'document-outline';
@@ -1087,7 +1088,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   avatarContainer: {
     position: 'relative',
-    marginBottom: 16,
+    marginBottom: SPACING.md,
     marginTop: 10,
   },
   avatar: {
@@ -1156,14 +1157,14 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   name: {
     color: '#fff',
-    fontSize: 26,
+    fontSize: FONT.h2,
     fontWeight: '900',
     letterSpacing: 0.5,
   },
   driverCode: {
     color: 'rgba(255,255,255,0.95)',
-    fontSize: 13,
-    marginTop: 4,
+    fontSize: FONT.bodySm,
+    marginTop: SPACING.xs,
     fontWeight: '700',
     letterSpacing: 1,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
@@ -1185,7 +1186,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   referralChipCode: {
     color: '#fff',
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     fontWeight: '800',
     letterSpacing: 1,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
@@ -1203,7 +1204,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     borderRadius: 16,
     marginTop: 20,
     paddingVertical: 12,
-    paddingHorizontal: 24,
+    paddingHorizontal: SPACING.lg,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.3)',
   },
@@ -1219,26 +1220,26 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   ratingNumber: {
     color: '#fff',
-    fontSize: 22,
+    fontSize: FONT.h3,
     fontWeight: '900',
   },
   ratingLabel: {
     color: 'rgba(255,255,255,0.8)',
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '600',
     marginTop: 2,
     letterSpacing: 1,
   },
   starsRow: {
     flexDirection: 'row',
-    marginTop: 4,
+    marginTop: SPACING.xs,
     gap: 2,
   },
   contentBody: {
     paddingTop: 10,
   },
   section: {
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     marginTop: 20,
   },
   sectionHeaderRow: {
@@ -1246,7 +1247,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
-    paddingHorizontal: 4,
+    paddingHorizontal: SPACING.xs,
   },
   sectionTitle: {
     color: colors.text,
@@ -1270,8 +1271,8 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
     borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.02)',
     shadowColor: '#000',
@@ -1303,14 +1304,14 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   cardLabel: {
     color: colors.textDim,
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '600',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
   cardValue: {
     color: colors.text,
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontWeight: '700',
     marginTop: 2,
   },
@@ -1340,34 +1341,34 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   actionText: {
     flex: 1,
     color: colors.text,
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontWeight: '600',
   },
   companySection: {
-    marginHorizontal: 16,
-    marginTop: 24,
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.lg,
     marginBottom: 40,
-    paddingTop: 16,
+    paddingTop: SPACING.md,
     alignItems: 'center',
   },
   companyName: {
     color: colors.textDim,
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     fontWeight: '700',
     marginBottom: 6,
   },
   companyLine: {
     color: colors.textDim,
-    fontSize: 11,
+    fontSize: FONT.label,
     marginTop: 2,
     textAlign: 'center',
   },
   rejectionBox: {
-    marginHorizontal: 16,
-    marginTop: 24,
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.lg,
     backgroundColor: 'rgba(239, 68, 68, 0.1)',
     borderRadius: 16,
-    padding: 16,
+    padding: SPACING.md,
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
@@ -1376,13 +1377,13 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   },
   rejectionTitle: {
     color: colors.danger,
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontWeight: '800',
-    marginBottom: 4,
+    marginBottom: SPACING.xs,
   },
   rejectionText: {
     color: '#991B1B',
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     lineHeight: 18,
   },
 }); }
@@ -1397,14 +1398,14 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 16,
-    paddingBottom: 16,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.md,
     paddingHorizontal: 20,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  backBtn: { padding: 4, width: 32 },
+  backBtn: { padding: SPACING.xs, width: 32 },
   headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text, flex: 1, textAlign: 'center' },
 
   content: { padding: 20 },
@@ -1414,7 +1415,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     backgroundColor: colors.surface,
     padding: 18,
     borderRadius: 18,
-    marginBottom: 16,
+    marginBottom: SPACING.md,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -1438,8 +1439,8 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
-  heroSub: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
-  heroEmail: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+  heroSub: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 2 },
+  heroEmail: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: 2 },
 
   infoBox: {
     flexDirection: 'row',
@@ -1460,9 +1461,9 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     color: colors.textDim,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
-    marginBottom: 8,
-    marginTop: 4,
-    paddingHorizontal: 4,
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.xs,
+    paddingHorizontal: SPACING.xs,
   },
   card: {
     backgroundColor: colors.surface,
@@ -1475,24 +1476,24 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     elevation: 1,
     overflow: 'hidden',
   },
-  divider: { height: 1, backgroundColor: colors.surfaceLight, marginHorizontal: 16 },
+  divider: { height: 1, backgroundColor: colors.surfaceLight, marginHorizontal: SPACING.md },
 
-  field: { paddingHorizontal: 16, paddingVertical: 12 },
+  field: { paddingHorizontal: SPACING.md, paddingVertical: 12 },
   fieldLabel: {
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '700',
     color: colors.textDim,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
-    marginBottom: 4,
+    marginBottom: SPACING.xs,
   },
-  fieldInput: { fontSize: 16, color: colors.text, padding: 0, fontWeight: '500' },
-  fieldHelper: { fontSize: 11, color: colors.textDim, marginTop: 4 },
+  fieldInput: { fontSize: FONT.bodyLg, color: colors.text, padding: 0, fontWeight: '500' },
+  fieldHelper: { fontSize: FONT.label, color: colors.textDim, marginTop: SPACING.xs },
 
   pickerBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 14,
     gap: 12,
   },
@@ -1505,13 +1506,13 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     alignItems: 'center',
   },
   pickerLabel: {
-    fontSize: 11,
+    fontSize: FONT.label,
     fontWeight: '700',
     color: colors.textDim,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
-  pickerValue: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
+  pickerValue: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 2 },
 
   // Sticky footer
   footer: {
@@ -1527,7 +1528,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.primary,
     borderRadius: 14,
-    paddingVertical: 16,
+    paddingVertical: SPACING.md,
     gap: 8,
     shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 4 },
@@ -1540,7 +1541,7 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     shadowOpacity: 0,
     elevation: 0,
   },
-  saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  saveButtonText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '700' },
 
   // Gender picker bottom sheet — mirrors vehicle-info vehicleTypePicker modal
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
@@ -1592,5 +1593,5 @@ function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sheetOptionName: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.text },
+  sheetOptionName: { flex: 1, fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text },
 }); }

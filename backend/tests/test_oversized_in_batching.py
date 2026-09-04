@@ -14,7 +14,7 @@ Observed in production on 2026-08-31: 207 rejected requests in 24h across
 ``/rest/v1/users`` (admin drivers/stats), ``/rest/v1/driver_documents`` (the
 document-expiry sweep) and ``/rest/v1/rides`` (the stale-intent reconciler).
 
-Two things are covered here:
+Three things are covered here:
 
 1. ``repositories._base.get_rows_batched_in`` — the batching helper. It is a
    shared primitive with real correctness weight, and an early draft of it
@@ -23,6 +23,12 @@ Two things are covered here:
    could not use the helper's output directly because it must still return an
    ORDERED, PAGED result. That page is asserted to equal what the single
    ordered query it replaced would have returned.
+3. ``routes.rides.matching._get_active_subscriptions_batched`` — the same
+   failure hit LIVE dispatch on 2026-09-03 (not a background sweep this
+   time): the subscription-required-area gate and the daily-quota filter each
+   built a bare ``$in`` over the whole candidate pool (caps at 500). This one
+   deliberately does NOT reuse ``get_rows_batched_in`` — see its class
+   docstring below for why a same-named-attribute wrapper was required.
 
 All DB access is mocked — no real Supabase call is made.
 """
@@ -157,6 +163,102 @@ class TestGetRowsBatchedIn:
         await batched("drivers", "user_id", list(rows), extra)
 
         assert extra == {"status": {"$in": ["active"]}}, "caller's filters dict was mutated"
+
+
+# ---------------------------------------------------------------------------
+# routes.rides.matching._get_active_subscriptions_batched
+# ---------------------------------------------------------------------------
+
+
+class TestGetActiveSubscriptionsBatched:
+    """Dispatch-specific batching wrapper around the driver_subscriptions read
+    (2026-09-03 incident — observed on a live dispatch attempt, not a
+    background sweep like the two prior instances of this bug class).
+
+    matching.py's subscription-required-area gate and daily-quota filter each
+    build a ``{"driver_id": {"$in": [...]}}`` filter over the WHOLE candidate
+    pool (dispatch caps at 500 — see matching.py's "pool truncated" log).
+
+    Unlike ``get_rows_batched_in`` above, this wrapper keeps calling
+    ``_deps.db_supabase.get_rows`` under the same attribute name rather than
+    switching call sites to that shared helper: every existing dispatch test
+    replaces ``_deps.db_supabase`` wholesale and only stubs ``.get_rows``, so
+    a differently-named attribute would be left unconfigured on those mocks —
+    and because the quota filter fails OPEN on any exception, an unconfigured
+    mock would not fail loud, it would silently turn a "quota-filtered"
+    expectation into an "unfiltered" one. A pool under the batch size makes
+    exactly one iteration here, byte-identical to the pre-fix call, which is
+    why every pre-existing dispatch test needed no changes for this fix.
+    """
+
+    @staticmethod
+    def _install(rows_by_id: dict, monkeypatch):
+        from types import SimpleNamespace
+
+        from routes.rides.matching import _get_active_subscriptions_batched
+
+        # Same __module__-resolution safety as TestGetRowsBatchedIn._install
+        # above: matching.py is importable as both routes.rides.matching and
+        # backend.routes.rides.matching, and patching the wrong module's
+        # `_deps` would leave the real db_supabase in place.
+        module = sys.modules[_get_active_subscriptions_batched.__module__]
+        calls: list = []
+
+        async def _fake_get_rows(table, filters, *, columns="*", limit=None):
+            ids = filters["driver_id"]["$in"]
+            calls.append(
+                {
+                    "table": table,
+                    "ids": list(ids),
+                    "status": filters.get("status"),
+                    "columns": columns,
+                    "limit": limit,
+                }
+            )
+            return [row for i in ids for row in rows_by_id.get(i, [])]
+
+        monkeypatch.setattr(module._deps, "db_supabase", SimpleNamespace(get_rows=_fake_get_rows))
+        return _get_active_subscriptions_batched, calls
+
+    async def test_dispatch_pool_cap_is_split_into_url_safe_batches(self, monkeypatch):
+        """500 candidates — the dispatch pool's own cap — must not go out as one $in."""
+        ids = [_uid(i) for i in range(500)]
+        rows = {i: [{"driver_id": i, "rides_per_day": None}] for i in ids}
+        batched, calls = self._install(rows, monkeypatch)
+
+        out = await batched(ids, "driver_id,started_at,expires_at,rides_per_day")
+
+        assert len(out) == 500, "every candidate's subscription row must still be resolved"
+        assert len(calls) > 1, "500 ids must be split across requests, not sent as one $in"
+        widest = max(len(c["ids"]) for c in calls)
+        assert widest * _CHARS_PER_ID < _URL_SAFE_CHARS, (
+            f"widest request carries {widest} ids (~{widest * _CHARS_PER_ID} chars) — "
+            "that is the request line the edge proxy rejects"
+        )
+        assert all(c["table"] == "driver_subscriptions" for c in calls)
+        assert all(c["status"] == "active" for c in calls)
+        assert all(c["columns"] == "driver_id,started_at,expires_at,rides_per_day" for c in calls)
+
+    async def test_small_pool_makes_exactly_one_call(self, monkeypatch):
+        """The common case — every pre-existing dispatch test — is unchanged."""
+        ids = [_uid(i) for i in range(3)]
+        rows = {i: [{"driver_id": i}] for i in ids}
+        batched, calls = self._install(rows, monkeypatch)
+
+        out = await batched(ids, "driver_id,rides_per_day")
+
+        assert len(out) == 3
+        assert len(calls) == 1, "a pool under the batch size must issue exactly one request, as before this fix"
+        assert calls[0]["ids"] == ids
+        assert calls[0]["limit"] == 3
+
+    async def test_empty_pool_issues_no_query(self, monkeypatch):
+        batched, calls = self._install({}, monkeypatch)
+
+        out = await batched([], "driver_id")
+
+        assert out == []
+        assert calls == []
 
 
 # ---------------------------------------------------------------------------

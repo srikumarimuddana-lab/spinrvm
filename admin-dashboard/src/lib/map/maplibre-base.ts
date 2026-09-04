@@ -71,6 +71,24 @@ export function trackBaseMapStyle(): string {
  *  guard can actually switch styles on failure. */
 export const MAP_STYLE_FALLBACK = MAP_STYLE_URL; // liberty — different look from positron
 
+/**
+ * Fallback basemap style for the admin dashboard's Live Monitoring and Heat
+ * Map pages, tried when the primary keyless OpenFreeMap style fails to load.
+ * Unlike MAP_STYLE_FALLBACK above (still OpenFreeMap, just a different style
+ * path — useless if the whole host is unreachable), this is a genuinely
+ * different provider: `tiles.openfreemap.org` being unreachable from an
+ * admin's network is a real, recurring failure (not hypothetical — confirmed
+ * against the actual deployed dashboard, 2026-09-04), so the fallback needs a
+ * different host entirely.
+ *
+ * Returns null when no NEXT_PUBLIC_PROTOMAPS_API_KEY is configured, in which
+ * case there is nothing to fall back to and the caller should keep its
+ * existing "failed to load" error state.
+ */
+export function monitoringFallbackStyle(flavor: string = "light"): string | null {
+    return protomapsStyleUrl(flavor);
+}
+
 // Saskatoon by default — Spinr is a Saskatchewan-first service, so maps
 // should land somewhere operational even before service areas load or
 // the user's geolocation resolves. MapLibre uses [lng, lat] ordering.

@@ -313,6 +313,45 @@ contradicts a claim made earlier in this log:
    what it asserted. Grepping for callers is not the same as reading them;
    that gap is what CI caught.
 
+## Merge note — parallel fix collision with PR #4919 (2026-09-04)
+
+While this PR was in review, **PR #4919 landed the same C54 claim-loop fix on
+`main` independently.** `main` was merged in (merge commit, per the repo's
+advisory-only merge-commit check) and the conflict in
+`backend/routes/rides/matching.py` was **merged manually — kept mine**, for two
+specific reasons rather than preference:
+
+1. **#4919's version logs with `logger.error(..., exc_info=True)`.** In this
+   module `logger` is loguru (re-exported via `_deps`), which swallows
+   `exc_info` as a `str.format` keyword: no traceback is captured and the
+   loguru→Sentry bridge sends a stack-less `capture_message`. The handler's
+   entire purpose is to surface the root cause of a mid-loop claim failure, so
+   the merged version would have shipped that diagnostic already broken. This
+   is the C60 defect class; it is invisible to
+   `tests/test_loguru_call_conventions.py` because that gate selects files by
+   loguru's direct import line, which this module does not have — filed as C65.
+2. **#4919's release loop is unguarded.** The most likely trigger for the claim
+   failing is a DB blip, which makes `set_driver_available` just as likely to
+   fail; unguarded, the first failed release aborts the remaining ones *and*
+   replaces the original exception, losing the root cause. Each release is
+   individually try/except-guarded here.
+
+The kept version also spans the whole loop rather than the claim call alone, so
+a failure of the inline revalidation release is covered by the same recovery.
+Both PRs' regression tests are retained and both pass against the kept
+implementation: #4919's `test_claim_loop_exception_releases_earlier_claims_and_reraises`
+(2 candidates, `test_dispatch_match_attempt_branches.py`) and this PR's
+`test_postgrest_claim_loop_releases_prior_claims_and_reraises` (3 candidates,
+`test_dispatch_db_errors.py`).
+
+`ACTION_ITEMS.md` C54 records both closures. The three items this PR filed were
+renumbered C63/C64/C65 → **C65/C66/C67**, because #4920 took C63/C64 on `main`
+for unrelated findings while this PR was open.
+
+Unrelated to this PR, the same merge brought in `5a791b9` (#4922), which fixes
+the `parse_iso_utc` dual-import gap in `routes/admin/compliance.py` that had
+turned this PR's CI red through no fault of its diff — see the CI note below.
+
 ## What was NOT verified
 
 - **No automated test execution in this session.** This sandbox's network

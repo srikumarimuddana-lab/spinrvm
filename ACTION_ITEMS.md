@@ -15316,6 +15316,78 @@ record of what was assumed vs. what was actually true</summary>
     **Still not closed**: per-file live-schema verification of the 10
     untracked files (path (b)) remains the deferred, higher-stakes manual
     audit — explicitly out of scope for this follow-up too.
+  - **2026-09-04 follow-up — per-file live verification (path (b)) done for
+    all 5 of the money/auth/RLS-named untracked files** (read-only Supabase
+    MCP queries against `soavhtdhefowwvforzwb`, no writes). Results:
+    - **`26_rls_coverage_gap.sql` — resolves G2 item 1's "unconfirmed"
+      note.** All 6 target tables (`subscription_plans`,
+      `driver_subscriptions`, `driver_notes`, `driver_activity_log`,
+      `driver_daily_stats`, `driver_location_history`) confirmed
+      `relrowsecurity=true` live; all 3 named deny-all policies
+      (`refresh_tokens_deny_all`, `stripe_events_deny_all`,
+      `schema_migrations_deny_all`) confirmed present. Untracked in
+      `schema_migrations` is a pure bookkeeping gap — every DDL effect is
+      live. No action needed; not a candidate for tracking backfill either,
+      per G2's existing "left alone" decision for this file.
+    - **`70_fix_financial_events_rls.sql` — confirmed still correctly
+      un-applied. Do not apply.** Live `financial_events_select` policy
+      still has migration 58's original (safe) `qual`. This is **G2 item
+      1's #1 security-regression file** and is registered in
+      `run_migrations.py`'s `NEVER_APPLY` skip-list — this session
+      initially mischaracterized the live/target diff as "a stale
+      performance optimization, safe to apply" without cross-checking the
+      skip-list first, then caught the error via a
+      `spinr-migration-reviewer` pass *before* applying anything (no write
+      was made). Correcting the record here: 70's JWT-trust approach
+      (`auth.jwt() -> 'user_metadata' ->> 'role' = 'admin'`) is a real
+      privilege-escalation bug — `user_metadata` is self-editable by any
+      authenticated Supabase user, not admin-controlled — exactly as G2
+      already documented. Deferring entirely to G2 item 1 for this file;
+      not duplicating its analysis further here. **Process lesson**: any
+      future live-schema-drift check on a specific migration file must
+      grep `NEVER_APPLY` in `run_migrations.py` (and this file for a prior
+      G2/C-item mention of that filename) *before* characterizing an
+      unapplied file as a gap worth closing.
+    - **`78_fix_pii_function_search_path.sql` / `137_fix_pii_encrypt_pgsodium_perms.sql`
+      — resolves G2 item 1's "ambiguous" note on 137.** Both are moot, not
+      applied and not needed: migration **138**
+      (`driver_pii_use_vault_create_secret.sql`, confirmed tracked +
+      applied 2026-08-14) fully supersedes both — it takes a different,
+      working approach (`vault.create_secret()` instead of 137's
+      direct-`vault.secrets`-insert-plus-ownership-transfer approach, which
+      138's own rollback comment says still failed with `permission denied
+      for _crypto_aead_det_noncegen()` on this managed project). Live
+      `encrypt_driver_pii`/`decrypt_driver_pii` search_path
+      (`public, vault, pg_temp`) and owner (`postgres`) match migration
+      138's definition exactly, explaining why G2 found the live state
+      matching neither 78's nor 137's target — it's actually 138's target,
+      a file G2 didn't check. 78 is separately, correctly skip-listed
+      (would strip `vault` and regress 138's working fix); 137 was not
+      previously skip-listed but should be treated the same way — it's
+      superseded, not merely unconfirmed, and applying it (search_path
+      minus 138's vault-only approach, plus an ownership transfer to
+      `supabase_admin` that a 2026-08-22 G2 follow-up already found
+      unnecessary on this project) would be a pointless regression risk,
+      not a fix. No live bug exists in PII encryption today.
+    - **`376_corporate_wallet_adjust_idempotency.sql` — now fully applied
+      and tracked** (`applied_at` 2026-09-02, after the 2026-08-31 audit
+      ran — explaining why it still showed as one of the 10 untracked
+      files then). Verified live: `client_idempotency_key` column, its
+      partial unique index, and the new 11-arg
+      `corporate_wallet_apply_delta` overload all present. Incidentally
+      confirmed the migration's own comment ("old 10-arg signature no
+      longer exists") is technically wrong — Postgres keeps both overloads
+      when arg count differs, so the old 10-arg signature still exists
+      alongside the new 11-arg one — but harmless: both are `EXECUTE`-
+      granted to `service_role`/`postgres` only, no `anon`/`authenticated`
+      grant on either.
+    - **Net result of this follow-up**: of the 10 untracked files from the
+      2026-08-31 audit, the 5 non-money/auth/RLS ones remain unverified
+      (still open, lower priority — not touched this pass); of the 5
+      flagged ones, 1 (376) is fully resolved and tracked, 1 (26) is fully
+      resolved (bookkeeping-only gap), 2 (78/137) are moot (superseded by
+      138), and 1 (70) is confirmed correctly blocked — no code or schema
+      change was made or is needed for any of the 5.
 - [ ] **Original status (2026-08-13, superseded above but kept for
   history):** open — found while investigating why the
   corporate-portal OTP email send has been failing since it shipped (see

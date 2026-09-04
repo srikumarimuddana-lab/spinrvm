@@ -382,7 +382,7 @@ export default function ManageCardsScreen() {
                   </TouchableOpacity>
                 )
               )}
-              <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteCard(item)} activeOpacity={0.7}>
+              <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteCard(item)} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="trash-outline" size={18} color={colors.error} />
               </TouchableOpacity>
             </View>

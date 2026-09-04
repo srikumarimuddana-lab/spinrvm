@@ -750,29 +750,17 @@ class TestSaskatoonCityTripLogRows:
     completed rides, plus rides cancelled by the rider or driver after a
     driver had already accepted, scoped to the Saskatoon service area."""
 
-    def _get_rows_side(self, rides, saskatoon_areas=None, drivers=None):
+    def _get_rows_side(self, rides, saskatoon_areas=None):
         areas = saskatoon_areas if saskatoon_areas is not None else [{"id": "sk1", "name": "Saskatoon"}]
-        driver_rows = drivers if drivers is not None else []
 
         async def side(table, filters=None, **kw):
             if table == "service_areas":
                 return areas
             if table == "rides":
                 return rides
-            if table == "drivers":
-                return driver_rows
             return []
 
         return side
-
-    @staticmethod
-    def _passthrough_decrypt():
-        """_decrypt_driver_pii round-trips through a Vault RPC this unit
-        test has no business calling — patch it to identity so the test
-        exercises this module's own lookup/mapping logic, not the vault
-        client, matching how _patch_get_rows isolates the Supabase query
-        layer the same way."""
-        return patch("backend.routes.admin.compliance._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d))
 
     def test_completed_ride_included_with_full_timeline(self):
         rides = [
@@ -785,14 +773,9 @@ class TestSaskatoonCityTripLogRows:
                 "ride_completed_at": "2026-07-05T10:30:00Z",
                 "cancelled_at": None,
                 "cancelled_by": None,
-                "driver_id": "d1",
             }
         ]
-        drivers = [{"id": "d1", "license_number": "SK-DL-778899"}]
-        with (
-            _patch_get_rows(self._get_rows_side(rides, drivers=drivers)),
-            self._passthrough_decrypt(),
-        ):
+        with _patch_get_rows(self._get_rows_side(rides)):
             rows, truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
 
         assert not truncated
@@ -804,7 +787,6 @@ class TestSaskatoonCityTripLogRows:
                 "End_Timestamp": "2026-07-05 10:30 UTC",
                 "Passenger_Wait_Time (Mins)": "10",
                 "Trip_Status": "Completed",
-                "Driver_License_Number": "SK-DL-778899",
             }
         ]
 
@@ -839,14 +821,9 @@ class TestSaskatoonCityTripLogRows:
                 "ride_completed_at": None,
                 "cancelled_at": "2026-07-05T10:05:00Z",
                 "cancelled_by": "rider",
-                "driver_id": "d3",
             }
         ]
-        drivers = [{"id": "d3", "license_number": "SK-DL-111222"}]
-        with (
-            _patch_get_rows(self._get_rows_side(rides, drivers=drivers)),
-            self._passthrough_decrypt(),
-        ):
+        with _patch_get_rows(self._get_rows_side(rides)):
             rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
 
         assert rows == [
@@ -857,7 +834,6 @@ class TestSaskatoonCityTripLogRows:
                 "End_Timestamp": "",
                 "Passenger_Wait_Time (Mins)": "",
                 "Trip_Status": "Cancelled by Rider",
-                "Driver_License_Number": "SK-DL-111222",
             }
         ]
 
@@ -872,61 +848,13 @@ class TestSaskatoonCityTripLogRows:
                 "ride_completed_at": None,
                 "cancelled_at": "2026-07-05T10:06:00Z",
                 "cancelled_by": "driver",
-                "driver_id": "d4",
             }
         ]
-        drivers = [{"id": "d4", "license_number": "SK-DL-333444"}]
-        with (
-            _patch_get_rows(self._get_rows_side(rides, drivers=drivers)),
-            self._passthrough_decrypt(),
-        ):
+        with _patch_get_rows(self._get_rows_side(rides)):
             rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
 
         assert len(rows) == 1
         assert rows[0]["Trip_Status"] == "Cancelled by Driver"
-        assert rows[0]["Driver_License_Number"] == "SK-DL-333444"
-
-    def test_driver_lookup_only_queries_kept_rows_driver_ids(self):
-        """A ride excluded from the report (cancelled before acceptance)
-        must not trigger a drivers lookup for its driver_id — the batched
-        $in query is built from the *kept* rows only."""
-        rides = [
-            {
-                "id": "r_excluded",
-                "status": "cancelled",
-                "ride_requested_at": "2026-07-05T09:00:00Z",
-                "driver_accepted_at": None,
-                "cancelled_by": "rider",
-                "driver_id": "d_excluded",
-            },
-            {
-                "id": "r_kept",
-                "status": "completed",
-                "ride_requested_at": "2026-07-05T10:00:00Z",
-                "driver_accepted_at": "2026-07-05T10:02:00Z",
-                "ride_started_at": "2026-07-05T10:10:00Z",
-                "ride_completed_at": "2026-07-05T10:30:00Z",
-                "driver_id": "d_kept",
-            },
-        ]
-        captured = {}
-
-        async def side(table, filters=None, **kw):
-            if table == "service_areas":
-                return [{"id": "sk1", "name": "Saskatoon"}]
-            if table == "rides":
-                return rides
-            if table == "drivers":
-                captured["drivers"] = filters
-                return [{"id": "d_kept", "license_number": "SK-DL-555"}]
-            return []
-
-        with _patch_get_rows(side), self._passthrough_decrypt():
-            rows, _truncated = asyncio.run(compliance._saskatoon_city_trip_log_rows(_START, _END))
-
-        assert captured["drivers"] == {"id": {"$in": ["d_kept"]}}
-        assert len(rows) == 1
-        assert rows[0]["Driver_License_Number"] == "SK-DL-555"
 
     def test_system_auto_cancel_excluded_even_if_driver_had_accepted(self):
         """Out of scope by spec (rider/driver cancellations only), so
@@ -981,8 +909,6 @@ class TestSaskatoonCityTripLogRows:
         assert captured["rides"]["service_area_id"] == {"$in": ["sk1"]}
         assert captured["rides"]["status"] == {"$in": ["completed", "cancelled"]}
         assert captured["rides"]["ride_requested_at"] == {"$gte": _START.isoformat(), "$lte": _END.isoformat()}
-        # No rides -> no driver ids -> the drivers table must never be queried.
-        assert "drivers" not in captured
 
     def test_raises_loudly_when_saskatoon_area_is_missing(self):
         """Never silently falls back to 'every area' (CLAUDE.md: don't mask

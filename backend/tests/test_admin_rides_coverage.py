@@ -239,13 +239,15 @@ class TestAdminCompleteRide:
     def test_complete_happy_path_sets_waived_admin(self, client, as_super_admin):
         captured: dict = {}
 
-        async def _update_ride(ride_id, data):
-            captured["ride_id"] = ride_id
+        async def _update_one(table, filters, data):
+            captured["table"] = table
+            captured["filters"] = filters
             captured["data"] = data
+            return {**_RIDE_IN_PROGRESS, **data}
 
         with (
             patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_IN_PROGRESS)),
-            patch("db_supabase.update_ride", AsyncMock(side_effect=_update_ride)),
+            patch("db_supabase.update_one", AsyncMock(side_effect=_update_one)),
             patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
             patch("db_supabase.set_driver_available", AsyncMock()),
             patch("utils.insurance_periods.record_period_transition", AsyncMock()),
@@ -256,15 +258,17 @@ class TestAdminCompleteRide:
         ):
             resp = client.post("/api/admin/rides/ride-3/complete")
         assert resp.status_code == 200
+        assert captured["filters"] == {"id": "ride-3", "status": "in_progress"}
         assert captured["data"]["status"] == "completed"
         # Must NOT impersonate 'paid' — no real Stripe charge happened.
         assert captured["data"]["payment_status"] == "waived_admin"
 
     def test_complete_from_driver_arrived_allowed(self, client, as_super_admin):
         ride = {**_RIDE_IN_PROGRESS, "status": "driver_arrived"}
+        completed = {**ride, "status": "completed"}
         with (
             patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch("db_supabase.update_one", AsyncMock(return_value=completed)),
             patch("routes.admin.rides.log_admin_action", AsyncMock(return_value="audit-1")),
             patch("db_supabase.set_driver_available", AsyncMock()),
             patch("utils.insurance_periods.record_period_transition", AsyncMock()),
@@ -279,7 +283,7 @@ class TestAdminCompleteRide:
     def test_complete_db_write_failure_returns_500_not_swallowed(self, client, as_super_admin):
         with (
             patch("db_supabase.get_ride", AsyncMock(return_value=_RIDE_IN_PROGRESS)),
-            patch("db_supabase.update_ride", AsyncMock(side_effect=RuntimeError("db down"))),
+            patch("db_supabase.update_one", AsyncMock(side_effect=RuntimeError("db down"))),
         ):
             resp = client.post("/api/admin/rides/ride-3/complete")
         assert resp.status_code == 500

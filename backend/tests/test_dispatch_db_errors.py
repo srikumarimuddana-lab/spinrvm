@@ -171,7 +171,7 @@ async def test_postgrest_claim_loop_releases_prior_claims_and_reraises():
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
             # max_offers=3 so the loop doesn't stop claiming before the 3rd
             # (failing) candidate is reached.
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",

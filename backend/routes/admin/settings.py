@@ -585,9 +585,20 @@ class SettingsUpdateRequest(BaseModel):
         to an attacker-controlled test key — reject outright rather than
         silently accepting whatever string is submitted. A masked preview
         value round-tripped from GET (see the mask-roundtrip guard in
-        admin_update_settings) already starts with the real key's own
-        prefix, so it passes this check unchanged."""
+        admin_update_settings) normally keeps the real key's own prefix, so
+        it would pass this check unchanged -- except when the *stored* key's
+        prefix no longer matches the current environment (e.g. a leftover
+        sk_live_ value sitting in a non-production app_settings row). That
+        mismatch used to reject the entire save -- every field on the page,
+        not just the credential -- because this validator runs before the
+        mask-roundtrip guard ever gets a chance to drop the field. A masked
+        preview is never persisted regardless of prefix (the guard always
+        strips any `*****`-suffixed value first), so exempting it here can't
+        smuggle a real credential through; it only stops an unrelated save
+        from being blocked by a credential the admin didn't touch."""
         if not v:
+            return v
+        if v.endswith("*****"):
             return v
         if _core_settings.ENV.lower() == "production":
             if not v.startswith("sk_live_"):

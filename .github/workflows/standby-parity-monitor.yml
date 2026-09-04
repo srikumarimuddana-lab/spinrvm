@@ -1,0 +1,232 @@
+name: Standby parity monitor (Railway vs Fly)
+
+# Daily proof that the Railway warm standby is actually a standby (ADR-007),
+# built after ACTION_ITEMS.md C5: the Railway deploy workflow had been failing
+# on every push for weeks ("Invalid RAILWAY_TOKEN"), nobody noticed, and the
+# standby silently drifted from main. Nothing checked (a) that Railway had
+# every required variable, (b) that the two providers' secrets were identical,
+# or (c) what commit Railway was even running. This does all three, plus
+# /health on both, and files ONE tracked issue (updated in place, never
+# spammed) when anything is off — same pattern as cert-domain-monitor.yml.
+#
+# Evidence is collected here in shell and judged by scripts/standby_parity.py
+# (pure stdlib; `--self-test` runs its scenario table in the same job). NO
+# SECRET VALUE is ever read: variable/secret NAMES only, HTTP status codes,
+# and the HMAC fingerprints the backend's /deploy-info returns.
+#
+# ── GitHub secrets it uses (all already exist for the deploy workflows,
+#    except METRICS_AUTH_TOKEN which is new and OPTIONAL) ───────────────────
+#   RAILWAY_TOKEN        Project token — deploy-backend.yml
+#   FLY_API_TOKEN        deploy token — deploy-fly.yml
+#   BACKEND_HEALTH_URL   https://<service>.up.railway.app   (optional; skips probe)
+#   FLY_HEALTH_URL       https://spinr-backend-yyz.fly.dev   (optional; skips probe)
+#   METRICS_AUTH_TOKEN   the backend's own METRICS_AUTH_TOKEN value (optional;
+#                        without it, build-sha and value parity are reported as
+#                        "NOT verified", never silently passed)
+
+on:
+  schedule:
+    # Daily 12:30 UTC (~06:30 CST) — after cert-domain-monitor (12:00), before
+    # business hours so a finding is actionable same-day.
+    - cron: "30 12 * * *"
+  workflow_dispatch:
+    inputs:
+      force_open_issue:
+        description: "Open/update the tracked issue even if everything is healthy (manual override, for testing)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  FLY_APP: spinr-backend-yyz
+  RAILWAY_SERVICE: spinr-backend
+  ISSUE_LABEL: "standby-parity"
+  # Hoisted so step `if:` conditionals can test them (secrets context is not
+  # available there).
+  BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+  FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+  METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
+
+jobs:
+  check-and-notify:
+    name: Railway ↔ Fly parity check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Self-test the parity evaluator
+        run: python3 scripts/standby_parity.py --self-test
+
+      - name: Install Railway CLI v4
+        run: npm i -g @railway/cli@4.40.2
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master (2026-08-18)
+
+      # `railway variables --json` is {"NAME":"value",...}; it goes straight
+      # into `jq 'keys'` and the value side is never written anywhere.
+      - name: Collect Railway variable names
+        id: railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+          if [ -z "${RAILWAY_TOKEN}" ]; then
+            echo "error=RAILWAY_TOKEN GitHub secret is not set" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! err=$(railway status 2>&1); then
+            echo "error=$(printf '%s' "${err}" | grep -m1 . | tr -d '\r' | cut -c1-200)" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! railway variables --service "${RAILWAY_SERVICE}" --json | jq -c 'keys' > evidence/railway_names.json; then
+            echo "error=railway variables --service ${RAILWAY_SERVICE} failed" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Railway variable names: $(jq -r 'join(", ")' evidence/railway_names.json)"
+
+      - name: Collect Fly secret names
+        id: fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "error=FLY_API_TOKEN GitHub secret is not set" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! flyctl secrets list -a "${FLY_APP}" --json | jq -c '[.[].Name]' > evidence/fly_names.json; then
+            echo "error=flyctl secrets list -a ${FLY_APP} failed" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Fly secret names: $(jq -r 'join(", ")' evidence/fly_names.json)"
+
+      - name: Probe /health on both providers
+        id: health
+        run: |
+          set -uo pipefail
+          probe() {  # $1 = base url
+            curl -sf --max-time 10 "$1/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000"
+          }
+          if [ -n "${FLY_HEALTH_URL}" ]; then f=$(probe "${FLY_HEALTH_URL}"); else f=skipped; fi
+          if [ -n "${BACKEND_HEALTH_URL}" ]; then r=$(probe "${BACKEND_HEALTH_URL}"); else r=skipped; fi
+          echo "fly=${f}" >> "$GITHUB_OUTPUT"; echo "railway=${r}" >> "$GITHUB_OUTPUT"
+          echo "Fly /health: ${f}   Railway /health: ${r}"
+
+      # Fingerprints only (see backend/server.py /deploy-info) — safe to store
+      # as a step artifact-in-workspace; nothing in the body is a value.
+      - name: Fetch /deploy-info on both providers
+        if: ${{ env.METRICS_AUTH_TOKEN != '' }}
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+          fetch() {  # $1 = base url, $2 = out file
+            code=$(curl -s --max-time 10 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN}" "$1/deploy-info" \
+                     -o "$2" -w "%{http_code}" 2>/dev/null || echo "000")
+            if [ "${code}" != "200" ]; then
+              printf '{"__unparseable__":true,"__error__":"HTTP %s"}\n' "${code}" > "$2"
+            fi
+            echo "$1/deploy-info → HTTP ${code}"
+          }
+          [ -n "${FLY_HEALTH_URL}" ] && fetch "${FLY_HEALTH_URL}" evidence/fly_info.json
+          [ -n "${BACKEND_HEALTH_URL}" ] && fetch "${BACKEND_HEALTH_URL}" evidence/railway_info.json
+          true
+
+      - name: Evaluate
+        id: parity
+        env:
+          RAILWAY_ERROR: ${{ steps.railway.outputs.error }}
+          FLY_ERROR: ${{ steps.fly.outputs.error }}
+        run: |
+          set -euo pipefail
+          python3 scripts/standby_parity.py \
+            --required deploy/backend-required-env.txt \
+            --railway-names evidence/railway_names.json --railway-error "${RAILWAY_ERROR}" \
+            --fly-names evidence/fly_names.json --fly-error "${FLY_ERROR}" \
+            --railway-health "${{ steps.health.outputs.railway }}" \
+            --fly-health "${{ steps.health.outputs.fly }}" \
+            --railway-info evidence/railway_info.json \
+            --fly-info evidence/fly_info.json \
+            --main-sha "${GITHUB_SHA}" | tee parity-report.md
+
+      - name: Ensure tracking label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create "${ISSUE_LABEL}" --repo "${{ github.repository }}" --color B60205 --description "Automated Railway↔Fly standby parity findings" --force
+
+      - name: Check for existing open tracked issue
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --repo "${REPO}" --state open --label "${ISSUE_LABEL}" --json number --jq '.[0].number // empty')
+          echo "existing=${existing}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update tracked issue
+        if: steps.parity.outputs.severity != 'OK' || github.event.inputs.force_open_issue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SEVERITY: ${{ steps.parity.outputs.severity }}
+          FINDINGS: ${{ steps.parity.outputs.findings }}
+          EXISTING_ISSUE: ${{ steps.existing.outputs.existing }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="[${SEVERITY}] Railway standby parity finding — $(date -u +%Y-%m-%d)"
+          body=$(cat <<EOF
+          # Railway ↔ Fly standby parity — ${SEVERITY}
+
+          Automated daily check (\`.github/workflows/standby-parity-monitor.yml\`, run
+          [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
+          It verifies ADR-007's standby invariants: Railway deploys are landing, every
+          required variable exists on both providers, secrets are byte-identical, both
+          serve the same commit, and both answer \`/health\`. Names and fingerprints
+          only — no value is ever read or shown.
+
+          ${FINDINGS}
+
+          ## Next step
+          - 🔴 CRITICAL: a fail-over to Railway today would be broken or unsafe. Fix
+            before relying on the standby — see \`docs/runbooks/railway-fly-failover.md\`
+            → "Standby readiness automation" for what each finding means and the fix.
+          - 🟡 WARN: something could not be verified (usually a missing optional
+            GitHub secret) or a non-blocking drift. Resolve so the check is complete.
+
+          Required-variable list: \`deploy/backend-required-env.txt\`. This issue is
+          updated in place on each run while a finding persists; closing it does not
+          silence tomorrow's run.
+
+          ---
+          *Auto-generated by \`.github/workflows/standby-parity-monitor.yml\`.*
+          EOF
+          )
+          if [ -n "${EXISTING_ISSUE}" ]; then
+            gh issue edit "${EXISTING_ISSUE}" --repo "${REPO}" --title "${title}" --body "${body}"
+            echo "Updated existing issue #${EXISTING_ISSUE}"
+          else
+            gh issue create --repo "${REPO}" --title "${title}" --body "${body}" --label "${ISSUE_LABEL}"
+          fi
+
+      - name: Close tracked issue when everything is green
+        if: steps.parity.outputs.severity == 'OK' && steps.existing.outputs.existing != '' && github.event.inputs.force_open_issue != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXISTING_ISSUE: ${{ steps.existing.outputs.existing }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh issue close "${EXISTING_ISSUE}" --repo "${REPO}" \
+            --comment "Standby parity check is green again as of $(date -u +%Y-%m-%dT%H:%MZ) (run ${{ github.run_id }}). Auto-closed."
+
+      # A red scheduled run is a second, independent signal (Actions email /
+      # the workflow badge) on top of the issue.
+      - name: Fail the run on CRITICAL
+        if: steps.parity.outputs.severity == 'CRITICAL'
+        run: |
+          echo "::error title=Standby parity CRITICAL::A fail-over to Railway today would be broken or unsafe. See the tracked '${ISSUE_LABEL}' issue."
+          exit 1

@@ -25,7 +25,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 try:
     from . import conversations, response_cache
     from .guardrails import fallback_over_cap
-    from .pii import filter_tool_leakage, scrub_pii
+    from .pii import ScrubPolicy, filter_tool_leakage, scrub_pii
     from .prompts import build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
@@ -34,7 +34,7 @@ try:
 except ImportError:
     from ai import conversations, response_cache
     from ai.guardrails import fallback_over_cap
-    from ai.pii import filter_tool_leakage, scrub_pii
+    from ai.pii import ScrubPolicy, filter_tool_leakage, scrub_pii
     from ai.prompts import build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
@@ -270,11 +270,12 @@ async def _run_chat_turn(
             source="message",
         )
 
-    # keep_trip_pins: chat messages may carry app-generated bracketed
-    # [lat,lng] trip endpoints (quote-card taps, map-pin confirms) that the
-    # model must see verbatim. Only this path opts in — Sentry and support
-    # scrubbing stay fully strict.
-    scrubbed = scrub_pii(user_message, keep_trip_pins=True)
+    # ScrubPolicy.AI_CHAT: chat messages may carry app-generated bracketed
+    # [lat,lng] trip endpoints (quote-card taps, map-pin confirms) and the
+    # postal code of a tapped address, both of which the model must see
+    # verbatim (ADR 012). Only this path and tools.py's model-facing result
+    # cap opt in — Sentry, support and /mcp scrubbing stay fully strict.
+    scrubbed = scrub_pii(user_message, policy=ScrubPolicy.AI_CHAT)
     user_row = await conversations.append_message(conversation, "user", scrubbed)
     yield "meta", {"conversation_id": conversation["id"], "user_message_id": user_row["id"]}
 
@@ -469,12 +470,12 @@ async def _run_chat_turn(
     # dispatch tool result). Scrub only what's written to ai_messages / the
     # FAQ cache — the raw text has already streamed to the client this turn,
     # so the rider still sees the real reply; only stored/replayed copies
-    # change. keep_trip_pins mirrors the user-side call in case the model
-    # echoes a bracketed trip-endpoint pair back.
+    # change. ScrubPolicy.AI_CHAT mirrors the user-side call in case the
+    # model echoes a bracketed trip-endpoint pair or a postal code back.
     # AI13: also strip snake_case-shaped tool-name/internal-jargon leakage
     # from the persisted/replayed copy -- same live-stream-unchanged
     # convention as the PII scrub immediately above.
-    stored_text = filter_tool_leakage(scrub_pii(final_text, keep_trip_pins=True))
+    stored_text = filter_tool_leakage(scrub_pii(final_text, policy=ScrubPolicy.AI_CHAT))
 
     assistant_row = await conversations.append_message(
         conversation,

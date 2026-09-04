@@ -211,7 +211,7 @@ async def run_public_turn(
             source="public_web",
         )
 
-    # Strict scrub (no keep_trip_pins): the public site has no map-pin or
+    # ScrubPolicy.STRICT (the default): the public site has no map-pin or
     # quote-card flow, so bracketed coordinates here are never app-generated.
     scrubbed = scrub_pii(message.strip())
 

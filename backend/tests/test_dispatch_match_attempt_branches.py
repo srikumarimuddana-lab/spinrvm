@@ -252,7 +252,7 @@ async def test_claim_loop_exception_releases_earlier_claims_and_reraises():
         patch("backend.routes.rides.matching._deps.get_app_settings", AsyncMock(return_value={})),
         patch(
             "backend.routes.rides.matching._shared.dispatch.resolve_matching_config",
-            AsyncMock(return_value=("nearest", 0, 10.0, 3, False)),
+            AsyncMock(return_value=("nearest", 0, 10.0, 3, False, 500)),
         ),
         patch(
             "backend.routes.rides.matching._deps.filter_and_rank_drivers",

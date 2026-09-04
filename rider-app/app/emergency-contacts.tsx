@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  TextInput,
   KeyboardAvoidingView,
   ActivityIndicator,
 } from 'react-native';
@@ -18,6 +17,8 @@ import { getEmergencyContactFormError } from '../utils/emergencyContactSchema';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
+import { Input } from '@shared/components/Input';
 
 const MAX_CONTACTS = 3;
 
@@ -233,21 +234,21 @@ export default function EmergencyContactsScreen() {
             <View style={styles.addForm}>
               <Text style={styles.formTitle}>New Emergency Contact</Text>
 
-              <Text style={styles.formLabel}>Full Name</Text>
-              <TextInput
+              <Input
+                label="Full Name"
+                labelStyle={styles.formLabel}
                 style={styles.formInput}
                 placeholder="e.g. Sarah Johnson"
-                placeholderTextColor={colors.textDim}
                 value={name}
                 onChangeText={setName}
                 autoCapitalize="words"
               />
 
-              <Text style={styles.formLabel}>Phone Number</Text>
-              <TextInput
+              <Input
+                label="Phone Number"
+                labelStyle={styles.formLabel}
                 style={styles.formInput}
                 placeholder="e.g. (306) 555-1234"
-                placeholderTextColor={colors.textDim}
                 value={phone}
                 onChangeText={setPhone}
                 keyboardType="phone-pad"
@@ -277,23 +278,27 @@ export default function EmergencyContactsScreen() {
               </View>
 
               <View style={styles.formButtons}>
-                <TouchableOpacity
+                <Button
+                  variant="secondary"
+                  size="md"
+                  fullWidth={false}
                   style={styles.cancelButton}
+                  textStyle={styles.cancelButtonText}
                   onPress={() => { setShowAdd(false); setName(''); setPhone(''); }}
                 >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.saveButton, saving && { opacity: 0.6 }]}
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  size="md"
+                  fullWidth={false}
+                  loading={saving}
+                  style={styles.saveButton}
+                  textStyle={styles.saveButtonText}
                   onPress={handleAdd}
-                  disabled={saving}
                 >
-                  {saving ? (
-                    <ActivityIndicator color="#FFF" size="small" />
-                  ) : (
-                    <Text style={styles.saveButtonText}>Save Contact</Text>
-                  )}
-                </TouchableOpacity>
+                  Save Contact
+                </Button>
               </View>
             </View>
           )}

@@ -23,9 +23,28 @@ information:
 
 Both are asserted statically over the source: neither defect is observable at
 runtime without asserting on log *text*, and a unit test per call site would be
-absurd. The scan only inspects modules that do ``from loguru import logger`` —
-stdlib ``logging`` uses %-style correctly and ``exc_info`` legitimately, so it
-must not be caught here.
+absurd. Only loguru modules are inspected — stdlib ``logging`` uses %-style
+correctly and ``exc_info`` legitimately, so it must not be caught here.
+
+**Selecting those modules is the hard part, and getting it wrong is silent.**
+This scan originally picked files with the substring ``from loguru import
+logger``. That missed every module which takes ``logger`` from a package-local
+re-export, and ``backend/routes/rides/*`` does exactly that — 12 modules and 221
+call sites, including the whole dispatch path, were never scanned. 161 of those
+calls carried one of the two defects above while the suite stayed green.
+
+The two ``_deps`` modules are also not interchangeable, so "scan anything that
+isn't obviously stdlib" would be wrong in the other direction:
+
+    routes/rides/_deps.py     from loguru import logger        -> loguru
+    routes/drivers/_deps.py   logger = logging.getLogger(...)  -> stdlib
+
+``routes/drivers/*`` is therefore stdlib, and its ``exc_info=``/``%s`` calls are
+correct. So the selector below *resolves* each module's ``logger`` binding,
+following ``from ._deps import logger`` to the module that defines it, and
+``test_every_logger_binding_resolves`` fails on any binding it cannot classify —
+the point being that the next re-export cannot quietly slip out of the scan the
+way this one did.
 """
 
 from __future__ import annotations
@@ -61,16 +80,119 @@ LEVELS = {
 }
 
 
-def _loguru_modules() -> list[tuple[Path, str]]:
+def _read(rel: str) -> tuple[Path, str]:
+    path = BACKEND / rel
+    return path, path.read_text()
+
+
+def _backend_modules() -> list[tuple[Path, str]]:
     out = []
     for path in sorted(BACKEND.rglob("*.py")):
         parts = path.parts
         if ".venv" in parts or "tests" in parts:
             continue
-        src = path.read_text()
-        if "from loguru import logger" in src:
-            out.append((path, src))
+        out.append((path, path.read_text()))
     return out
+
+
+def _resolve_module(path: Path, level: int, module: str | None) -> Path | None:
+    """Map an `from ... import` target to a file inside BACKEND, or None."""
+    parts = (module or "").split(".") if module else []
+    if level:
+        # level 1 == the importing module's own package directory
+        try:
+            base = path.parents[level - 1]
+        except IndexError:
+            return None
+        bases = [base]
+    else:
+        # Absolute, in both spellings the dual-import pattern produces:
+        # `backend.routes.rides._deps` and `routes.rides._deps`.
+        bases = [BACKEND.parent, BACKEND]
+    for base in bases:
+        cand = base.joinpath(*parts)
+        for f in (cand.with_suffix(".py"), cand / "__init__.py"):
+            if f.is_file() and BACKEND in f.parents:
+                return f
+    return None
+
+
+def _logger_flavor(path: Path, src: str, seen: frozenset[Path] = frozenset()) -> str:
+    """'loguru' | 'stdlib' | 'unknown' for the module-level `logger` name.
+
+    Follows re-exports (`from ._deps import logger`) to the defining module.
+    `ast.walk` rather than top-level-only, so the dual-import try/except that
+    every module in this codebase uses is covered.
+    """
+    if path in seen:
+        return "unknown"  # import cycle — refuse to guess
+    seen = seen | {path}
+    tree = ast.parse(src)
+
+    # Local names bound to loguru's logger under *any* alias, so that
+    # `from loguru import logger as _raw` + `logger = _raw.bind(...)` resolves.
+    loguru_aliases = {
+        a.asname or a.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "loguru"
+        for a in node.names
+        if a.name == "logger"
+    }
+
+    flavors = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            bound = [a for a in node.names if (a.asname or a.name) == "logger"]
+            if not bound:
+                continue
+            if any(a.name != "logger" for a in bound):
+                flavors.add("unknown")  # `from x import something as logger` — don't guess
+                continue
+            if node.level == 0 and node.module == "loguru":
+                flavors.add("loguru")
+                continue
+            target = _resolve_module(path, node.level, node.module)
+            if target is None:
+                flavors.add("unknown")
+            else:
+                flavors.add(_logger_flavor(target, target.read_text(), seen))
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(isinstance(t, ast.Name) and t.id == "logger" for t in targets):
+                continue
+            value = node.value
+            if value is None:
+                continue  # bare `logger: Logger` annotation binds nothing
+            if any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "getLogger"
+                for n in ast.walk(value)
+            ):
+                flavors.add("stdlib")
+                continue
+            root = value  # unwrap `.bind(...).opt(...)` chains back to their receiver
+            while isinstance(root, ast.Call):
+                root = root.func
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name) and root.id in loguru_aliases:
+                flavors.add("loguru")
+            elif isinstance(root, ast.Name) and root.id == "logger":
+                pass  # `logger = logger` alias; the real binding is elsewhere
+            else:
+                flavors.add("unknown")
+    if flavors == {"loguru"}:
+        return "loguru"
+    if flavors == {"stdlib"}:
+        return "stdlib"
+    return "unknown"
+
+
+def _loguru_modules() -> list[tuple[Path, str]]:
+    return [
+        (path, src)
+        for path, src in _backend_modules()
+        if _logger_flavor(path, src) == "loguru" and any(True for _ in _logger_calls(ast.parse(src)))
+    ]
 
 
 def _logger_calls(tree: ast.AST):
@@ -132,9 +254,46 @@ def test_no_exc_info_kwarg_in_loguru_calls():
 def test_scan_actually_sees_the_backend():
     """Non-vacuity guard: the two tests above pass trivially on an empty scan."""
     modules = _loguru_modules()
-    assert len(modules) > 20, f"only {len(modules)} loguru modules found — scan is broken"
+    assert len(modules) > 40, f"only {len(modules)} loguru modules found — scan is broken"
     total_calls = sum(len(list(_logger_calls(ast.parse(src)))) for _p, src in modules)
-    assert total_calls > 200, f"only {total_calls} logger calls found — call detection is broken"
+    assert total_calls > 700, f"only {total_calls} logger calls found — call detection is broken"
+
+
+def test_scan_covers_reexported_loggers_and_only_those():
+    """Pins both edges of the selector — the blind spot, and its overcorrection.
+
+    ``routes/rides/*`` re-exports loguru's logger and must be scanned; the
+    original substring selector missed it. ``routes/drivers/*`` re-exports a
+    *stdlib* logger and must not be, or the scan would demand loguru spellings
+    for calls where ``exc_info=``/``%s`` are correct.
+    """
+    scanned = {p.relative_to(BACKEND).as_posix() for p, _s in _loguru_modules()}
+    assert "routes/rides/matching.py" in scanned
+    assert "routes/rides/booking.py" in scanned
+    assert "routes/drivers/ride_flow.py" not in scanned
+    assert "routes/drivers/subscriptions.py" not in scanned
+
+    assert _logger_flavor(*_read("routes/rides/_deps.py")) == "loguru"
+    assert _logger_flavor(*_read("routes/drivers/_deps.py")) == "stdlib"
+
+
+def test_every_logger_binding_resolves():
+    """No module may call `logger.*` with a binding the selector cannot classify.
+
+    This is the guard the original scan lacked: an unrecognised binding used to
+    mean "silently not scanned", which is how 161 defective calls stayed green.
+    It now means a failing test, and the fix is to teach `_logger_flavor` the new
+    shape — never to leave the module unclassified.
+    """
+    unresolved = [
+        p.relative_to(BACKEND).as_posix()
+        for p, s in _backend_modules()
+        if any(True for _ in _logger_calls(ast.parse(s))) and _logger_flavor(p, s) == "unknown"
+    ]
+    assert not unresolved, (
+        "these modules call logger.* but their `logger` binding could not be traced to "
+        "loguru or stdlib logging, so they are in neither scan:\n" + "\n".join(unresolved)
+    )
 
 
 def test_detectors_catch_the_original_defects():

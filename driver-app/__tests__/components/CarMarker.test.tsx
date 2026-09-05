@@ -1,7 +1,9 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
+import { Platform, Image } from 'react-native';
+import { Marker } from 'react-native-maps';
 import { CarMarker } from '../../components/CarMarker';
-import { playbackPosition } from '@shared/utils/markerPlayback';
+import { playbackPosition, pushFix } from '@shared/utils/markerPlayback';
 
 // react-native-maps requires native modules Jest can't load — stub with
 // components that support everything CarMarker actually uses: a ref with
@@ -199,6 +201,169 @@ describe('CarMarker — onBearingChange (shared bearing source for map camera + 
       latitude: 50.446,
       longitude: -104.6189,
     });
+    unmount();
+  });
+});
+
+describe('CarMarker — physics-based jump rejection (ingestFix)', () => {
+  const mockPushFix = pushFix as jest.Mock;
+  const start = { latitude: 50.4452, longitude: -104.6189 };
+  // A realistic epoch anchor: ingestFix falls back to Date.now() whenever a
+  // fix's timestampMs is more than 60s away from it (guards a nonsense
+  // device clock) — fake-timing Date.now() itself to track each render's
+  // intended fixTimestampMs (rather than tiny synthetic values like `1_000`)
+  // is what lets these tests control elapsed real time precisely instead of
+  // depending on how long the test runner actually takes between rerenders.
+  const BASE = 1_700_000_000_000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(BASE);
+    mockPushFix.mockClear();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('drops a fix implying an impossible speed instead of feeding it to the buffer', () => {
+    const { rerender, unmount } = render(
+      <CarMarker coordinate={start} fixTimestampMs={BASE} />,
+    );
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    // ~600m away, 2ms later — several hundred m/s, impossible for a vehicle.
+    jest.setSystemTime(BASE + 2);
+    const glitch = { latitude: start.latitude + 0.0054, longitude: start.longitude };
+    rerender(<CarMarker coordinate={glitch} fixTimestampMs={BASE + 2} />);
+    // ingestFix must have bailed before calling pushFix again.
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it('still accepts a normal, plausible fix update', () => {
+    const { rerender, unmount } = render(
+      <CarMarker coordinate={start} fixTimestampMs={BASE} />,
+    );
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    // ~11m away, 2s later — an ordinary driving-speed segment.
+    jest.setSystemTime(BASE + 2_000);
+    const next = { latitude: start.latitude + 0.0001, longitude: start.longitude };
+    rerender(<CarMarker coordinate={next} fixTimestampMs={BASE + 2_000} />);
+    expect(mockPushFix).toHaveBeenCalledTimes(2);
+
+    unmount();
+  });
+
+  it('accepts a large jump after a real elapsed gap (background/tunnel), not just small moves', () => {
+    const { rerender, unmount } = render(
+      <CarMarker coordinate={start} fixTimestampMs={BASE} />,
+    );
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    // ~3km away, 5 minutes later — a legitimate gap (~10 m/s average), not a glitch.
+    jest.setSystemTime(BASE + 5 * 60_000);
+    const afterGap = { latitude: start.latitude + 0.027, longitude: start.longitude };
+    rerender(<CarMarker coordinate={afterGap} fixTimestampMs={BASE + 5 * 60_000} />);
+    expect(mockPushFix).toHaveBeenCalledTimes(2);
+
+    unmount();
+  });
+});
+
+describe('CarMarker — Android ring-change re-arms the frozen snapshot', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+  });
+
+  // Fires the car Image's onLoad, then lets its 350ms settle timer freeze
+  // tracksViewChanges — the ordinary (working) mount path.
+  function loadImageAndSettle(root: any) {
+    act(() => {
+      root.findByType(Image).props.onLoad();
+    });
+    act(() => {
+      jest.advanceTimersByTime(350);
+    });
+  }
+
+  it('immediately re-arms tracksViewChanges when the ring prop changes after freezing', () => {
+    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={null} />);
+    loadImageAndSettle(UNSAFE_root);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    // Ring appears (e.g. going online while idle) — must re-arm immediately,
+    // before any timer advances, so the native renderer gets a fresh chance
+    // to snapshot the car image alongside the now-visible ring.
+    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    // And settles back to false on the same 350ms schedule, since the image
+    // was already loaded before this ring change.
+    act(() => {
+      jest.advanceTimersByTime(350);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    unmount();
+  });
+
+  it('re-arms again when the ring disappears (e.g. going back offline), clearing a stale frozen ring', () => {
+    const { UNSAFE_root, rerender, unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />,
+    );
+    loadImageAndSettle(UNSAFE_root);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    rerender(<CarMarker coordinate={coord} ring={null} />);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    unmount();
+  });
+
+  it('does not re-freeze prematurely if the ring changes before the image has ever loaded', () => {
+    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={null} />);
+    // No onLoad fired yet — tracksViewChanges is still true from mount.
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
+    // Still true — must not schedule a 350ms freeze ahead of the image
+    // actually loading, or this reproduces the exact bug being fixed.
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+    act(() => {
+      jest.advanceTimersByTime(350);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    // Only the hard cap (or a real onLoad) may freeze it from here.
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    unmount();
+  });
+
+  it('is a no-op when re-rendered with the same ring identity (no redundant re-arm)', () => {
+    const ring = { color: '#10B981', pulsing: false };
+    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={ring} />);
+    loadImageAndSettle(UNSAFE_root);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    // Same color/pulsing, new object identity (e.g. a parent re-render) —
+    // must NOT re-arm; only an actual identity (color/pulsing) change should.
+    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
     unmount();
   });
 });

@@ -20,6 +20,17 @@ interface MapControlsProps {
   /** When set, renders a compass toggle for course-up map rotation. */
   courseUpEnabled?: boolean;
   onToggleCourseUp?: () => void;
+  /**
+   * Whether the follow-camera is currently engaged. Omitted/undefined is
+   * treated as following (matches the pre-this-prop default and every
+   * caller that doesn't track follow state). When explicitly false — the
+   * driver panned the map or looked away at a hotspot — the locate icon
+   * dims to an outline so the button visibly indicates "tap to resume
+   * following" instead of looking identical whether following or not
+   * (Uber/Lyft convention: filled/accented = following, outline/muted =
+   * off-follow).
+   */
+  isFollowing?: boolean;
 }
 
 export const MapControls: React.FC<MapControlsProps> = ({
@@ -29,6 +40,7 @@ export const MapControls: React.FC<MapControlsProps> = ({
   onRecenter,
   courseUpEnabled,
   onToggleCourseUp,
+  isFollowing = true,
 }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -119,11 +131,23 @@ export const MapControls: React.FC<MapControlsProps> = ({
         </View>
       )}
 
-      {/* My Location Button */}
+      {/* My Location Button — filled/accented while following, dimmed
+          outline once the driver has panned away (see isFollowing doc). */}
       <View style={[styles.shadowWrapper, { marginTop: 12 }]}>
         <SafeBlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={[styles.blurContainer, styles.myLocationBtn]}>
-          <TouchableOpacity style={styles.btnInner} onPress={handleRecenter} activeOpacity={0.7} accessibilityRole="button" accessibilityLabel="Center map on my location">
-            <Ionicons name="locate" size={24} color={colors.primary} />
+          <TouchableOpacity
+            style={styles.btnInner}
+            onPress={handleRecenter}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={isFollowing ? 'Center map on my location' : 'Resume following my location'}
+            accessibilityState={{ selected: isFollowing }}
+          >
+            <Ionicons
+              name={isFollowing ? 'locate' : 'locate-outline'}
+              size={24}
+              color={isFollowing ? colors.primary : colors.textSecondary}
+            />
           </TouchableOpacity>
         </SafeBlurView>
       </View>

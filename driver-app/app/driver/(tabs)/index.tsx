@@ -349,6 +349,20 @@ function DriverDashboard() {
     cellLngDeg: heatmapCellLng,
   } = useDemandHeatmap(rideState, isOnline);
 
+  // Viewport for HeatmapCells' region filter (HM-05 follow-up). The call
+  // site below used to pass `region={null}`, which is a dead filter: every
+  // cell the server returned rendered regardless of what's actually on
+  // screen. Sourced from onRegionChangeComplete (fires once per pan/zoom
+  // gesture) rather than the continuous onRegionChange already wired to
+  // currentRegionRef above — that ref only tracks deltas for MapControls'
+  // zoom math and updates on every frame of a drag, which would be a wasteful
+  // re-render cadence for something that only gates cell visibility. Only
+  // meaningful while idle (heatmapCells is empty outside idle — see
+  // useDemandHeatmap's shouldPoll — so this is otherwise unused state).
+  const [heatmapRegion, setHeatmapRegion] = useState<
+    { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number } | null
+  >(null);
+
   // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
   const { zones: airportZones, activeZone: activeAirportZone } = useAirportZones(
     (driverData?.service_area_id as string) ?? null,
@@ -612,6 +626,12 @@ function DriverDashboard() {
   // existing one-time route-overview fitToCoordinates instead — there's no
   // ongoing travel direction to orient toward.
   const followRef = useRef(true);
+  // Render-visible mirror of followRef, for MapControls' recenter button
+  // (Uber/Lyft convention: a dimmed/outline locate icon when the driver has
+  // panned away from follow, filled/accented once it resumes) — followRef
+  // itself is a ref so setting it alone doesn't trigger a re-render; every
+  // followRef.current assignment below also updates this state.
+  const [isFollowing, setIsFollowing] = useState(true);
   const followZoomTierRef = useRef<number | null>(null);
   const [courseUp, setCourseUp] = useState(true);
   // DriverIdlePanel's own content height, minus its collapsible hud block
@@ -696,6 +716,21 @@ function DriverDashboard() {
     },
     [],
   );
+  // Camera-update throttle: this effect re-runs on every `location` change,
+  // and on iOS watchPositionAsync's distanceFilter has no time floor (unlike
+  // Android's interval-gated provider — see LOCATION_CONFIGS in
+  // useDriverDashboard.ts), so fixes can arrive well under CAMERA_ANIM_MS
+  // apart while driving. Calling animateCamera again before the prior
+  // 700ms animation finishes cancels its in-flight interpolation and
+  // restarts from wherever it happened to be — reported live as zoom/
+  // rotation "not smooth" on turns and slowdowns. Throttle to at most one
+  // animateCamera per CAMERA_ANIM_MS: fire immediately if idle long enough
+  // (leading edge), otherwise schedule exactly one trailing call carrying
+  // the latest computed params so a fast-changing heading/position is
+  // coalesced, never silently dropped.
+  const CAMERA_ANIM_MS = 700;
+  const lastCameraUpdateRef = useRef(0);
+  const pendingCameraTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
@@ -716,10 +751,35 @@ function DriverDashboard() {
       const aheadM = metersPerPx * Dimensions.get('window').height * 0.18;
       center = destinationPoint(center, mapHeading, aheadM);
     }
-    mapRef.current.animateCamera?.(
-      { center, zoom, heading: mapHeading },
-      { duration: 700 },
-    );
+
+    const applyCamera = () => {
+      lastCameraUpdateRef.current = Date.now();
+      pendingCameraTimeoutRef.current = null;
+      mapRef.current?.animateCamera?.(
+        { center, zoom, heading: mapHeading },
+        { duration: CAMERA_ANIM_MS },
+      );
+    };
+
+    if (pendingCameraTimeoutRef.current) {
+      clearTimeout(pendingCameraTimeoutRef.current);
+      pendingCameraTimeoutRef.current = null;
+    }
+    const elapsed = Date.now() - lastCameraUpdateRef.current;
+    if (elapsed >= CAMERA_ANIM_MS) {
+      applyCamera();
+    } else {
+      // Anchored on lastCameraUpdateRef (unchanged until a call actually
+      // fires), so repeated reschedules from fast-arriving ticks converge
+      // on the same fire time instead of pushing it back indefinitely.
+      pendingCameraTimeoutRef.current = setTimeout(applyCamera, CAMERA_ANIM_MS - elapsed);
+    }
+    return () => {
+      if (pendingCameraTimeoutRef.current) {
+        clearTimeout(pendingCameraTimeoutRef.current);
+        pendingCameraTimeoutRef.current = null;
+      }
+    };
     // mapRef is a stable useRef object from useDriverDashboard().
   }, [location, rideState, mapRef, courseUp]);
   useEffect(() => {
@@ -963,7 +1023,9 @@ function DriverDashboard() {
           // Driver is exploring (heatmap, hotspots) — stop the follow camera
           // from yanking the map back; the recenter button resumes it.
           followRef.current = false;
+          setIsFollowing(false);
         }}
+        onRegionChangeComplete={(region) => setHeatmapRegion(region)}
       >
         {/* Driver car marker */}
         {location?.coords && (
@@ -1145,7 +1207,7 @@ function DriverDashboard() {
         {heatmapCells.length > 0 && Platform.OS !== 'web' && (
           <HeatmapCells
             cells={heatmapCells}
-            region={null}
+            region={heatmapRegion}
             cellLatDeg={heatmapCellLat}
             cellLngDeg={heatmapCellLng}
           />
@@ -1221,6 +1283,7 @@ function DriverDashboard() {
               // Deliberate look-away — pause follow so the camera stays on the
               // hotspot instead of snapping back to the car 3s later.
               followRef.current = false;
+              setIsFollowing(false);
               mapRef.current?.animateToRegion({
                 latitude: lat,
                 longitude: lng,
@@ -1311,8 +1374,10 @@ function DriverDashboard() {
         mapRef={mapRef}
         location={location}
         currentRegionRef={currentRegionRef}
+        isFollowing={isFollowing}
         onRecenter={() => {
           followRef.current = true;
+          setIsFollowing(true);
           followZoomTierRef.current = null;
           return refreshLocation(false);
         }}
@@ -1324,6 +1389,7 @@ function DriverDashboard() {
           // nothing until they also tap recenter, since the follow-camera
           // effect below exits early on that guard in either direction.
           followRef.current = true;
+          setIsFollowing(true);
           setCourseUp((prev) => {
             const next = !prev;
             // Straighten/rotate immediately, not on the next GPS tick —

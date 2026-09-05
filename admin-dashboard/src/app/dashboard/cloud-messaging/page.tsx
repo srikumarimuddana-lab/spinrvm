@@ -487,7 +487,10 @@ export default function CloudMessagingPage() {
                                                 className={cn(
                                                     "flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors",
                                                     isActive
-                                                        ? "border-primary bg-primary/5 text-primary"
+                                                        // text-primary here was only 3.87:1 on this tinted-dark surface,
+                                        // below AA's 4.5:1 (#2803) — text-foreground keeps the same
+                                        // border/tint accent while making the label itself readable.
+                                        ? "border-primary bg-primary/5 text-foreground"
                                                         : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                                                 )}
                                             >

@@ -608,7 +608,9 @@ export function MonitoringMap({
     if (loadError) {
         return (
             <div className="flex h-full items-center justify-center bg-muted">
-                <p className="text-sm text-destructive">
+                {/* dark:text-[#ff453a] — same fix and reasoning as the identical fallback in
+                    components/heat-map.tsx (#2803). */}
+                <p className="text-sm text-destructive dark:text-[#ff453a]">
                     Failed to load map style. Check network / tile provider.
                 </p>
             </div>

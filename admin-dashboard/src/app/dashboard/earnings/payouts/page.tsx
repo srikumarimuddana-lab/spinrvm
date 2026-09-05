@@ -209,7 +209,7 @@ export default function PayoutsPage() {
             <PageHeader
                 title={
                     <span className="inline-flex items-center gap-3">
-                        <Link href="/dashboard/earnings" className="text-muted-foreground hover:text-foreground">
+                        <Link href="/dashboard/earnings" className="text-muted-foreground hover:text-foreground" aria-label="Back to Earnings">
                             <ArrowLeft className="h-5 w-5" />
                         </Link>
                         <Wallet className="h-6 w-6 text-primary" />

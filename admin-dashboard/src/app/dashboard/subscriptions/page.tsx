@@ -701,7 +701,10 @@ export default function SubscriptionsPage() {
                         onClick={() => setActiveTab(t.id)}
                         className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                             activeTab === t.id
-                                ? "border-primary text-primary"
+                                // text-primary here was only 3.99:1 on this dark surface, below AA's
+                                // 4.5:1 (#2803) — text-foreground keeps the border-primary underline
+                                // accent while making the tab label itself readable.
+                                ? "border-primary text-foreground"
                                 : "border-transparent text-muted-foreground hover:text-foreground"
                         }`}
                     >

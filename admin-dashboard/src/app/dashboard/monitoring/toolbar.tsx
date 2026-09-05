@@ -85,7 +85,10 @@ export function MonitoringToolbar({
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showRides
                             // eslint-disable-next-line no-restricted-syntax -- filter-category chip, not a status signal; distinguishes this toggle from the others, no token equivalent (#2816)
-                            ? "bg-blue-500/10 text-blue-600 ring-1 ring-blue-500/30"
+                            // dark:text-blue-400 — text-blue-600 alone is only 3.48:1 on this tinted
+                            // dark surface, below AA's 4.5:1 (#2803); same fix already used next door
+                            // in driver-panel.tsx for the identical blue-500/10 pairing.
+                            ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 ring-1 ring-blue-500/30"
                             : "text-muted-foreground hover:bg-muted"
                     }`}
                 >
@@ -97,7 +100,10 @@ export function MonitoringToolbar({
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
                         filters.showDemand
                             // eslint-disable-next-line no-restricted-syntax -- filter-category chip, not a status signal; distinguishes this toggle from the others, no token equivalent (#2816)
-                            ? "bg-orange-500/10 text-orange-600 ring-1 ring-orange-500/30"
+                            // dark:text-orange-400 — same fix and reasoning as the Rides toggle above
+                            // (#2803); not yet caught by the a11y crawl-audit gate only because
+                            // showDemand defaults to off, but it's the identical pairing.
+                            ? "bg-orange-500/10 text-orange-600 dark:text-orange-400 ring-1 ring-orange-500/30"
                             : "text-muted-foreground hover:bg-muted"
                     }`}
                 >

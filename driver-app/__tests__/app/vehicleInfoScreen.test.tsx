@@ -20,6 +20,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text, TextInput, Alert } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: any) => children }));
@@ -68,6 +69,10 @@ const flush = async () => {
 
 const VEHICLE_TYPE_SEDAN = { id: 'vt-1', name: 'Sedan', description: 'Standard 4-door', capacity: 4, icon: 'car' };
 const VEHICLE_TYPE_XL = { id: 'vt-2', name: 'XL', description: 'Larger group rides', capacity: 6, icon: 'car' };
+const VEHICLE_TYPE_SPORT = { id: 'vt-3', name: 'Sport', description: 'Premium rides', capacity: 4, icon: 'car-sport' };
+// "car-compact" is seeded data (backend/seed_vehicle_types.py) and is NOT a
+// real Ionicons glyph name — must be mapped, never passed through raw.
+const VEHICLE_TYPE_LEGACY = { id: 'vt-4', name: 'Standard', description: 'Legacy icon value', capacity: 4, icon: 'car-compact' };
 
 let renderer: TestRenderer.ReactTestRenderer | null = null;
 async function renderScreen() {
@@ -216,6 +221,37 @@ describe('VehicleInfoScreen', () => {
     });
     expect(allText(r)).not.toContain('Select Vehicle Type');
     expect(allText(r)).toContain('Sedan');
+  });
+
+  it("uses each vehicle type's icon for its row in the picker", async () => {
+    mockApiGet.mockResolvedValue({ data: [VEHICLE_TYPE_SEDAN, VEHICLE_TYPE_SPORT] });
+    const r = await renderScreen();
+    const typeBox = findButtonByText(r, 'Tap to select');
+    act(() => {
+      typeBox.props.onPress();
+    });
+    const icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'car-sport')).toBe(true);
+  });
+
+  it('falls back to the generic car glyph for an unrecognized/legacy icon value', async () => {
+    mockApiGet.mockResolvedValue({ data: [VEHICLE_TYPE_LEGACY] });
+    const r = await renderScreen();
+    const typeBox = findButtonByText(r, 'Tap to select');
+    act(() => {
+      typeBox.props.onPress();
+    });
+    let icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'car-compact')).toBe(false);
+
+    const legacyOption = findButtonByText(r, 'Standard');
+    act(() => {
+      legacyOption.props.onPress();
+    });
+    // Selected-type summary box also resolves through the same map.
+    icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'car-compact')).toBe(false);
+    expect(icons.some((n) => n.props.name === 'car')).toBe(true);
   });
 
   it('confirms via Alert, then saves and navigates back on success', async () => {

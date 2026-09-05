@@ -36,6 +36,26 @@ interface VehicleType {
     icon: string;
 }
 
+// Vehicle types carry an `icon` key (see backend/seed_vehicle_types.py and
+// admin-dashboard's VEHICLE_ICON_MAP / rider-app's ride-options.tsx for the
+// other two places this same map is mirrored) that isn't guaranteed to be a
+// real Ionicons glyph name: the seeded "car-compact" isn't one. Map known
+// keys to a real Ionicons name here rather than passing the raw string
+// straight into <Ionicons name={...}>, so an unrecognized or legacy value
+// can't render a blank icon. Unknown/missing values fall back to "car" —
+// the glyph this screen always showed before vehicle types had distinct
+// icons here.
+const VEHICLE_TYPE_ICON_NAMES: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
+    'car-compact': 'car',
+    'car-sport': 'car-sport',
+    bus: 'bus',
+    'bus-outline': 'bus-outline',
+};
+
+function vehicleTypeIconName(icon?: string | null): React.ComponentProps<typeof Ionicons>['name'] {
+    return (icon && VEHICLE_TYPE_ICON_NAMES[icon]) || 'car';
+}
+
 export default function VehicleInfoScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -119,6 +139,15 @@ export default function VehicleInfoScreen() {
         setVehicleTypeName(vehicleType.name);
         setShowVehicleTypePicker(false);
     };
+
+    // Derived (not extra state) so it stays correct on initial load — when
+    // `driver.vehicle_type_id` seeds `form` before the picker is ever
+    // opened — and after a fresh selection, without duplicating what
+    // handleVehicleTypeSelect already tracks in vehicleTypeName.
+    const selectedVehicleType = useMemo(
+        () => vehicleTypes.find(t => t.id === form.vehicle_type_id),
+        [vehicleTypes, form.vehicle_type_id],
+    );
 
     const handleChange = (key: string, value: string) => {
         setForm(prev => ({ ...prev, [key]: value }));
@@ -253,7 +282,7 @@ export default function VehicleInfoScreen() {
                             activeOpacity={0.7}
                         >
                             <View style={styles.vehicleTypeIconBox}>
-                                <Ionicons name="car" size={22} color={colors.primary} />
+                                <Ionicons name={vehicleTypeIconName(selectedVehicleType?.icon)} size={22} color={colors.primary} />
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.vehicleTypeLabel}>Vehicle Type *</Text>
@@ -395,7 +424,7 @@ export default function VehicleInfoScreen() {
                                     onPress={() => handleVehicleTypeSelect(item)}
                                 >
                                     <View style={styles.vehicleTypeOptionIcon}>
-                                        <Ionicons name="car" size={22} color={colors.primary} />
+                                        <Ionicons name={vehicleTypeIconName(item.icon)} size={22} color={colors.primary} />
                                     </View>
                                     <View style={styles.vehicleTypeInfo}>
                                         <Text style={styles.vehicleTypeOptionName}>{item.name}</Text>

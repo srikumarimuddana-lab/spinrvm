@@ -413,7 +413,11 @@ async def _collect_noshow_fee_from_card(
         )
         return Decimal("0"), outcome.payment_intent_id
 
-    charged = Decimal(str(outcome.charged_amount or total_fee)).quantize(Decimal("0.01"))
+    # charge_ancillary_fee sets charged_amount=amount_dec on every "succeeded"
+    # return (utils/stripe_charge.py), so use it verbatim. Falling back to
+    # total_fee here would book revenue we did not take if it were ever 0 —
+    # wrong direction for a defensive default on a ledger write.
+    charged = Decimal(str(outcome.charged_amount)).quantize(Decimal("0.01"))
     await record_ledger_event(
         event_type="stripe_charge",
         user_id=rider_id,

@@ -74,7 +74,28 @@ async def rider_start_ride(
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Start a ride. Restricted to the assigned driver only (R-P1-17)."""
+    """Start a ride without OTP — restricted to the assigned driver, and
+    disabled in production (R-P1-17).
+
+    This is the rider-router twin of POST /drivers/rides/{id}/start, which has
+    been production-gated since it was added. This one was not, which left an
+    OTP-free path from driver_arrived to in_progress: the assigned driver could
+    open Period 3 (passenger aboard, full TNC commercial coverage) and start the
+    meter with no rider present, bypassing verify-otp entirely. Neither mobile
+    app calls it — driver-app/store/driverStore.ts uses the /drivers/... routes
+    for both verify-otp and the dev start fallback — so gating it here matches
+    the sibling route without changing any shipped client flow.
+    """
+    try:
+        from ...core.config import settings as _settings
+    except ImportError:
+        from core.config import settings as _settings  # type: ignore
+
+    if _settings.ENV.lower() == "production":
+        raise HTTPException(
+            status_code=410,
+            detail="Use POST /drivers/rides/{ride_id}/verify-otp to start a ride in production.",
+        )
     # R-P1-17: Only the assigned driver may mark a ride as started.
     if not current_user.get("is_driver"):
         raise HTTPException(status_code=403, detail="ERR_DRIVER_ONLY")

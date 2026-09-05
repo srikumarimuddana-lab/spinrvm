@@ -171,7 +171,7 @@ if [ -n "$STAGED_SHARED" ]; then
     # pages use this," not a real import-graph resolution. False positives
     # (a common name matching unrelated text) are expected and fine for a
     # warning-only nudge.
-    REFS=$(git grep -l -w "$base" -- '*.ts' '*.tsx' '*.js' '*.jsx' ':!node_modules' ':!.next' ':!dist' ':!build' 2>/dev/null | grep -vF "$f" | wc -l)
+    REFS=$(git grep -l -w "$base" -- '*.ts' '*.tsx' '*.js' '*.jsx' ':!node_modules' ':!.next' ':!dist' ':!build' 2>/dev/null | grep -vFc "$f")
     if [ "$REFS" -ge 3 ]; then
       if [ "$HAS_CHANGE_LOG" -eq 0 ]; then
         echo -e "${YELLOW}  WARN — $f looks shared (referenced by ~$REFS other files) — CLAUDE.md gate #3 wants a Change Impact Log entry (PR body or docs/change-log/) and usually a feature flag for a change like this.${NC}"

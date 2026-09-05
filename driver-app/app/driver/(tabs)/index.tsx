@@ -612,6 +612,12 @@ function DriverDashboard() {
   // existing one-time route-overview fitToCoordinates instead — there's no
   // ongoing travel direction to orient toward.
   const followRef = useRef(true);
+  // Render-visible mirror of followRef, for MapControls' recenter button
+  // (Uber/Lyft convention: a dimmed/outline locate icon when the driver has
+  // panned away from follow, filled/accented once it resumes) — followRef
+  // itself is a ref so setting it alone doesn't trigger a re-render; every
+  // followRef.current assignment below also updates this state.
+  const [isFollowing, setIsFollowing] = useState(true);
   const followZoomTierRef = useRef<number | null>(null);
   const [courseUp, setCourseUp] = useState(true);
   // DriverIdlePanel's own content height, minus its collapsible hud block
@@ -1003,6 +1009,7 @@ function DriverDashboard() {
           // Driver is exploring (heatmap, hotspots) — stop the follow camera
           // from yanking the map back; the recenter button resumes it.
           followRef.current = false;
+          setIsFollowing(false);
         }}
       >
         {/* Driver car marker */}
@@ -1261,6 +1268,7 @@ function DriverDashboard() {
               // Deliberate look-away — pause follow so the camera stays on the
               // hotspot instead of snapping back to the car 3s later.
               followRef.current = false;
+              setIsFollowing(false);
               mapRef.current?.animateToRegion({
                 latitude: lat,
                 longitude: lng,
@@ -1351,8 +1359,10 @@ function DriverDashboard() {
         mapRef={mapRef}
         location={location}
         currentRegionRef={currentRegionRef}
+        isFollowing={isFollowing}
         onRecenter={() => {
           followRef.current = true;
+          setIsFollowing(true);
           followZoomTierRef.current = null;
           return refreshLocation(false);
         }}
@@ -1364,6 +1374,7 @@ function DriverDashboard() {
           // nothing until they also tap recenter, since the follow-camera
           // effect below exits early on that guard in either direction.
           followRef.current = true;
+          setIsFollowing(true);
           setCourseUp((prev) => {
             const next = !prev;
             // Straighten/rotate immediately, not on the next GPS tick —

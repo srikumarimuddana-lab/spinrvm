@@ -28,14 +28,14 @@ and built-in WebSocket support.
     railway variables --service spinr-backend \
       --set SUPABASE_URL="your_supabase_url" \
       --set SUPABASE_SERVICE_ROLE_KEY=<paste-from-supabase-settings-api> \
-      --set FIREBASE_SERVICE_ACCOUNT_JSON='{"type": "service_account", ...}' \
+      --set "FIREBASE_SERVICE_ACCOUNT_JSON=$(cat firebase-sa.json)" \
       --set JWT_SECRET="your_strong_jwt_secret" \
       --set ENV=production \
       --set SUPABASE_REGION=ca-central-1 \
       --set RATE_LIMIT_REDIS_URL="$REDIS_URL"
     ```
     *Note: the backend reads `SUPABASE_SERVICE_ROLE_KEY` (`backend/core/config.py`); a variable named `SUPABASE_KEY` is ignored and production refuses to boot.*
-    *Note: The Firebase JSON must be minified (on one line) or enclosed in single quotes.*
+    *Note: `firebase-sa.json` is the service-account file downloaded from Firebase, minified to one line; pipe it from the file as shown so no shell quoting touches the embedded double quotes (same caveat as `fly secrets set` in `docs/runbooks/railway-fly-failover.md`). It must stay raw JSON, not base64.*
     *Note: `RATE_LIMIT_REDIS_URL` should point at the Railway Redis plugin (or Upstash).*
 5.  **Deploy**:
     ```bash

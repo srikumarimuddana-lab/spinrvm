@@ -48,11 +48,11 @@ env:
   FLY_APP: spinr-backend-yyz
   RAILWAY_SERVICE: spinr-backend
   ISSUE_LABEL: "standby-parity"
-  # Hoisted so step `if:` conditionals can test them (secrets context is not
-  # available there).
-  BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
-  FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
-  METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
+  # Secrets (BACKEND_HEALTH_URL, FLY_HEALTH_URL, METRICS_AUTH_TOKEN, the two
+  # provider tokens) are scoped to the individual steps that use them, never
+  # hoisted here — a workflow-level secret is visible to every step (Semgrep
+  # gha-workflow-env-secret). Steps test for an unset secret inside their
+  # script instead of in an `if:`.
 
 jobs:
   check-and-notify:
@@ -107,6 +107,9 @@ jobs:
 
       - name: Probe /health on both providers
         id: health
+        env:
+          BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+          FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
         run: |
           set -uo pipefail
           probe() {  # $1 = base url
@@ -120,9 +123,16 @@ jobs:
       # Fingerprints only (see backend/server.py /deploy-info) — safe to store
       # as a step artifact-in-workspace; nothing in the body is a value.
       - name: Fetch /deploy-info on both providers
-        if: ${{ env.METRICS_AUTH_TOKEN != '' }}
+        env:
+          BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+          FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+          METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
         run: |
           set -uo pipefail
+          if [ -z "${METRICS_AUTH_TOKEN}" ]; then
+            echo "METRICS_AUTH_TOKEN GitHub secret is unset — skipping /deploy-info (the evaluator reports build/value parity as NOT verified)."
+            exit 0
+          fi
           mkdir -p evidence
           fetch() {  # $1 = base url, $2 = out file
             code=$(curl -s --max-time 10 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN}" "$1/deploy-info" \

@@ -412,7 +412,7 @@ export default function StaffPage() {
           ) : staff.length === 0 ? (
             <div className="text-center py-16">
               <Users className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold">No staff members yet</h3>
+              <h2 className="text-lg font-semibold">No staff members yet</h2>
               <p className="text-muted-foreground mt-1">Add your first team member to share admin access</p>
             </div>
           ) : (

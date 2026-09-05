@@ -503,7 +503,7 @@ export default function AuditLogsPage() {
                     ) : logs.length === 0 ? (
                         <div className="text-center py-16">
                             <Shield className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
-                            <h3 className="text-lg font-semibold">No audit logs found</h3>
+                            <h2 className="text-lg font-semibold">No audit logs found</h2>
                             <p className="text-muted-foreground mt-1">
                                 {hasFilters
                                     ? "Try adjusting your filters."

@@ -270,7 +270,7 @@ export default function DocumentRequirementsPage() {
             <PageHeader
                 title={
                     <span className="inline-flex items-center gap-3">
-                        <Link href="/dashboard/documents" className="text-muted-foreground hover:text-foreground">
+                        <Link href="/dashboard/documents" className="text-muted-foreground hover:text-foreground" aria-label="Back to Documents">
                             <ArrowLeft className="h-5 w-5" />
                         </Link>
                         <FileCheck className="h-6 w-6 text-primary" />

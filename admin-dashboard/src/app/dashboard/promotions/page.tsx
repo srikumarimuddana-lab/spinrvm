@@ -565,7 +565,7 @@ export default function PromotionsPage() {
                     {loading ? (
                         <div className="flex items-center justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                     ) : filtered.length === 0 ? (
-                        <div className="text-center py-12"><Ticket className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" /><h3 className="text-lg font-semibold">No {promoTab === "expired" ? "expired codes" : promoTab === "public" ? "promo codes" : "coupons"} found</h3><p className="text-muted-foreground mt-1">{promoTab === "expired" ? "No expired promo codes." : "Create one to get started."}</p></div>
+                        <div className="text-center py-12"><Ticket className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" /><h2 className="text-lg font-semibold">No {promoTab === "expired" ? "expired codes" : promoTab === "public" ? "promo codes" : "coupons"} found</h2><p className="text-muted-foreground mt-1">{promoTab === "expired" ? "No expired promo codes." : "Create one to get started."}</p></div>
                     ) : (
                         <div className="border rounded-lg">
                             <Table>
@@ -678,9 +678,12 @@ export default function PromotionsPage() {
                 <CardContent className="space-y-4">
                     {/* Date range selectors for usage */}
                     <div className="flex flex-wrap items-center gap-2">
+                        {/* bg-destructive below (not the raw bg-red-500/600 palette shade, so
+                            no-restricted-syntax no longer applies here) — white text on bg-red-500
+                            was only 3.8:1, below AA's 4.5:1 (#2803); --destructive (#dc2626) is the
+                            already-audited value white text reaches 4.83:1 against. */}
                         {DATE_RANGES.map((r) => (
-                            // eslint-disable-next-line no-restricted-syntax -- decorative solid-fill selected-range button, not a status signal (#2816)
-                            <Button key={r.key} variant={usageDateRange === r.key ? "default" : "outline"} size="sm" onClick={() => setUsageDateRange(r.key)} className={usageDateRange === r.key ? "bg-red-500 hover:bg-red-600 text-white" : ""}>
+                            <Button key={r.key} variant={usageDateRange === r.key ? "default" : "outline"} size="sm" onClick={() => setUsageDateRange(r.key)} className={usageDateRange === r.key ? "bg-destructive hover:bg-destructive/90 text-white" : ""}>
                                 {r.label}
                             </Button>
                         ))}

@@ -465,8 +465,12 @@ export default function HeatMapPage() {
                             />
                         </div>
                     </div>
+                    {/* dark:text-[#ff453a] below — see #2803: text-destructive alone is only ~4.1:1
+                        on this dark surface, below AA's 4.5:1. Reuses the vibrant brand red
+                        globals.css's dark theme already uses for the same reason
+                        (--sidebar-primary/--sidebar-destructive). */}
                     {dateError && (
-                        <p className="text-sm text-destructive mt-2">{dateError}</p>
+                        <p className="text-sm text-destructive dark:text-[#ff453a] mt-2">{dateError}</p>
                     )}
 
                     {/* Display Toggles */}
@@ -503,7 +507,7 @@ export default function HeatMapPage() {
                             role="alert"
                             className="w-full h-[600px] flex flex-col items-center justify-center gap-3 text-center px-6"
                         >
-                            <p className="text-sm text-destructive">{heatMapError}</p>
+                            <p className="text-sm text-destructive dark:text-[#ff453a]">{heatMapError}</p>
                             <Button variant="outline" size="sm" onClick={fetchHeatMapData}>
                                 <RefreshCw className="mr-2 h-4 w-4" />
                                 Retry
@@ -631,7 +635,7 @@ export default function HeatMapPage() {
                                 <AlertTriangle className="h-4 w-4 text-destructive" />
                             </CardHeader>
                             <CardContent>
-                                <div className="text-2xl font-bold text-destructive">
+                                <div className="text-2xl font-bold text-destructive dark:text-[#ff453a]">
                                     {demandAreas.reduce((s, a) => s + a.pressure, 0)}
                                 </div>
                                 {/* Deliberately NOT "unfulfilled requests": demand_count

@@ -659,7 +659,7 @@ export default function RedisMonitoringPage() {
 
                     <Separator className="my-4" />
 
-                    <h3 className="mb-2 text-sm font-medium">Counters (this replica, since start)</h3>
+                    <h2 className="mb-2 text-sm font-medium">Counters (this replica, since start)</h2>
                     {infra && Object.keys(infra.metrics ?? {}).length > 0 ? (
                         <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
                             {Object.entries(infra.metrics ?? {})

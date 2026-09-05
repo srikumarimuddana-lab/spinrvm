@@ -276,7 +276,7 @@ export default function VehicleTypesPage() {
                 <Card className="border-dashed">
                     <CardContent className="flex flex-col items-center justify-center py-16 text-center">
                         <Car className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                        <h3 className="text-lg font-semibold">No vehicle types yet</h3>
+                        <h2 className="text-lg font-semibold">No vehicle types yet</h2>
                         <p className="text-muted-foreground text-sm mt-1 mb-4">
                             Add your first vehicle type to get started.
                         </p>

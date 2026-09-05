@@ -159,9 +159,9 @@ export default function DashboardPage() {
 
                     {/* Ride breakdown */}
                     <div className="bg-card border rounded-2xl p-5">
-                        <h3 className="text-sm font-bold text-muted-foreground uppercase tracking-wider mb-4">
+                        <h2 className="text-sm font-bold text-muted-foreground uppercase tracking-wider mb-4">
                             Ride Breakdown · {rangeLabel}
-                        </h3>
+                        </h2>
                         <div className="space-y-3">
                             <BarStat label="Completed" value={bd.completed} total={rides.total} color="bg-success" />
                             {/* eslint-disable-next-line no-restricted-syntax -- categorical ride-breakdown status map (5 states), not a success/warning/destructive signal (#2816) */}
@@ -181,7 +181,12 @@ export default function DashboardPage() {
                             </div>
                             <div className="flex-1">
                                 <p className="text-xs text-muted-foreground">Cancellation rate</p>
-                                <p className="text-lg font-bold text-destructive">
+                                {/* text-destructive alone is only 4.1:1 on this dark card surface — below
+                                    the 4.5:1 AA-normal-text bar (see #2803). #ff453a is the vibrant brand
+                                    red already used for the same reason by --sidebar-primary/--sidebar-destructive
+                                    in globals.css's dark theme (5.8:1+ on these surfaces); reused here rather
+                                    than inventing a new value. */}
+                                <p className="text-lg font-bold text-destructive dark:text-[#ff453a]">
                                     {rides.total > 0 ? (((bd.cancelled ?? 0) / rides.total) * 100).toFixed(1) : 0}%
                                 </p>
                             </div>

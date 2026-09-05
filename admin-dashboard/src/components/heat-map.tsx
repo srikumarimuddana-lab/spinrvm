@@ -234,7 +234,11 @@ export default function HeatMap({
                 className="flex items-center justify-center bg-muted"
                 style={{ height, width: "100%", borderRadius: "8px" }}
             >
-                <p className="text-sm text-destructive">
+                {/* dark:text-[#ff453a] — text-destructive alone is only 3.66:1 on this
+                    bg-muted surface, below AA's 4.5:1 (#2803); reuses the vibrant brand red
+                    globals.css's dark theme already uses for the same reason
+                    (--sidebar-primary/--sidebar-destructive). */}
+                <p className="text-sm text-destructive dark:text-[#ff453a]">
                     Failed to load map style. Check network / tile provider.
                 </p>
             </div>

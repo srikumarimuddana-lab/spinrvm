@@ -349,6 +349,20 @@ function DriverDashboard() {
     cellLngDeg: heatmapCellLng,
   } = useDemandHeatmap(rideState, isOnline);
 
+  // Viewport for HeatmapCells' region filter (HM-05 follow-up). The call
+  // site below used to pass `region={null}`, which is a dead filter: every
+  // cell the server returned rendered regardless of what's actually on
+  // screen. Sourced from onRegionChangeComplete (fires once per pan/zoom
+  // gesture) rather than the continuous onRegionChange already wired to
+  // currentRegionRef above — that ref only tracks deltas for MapControls'
+  // zoom math and updates on every frame of a drag, which would be a wasteful
+  // re-render cadence for something that only gates cell visibility. Only
+  // meaningful while idle (heatmapCells is empty outside idle — see
+  // useDemandHeatmap's shouldPoll — so this is otherwise unused state).
+  const [heatmapRegion, setHeatmapRegion] = useState<
+    { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number } | null
+  >(null);
+
   // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
   const { zones: airportZones, activeZone: activeAirportZone } = useAirportZones(
     (driverData?.service_area_id as string) ?? null,
@@ -1011,6 +1025,7 @@ function DriverDashboard() {
           followRef.current = false;
           setIsFollowing(false);
         }}
+        onRegionChangeComplete={(region) => setHeatmapRegion(region)}
       >
         {/* Driver car marker */}
         {location?.coords && (
@@ -1192,7 +1207,7 @@ function DriverDashboard() {
         {heatmapCells.length > 0 && Platform.OS !== 'web' && (
           <HeatmapCells
             cells={heatmapCells}
-            region={null}
+            region={heatmapRegion}
             cellLatDeg={heatmapCellLat}
             cellLngDeg={heatmapCellLng}
           />

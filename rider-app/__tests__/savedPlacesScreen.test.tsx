@@ -16,6 +16,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text, TextInput } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -141,6 +142,26 @@ describe('SavedPlacesScreen', () => {
     const r = await renderScreen();
     expect(allText(r)).toContain('Home');
     expect(allText(r)).toContain('100 Main St');
+  });
+
+  it("uses the address's own saved icon field, not just a name-substring guess", async () => {
+    // "Downtown Fitness Club" doesn't contain "gym", so the old
+    // name-substring-only lookup would have fallen through to the
+    // generic "Other" star instead of the fitness icon this type saved.
+    mockRideState.savedAddresses = [
+      { id: 'p2', name: 'Downtown Fitness Club', address: '55 Fit Ave', icon: 'gym' },
+    ];
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'fitness')).toBe(true);
+    expect(icons.some((n) => n.props.name === 'star')).toBe(false);
+  });
+
+  it('falls back to matching the name when no icon field is present (legacy rows)', async () => {
+    mockRideState.savedAddresses = [{ id: 'p3', name: 'School', address: '9 Learn Rd' }];
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'school')).toBe(true);
   });
 
   it('opens the add form and seeds the label from a type chip only when the label is empty', async () => {

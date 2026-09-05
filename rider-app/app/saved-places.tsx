@@ -14,14 +14,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
 import type { PlacePrediction as Prediction } from '@shared/api/places';
-
-const PLACE_TYPES = [
-  { key: 'Home', icon: 'home', color: '#FF3B30', bg: '#FEF2F2' },
-  { key: 'Work', icon: 'briefcase', color: '#3B82F6', bg: '#DBEAFE' },
-  { key: 'Gym', icon: 'fitness', color: '#10B981', bg: '#ECFDF5' },
-  { key: 'School', icon: 'school', color: '#F59E0B', bg: '#FEF3C7' },
-  { key: 'Other', icon: 'star', color: '#8B5CF6', bg: '#EDE9FE' },
-];
+import { SAVED_PLACE_TYPES, savedPlaceConfig } from '../utils/savedPlaceIcon';
 
 export default function SavedPlacesScreen() {
   const router = useRouter();
@@ -141,13 +134,8 @@ export default function SavedPlacesScreen() {
     setPlaceName(''); setSelectedType('Home'); setSearchText(''); setSelectedPlace(null); clearPredictions();
   };
 
-  const getPlaceConfig = (name: string) => {
-    const lower = name?.toLowerCase() || '';
-    return PLACE_TYPES.find(t => lower.includes(t.key.toLowerCase())) || PLACE_TYPES[PLACE_TYPES.length - 1];
-  };
-
   const renderPlace = ({ item }: { item: any }) => {
-    const config = getPlaceConfig(item.name);
+    const config = savedPlaceConfig(item);
     return (
       <View style={styles.placeItem}>
         <View style={[styles.placeIcon, { backgroundColor: config.bg }]}>
@@ -196,7 +184,7 @@ export default function SavedPlacesScreen() {
                   {/* Type selector */}
                   <Text style={styles.formLabel}>Type</Text>
                   <View style={styles.typeRow}>
-                    {PLACE_TYPES.map((t) => (
+                    {SAVED_PLACE_TYPES.map((t) => (
                       <TouchableOpacity
                         key={t.key}
                         style={[styles.typeChip, selectedType === t.key && { backgroundColor: t.bg, borderColor: t.color }]}

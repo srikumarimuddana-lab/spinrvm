@@ -21,6 +21,7 @@ import { showToast } from '../store/toastStore';
 import api from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
 import type { PlacePrediction } from '@shared/api/places';
+import { savedPlaceConfig } from '../utils/savedPlaceIcon';
 
 export default function SearchDestinationScreen() {
   const router = useRouter();
@@ -710,7 +711,12 @@ export default function SearchDestinationScreen() {
                       <Text style={styles.sectionTitle}>Favourites</Text>
                       {savedAddresses
                         .filter(a => a.name?.toLowerCase() !== 'home' && a.name?.toLowerCase() !== 'work')
-                        .map((addr, index) => (
+                        .map((addr, index) => {
+                          // Use the address's own saved type (Gym/School/Other/…)
+                          // instead of a hardcoded star for every favourite —
+                          // matches saved-places.tsx's own list rendering.
+                          const config = savedPlaceConfig(addr);
+                          return (
                         <TouchableOpacity
                           key={`fav-${index}`}
                           style={styles.predictionRow}
@@ -721,15 +727,16 @@ export default function SearchDestinationScreen() {
                           accessibilityLabel={`${addr.name || 'Saved'} — ${addr.address}`}
                           accessibilityHint="Double-tap to select this saved place"
                         >
-                          <View style={[styles.predictionIcon, { backgroundColor: '#FFF7ED' }]}>
-                            <Ionicons name="star" size={20} color="#F59E0B" />
+                          <View style={[styles.predictionIcon, { backgroundColor: config.bg }]}>
+                            <Ionicons name={config.icon} size={20} color={config.color} />
                           </View>
                           <View style={styles.predictionContent}>
                             <Text style={styles.predictionMainText}>{addr.name || 'Saved'}</Text>
                             <Text style={styles.predictionSecondaryText} numberOfLines={1}>{addr.address}</Text>
                           </View>
                         </TouchableOpacity>
-                      ))}
+                          );
+                        })}
                     </View>
                   )}
 

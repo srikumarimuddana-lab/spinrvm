@@ -380,11 +380,26 @@ def first_name_only(user: dict | None, fallback: str = "") -> str:
 # `tests/test_no_raw_exception_in_4xx_detail.py` fails the build on new ones.
 
 _ERR_EMAIL_RE = _re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
-# Stripe object ids and secrets: pi_/ch_/cus_/sub_/in_/pm_/seti_/txn_/evt_/dp_,
-# plus sk_/rk_/pk_ keys. Matches the Stripe-documented shape (prefix + _ + at
-# least 8 base62 chars) so ordinary words are not swallowed.
+# Stripe object ids and secrets, plus sk_/rk_/pk_ keys.
+#
+# Split into two alternations on purpose. Four Stripe prefixes — in_ (Invoice),
+# re_ (Refund), po_ (Payout), cs_ (Checkout Session) — are also the start of
+# ordinary snake_case identifiers that legitimately appear in 4xx copy:
+# "status must be one of in_progress, completed" (routes/admin/users.py) was
+# rewritten to "one of [redacted], completed" by the naive single pattern.
+# Those four therefore require a digit somewhere in the suffix, which every
+# real Stripe id has and no English word does.
+#
+# The unambiguous prefixes keep the plain rule — deliberately, because a
+# 14-char base62 id has roughly an 8% chance of containing no digit at all, so
+# a blanket digit requirement would silently miss about one id in twelve.
 _ERR_STRIPE_RE = _re.compile(
-    r"\b(?:pi|ch|cus|sub|in|pm|seti|txn|evt|dp|re|po|acct|price|prod|cs)_[A-Za-z0-9]{8,}\b"
+    r"\b(?:pi|ch|cus|sub|pm|seti|txn|evt|dp|acct|price|prod)_[A-Za-z0-9]{8,}\b"
+    r"|\b(?:in|re|po|cs)_(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{8,}\b"
+    # Checkout Sessions carry a mode segment (cs_test_…/cs_live_…), so the
+    # single-segment rule above misses them: `_` is a word char, so its \b
+    # never fires mid-id.
+    r"|\bcs_(?:test|live)_[A-Za-z0-9]{8,}\b"
     r"|\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{8,}\b"
 )
 # JWTs and long opaque bearer tokens.

@@ -285,8 +285,16 @@ async def _collect_noshow_fee_from_card(
     fee_admin: Decimal,
     fee_driver: Decimal,
     driver_id: str,
-) -> tuple[Decimal, str | None]:
-    """Collect a no-show fee from a card rider. Returns (collected, fee_pi).
+) -> tuple[Decimal, str | None, bool]:
+    """Collect a no-show fee from a card rider.
+
+    Returns ``(collected, fee_pi, from_hold)``. ``from_hold`` is True ONLY when
+    the money came out of the booking hold's partial capture — the caller uses
+    it to decide whether ``auth_status`` may be stamped ``captured``. Getting
+    that wrong strands the rider's hold: ``card_hold_release.OPEN_AUTH_STATES``
+    is ``("authorized", "fare_only")``, so a hold marked ``captured`` while it
+    is actually still open becomes invisible to ``orphaned_hold_reconciler``
+    and sits on the card until Stripe's ~7-day expiry.
 
     Hold-capture first, fresh charge as the fallback — the same order as
     routes/rides/cancellation.py's rider-cancel path, and for the same reason:
@@ -314,7 +322,7 @@ async def _collect_noshow_fee_from_card(
     rider_id = ride.get("rider_id")
     if not rider_id:
         logger.error("[NOSHOW] card fee not collected ride_id=%s — ride has no rider_id", ride_id)
-        return Decimal("0"), None
+        return Decimal("0"), None, False
 
     _ledger_meta = {
         "source": "noshow_fee",
@@ -355,7 +363,7 @@ async def _collect_noshow_fee_from_card(
                 ref=outcome.payment_intent_id,
                 metadata={**_ledger_meta, "collection": "hold_partial_capture"},
             )
-            return captured, outcome.payment_intent_id
+            return captured, outcome.payment_intent_id, True
 
         # Do NOT release the hold here. The fee is still owed and the fallback
         # below charges a fresh PaymentIntent — releasing now would drop our only
@@ -388,7 +396,7 @@ async def _collect_noshow_fee_from_card(
         )
     except Exception as exc:  # pragma: no cover — helper never raises
         logger.error("[NOSHOW] fee charge raised ride_id=%s: %s", ride_id, exc, exc_info=True)
-        return Decimal("0"), None
+        return Decimal("0"), None, False
 
     if outcome.status == "unconfigured":
         # Stripe isn't wired up (dev/test) — no Stripe call was made at all, so
@@ -398,7 +406,7 @@ async def _collect_noshow_fee_from_card(
             ride_id,
             total_fee,
         )
-        return Decimal("0"), None
+        return Decimal("0"), None, False
 
     if outcome.status != "succeeded":
         # The driver is still paid below — that is the existing policy and this
@@ -411,7 +419,7 @@ async def _collect_noshow_fee_from_card(
             total_fee,
             fee_driver,
         )
-        return Decimal("0"), outcome.payment_intent_id
+        return Decimal("0"), outcome.payment_intent_id, False
 
     # charge_ancillary_fee sets charged_amount=amount_dec on every "succeeded"
     # return (utils/stripe_charge.py), so use it verbatim. Falling back to
@@ -426,7 +434,7 @@ async def _collect_noshow_fee_from_card(
         ref=outcome.payment_intent_id,
         metadata={**_ledger_meta, "collection": "fresh_charge"},
     )
-    return charged, outcome.payment_intent_id
+    return charged, outcome.payment_intent_id, False
 
 
 @router.post("/rides/{ride_id}/noshow")
@@ -536,6 +544,7 @@ async def mark_rider_noshow(
     _hold_is_live = bool(_booking_pi) and _auth_state in ("authorized", "fare_only")
     _fee_pi: str | None = None
     _fee_collected = Decimal("0")
+    _fee_from_hold = False
 
     if total_fee > 0:
         if payment_method == "wallet":
@@ -577,7 +586,7 @@ async def mark_rider_noshow(
             # Company-allowance / corporate-paid rides are deliberately excluded
             # (same carve-out as the rider-cancel path): that fee belongs on the
             # corporate wallet ledger, not a personal Stripe card.
-            _fee_collected, _fee_pi = await _collect_noshow_fee_from_card(
+            _fee_collected, _fee_pi, _fee_from_hold = await _collect_noshow_fee_from_card(
                 ride=ride,
                 ride_id=ride_id,
                 total_fee=total_fee,
@@ -642,7 +651,13 @@ async def mark_rider_noshow(
         # no-shows keep byte-identical payloads to before this change.
         _fee_attribution["cancel_fee_payment_intent_id"] = _fee_pi
         _fee_attribution["payment_status"] = "paid" if _fee_collected > 0 else "failed"
-        if _hold_is_live and _fee_collected > 0:
+        if _fee_from_hold:
+            # ONLY on the capture path. On the fresh-charge fallback the hold is
+            # deliberately left open (the capture failed, so releasing before
+            # the fallback resolved would have dropped our only reserved funds),
+            # and stamping "captured" there would hide a live hold from
+            # orphaned_hold_reconciler — it scans OPEN_AUTH_STATES. Mirrors the
+            # rider-cancel twin, which gates on fee_taken_from_hold > 0.
             _fee_attribution["auth_status"] = "captured"
     try:
         await db_supabase.update_ride(ride_id, _fee_attribution)

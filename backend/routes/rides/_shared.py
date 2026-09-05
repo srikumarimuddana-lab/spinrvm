@@ -424,6 +424,19 @@ async def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
     # (DELETE /{ride_id}/stops/{index}), which shrinks the fare — a ride whose
     # remaining fare falls below the promo would otherwise produce a negative
     # grand_total and a negative charge.
+    #
+    # RESIDUAL, deliberately not closed here: the discount is subtracted
+    # UNCAPPED (mirroring fare_service.py:468, so `free_ride` promos — which
+    # exceed the ride fare by design — keep working), while _ride_receipt_lines
+    # below renders the promo line CAPPED at ride fare. Those agree for every
+    # normal ride, because booking.py caps discount_amount at the ride portion
+    # when it is stored. They diverge only once stop REMOVAL drags the fare
+    # below the stored promo: e.g. $3 fare + $1 tax with a $5 promo charges $0
+    # but renders lines summing to $1. Reconciling that means changing the
+    # shared renderer, which several other surfaces read — out of scope for
+    # this fix. Note the direction: before this line existed the mismatch was
+    # the FULL discount on every promo stop-edit, so this narrows it rather
+    # than introducing it.
     grand_total = max(_round(new_total + fees_total + tax_amount - discount), _d(0))
 
     result = {

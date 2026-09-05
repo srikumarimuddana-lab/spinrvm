@@ -80,6 +80,36 @@ class TestKeepsUsableMessages:
     def test_ordinary_ux_copy_is_untouched(self, ux):
         assert redact_error_detail(ux) == ux
 
+    @pytest.mark.parametrize(
+        "snake_case",
+        [
+            "status must be one of in_progress, completed, rejected",
+            "cannot re_open this ticket",
+            "po_box delivery unsupported",
+            "Ride is not in driver_arrived state",
+        ],
+    )
+    def test_snake_case_identifiers_are_not_mistaken_for_stripe_ids(self, snake_case):
+        """Regression: in_/re_/po_/cs_ are Stripe prefixes AND the start of
+        ordinary snake_case words. The first version of this pattern rewrote
+        `in_progress` (routes/admin/users.py's status list) to `[redacted]`."""
+        assert redact_error_detail(snake_case) == snake_case
+
+    @pytest.mark.parametrize(
+        "stripe_id",
+        [
+            "Invoice in_1MtwBwLkdIwHu7ix2ab not found",
+            "Refund re_3MtwBwLkdIwHu7ix1abc failed",
+            "Checkout cs_test_a1b2c3d4e5f6 expired",
+            "Checkout cs_live_a1b2c3d4e5f6 expired",
+            "Customer cus_NffrFeUfNVaHib missing",
+        ],
+    )
+    def test_real_ids_on_those_same_prefixes_are_still_removed(self, stripe_id):
+        """The narrowing must not create a hole: those four prefixes still
+        redact when the suffix carries a digit, as every real Stripe id does."""
+        assert "[redacted]" in redact_error_detail(stripe_id)
+
     def test_short_numbers_survive(self):
         """Amounts, counts and timeouts are not identifiers."""
         assert redact_error_detail("Wait 300 seconds") == "Wait 300 seconds"

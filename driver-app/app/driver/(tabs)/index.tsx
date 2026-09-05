@@ -696,6 +696,21 @@ function DriverDashboard() {
     },
     [],
   );
+  // Camera-update throttle: this effect re-runs on every `location` change,
+  // and on iOS watchPositionAsync's distanceFilter has no time floor (unlike
+  // Android's interval-gated provider — see LOCATION_CONFIGS in
+  // useDriverDashboard.ts), so fixes can arrive well under CAMERA_ANIM_MS
+  // apart while driving. Calling animateCamera again before the prior
+  // 700ms animation finishes cancels its in-flight interpolation and
+  // restarts from wherever it happened to be — reported live as zoom/
+  // rotation "not smooth" on turns and slowdowns. Throttle to at most one
+  // animateCamera per CAMERA_ANIM_MS: fire immediately if idle long enough
+  // (leading edge), otherwise schedule exactly one trailing call carrying
+  // the latest computed params so a fast-changing heading/position is
+  // coalesced, never silently dropped.
+  const CAMERA_ANIM_MS = 700;
+  const lastCameraUpdateRef = useRef(0);
+  const pendingCameraTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
@@ -716,10 +731,35 @@ function DriverDashboard() {
       const aheadM = metersPerPx * Dimensions.get('window').height * 0.18;
       center = destinationPoint(center, mapHeading, aheadM);
     }
-    mapRef.current.animateCamera?.(
-      { center, zoom, heading: mapHeading },
-      { duration: 700 },
-    );
+
+    const applyCamera = () => {
+      lastCameraUpdateRef.current = Date.now();
+      pendingCameraTimeoutRef.current = null;
+      mapRef.current?.animateCamera?.(
+        { center, zoom, heading: mapHeading },
+        { duration: CAMERA_ANIM_MS },
+      );
+    };
+
+    if (pendingCameraTimeoutRef.current) {
+      clearTimeout(pendingCameraTimeoutRef.current);
+      pendingCameraTimeoutRef.current = null;
+    }
+    const elapsed = Date.now() - lastCameraUpdateRef.current;
+    if (elapsed >= CAMERA_ANIM_MS) {
+      applyCamera();
+    } else {
+      // Anchored on lastCameraUpdateRef (unchanged until a call actually
+      // fires), so repeated reschedules from fast-arriving ticks converge
+      // on the same fire time instead of pushing it back indefinitely.
+      pendingCameraTimeoutRef.current = setTimeout(applyCamera, CAMERA_ANIM_MS - elapsed);
+    }
+    return () => {
+      if (pendingCameraTimeoutRef.current) {
+        clearTimeout(pendingCameraTimeoutRef.current);
+        pendingCameraTimeoutRef.current = null;
+      }
+    };
     // mapRef is a stable useRef object from useDriverDashboard().
   }, [location, rideState, mapRef, courseUp]);
   useEffect(() => {

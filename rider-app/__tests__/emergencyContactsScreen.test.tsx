@@ -330,6 +330,29 @@ describe('EmergencyContactsScreen (rider-app)', () => {
     expect(r.root.findAllByProps({ name: 'person-circle-outline' }).length).toBeGreaterThan(0);
   });
 
+  it('gives different relationships distinct accent colors, not the shared brand color', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        contacts: [
+          { id: 'c1', name: 'A', phone: '1111111111', relationship: 'Spouse' },
+          { id: 'c2', name: 'B', phone: '2222222222', relationship: 'Friend' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    const spouseIcon = r.root.findByProps({ name: 'heart' });
+    const friendIcon = r.root.findByProps({ name: 'person-outline' });
+    expect(spouseIcon.props.color).not.toBe(friendIcon.props.color);
+    expect(spouseIcon.props.color).not.toBe(COLORS.primary);
+  });
+
+  it('falls back to a neutral accent color for an unrecognised relationship', async () => {
+    mockApiGet.mockResolvedValue({ data: { contacts: [{ ...CONTACT_1, relationship: 'Roommate' }] } });
+    const r = await renderScreen();
+    const fallbackIcon = r.root.findByProps({ name: 'person-circle-outline' });
+    expect(fallbackIcon.props.color).toBe('#6B7280');
+  });
+
   it('selects a relationship chip and submits it with the new contact', async () => {
     mockApiPost.mockResolvedValue({ data: {} });
     const r = await renderScreen();

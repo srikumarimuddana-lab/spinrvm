@@ -179,6 +179,6 @@
     "test:coverage": "jest --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "postinstall": "patch-package --error-on-warn && node scripts/dedupe-shared-nm.js"
+    "postinstall": "patch-package --error-on-warn && node scripts/dedupe-shared-nm.js && node scripts/dedupe-babel-helper-compilation-targets.js"
   }
 }

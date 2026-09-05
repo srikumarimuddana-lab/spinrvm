@@ -382,26 +382,50 @@ def pickup_otp_locked_exc() -> HTTPException:
     )
 
 
+# When Redis is CONFIGURED but unavailable, redis_get/_incr re-raise (with
+# REDIS_URL unset they already return the in-process value — see
+# utils/redis_client.py). This lockout must not answer that with a 503:
+# the pickup OTP is the ONLY production path from driver_arrived ->
+# in_progress now that both /start routes are 410 there, so a 503 would strand
+# every rider in every car, fleet-wide, on a *cache* outage — the same
+# shared-dependency coupling removed from /health in this same branch.
+#
+# So it degrades to the in-process store instead. The control survives in
+# weakened form: per-replica rather than global (N replicas ≈ N× the attempts),
+# and lost on restart. That is the documented behaviour of the phone-OTP
+# lockout too whenever REDIS_URL is unset (CLAUDE.md, "Redis transparency").
+# `_local_*` are redis_client's own fallback primitives, reused rather than
+# reimplemented so the TTL semantics cannot drift apart from it.
+def _degraded_note(op: str, ride_id: str, err: Exception) -> None:
+    logger.error(
+        "Redis unavailable in pickup OTP %s ride=%s — degrading to the in-process "
+        "counter (per-replica, lost on restart): %s",
+        op,
+        ride_id,
+        err,
+    )
+    _deps._metric_inc("spinr_rides_pickup_otp_degraded_total")
+
+
 async def check_pickup_otp_lockout(ride_id: str) -> None:
     """Raise 429 if this ride's pickup OTP is locked out.
 
-    Fails CLOSED (503) on Redis errors, matching routes/auth.py's
-    _check_otp_lockout: the lockout is the only brute-force control on this
-    endpoint, so an unavailable Redis must not silently remove it.
+    Degrades to the in-process counter on a Redis error rather than failing
+    closed — see the note above for why a 503 here is worse than a weakened
+    limit. Deliberately diverges from routes/auth.py's _check_otp_lockout,
+    which CAN fail closed because a blocked login is an inconvenience, not a
+    rider sitting in a stopped car.
     """
     try:
-        from ...utils.redis_client import redis_get
+        from ...utils.redis_client import _local_get, redis_get
     except ImportError:
-        from utils.redis_client import redis_get  # type: ignore
+        from utils.redis_client import _local_get, redis_get  # type: ignore
 
     try:
         locked = await redis_get(_pickup_otp_lock_key(ride_id))
     except Exception as e:
-        logger.error(f"Redis unavailable in pickup OTP lockout check ride={ride_id}: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail="Verification temporarily unavailable, please try again",
-        ) from None
+        _degraded_note("lockout check", ride_id, e)
+        locked = _local_get(_pickup_otp_lock_key(ride_id))
     if locked:
         raise pickup_otp_locked_exc()
 
@@ -414,16 +438,63 @@ async def record_pickup_otp_failure(ride_id: str, driver_id: str) -> int:
     the counter could not be read/written.
     """
     try:
-        from ...utils.redis_client import redis_expire, redis_incr, redis_set
+        from ...utils.redis_client import (
+            _local_expire,
+            _local_incr,
+            _local_set,
+            redis_expire,
+            redis_incr,
+            redis_set,
+        )
     except ImportError:
-        from utils.redis_client import redis_expire, redis_incr, redis_set  # type: ignore
+        from utils.redis_client import (  # type: ignore
+            _local_expire,
+            _local_incr,
+            _local_set,
+            redis_expire,
+            redis_incr,
+            redis_set,
+        )
 
+    fail_key = _pickup_otp_fail_key(ride_id)
     try:
-        count = await redis_incr(_pickup_otp_fail_key(ride_id))
+        # The increment ALONE decides which store this call uses. Retrying a
+        # failed expire/set against the other store would be fine, but falling
+        # back after a *successful* incr would count the same wrong code twice
+        # and lock the ride early.
+        try:
+            count = await redis_incr(fail_key)
+            degraded = False
+        except Exception as e:
+            # Same degrade as the check above — a wrong code must still count
+            # against the ride, just in a per-replica counter.
+            _degraded_note("failure record", ride_id, e)
+            count = _local_incr(fail_key)
+            degraded = True
+
         if count == 1:
-            await redis_expire(_pickup_otp_fail_key(ride_id), _PICKUP_OTP_FAILURE_WINDOW_SECONDS)
+            if degraded:
+                _local_expire(fail_key, _PICKUP_OTP_FAILURE_WINDOW_SECONDS)
+            else:
+                try:
+                    await redis_expire(fail_key, _PICKUP_OTP_FAILURE_WINDOW_SECONDS)
+                except Exception as e:
+                    # No TTL means the counter would outlive its window. Losing
+                    # the expiry is safer than losing the count, so keep going.
+                    logger.error(f"pickup OTP counter TTL not set ride={ride_id}: {e}")
+
         if count >= _PICKUP_OTP_MAX_FAILURES:
-            await redis_set(_pickup_otp_lock_key(ride_id), "1", _PICKUP_OTP_LOCKOUT_TTL_SECONDS)
+            lock_key = _pickup_otp_lock_key(ride_id)
+            if degraded:
+                _local_set(lock_key, "1", _PICKUP_OTP_LOCKOUT_TTL_SECONDS)
+            else:
+                try:
+                    await redis_set(lock_key, "1", _PICKUP_OTP_LOCKOUT_TTL_SECONDS)
+                except Exception as e:
+                    # The threshold was reached; the lock MUST land somewhere or
+                    # the attacker just keeps going.
+                    _degraded_note("lock write", ride_id, e)
+                    _local_set(lock_key, "1", _PICKUP_OTP_LOCKOUT_TTL_SECONDS)
             # Security-relevant event: route to Sentry via logger.error so
             # on-call sees a driver probing a pickup code. IDs only, no PII.
             logger.error(f"PICKUP_OTP_LOCKOUT_TRIGGERED ride_id={ride_id} driver_id={driver_id} after {count} failures")
@@ -437,10 +508,15 @@ async def record_pickup_otp_failure(ride_id: str, driver_id: str) -> int:
 async def clear_pickup_otp_failures(ride_id: str) -> None:
     """Reset counter + lock after a correct code. Best-effort."""
     try:
-        from ...utils.redis_client import redis_delete
+        from ...utils.redis_client import _local_delete, redis_delete
     except ImportError:
-        from utils.redis_client import redis_delete  # type: ignore
+        from utils.redis_client import _local_delete, redis_delete  # type: ignore
 
+    # Always clear the in-process copy too: a ride whose counter was written
+    # during a Redis outage would otherwise keep a stale local lock after Redis
+    # comes back, blocking a driver on a code they got right.
+    _local_delete(_pickup_otp_fail_key(ride_id))
+    _local_delete(_pickup_otp_lock_key(ride_id))
     try:
         await redis_delete(_pickup_otp_fail_key(ride_id))
         await redis_delete(_pickup_otp_lock_key(ride_id))

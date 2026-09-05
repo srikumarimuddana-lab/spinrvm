@@ -105,6 +105,17 @@ Regression risks, stated plainly:
    stop being released on timeout and rides would stall in `driver_assigned`.
 3. **Fail-closed on read error means a real miss can go unpenalised** during a DB
    incident. Accepted deliberately, per §3.
+4. **The race is narrowed, not closed.** Self-review finding: this is a read
+   *after* the offer claim, not part of it, so an ordering remains where the
+   reaper claims the offer, reads the ride as still `searching`, and only then
+   does `accept_ride`'s CAS land — the winner is still penalised in that
+   interleaving. Closing it fully requires the offer claim and the ride CAS to
+   be one atomic unit (a Postgres function, the way
+   `corporate_wallet_apply_delta` does it), which is a schema change and its own
+   piece of work. What the guard buys is the common case: the reaper only runs
+   at/after the 15 s timeout, while the accept racing it arrived just before, so
+   the CAS has normally already landed by the time the reaper reads. **This is
+   a genuine remaining hole, not a theoretical one — it is just much smaller.**
 
 ## 5. User-experience effect
 

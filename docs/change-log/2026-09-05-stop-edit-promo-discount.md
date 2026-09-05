@@ -78,6 +78,20 @@ Regression risk: rides **without** a promo are arithmetically unchanged
 (`discount = 0`), which is the majority of traffic and is covered by an explicit
 test. The behaviour change is confined to promo rides whose stops are edited.
 
+**Known residual (self-review finding).** `grand_total` subtracts the discount
+**uncapped** — mirroring `fare_service.py:468` so `free_ride` promos, which
+exceed the ride fare by design, keep working — while `_ride_receipt_lines`
+renders the promo line **capped at ride fare**. They agree for every normal
+ride, because `booking.py:1338` caps `discount_amount` at the ride portion when
+it is stored. They diverge only once stop *removal* drags the fare below the
+stored promo: a $3 remaining fare with $1 tax and a $5 promo charges $0 but
+renders lines summing to $1. Reconciling that means changing the shared
+renderer, which several other surfaces read, so it is out of scope here.
+
+Note the direction, though: **before this fix the mismatch was the full
+discount on every promo stop-edit.** This narrows it to a rare edge case rather
+than introducing it.
+
 ## 5. User-experience effect
 
 - **Rider (visible, mid-ride):** a rider on a promo ride who edits stops is now

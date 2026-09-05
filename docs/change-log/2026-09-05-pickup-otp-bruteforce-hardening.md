@@ -82,8 +82,15 @@ ride's code is unaffected on the next.
 - `rider_start_ride` — 3 hits, all the definition plus its `__init__` re-export
   pair. No internal caller.
 - Both mobile apps: `driver-app/store/driverStore.ts:699,716` call
-  `/drivers/rides/{id}/verify-otp` and `/drivers/rides/{id}/start`. **Neither
-  app calls `/rides/{id}/start`**, so gating it changes no shipped client flow.
+  `/drivers/rides/{id}/verify-otp` and `/drivers/rides/{id}/start`.
+  rider-app **does** have a `startRide` store action that POSTs
+  `/rides/{id}/start` (`rider-app/store/rideStore.ts:910`) — an earlier draft of
+  this entry wrongly said neither app called it. Nothing outside that action's
+  own unit test invokes it, though: it is unwired dev-simulation code sitting
+  next to an equally unwired `simulateArrival`, and carrying a rider token it
+  would already have hit the route's `is_driver` 403. So gating it still
+  changes no shipped client flow — but the reason is "unreachable", not
+  "absent".
 
 Interactions considered:
 
@@ -99,6 +106,33 @@ Interactions considered:
   dict (CLAUDE.md "Redis transparency"), so in that mode the counter is
   per-replica and lost on restart. That weakens but does not remove the control,
   and matches how the existing phone-OTP lockout already behaves.
+
+- **Redis CONFIGURED but unavailable** — `redis_get`/`redis_incr` *re-raise* in
+  that case (they only return the in-process value when `REDIS_URL` is unset).
+  This originally answered that with a 503, copying `routes/auth.py`'s
+  fail-closed `_check_otp_lockout`. **Self-review caught that as a fleet-wide
+  outage risk this branch itself created**: with the `/start` bypass now gated,
+  the pickup OTP is the *only* production path from `driver_arrived` to
+  `in_progress`, so a 503 here strands every rider in every car on a **cache**
+  outage — the same shared-dependency coupling this branch removes from
+  `/health`. Before these changes a Redis outage did not block trip starts at
+  all.
+
+  Resolved (user decision, this session) by **degrading to the in-process
+  counter** instead of 503, reusing `redis_client`'s own `_local_*` primitives
+  so the TTL semantics cannot drift. Trips keep starting; the control survives
+  in weakened form — per-replica rather than global (N replicas ≈ N× the
+  attempts) and lost on restart. The degrade emits
+  `spinr_rides_pickup_otp_degraded_total` and an `error` log so it is visible,
+  and `clear_pickup_otp_failures` always wipes the local copy too, or a ride
+  locked during an outage would stay locked in-process after Redis returned.
+
+  This deliberately diverges from `routes/auth.py`, which can fail closed
+  because a blocked login is an inconvenience, not a rider sitting in a
+  stopped car. The residual accepted risk: during a Redis outage an attacker
+  gets roughly N× the attempts across N replicas. At 5 per ride per replica
+  that is still far from the ~10,000 needed for a 4-digit code, and the outage
+  would have to persist for the whole attempt run.
 
 Regression risk, stated plainly: **a real rider/driver pair who mistype the
 code 5 times are locked out of starting their trip for 15 minutes.** That is the
@@ -199,6 +233,10 @@ unbounded-brute-force hole, and a flag to turn that back on is a hole of its own
       stdlib `logging` in this package so `%s` placeholders are correct — not
       loguru).
 - [x] `ruff check` and `ruff format --check` clean on all four files.
+- [x] The degraded-Redis counter semantics were exercised directly against
+      `redis_client`'s real `_local_*` primitives in a standalone harness
+      (counts 1..5, locks at the threshold, stays scoped per ride, clears) —
+      the one part of this fix that could be run in this environment.
 - [ ] **Automated tests NOT run** — see §"What was not verified".
 - [ ] Not feature-flagged — justified in §8.
 - [ ] Not manually reproduced in staging.

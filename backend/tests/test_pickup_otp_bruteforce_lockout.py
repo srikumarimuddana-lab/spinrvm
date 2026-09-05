@@ -270,26 +270,77 @@ class TestPickupOtpLockout:
         assert redis_client._local.get(f"spinr:ride:{_RIDE_ID}:otp_fail") is None
         await check_pickup_otp_lockout(_RIDE_ID)
 
-    async def test_lockout_check_fails_closed_when_redis_errors(self):
-        """The lockout is the only brute-force control on this endpoint, so an
-        unavailable Redis must 503 rather than silently remove it."""
+    async def test_redis_outage_does_not_block_trip_starts(self):
+        """A 503 here would strand every rider in every car: the pickup OTP is
+        the only production path from driver_arrived -> in_progress now that
+        both /start routes are 410 there. A cache outage must not become a
+        fleet-wide trip-start outage."""
         from backend.routes.drivers._shared import check_pickup_otp_lockout
 
         with patch(
             "backend.utils.redis_client.redis_get",
             AsyncMock(side_effect=RuntimeError("redis down")),
         ):
+            await check_pickup_otp_lockout(_RIDE_ID)  # must not raise
+
+    async def test_counter_still_works_during_a_redis_outage(self):
+        """Degraded, not disabled: the limit survives per-replica."""
+        from backend.routes.drivers._shared import (
+            _PICKUP_OTP_MAX_FAILURES,
+            check_pickup_otp_lockout,
+            record_pickup_otp_failure,
+        )
+
+        with (
+            patch(
+                "backend.utils.redis_client.redis_incr",
+                AsyncMock(side_effect=RuntimeError("redis down")),
+            ),
+            patch(
+                "backend.utils.redis_client.redis_set",
+                AsyncMock(side_effect=RuntimeError("redis down")),
+            ),
+            patch(
+                "backend.utils.redis_client.redis_get",
+                AsyncMock(side_effect=RuntimeError("redis down")),
+            ),
+        ):
+            counts = [await record_pickup_otp_failure(_RIDE_ID, _DRIVER_ID) for _ in range(_PICKUP_OTP_MAX_FAILURES)]
+            # The in-process counter really counts, rather than returning 0.
+            assert counts == list(range(1, _PICKUP_OTP_MAX_FAILURES + 1))
             with pytest.raises(HTTPException) as exc:
                 await check_pickup_otp_lockout(_RIDE_ID)
-        assert exc.value.status_code == 503
+        assert exc.value.status_code == 429
 
-    async def test_failure_record_is_best_effort_when_redis_errors(self):
-        """A Redis write failure must not turn a wrong-code 400 into a 500."""
+    async def test_a_correct_code_clears_the_degraded_lock_too(self):
+        """Otherwise a ride locked during an outage stays locked in-process
+        after Redis returns, blocking a driver on a code they got right."""
+        from backend.routes.drivers._shared import (
+            _PICKUP_OTP_MAX_FAILURES,
+            check_pickup_otp_lockout,
+            clear_pickup_otp_failures,
+            record_pickup_otp_failure,
+        )
+
+        with (
+            patch("backend.utils.redis_client.redis_incr", AsyncMock(side_effect=RuntimeError("down"))),
+            patch("backend.utils.redis_client.redis_set", AsyncMock(side_effect=RuntimeError("down"))),
+        ):
+            for _ in range(_PICKUP_OTP_MAX_FAILURES):
+                await record_pickup_otp_failure(_RIDE_ID, _DRIVER_ID)
+
+        # Redis is back; the correct code must clear both stores.
+        await clear_pickup_otp_failures(_RIDE_ID)
+        await check_pickup_otp_lockout(_RIDE_ID)  # must not raise
+
+    async def test_failure_record_never_turns_a_wrong_code_into_a_500(self):
+        """Even if the in-process fallback itself blows up, the caller gets its
+        400, not an exception."""
         from backend.routes.drivers._shared import record_pickup_otp_failure
 
-        with patch(
-            "backend.utils.redis_client.redis_incr",
-            AsyncMock(side_effect=RuntimeError("redis down")),
+        with (
+            patch("backend.utils.redis_client.redis_incr", AsyncMock(side_effect=RuntimeError("down"))),
+            patch("backend.utils.redis_client._local_incr", side_effect=RuntimeError("boom")),
         ):
             assert await record_pickup_otp_failure(_RIDE_ID, _DRIVER_ID) == 0
 

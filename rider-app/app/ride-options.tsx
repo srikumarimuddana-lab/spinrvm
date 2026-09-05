@@ -64,6 +64,25 @@ function fallbackHeading(driverId: string): number {
   return hash % 360;
 }
 
+// Vehicle types carry an `icon` key (see backend/seed_vehicle_types.py and
+// admin-dashboard's VEHICLE_ICON_MAP — the admin-side counterpart of this
+// same map) that isn't guaranteed to be a real Ionicons glyph name: the
+// seeded "car-compact" isn't one. Map known keys to a real Ionicons name
+// here rather than passing the raw string straight into <Ionicons
+// name={...}>, so an unrecognized or legacy value can't render a blank
+// icon. Unknown/missing values fall back to "car" — the glyph this screen
+// always showed before vehicle_type.icon was wired up to it.
+const VEHICLE_TYPE_ICON_NAMES: Record<string, React.ComponentProps<typeof Ionicons>['name']> = {
+  'car-compact': 'car',
+  'car-sport': 'car-sport',
+  bus: 'bus',
+  'bus-outline': 'bus-outline',
+};
+
+function vehicleTypeIconName(icon?: string | null): React.ComponentProps<typeof Ionicons>['name'] {
+  return (icon && VEHICLE_TYPE_ICON_NAMES[icon]) || 'car';
+}
+
 interface SavedCard {
   id: string;
   brand: string;
@@ -1496,7 +1515,11 @@ function AnimatedVehicleCard({
             />
           ) : (
             <View style={styles.carIconFallback}>
-              <Ionicons name="car" size={isSelected && isAvailable ? 60 : 42} color="#666" />
+              <Ionicons
+                name={vehicleTypeIconName(estimate.vehicle_type.icon)}
+                size={isSelected && isAvailable ? 60 : 42}
+                color="#666"
+              />
             </View>
           )}
         </Animated.View>

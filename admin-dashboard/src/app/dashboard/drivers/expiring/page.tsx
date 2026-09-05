@@ -139,7 +139,7 @@ export default function ExpiringDocsPage() {
                 <div className="flex items-center gap-2">
                     <Filter className="h-4 w-4 text-muted-foreground" />
                     <Select value={serviceAreaId} onValueChange={setServiceAreaId}>
-                        <SelectTrigger className="h-8 w-48 text-xs">
+                        <SelectTrigger className="h-8 w-48 text-xs" aria-label="Service area">
                             <SelectValue placeholder="All areas" />
                         </SelectTrigger>
                         <SelectContent>

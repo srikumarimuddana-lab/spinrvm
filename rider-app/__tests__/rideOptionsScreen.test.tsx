@@ -30,6 +30,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -1515,6 +1516,24 @@ describe('AnimatedVehicleCard additional branches', () => {
     mockRideState.estimates = [makeEstimate({ vehicle_type: { id: 'vt-sedan', name: 'Sedan', capacity: 4, image_url: 'https://example.com/car.png' } })];
     const r = await renderScreen();
     expect(r.root.findAllByType(ExpoImageMock as any).length).toBeGreaterThan(0);
+  });
+
+  it('uses vehicle_type.icon for the fallback glyph when no image_url is set', async () => {
+    mockRideState.estimates = [makeEstimate({ vehicle_type: { id: 'vt-sport', name: 'Sport', capacity: 4, icon: 'car-sport' } })];
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'car-sport')).toBe(true);
+  });
+
+  it('falls back to the generic car glyph for an unrecognized/legacy icon value', async () => {
+    // "car-compact" is seeded data (backend/seed_vehicle_types.py) and is
+    // NOT a real Ionicons glyph name — must be mapped, never passed through
+    // raw, or the icon would silently fail to render on a real device.
+    mockRideState.estimates = [makeEstimate({ vehicle_type: { id: 'vt-1', name: 'Standard', capacity: 4, icon: 'car-compact' } })];
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'car')).toBe(true);
+    expect(icons.some((n) => n.props.name === 'car-compact')).toBe(false);
   });
 
   it('treats a missing surge_multiplier as no surge (no "Higher demand" notice)', async () => {

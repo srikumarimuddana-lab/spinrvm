@@ -493,7 +493,32 @@ Gaps:
    covering the coverage-regression check, lint-warning trend, breaking-change
    detection and risk label. The repo's own history (a red `main` for 2.5 h
    noticed by nobody because the Slack secret was unset) shows what advisory
-   gates are worth.
+   gates are worth. Two concrete instances observed on this review's own PR
+   (#5033, one Markdown file):
+   - **`maestro-e2e.yml` fails on every push to every branch, with zero jobs.**
+     3,103 runs to date; the latest five on `main` and on an unrelated feature
+     branch are all `conclusion: failure`, `total_jobs: 0`, and every run is
+     named by file path instead of the workflow's declared
+     `name: Maestro Mobile E2E …` — GitHub's signature for a workflow file that
+     failed validation. Cause: the job-level `if:` at `maestro-e2e.yml:66-74`
+     references `matrix.app.dir`, and `matrix` is not an allowed context in
+     `jobs.<id>.if`. This is the "already failed before the merge" check C21
+     recorded on #3719, it is a second reason B25's `run-maestro` label can
+     never fire, and it is a permanent red light that teaches everyone to
+     ignore red. Fix: drop the `matrix.app.dir` clause from the job `if` and
+     apply it on the first step instead (or build the matrix from
+     `inputs.apps` with `fromJSON`).
+   - **The risk labeler mislabels any PR whose base has moved.**
+     `ci-guardrails.yml:1405-1440` computes changed files with a two-dot
+     `git diff BASE_SHA HEAD_SHA`, so a PR inherits everything `main` gained
+     after the fork point as its own change. #5033 touches one `.md` and was
+     labelled `risk:high` because `main` gained 8 backend files after the
+     branch was cut. C14 fixed the identical bug in `migration-check.yml` on
+     2026-08-10 and the coverage job in this same file already uses
+     `git merge-base`; the sweep never reached this step. The label drives the
+     Tier 5–7 template expansion and the `risk:high` pre-merge checklist, so it
+     misdirects reviewer attention in both directions. Fix: diff from
+     `$(git merge-base BASE_SHA HEAD_SHA)`.
 9. **Mobile telemetry** — see §2.1.
 
 ### 2.1 Mobile error handling and telemetry (deep dive)
@@ -848,8 +873,10 @@ to production on every push is not, on a product taking real charges.
 
 **Days 1–14 — stop the bleeding (no product risk)**
 1. `deploy-fly.yml` → `workflow_run` on CI success; required checks + one
-   approval in branch protection. *Verify:* a PR with a failing test cannot
-   merge; a red `main` does not deploy.
+   approval in branch protection; fix the always-red Maestro workflow file
+   and the two-dot risk labeler (§2 gap 8) so that red means red. *Verify:*
+   a PR with a failing test cannot merge; a red `main` does not deploy; a
+   docs-only PR is labelled `risk:low` and produces no failed run.
 2. `release_command` for migrations; DSN as a Fly secret; staging to parity.
    *Verify:* `run_migrations.py --status` shows 0 pending on staging after a
    deploy.

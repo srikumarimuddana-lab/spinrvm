@@ -54,10 +54,13 @@ interface VehicleType {
 // `icon` stores an Ionicons name (see backend/seed_vehicle_types.py) consumed
 // by the mobile apps' <Ionicons name={...}> — lucide-react (what the admin
 // dashboard uses) has no equivalent lookup-by-name, so this maps the known
-// seeded names to a same-shaped lucide icon purely for a readable dashboard
-// preview. An unrecognized/custom icon name (an admin can free-type this
-// field) falls back to the generic Car glyph, same as before this mapping
-// existed.
+// seeded names to a same-shaped lucide icon for both the dashboard preview
+// and the "Icon" picker buttons in the Add/Edit dialog (below). Doubles as
+// the fixed set of choices offered there — same pattern as MARKER_VARIANTS.
+// A legacy/unrecognized icon value (from before the picker replaced a free-
+// text field) falls back to the generic Car glyph wherever it's rendered;
+// picking any option here always writes one of these known keys going
+// forward.
 const VEHICLE_ICON_MAP: Record<string, typeof Car> = {
     "car-compact": Car,
     "car-sport": CarFront,
@@ -81,7 +84,7 @@ const MARKER_VARIANTS = [
 const EMPTY_FORM: Omit<VehicleType, "id" | "created_at"> = {
     name: "",
     description: "",
-    icon: "car",
+    icon: "car-compact",
     capacity: 4,
     image_url: "",
     is_active: true,
@@ -407,34 +410,47 @@ export default function VehicleTypesPage() {
                             />
                         </div>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label htmlFor="vehicle-type-icon">Icon Name</Label>
-                                <Input
-                                    id="vehicle-type-icon"
-                                    placeholder="car"
-                                    value={form.icon}
-                                    onChange={(e) =>
-                                        setForm({ ...form, icon: e.target.value })
-                                    }
-                                />
+                        <div className="space-y-2">
+                            <Label>Icon</Label>
+                            <p className="text-xs text-muted-foreground">
+                                Shown next to the type in this list, and as the fallback
+                                on the rider app&apos;s ride card until an illustration is
+                                uploaded below.
+                            </p>
+                            <div className="grid grid-cols-4 gap-2">
+                                {Object.entries(VEHICLE_ICON_MAP).map(([value, Icon]) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        onClick={() => setForm({ ...form, icon: value })}
+                                        className={`flex flex-col items-center gap-1 rounded-lg border p-3 transition-colors ${
+                                            form.icon === value
+                                                ? "border-primary bg-primary/5 ring-1 ring-primary"
+                                                : "border-input hover:bg-muted"
+                                        }`}
+                                    >
+                                        <Icon className="h-6 w-6" />
+                                        <span className="text-xs font-medium">{vehicleIconLabel(value)}</span>
+                                    </button>
+                                ))}
                             </div>
-                            <div className="space-y-2">
-                                <Label htmlFor="vehicle-type-capacity">Capacity</Label>
-                                <Input
-                                    id="vehicle-type-capacity"
-                                    type="number"
-                                    min={1}
-                                    max={20}
-                                    value={form.capacity}
-                                    onChange={(e) =>
-                                        setForm({
-                                            ...form,
-                                            capacity: parseInt(e.target.value) || 4,
-                                        })
-                                    }
-                                />
-                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="vehicle-type-capacity">Capacity</Label>
+                            <Input
+                                id="vehicle-type-capacity"
+                                type="number"
+                                min={1}
+                                max={20}
+                                value={form.capacity}
+                                onChange={(e) =>
+                                    setForm({
+                                        ...form,
+                                        capacity: parseInt(e.target.value) || 4,
+                                    })
+                                }
+                            />
                         </div>
 
                         <div className="space-y-2">

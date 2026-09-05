@@ -6,16 +6,15 @@
 # This image gets its own pin/refresh discipline instead of piggybacking on
 # the backend's.
 #
-# Pin: Grafana's official Alloy image, by tag only for now. This session has
-# no registry access to pull `grafana/alloy:v1.4.3`'s real manifest digest,
-# so a digest pin is NOT fabricated here (a made-up sha256 would silently
-# fail every build). TODO (human, before first deploy): resolve and add the
-# real `@sha256:...` digest — `docker pull grafana/alloy:v1.4.3 && docker
-# inspect --format='{{index .RepoDigests 0}}' grafana/alloy:v1.4.3` — then
-# follow the same quarterly refresh cadence as backend/Dockerfile
-# (docs/runbooks/docker-image-pinning.md, which should be extended to cover
-# this image too as a follow-up, not done in this PR).
-FROM grafana/alloy:v1.4.3 AS alloy
+# Pin: Grafana's official Alloy image, by content-hash digest — same
+# convention as backend/Dockerfile's python:3.12.13-slim@sha256:... pin.
+# Digest resolved 2026-09-05 via Docker Hub's registry API against the
+# grafana/alloy:v1.4.3 manifest LIST (multi-arch; linux/amd64 is what Fly
+# machines run) — `curl` against registry-1.docker.io, not a fabricated
+# value. Follow the same quarterly refresh cadence as backend/Dockerfile
+# once docs/runbooks/docker-image-pinning.md is extended to cover this
+# image too (not done here).
+FROM grafana/alloy:v1.4.3@sha256:06bdcbb51fc22b16c2e96b31cbdf9cb0972e3bdedfbac2cc55ed36743f7fb9aa AS alloy
 
 # `dig` (bind-tools) is needed by discover-targets.sh to resolve Fly's
 # per-machine DNS records (see README.md, "Fly .internal DNS problem").

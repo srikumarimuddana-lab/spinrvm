@@ -364,6 +364,26 @@ async def double_entry_enabled() -> bool:
         return False
 
 
+# Namespace for deterministic (replay-safe) ledger ids. Fixed forever: changing
+# it re-randomises every derived id and defeats the deduplication it exists for.
+_LEDGER_ID_NAMESPACE = uuid.UUID("6f9c1d2e-8a4b-5c7d-9e0f-1a2b3c4d5e6f")
+
+
+def derive_event_id(dedupe_key: str) -> str:
+    """Derive a stable ``financial_events.id`` from a caller-chosen key.
+
+    ``financial_events.id`` is the table's PRIMARY KEY, so a deterministic id
+    turns that existing constraint into the replay guard — no new unique index
+    is needed, and ``_is_duplicate_key`` above already treats the resulting
+    23505 as success.
+
+    The key must identify the *money movement*, not the attempt: two different
+    balance transactions on one dispute must produce two ids, while the same
+    balance transaction seen twice must produce one.
+    """
+    return str(uuid.uuid5(_LEDGER_ID_NAMESPACE, dedupe_key))
+
+
 async def record_event(
     *,
     event_type: str,
@@ -373,14 +393,22 @@ async def record_event(
     ref: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     legs: Optional[Sequence[Leg]] = None,
+    dedupe_key: Optional[str] = None,
 ) -> Optional[str]:
     """Write one journal header, plus its double-entry legs when enabled.
 
     Returns the event id on success, ``None`` if the header could not be
     written. Never raises — callers are on the far side of a completed money
     movement and must not fail the request because bookkeeping failed.
+
+    ``dedupe_key`` makes the write replay-safe across *separate calls*. Without
+    it the id is a fresh ``uuid4``, which only dedupes the internal retry inside
+    ``_insert_with_retry`` — a caller re-run (Stripe redelivery, the admin event
+    replay) books the same money a second time. Pass a key derived from the
+    money movement's own identity for any handler that can legitimately be
+    replayed. See N4 in the 2026-09-05 director review.
     """
-    event_id = str(uuid.uuid4())
+    event_id = derive_event_id(dedupe_key) if dedupe_key else str(uuid.uuid4())
     header = {
         "id": event_id,  # client-supplied so a retry is idempotent
         "event_type": event_type,

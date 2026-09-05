@@ -392,6 +392,26 @@ async def record_dispute_close_events(
         amount_cents = int(bt.get("amount", 0) or 0)
         if amount_cents == 0:
             continue
+        bt_id = bt.get("id") or ""
+        # N4 (2026-09-05 director review): this loop called record_event
+        # unconditionally, and record_event minted a fresh uuid4 per call. Stuck
+        # events are re-run through _dispatch_stripe_event by the admin replay
+        # (routes/admin/stripe_events.py), so a crash after the ledger write
+        # booked the same -$42.50 chargeback and -$15.00 fee a second time.
+        #
+        # A Stripe balance-transaction id is globally unique and stable across
+        # redeliveries, so it identifies the money movement rather than the
+        # attempt — deriving the row's PRIMARY KEY from it makes the replay a
+        # no-op duplicate-key, which _insert_with_retry already treats as
+        # success. A bt with no id (should not happen; Stripe always sets one)
+        # falls back to the previous random-id behaviour rather than collapsing
+        # every such row onto one shared key.
+        _dedupe = f"stripe_dispute|{dispute_id}|{bt_id}" if bt_id else None
+        if not bt_id:
+            logger.error(
+                "[B27] dispute {} balance transaction has no id — ledger row is NOT replay-safe",
+                dispute_id,
+            )
         await ledger_service.record_event(
             event_type="stripe_dispute",
             user_id=user_id,
@@ -400,12 +420,13 @@ async def record_dispute_close_events(
             ref=dispute_id,
             metadata={
                 "stripe_dispute_id": dispute_id,
-                "balance_transaction_id": bt.get("id") or "",
+                "balance_transaction_id": bt_id,
                 "balance_transaction_type": bt.get("type") or "",
                 "fee_cents": int(bt.get("fee", 0) or 0),
                 "dispute_status": dispute_status,
                 "currency": bt.get("currency") or "",
             },
+            dedupe_key=_dedupe,
         )
 
 

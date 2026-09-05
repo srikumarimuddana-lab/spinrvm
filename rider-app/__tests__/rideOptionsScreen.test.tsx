@@ -1536,6 +1536,27 @@ describe('AnimatedVehicleCard additional branches', () => {
     expect(icons.some((n) => n.props.name === 'car-compact')).toBe(false);
   });
 
+  it('gives different vehicle types distinct fallback-icon accent colors, not a flat gray', async () => {
+    mockRideState.estimates = [
+      makeEstimate({ vehicle_type: { id: 'vt-sport', name: 'Premium', capacity: 4, icon: 'car-sport' } }),
+      makeEstimate({ vehicle_type: { id: 'vt-van', name: 'Van', capacity: 6, icon: 'bus' } }),
+    ];
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    const sportIcon = icons.find((n) => n.props.name === 'car-sport');
+    const busIcon = icons.find((n) => n.props.name === 'bus');
+    expect(sportIcon!.props.color).not.toBe(busIcon!.props.color);
+    expect(sportIcon!.props.color).not.toBe('#666');
+  });
+
+  it('falls back to a neutral fallback-icon color for an unrecognized vehicle type icon', async () => {
+    mockRideState.estimates = [makeEstimate({ vehicle_type: { id: 'vt-1', name: 'Standard', capacity: 4, icon: 'car-compact-legacy' } })];
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    const carIcon = icons.find((n) => n.props.name === 'car');
+    expect(carIcon!.props.color).toBe('#6B7280');
+  });
+
   it('treats a missing surge_multiplier as no surge (no "Higher demand" notice)', async () => {
     mockRideState.estimates = [makeEstimate({ surge_multiplier: undefined })];
     const r = await renderScreen();

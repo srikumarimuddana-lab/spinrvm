@@ -254,6 +254,45 @@ describe('VehicleInfoScreen', () => {
     expect(icons.some((n) => n.props.name === 'car')).toBe(true);
   });
 
+  it('gives different vehicle types distinct icon accent colors in the picker', async () => {
+    // Uses "bus" and "bus-outline" rather than the VEHICLE_TYPE_* fixtures
+    // above: their icons ("car", "car-sport") collide with two other
+    // hardcoded, always-on icons elsewhere on this screen (the hero card's
+    // decorative car-sport glyph, and the field summary's pre-selection
+    // "car" fallback), which would make this assertion pass for the wrong
+    // reason.
+    const VAN_TYPE = { id: 'vt-van', name: 'Van', description: 'Group rides', capacity: 8, icon: 'bus' };
+    const XL_TYPE = { id: 'vt-xl', name: 'XL', description: 'Larger group rides', capacity: 6, icon: 'bus-outline' };
+    mockApiGet.mockResolvedValue({ data: [VAN_TYPE, XL_TYPE] });
+    const r = await renderScreen();
+    const typeBox = findButtonByText(r, 'Tap to select');
+    act(() => {
+      typeBox.props.onPress();
+    });
+    const icons = r.root.findAllByType(Ionicons as any);
+    const vanIcon = icons.find((n) => n.props.name === 'bus');
+    const xlIcon = icons.find((n) => n.props.name === 'bus-outline');
+    expect(vanIcon!.props.color).not.toBe(xlIcon!.props.color);
+  });
+
+  it('carries the selected type\'s accent color into the field summary box, not the flat brand color', async () => {
+    // Uses "bus-outline" rather than VEHICLE_TYPE_SPORT's "car-sport": the
+    // hero card above this section has its own hardcoded, always-on
+    // <Ionicons name="car-sport" color={colors.primary}> decoration
+    // unrelated to the selected vehicle type, which would otherwise collide
+    // with this assertion.
+    const XL_TYPE = { id: 'vt-xl', name: 'XL', description: 'Larger group rides', capacity: 6, icon: 'bus-outline' };
+    mockApiGet.mockResolvedValue({ data: [XL_TYPE] });
+    const r = await renderScreen();
+    const typeBox = findButtonByText(r, 'Tap to select');
+    act(() => { typeBox.props.onPress(); });
+    const xlOption = findButtonByText(r, 'XL');
+    act(() => { xlOption.props.onPress(); });
+    const icons = r.root.findAllByType(Ionicons as any);
+    const xlIcon = icons.find((n) => n.props.name === 'bus-outline');
+    expect(xlIcon!.props.color).toBe('#8B5CF6');
+  });
+
   it('confirms via Alert, then saves and navigates back on success', async () => {
     const r = await renderScreen();
     await fillValidForm(r);

@@ -14,6 +14,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import FaqScreen from '../../app/driver/faq';
 
@@ -124,6 +125,24 @@ describe('FaqScreen (driver-app)', () => {
     expect(onboardingIdx).toBeGreaterThan(-1);
     expect(onboardingIdx).toBeLessThan(paymentsIdx);
     expect(paymentsIdx).toBeLessThan(customIdx);
+  });
+
+  it('gives different category headers distinct accent colors, not a flat brand tint', async () => {
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    const onboardingIcon = icons.find((n) => n.props.name === 'rocket');
+    const paymentsIcon = icons.find((n) => n.props.name === 'wallet');
+    expect(onboardingIcon!.props.color).not.toBe(paymentsIcon!.props.color);
+    expect(onboardingIcon!.props.color).not.toBe(COLORS.primary);
+  });
+
+  it('falls back to the default accent color for an unrecognized category', async () => {
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    // "zzz-custom" (Title-Cased to "Zzz-custom") isn't a known category key,
+    // so it renders the generic help-circle glyph via the same fallback.
+    const fallbackIcon = icons.find((n) => n.props.name === 'help-circle');
+    expect(fallbackIcon!.props.color).toBe('#F59E0B');
   });
 
   it('filters by search text across question and answer, case-insensitively', async () => {

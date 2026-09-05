@@ -33,6 +33,24 @@ const RELATIONSHIPS = [
   'Spouse', 'Parent', 'Sibling', 'Child', 'Friend', 'Other',
 ];
 
+// Per-relationship icon + accent color, so a contact list reads at a glance
+// instead of every avatar sharing the same brand-color tint. Keyed by the
+// lowercased relationship string stored on the contact (matches
+// RELATIONSHIPS above); an unrecognized or missing value falls back to a
+// neutral default, same as the icon-only lookup this replaces.
+const RELATIONSHIP_META: Record<string, { icon: string; color: string }> = {
+  spouse: { icon: 'heart', color: '#EC4899' },
+  parent: { icon: 'people', color: '#3B82F6' },
+  sibling: { icon: 'people-outline', color: '#8B5CF6' },
+  child: { icon: 'person', color: '#F59E0B' },
+  friend: { icon: 'person-outline', color: '#10B981' },
+};
+const DEFAULT_RELATIONSHIP_META = { icon: 'person-circle-outline', color: '#6B7280' };
+
+function relationshipConfig(rel?: string): { icon: string; color: string } {
+  return (rel && RELATIONSHIP_META[rel.toLowerCase()]) || DEFAULT_RELATIONSHIP_META;
+}
+
 export default function EmergencyContactsScreen() {
   const router = useRouter();
   const { colors } = useTheme();
@@ -139,17 +157,6 @@ export default function EmergencyContactsScreen() {
     return raw;
   };
 
-  const getRelationshipIcon = (rel?: string): string => {
-    switch (rel?.toLowerCase()) {
-      case 'spouse': return 'heart';
-      case 'parent': return 'people';
-      case 'sibling': return 'people-outline';
-      case 'child': return 'person';
-      case 'friend': return 'person-outline';
-      default: return 'person-circle-outline';
-    }
-  };
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
@@ -191,13 +198,15 @@ export default function EmergencyContactsScreen() {
             </View>
           ) : (
             <View style={styles.contactsList}>
-              {contacts.map((contact) => (
+              {contacts.map((contact) => {
+                const meta = relationshipConfig(contact.relationship);
+                return (
                 <View key={contact.id} style={styles.contactCard}>
-                  <View style={styles.contactAvatar}>
+                  <View style={[styles.contactAvatar, { backgroundColor: meta.color + '15' }]}>
                     <Ionicons
-                      name={getRelationshipIcon(contact.relationship) as any}
+                      name={meta.icon as any}
                       size={24}
-                      color={colors.primary}
+                      color={meta.color}
                     />
                   </View>
                   <View style={styles.contactInfo}>
@@ -214,7 +223,8 @@ export default function EmergencyContactsScreen() {
                     <Ionicons name="trash-outline" size={20} color="#EF4444" />
                   </TouchableOpacity>
                 </View>
-              ))}
+                );
+              })}
             </View>
           )}
 

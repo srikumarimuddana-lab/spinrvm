@@ -75,6 +75,16 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "tailwindcss"
         update-types: ["version-update:semver-major"]
+      # eslint 10.x crashes `npm run lint` outright (not just warns) — see
+      # #4823. eslint-plugin-react@7.37.5 (latest published) still calls the
+      # deprecated context.getFilename() from its shared React-version-
+      # detection utility, which eslint@10 no longer shims; its own
+      # peerDependencies cap at ^9.7, so it has no ESLint 10 support yet.
+      # #4774 auto-bumped this once already and PR #4898 had to pin back to
+      # ^9.39.5. Lift this once eslint-plugin-react ships an ESLint
+      # 10-compatible release.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
 
   # ─── Rider App ───────────────────────────────────────────────────────────
   - package-ecosystem: npm

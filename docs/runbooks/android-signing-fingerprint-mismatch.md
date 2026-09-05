@@ -67,7 +67,11 @@ Now compare:
 |---|---|
 | EAS SHA-1 **==** Play's *Upload key certificate* | Healthy. Skip to §4 — nothing to fix in Play; you only need to register fingerprints in Cloud/Firebase. |
 | EAS SHA-1 **==** Play's *App signing key certificate* | Play App Signing is off for this package, or you are reading the wrong row. Re-check before acting. |
-| EAS SHA-1 **!=** either Play value | **Real problem.** EAS holds a keystore Play does not recognise → §3. |
+| EAS SHA-1 **!=** Play's *Upload key certificate* | **Real problem.** EAS signs with a key Play will reject → §3. |
+
+The *App signing key certificate* is a **third, different** fingerprint on that same
+Play page. It is never expected to equal the EAS value and is not part of this
+diagnosis — but you do need it for §4, so copy it while you are there.
 
 > The console SHA-1 you were handed may be either of Play's two values. Confirming
 > *which row it came from* is the whole diagnosis — a fingerprint quoted without
@@ -80,24 +84,75 @@ Now compare:
 **Symptom:** `eas submit` / Play upload fails with *"Your Android App Bundle is
 signed with the wrong key … expected fingerprint SHA1: <X> … found: <Y>"*.
 
-This already happened once on `com.spinr.driver` (registered upload key `B7:F7:…`
-had no custodian; EAS held `D7:51:…`). It was resolved by an upload key reset, not
-by code.
+Seen twice on this project:
 
-**Fix — Play upload key reset:**
+- **`com.spinr.driver`, 2026-08:** registered upload key `B7:F7:…` had no custodian;
+  EAS held `D7:51:…`. Resolved by an upload key reset, not by code.
+- **`com.spinr.user`, 2026-09:** Play's upload key certificate is
+  `D3:C7:7E:B0:…:43:7A`; EAS's single build-credentials set (`xa8QcCZa5i`, alias
+  `9eebacda…c6451`, JKS, uploaded 2026-04-09) is `26:39:10:88:…:7C:DB`. No second
+  credentials set exists in EAS to switch to → §3b.
 
-1. Run `.github/workflows/generate-upload-keystore.yml` (workflow_dispatch, confirm
-   input `generate`). Requires repo secret `KEYSTORE_PASSWORD`, ≥12 chars, vaulted
-   *before* the run — it is unrecoverable afterwards.
-2. Download the run artifact (`upload-keystore.jks` + `upload_certificate.pem`).
-3. Play Console → App integrity → App signing → **Request upload key reset** →
+Fingerprints are public information — recording them here is deliberate, so the next
+mismatch can be compared against history instead of re-derived.
+
+### 3a. First — is the key Play wants still sitting in EAS, just not active?
+
+expo.dev → Project credentials → the application identifier → **Build credentials**.
+If more than one credentials set is listed, one of them may hold the keystore whose
+SHA-1 matches Play. Making that set the default is the whole fix — no reset, no
+waiting on Google.
+
+If there is exactly **one** set and its SHA-1 still does not match Play, that key is
+not in EAS. Check any off-EAS custodian (vault, a prior developer's machine, an old
+CI secret) before assuming it is lost — a recovered `.jks` uploaded to EAS is
+strictly cheaper than a reset. A key alias that is a bare 32-hex string is EAS's
+auto-generated format, i.e. that keystore was minted by EAS rather than uploaded by
+a human — a hint that the Play-side key came from some earlier, separate tooling
+path and was never in EAS at all.
+
+### 3b. Upload key reset — reuse the keystore EAS already has
+
+**Do not mint a new key just to satisfy the reset.** Play only needs a public
+certificate, and the keystore EAS already holds is a valid one to register. Fewer
+moving parts than generating a fresh key, and EAS needs no change at all.
+
+```bash
+cd rider-app   # or driver-app
+eas credentials -p android
+# → select the build profile → Keystore → "Download existing keystore"
+# EAS writes the .jks and prints the keystore password + key alias.
+
+keytool -export -rfc \
+  -keystore <downloaded>.jks \
+  -alias <alias printed by EAS> \
+  -storepass <password printed by EAS> \
+  -file upload_certificate.pem
+```
+
+1. Play Console → App integrity → App signing → **Request upload key reset** →
    upload **only** `upload_certificate.pem`. Never upload the `.jks` to Google.
-4. expo.dev → Credentials → Android → the package → Add new build credentials →
-   upload the `.jks`, make it active.
-5. Vault the `.jks` + password; delete the workflow run artifact.
-6. Wait 1–2 business days for Google to apply the reset, then rebuild + resubmit.
-7. **Record the new upload SHA-1** and redo §4 — the old upload fingerprint is now
-   dead everywhere it was registered.
+2. Wait 1–2 business days for Google to apply it.
+3. Rebuild and resubmit. **Nothing changes in EAS** — it keeps signing with the same
+   keystore, which Play now recognises.
+4. Vault the downloaded `.jks` + password and delete the local copy. The custody gap
+   audit `[23-6]` raised is what produces this failure in the first place.
+
+**Only if EAS's keystore is also unusable** (corrupt, or you want a clean key) run
+`.github/workflows/generate-upload-keystore.yml` instead: workflow_dispatch, confirm
+input `generate`, repo secret `KEYSTORE_PASSWORD` ≥12 chars vaulted *before* the run
+(unrecoverable afterwards). Download the artifact, submit the `.pem` to Play, upload
+the `.jks` to expo.dev as new build credentials and make it active, then delete the
+artifact. Note its `-dname` hardcodes `CN=Spinr Driver Upload Key` — change it if you
+run this for `com.spinr.user`.
+
+### 3c. After any reset
+
+**Record the new upload SHA-1 and redo §4.** The old upload fingerprint is dead
+everywhere it was registered — any Maps or Firebase entry naming it must be updated
+or EAS-distributed builds start failing. The reset does **not** touch the app signing
+key, so Play-distributed installs and anything registered against the app signing
+fingerprint are unaffected.
 
 If instead the app signing key itself is wrong, stop and escalate: it cannot be
 rotated without Play support and it invalidates every device-side signature check.

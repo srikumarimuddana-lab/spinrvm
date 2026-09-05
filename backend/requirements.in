@@ -39,7 +39,7 @@ google-auth>=2.0.0
 # any call to those endpoints would ModuleNotFoundError at runtime
 # AND CI's `pip install --require-hashes` from requirements-locked.txt
 # made the import fail at test-collection time.
-pyotp>=2.9.0
+pyotp>=2.10.0
 
 # HTTP clients
 requests>=2.34.2

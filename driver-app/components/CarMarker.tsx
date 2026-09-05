@@ -15,7 +15,7 @@ import {
     shouldResetBuffer,
     type PlaybackFix,
 } from '@shared/utils/markerPlayback';
-import { smoothFix, type SmoothingState } from '@shared/utils/gpsSmoothing';
+import { smoothFix, isImplausibleJump, type SmoothingState } from '@shared/utils/gpsSmoothing';
 import type { FixFeed, MarkerFix } from '@shared/utils/fixFeed';
 
 const CAR_IMAGES = {
@@ -262,6 +262,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // not within one. Re-seeded (set to null) whenever the buffer itself
     // resets, so a real teleport isn't dragged back toward the old estimate.
     const smoothingStateRef = useRef<SmoothingState | null>(null);
+    // Last RAW (pre-smoothing) fix that passed isImplausibleJump — the
+    // physics baseline the next fix is checked against. Deliberately not
+    // smoothingStateRef (a damped estimate) or bufferRef's tail (already
+    // fed into the playback buffer): this must be the last fix actually
+    // accepted as real, so a run of rejected glitches can never compound
+    // into a baseline that itself drifted away from the truth.
+    const lastAcceptedRawFixRef = useRef<{ latitude: number; longitude: number; timestampMs: number } | null>(null);
     // Latest heading prop, read by the ticker (which must not re-fire per
     // heading change). Synced in an effect, never during render.
     const headingRef = useRef<number | null | undefined>(heading);
@@ -364,6 +371,17 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             Number.isFinite(fix.timestampMs) && Math.abs(now - fix.timestampMs) < 60_000
                 ? fix.timestampMs
                 : now;
+        // Physics-based rejection (Uber Beacon-style, without full sensor
+        // fusion): a fix implying an impossible speed since the last
+        // accepted one is GPS noise/multipath, not a real position — drop it
+        // outright rather than accepting it or letting SNAP_DISTANCE_M below
+        // treat it as a legitimate teleport. Elapsed time is what tells a
+        // real gap (backgrounding, tunnel) apart from a glitch, not distance
+        // alone — see isImplausibleJump's own doc.
+        if (isImplausibleJump(lastAcceptedRawFixRef.current, { ...rawCoord, timestampMs: ts })) {
+            return;
+        }
+        lastAcceptedRawFixRef.current = { ...rawCoord, timestampMs: ts };
         if (shouldResetBuffer(bufferRef.current, rawCoord, SNAP_DISTANCE_M)) {
             bufferRef.current.length = 0;
             // Stale estimate would otherwise drag the newly-reset position

@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
 import { CarMarker } from '../../components/CarMarker';
-import { playbackPosition } from '@shared/utils/markerPlayback';
+import { playbackPosition, pushFix } from '@shared/utils/markerPlayback';
 
 // react-native-maps requires native modules Jest can't load — stub with
 // components that support everything CarMarker actually uses: a ref with
@@ -199,6 +199,73 @@ describe('CarMarker — onBearingChange (shared bearing source for map camera + 
       latitude: 50.446,
       longitude: -104.6189,
     });
+    unmount();
+  });
+});
+
+describe('CarMarker — physics-based jump rejection (ingestFix)', () => {
+  const mockPushFix = pushFix as jest.Mock;
+  const start = { latitude: 50.4452, longitude: -104.6189 };
+  // A realistic epoch anchor: ingestFix falls back to Date.now() whenever a
+  // fix's timestampMs is more than 60s away from it (guards a nonsense
+  // device clock) — fake-timing Date.now() itself to track each render's
+  // intended fixTimestampMs (rather than tiny synthetic values like `1_000`)
+  // is what lets these tests control elapsed real time precisely instead of
+  // depending on how long the test runner actually takes between rerenders.
+  const BASE = 1_700_000_000_000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(BASE);
+    mockPushFix.mockClear();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('drops a fix implying an impossible speed instead of feeding it to the buffer', () => {
+    const { rerender, unmount } = render(
+      <CarMarker coordinate={start} fixTimestampMs={BASE} />,
+    );
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    // ~600m away, 2ms later — several hundred m/s, impossible for a vehicle.
+    jest.setSystemTime(BASE + 2);
+    const glitch = { latitude: start.latitude + 0.0054, longitude: start.longitude };
+    rerender(<CarMarker coordinate={glitch} fixTimestampMs={BASE + 2} />);
+    // ingestFix must have bailed before calling pushFix again.
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it('still accepts a normal, plausible fix update', () => {
+    const { rerender, unmount } = render(
+      <CarMarker coordinate={start} fixTimestampMs={BASE} />,
+    );
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    // ~11m away, 2s later — an ordinary driving-speed segment.
+    jest.setSystemTime(BASE + 2_000);
+    const next = { latitude: start.latitude + 0.0001, longitude: start.longitude };
+    rerender(<CarMarker coordinate={next} fixTimestampMs={BASE + 2_000} />);
+    expect(mockPushFix).toHaveBeenCalledTimes(2);
+
+    unmount();
+  });
+
+  it('accepts a large jump after a real elapsed gap (background/tunnel), not just small moves', () => {
+    const { rerender, unmount } = render(
+      <CarMarker coordinate={start} fixTimestampMs={BASE} />,
+    );
+    expect(mockPushFix).toHaveBeenCalledTimes(1);
+
+    // ~3km away, 5 minutes later — a legitimate gap (~10 m/s average), not a glitch.
+    jest.setSystemTime(BASE + 5 * 60_000);
+    const afterGap = { latitude: start.latitude + 0.027, longitude: start.longitude };
+    rerender(<CarMarker coordinate={afterGap} fixTimestampMs={BASE + 5 * 60_000} />);
+    expect(mockPushFix).toHaveBeenCalledTimes(2);
+
     unmount();
   });
 });

@@ -1746,6 +1746,17 @@ async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: in
     # ride still in driver_assigned is the legitimate timeout — so this check
     # must key on the ride having reached a POST-acceptance state with this
     # driver, never on driver_id alone.
+    #
+    # RESIDUAL, deliberately not closed here: this is a read after the claim,
+    # not part of it, so a window remains — reaper claims the offer, reads the
+    # ride as still `searching`, and only THEN does accept_ride's CAS land. The
+    # winner is still penalised in that ordering. Closing it fully needs the
+    # offer claim and the ride CAS to be one atomic unit (a Postgres function,
+    # the way corporate_wallet_apply_delta does it), which is a schema change
+    # and its own piece of work. What this guard does buy is the common case:
+    # the accept CAS normally lands well before the reaper's read, because the
+    # reaper only runs at/after the 15 s timeout while the accept that races it
+    # arrived just before. Narrower window, same failure if you lose it.
     try:
         _ride_now = await _deps.db_supabase.get_ride(ride_id)
     except Exception:

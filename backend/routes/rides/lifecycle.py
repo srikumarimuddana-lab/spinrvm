@@ -81,10 +81,16 @@ async def rider_start_ride(
     been production-gated since it was added. This one was not, which left an
     OTP-free path from driver_arrived to in_progress: the assigned driver could
     open Period 3 (passenger aboard, full TNC commercial coverage) and start the
-    meter with no rider present, bypassing verify-otp entirely. Neither mobile
-    app calls it — driver-app/store/driverStore.ts uses the /drivers/... routes
-    for both verify-otp and the dev start fallback — so gating it here matches
-    the sibling route without changing any shipped client flow.
+    meter with no rider present, bypassing verify-otp entirely.
+
+    Client callers, checked before gating: driver-app uses the /drivers/...
+    routes for both verify-otp and the dev start fallback
+    (driver-app/store/driverStore.ts). rider-app has a `startRide` store action
+    that does POST this route (rider-app/store/rideStore.ts), but nothing
+    outside its own unit test calls that action — it is unwired dev-simulation
+    code, sitting next to an equally unwired `simulateArrival`, and as a rider
+    token it would already have hit the is_driver 403 below. So no shipped
+    client flow changes here.
     """
     try:
         from ...core.config import settings as _settings

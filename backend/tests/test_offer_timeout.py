@@ -500,10 +500,10 @@ async def test_process_expired_offer_is_idempotent():
             AsyncMock(return_value={"is_available": True}),
         ),
         patch(
-            patch(
-                "backend.routes.rides._deps.db_supabase.get_ride",
-                AsyncMock(return_value={"id": "r", "status": "searching", "driver_id": None}),
-            ),
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "r", "status": "searching", "driver_id": None}),
+        ),
+        patch(
             "backend.routes.rides._deps.db_supabase.get_driver_by_id",
             AsyncMock(return_value=None),
         ),
@@ -561,10 +561,10 @@ async def test_process_expired_offer_auto_offline_at_threshold():
         ),
         patch("backend.routes.rides._deps.db_supabase.set_driver_available", new_callable=AsyncMock) as mock_avail,
         patch(
-            patch(
-                "backend.routes.rides._deps.db_supabase.get_ride",
-                AsyncMock(return_value={"id": "r", "status": "searching", "driver_id": None}),
-            ),
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "r", "status": "searching", "driver_id": None}),
+        ),
+        patch(
             "backend.routes.rides._deps.db_supabase.get_driver_by_id",
             AsyncMock(return_value={"id": "d1", "user_id": "user-1"}),
         ),
@@ -633,10 +633,10 @@ async def test_process_expired_offer_ws_notify_failure_is_swallowed():
             AsyncMock(return_value={"is_available": True}),
         ),
         patch(
-            patch(
-                "backend.routes.rides._deps.db_supabase.get_ride",
-                AsyncMock(return_value={"id": "r", "status": "searching", "driver_id": None}),
-            ),
+            "backend.routes.rides._deps.db_supabase.get_ride",
+            AsyncMock(return_value={"id": "r", "status": "searching", "driver_id": None}),
+        ),
+        patch(
             "backend.routes.rides._deps.db_supabase.get_driver_by_id",
             AsyncMock(return_value={"id": "d1", "user_id": "user-1"}),
         ),

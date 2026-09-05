@@ -56,6 +56,24 @@ function vehicleTypeIconName(icon?: string | null): React.ComponentProps<typeof 
     return (icon && VEHICLE_TYPE_ICON_NAMES[icon]) || 'car';
 }
 
+// Accent color per vehicle type, keyed the same way as the icon map above
+// (see backend/seed_vehicle_types.py: car-compact=Economy, car-sport=Premium,
+// bus=Van, bus-outline=XL) and mirrored in rider-app/app/ride-options.tsx.
+// Used both for the current-selection field above and the picker list below,
+// so the color a driver sees in the field matches the row highlighted when
+// they open the picker.
+const VEHICLE_TYPE_ICON_COLORS: Record<string, string> = {
+    'car-compact': '#3B82F6',
+    'car-sport': '#F59E0B',
+    bus: '#10B981',
+    'bus-outline': '#8B5CF6',
+};
+const DEFAULT_VEHICLE_TYPE_ICON_COLOR = '#6B7280';
+
+function vehicleTypeIconColor(icon?: string | null): string {
+    return (icon && VEHICLE_TYPE_ICON_COLORS[icon]) || DEFAULT_VEHICLE_TYPE_ICON_COLOR;
+}
+
 export default function VehicleInfoScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
@@ -281,8 +299,8 @@ export default function VehicleInfoScreen() {
                             onPress={() => setShowVehicleTypePicker(true)}
                             activeOpacity={0.7}
                         >
-                            <View style={styles.vehicleTypeIconBox}>
-                                <Ionicons name={vehicleTypeIconName(selectedVehicleType?.icon)} size={22} color={colors.primary} />
+                            <View style={[styles.vehicleTypeIconBox, { backgroundColor: vehicleTypeIconColor(selectedVehicleType?.icon) + '15' }]}>
+                                <Ionicons name={vehicleTypeIconName(selectedVehicleType?.icon)} size={22} color={vehicleTypeIconColor(selectedVehicleType?.icon)} />
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.vehicleTypeLabel}>Vehicle Type *</Text>
@@ -423,8 +441,8 @@ export default function VehicleInfoScreen() {
                                     ]}
                                     onPress={() => handleVehicleTypeSelect(item)}
                                 >
-                                    <View style={styles.vehicleTypeOptionIcon}>
-                                        <Ionicons name={vehicleTypeIconName(item.icon)} size={22} color={colors.primary} />
+                                    <View style={[styles.vehicleTypeOptionIcon, { backgroundColor: vehicleTypeIconColor(item.icon) + '15' }]}>
+                                        <Ionicons name={vehicleTypeIconName(item.icon)} size={22} color={vehicleTypeIconColor(item.icon)} />
                                     </View>
                                     <View style={styles.vehicleTypeInfo}>
                                         <Text style={styles.vehicleTypeOptionName}>{item.name}</Text>

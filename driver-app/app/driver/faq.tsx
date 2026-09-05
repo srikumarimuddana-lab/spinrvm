@@ -40,6 +40,17 @@ const CATEGORY_ICONS: Record<string, string> = {
     Technical: 'settings',
     general: 'help-circle',
 };
+// Accent color per category, alongside the icon shapes above, so the
+// section headers read at a glance instead of every icon box sharing the
+// same colors.primary tint.
+const CATEGORY_COLORS: Record<string, string> = {
+    Onboarding: '#8B5CF6',
+    Payments: '#10B981',
+    Documents: '#3B82F6',
+    Technical: '#6B7280',
+    general: '#F59E0B',
+};
+const DEFAULT_CATEGORY_COLOR = '#F59E0B';
 
 export default function FaqScreen() {
     const router = useRouter();
@@ -183,11 +194,11 @@ export default function FaqScreen() {
                         grouped.map(({ category, items }) => (
                             <View key={category} style={styles.categorySection}>
                                 <View style={styles.categoryHeader}>
-                                    <View style={styles.categoryIconBox}>
+                                    <View style={[styles.categoryIconBox, { backgroundColor: (CATEGORY_COLORS[category] ?? DEFAULT_CATEGORY_COLOR) + '15' }]}>
                                         <Ionicons
                                             name={(CATEGORY_ICONS[category] ?? 'help-circle') as any}
                                             size={16}
-                                            color={colors.primary}
+                                            color={CATEGORY_COLORS[category] ?? DEFAULT_CATEGORY_COLOR}
                                         />
                                     </View>
                                     <Text style={styles.categoryTitle}>{category}</Text>

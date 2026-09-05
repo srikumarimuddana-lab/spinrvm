@@ -83,6 +83,26 @@ function vehicleTypeIconName(icon?: string | null): React.ComponentProps<typeof 
   return (icon && VEHICLE_TYPE_ICON_NAMES[icon]) || 'car';
 }
 
+// Accent color per vehicle type, keyed the same way as the icon map above
+// (see backend/seed_vehicle_types.py for the icon-to-tier mapping this
+// mirrors: car-compact=Economy, car-sport=Premium, bus=Van, bus-outline=XL).
+// This is only the fallback shown when a type has no admin-uploaded
+// image_url — but the ride-selection list is the highest-visibility
+// side-by-side comparison screen in the app, so a shared flat color there
+// still flattens the one visual cue (icon shape) fully sighted users have
+// to tell types apart at a glance.
+const VEHICLE_TYPE_ICON_COLORS: Record<string, string> = {
+  'car-compact': '#3B82F6',
+  'car-sport': '#F59E0B',
+  bus: '#10B981',
+  'bus-outline': '#8B5CF6',
+};
+const DEFAULT_VEHICLE_TYPE_ICON_COLOR = '#6B7280';
+
+function vehicleTypeIconColor(icon?: string | null): string {
+  return (icon && VEHICLE_TYPE_ICON_COLORS[icon]) || DEFAULT_VEHICLE_TYPE_ICON_COLOR;
+}
+
 interface SavedCard {
   id: string;
   brand: string;
@@ -1514,11 +1534,11 @@ function AnimatedVehicleCard({
               cachePolicy="disk"
             />
           ) : (
-            <View style={styles.carIconFallback}>
+            <View style={[styles.carIconFallback, { backgroundColor: vehicleTypeIconColor(estimate.vehicle_type.icon) + '15' }]}>
               <Ionicons
                 name={vehicleTypeIconName(estimate.vehicle_type.icon)}
                 size={isSelected && isAvailable ? 60 : 42}
-                color="#666"
+                color={vehicleTypeIconColor(estimate.vehicle_type.icon)}
               />
             </View>
           )}

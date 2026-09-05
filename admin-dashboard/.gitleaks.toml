@@ -88,6 +88,28 @@ paths = ['''\.next/cache/''']
 # three are still caught (not swallowed) once `paths` is gone. Now enforced
 # repo-wide, not just inside these 4 files — a real improvement, not just a
 # reshuffle.
+#
+# 2026-09-05 (issue #4216 follow-up, re-verified against a fresh real
+# `npm run build` + the pinned gitleaks 8.27.2 binary): the `paths` on Entry
+# B below previously listed all 4 manifest files, which is broader than it
+# needs to be — checked the real content of each and only
+# `.next/server/server-reference-manifest.json` ever contains the bare
+# `"encryptionKey"` field. `prerender-manifest.json` and both
+# `middleware-manifest.json` variants only ever contain the three
+# Entry-A-covered names (`previewModeSigningKey`/`previewModeEncryptionKey`,
+# `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`, `__NEXT_PREVIEW_MODE_SIGNING_KEY`,
+# `__NEXT_PREVIEW_MODE_ENCRYPTION_KEY`) — confirmed by grepping the real
+# built files for a bare `"encryptionKey"` key and finding none. So Entry B's
+# `paths` is now narrowed to that one file only: the other 3 are no longer
+# excluded from scanning by anything and get full default-ruleset coverage
+# again, closing 3 of the 4 blind spots this issue found. Verified with a
+# planted canary (a `cloudflare_api_token`-shaped 40-char secret, matching
+# none of the allowlisted regexes) in `prerender-manifest.json`: silently
+# skipped under the old 4-file `paths` list, correctly caught once that file
+# was dropped from it. The same canary planted in
+# `server-reference-manifest.json` is still silently skipped — that one
+# file's blind spot is the genuinely unclosable residual gap from the
+# analysis above, not a regression from this narrowing.
 [[allowlists]]
 description = "Next.js per-build generated preview/server-action keys — safe repo-wide, no path anchor needed"
 regexTarget = "match"
@@ -100,19 +122,23 @@ regexes = [
 # Entry B: the one pattern that genuinely cannot be made regex-only-safe
 # (see the analysis above item 2/3) — the bare `"encryptionKey"` JSON field
 # name `server-reference-manifest.json` actually uses. `paths` is kept here
-# deliberately, with the file-wide-exclusion consequence now documented
-# accurately rather than the previous comment's inaccurate claim that
-# `condition = "AND"` scoped this to matching content only. This is the
-# residual, disclosed gap CR #4216 could not close — filed as its own
-# tracking note rather than silently left as an unexplained known-limitation.
+# deliberately, with the file-wide-exclusion consequence documented
+# accurately (NOT the disproven original claim that `condition = "AND"`
+# scoped this to matching content only — see the block comment above: a
+# `paths`-bearing entry excludes the whole file from every rule, full stop,
+# independent of `condition`/`regexes`). Narrowed 2026-09-05 to only the one
+# file that actually needs it — `prerender-manifest.json` and both
+# `middleware-manifest.json` variants never contain this bare field (verified
+# against a real build; see block comment above) so they no longer need to be
+# named here and are fully scanned again. `server-reference-manifest.json`'s
+# resulting blind spot is the residual, disclosed gap CR #4216 could not
+# close — filed as its own tracking note rather than silently left as an
+# unexplained known-limitation.
 [[allowlists]]
 description = "Next.js Server Actions payload encryptionKey field — cannot safely drop paths, see CR #4216"
 condition = "AND"
 regexTarget = "match"
 paths = [
-  '''\.next/prerender-manifest\.json$''',
-  '''\.next/(server/)?middleware-manifest\.json$''',
-  '''\.next/server/middleware/middleware-manifest\.json$''',
   '''\.next/server/server-reference-manifest\.json$''',
 ]
 regexes = [

@@ -12755,6 +12755,13 @@ record of what was assumed vs. what was actually true</summary>
 - **Action:** confirm `SENTRY_DSN`, `REDIS_URL`/`RATE_LIMIT_REDIS_URL`/`WS_REDIS_URL`,
   Firebase App Check enforcement, and `ENV=production` are set on **both** providers
   (standby drifts silently).
+- **Update (2026-09-04):** the "set on both providers" half of this is now
+  automated — `standby-parity-monitor.yml` checks every name in
+  `deploy/backend-required-env.txt` on both Fly and Railway daily, and
+  `/deploy-info` fingerprints confirm the values match (see C5's same-day
+  update). What remains manual here is Firebase App Check enforcement,
+  which is not an env var, and the one-time setup the monitor needs
+  (`METRICS_AUTH_TOKEN` on both providers + GitHub).
 
 ### C4. Staff MFA rollout comms
 - [ ] **Status:** code shipped; people not yet notified. **Half of the
@@ -12809,6 +12816,37 @@ record of what was assumed vs. what was actually true</summary>
   GitHub Environment protection rule directly — that step will need the
   GitHub UI, or an API token with `admin:repo_hook`/environments scope,
   whenever this is actually actioned.)
+- **Update (2026-09-04, later session) — root cause CORRECTED; detection
+  automated; the fix itself is one dashboard action.** Pulled the actual
+  run history of `deploy-backend.yml`: it is **not** blocked by an
+  Environment protection rule (at least not today). It **runs on every push
+  to `main` and fails in ~30 s** — the last 8 runs (#4196–#4203, all
+  2026-09-04) end at `railway up` with `Invalid RAILWAY_TOKEN. Please check
+  that it is valid and has access to the resource you're trying to use.`
+  The preceding diagnostic step swallowed the same error with `|| true`, so
+  the job log never made it obvious. Whether the environment rule ever
+  existed or was removed is not knowable from here; what is certain is that
+  the `RAILWAY_TOKEN` GitHub secret (set, 50 chars) is rejected by Railway
+  — revoked, expired, or not a Project token. **Fix: rotate the token**
+  (Railway → project → Settings → Tokens → New Token, type *Project Token*;
+  GitHub → Secrets → `RAILWAY_TOKEN`), then `workflow_dispatch`
+  `deploy-backend.yml`. Human action — no session can do it.
+  Shipped on `claude/railways-backup-server-oyo1t2` so this cannot silently
+  recur: `deploy-backend.yml` now fails fast with an actionable message on
+  an invalid token, refuses to deploy while any name in the new
+  `deploy/backend-required-env.txt` is missing on the service (Railway must
+  carry `ENV`/`SUPABASE_REGION`/`SENTRY_DSN` by hand — Fly gets them from
+  `fly.toml`/`deploy-fly.yml`), stamps the commit into the image, and
+  verifies the served sha after deploy; the backend exposes
+  `GET /deploy-info` (build sha + HMAC config fingerprints, bearer
+  `METRICS_AUTH_TOKEN`); and `standby-parity-monitor.yml` runs daily and
+  files a tracked `standby-parity` issue on any drift (names, values,
+  build sha, health). Details and the one-time human setup (token,
+  Railway-only variables, `METRICS_AUTH_TOKEN` on both providers + GitHub):
+  `docs/runbooks/railway-fly-failover.md` → "Standby readiness automation";
+  change log `docs/change-log/2026-09-04-railway-standby-parity-automation.md`.
+  **Still open:** the token rotation itself, then C1's drill (checklist now
+  in the runbook). Re-check the parity issue after both.
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here

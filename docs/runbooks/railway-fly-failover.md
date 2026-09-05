@@ -204,11 +204,13 @@ degrade to per-machine behavior.
 > connection headroom. Failing over during a burst therefore lands
 > burst-sized traffic on a single, much smaller instance.
 >
-> Worse today: Railway's `deploy-backend.yml` is blocked by a GitHub
-> Environment protection rule, so the standby has been silently drifting from
-> `main` (ACTION_ITEMS C5). Verify what commit Railway is actually running
-> before treating it as a viable target, and expect to scale Railway up
-> manually as part of the cutover, not after it.
+> Worse today: Railway's `deploy-backend.yml` has been **failing on every push
+> to `main`** with `Invalid RAILWAY_TOKEN` (confirmed 2026-09-04 from the run
+> logs — not the Environment-protection pause C5 originally recorded), so the
+> standby has been silently drifting from `main` (ACTION_ITEMS C5). Verify what
+> commit Railway is actually running (`/deploy-info`, see "Standby readiness
+> automation" below) before treating it as a viable target, and expect to scale
+> Railway up manually as part of the cutover, not after it.
 
 ## Fail back to Railway
 
@@ -237,3 +239,93 @@ degrade to per-machine behavior.
   production refuses to boot otherwise (PIPEDA).
 - Never put Railway or Fly provider URLs in mobile production builds. Use only the
   `api-spinr.spinr.ca` hostname.
+
+## Standby readiness automation
+
+Added 2026-09-04 (ACTION_ITEMS C5). Until then nothing verified that Railway
+was a standby at all: its deploy workflow had failed on every push for weeks
+(`Invalid RAILWAY_TOKEN`) and nothing could even say which commit Railway was
+running. Three pieces now keep it honest. None of them ever reads a secret
+**value** — only variable names, HTTP status codes, and HMAC fingerprints.
+
+| Piece | Where | What it guarantees |
+|---|---|---|
+| Required-variable list | `deploy/backend-required-env.txt` | Single source of truth for every name that must exist on a production deploy, with scope (`both` / `railway`-only) and the reason. Edit this, never a workflow's inline list. |
+| Railway deploy gate | `.github/workflows/deploy-backend.yml` | Fails **before** building if the token is invalid, or if any required name is missing on the service. After deploy, confirms the served build sha is the commit just pushed. |
+| Fly deploy gate | `.github/workflows/deploy-fly.yml` | Same served-sha confirmation. Both workflows stamp `backend/build_info.json` into the image. |
+| `GET /deploy-info` | `backend/server.py` | Returns `{provider, env, build:{sha,ref,built_at,provider}, fingerprints:{…}}`. Fingerprints are truncated HMAC-SHA256 keyed by `JWT_SECRET` — identical on both providers ⇔ the value is identical. Gated by `Authorization: Bearer <METRICS_AUTH_TOKEN>`; answers 503 when that token is unset. |
+| Daily parity monitor | `.github/workflows/standby-parity-monitor.yml` + `scripts/standby_parity.py` | Every day (and on demand): Railway token valid, required names present on both, one-sided variables, both `/health` green, both serve the same sha, Fly serves `main`, every fingerprint equal. Files one tracked issue (label `standby-parity`), updates it in place, auto-closes it when green; the run itself goes red on CRITICAL. |
+
+### One-time setup a human must do
+
+The automation is dark until these exist. Each is a dashboard action; none
+can be done from the repo.
+
+1. **Rotate `RAILWAY_TOKEN`.** Railway → project → Settings → Tokens → New
+   Token, type **Project Token**. Put it in GitHub → Settings → Secrets →
+   Actions → `RAILWAY_TOKEN`. Then re-run `deploy-backend.yml` via
+   `workflow_dispatch`; its new "Verify RAILWAY_TOKEN is valid" step is the
+   proof.
+2. **Set the Railway-only variables** on the `spinr-backend` service:
+   `ENV=production` and `SUPABASE_REGION=ca-central-1` (Fly gets these from
+   `fly.toml [env]`; `railway.json` cannot carry them). `SENTRY_DSN` too —
+   `deploy-fly.yml` stages it into Fly on every deploy, Railway has no such
+   step. The deploy gate lists anything else missing by name.
+3. **Set `METRICS_AUTH_TOKEN` on both providers** (same value, as a Fly
+   secret and a Railway variable) and as the GitHub Actions secret of the
+   same name. Without it `/deploy-info` answers 503 and the monitor reports
+   build-sha and value parity as "NOT verified" (WARN) — it never fakes a
+   pass. `/metrics` already wants this token in production, so it is likely
+   set on Fly already; copy that value.
+4. **Confirm `BACKEND_HEALTH_URL` and `FLY_HEALTH_URL`** GitHub secrets point
+   at the provider hostnames (`https://<service>.up.railway.app`,
+   `https://spinr-backend-yyz.fly.dev`) — not at `api-spinr.spinr.ca`, which
+   would probe whichever provider the CNAME currently selects and hide the
+   other.
+5. Run the monitor once by hand (Actions → "Standby parity monitor" → Run
+   workflow) and work the issue it opens down to green.
+
+### Reading a finding
+
+- **Railway variables → could not list … Invalid RAILWAY_TOKEN**: no deploy has
+  landed since the token broke. Step 1 above.
+- **missing on Railway: `ENV`, `SUPABASE_REGION`**: the standby would boot in
+  *development* mode — dev OTP bypass `1234` live, every production secret
+  guard skipped, wildcard CORS tolerated. Step 2. Treat as CRITICAL even
+  though `/health` is green.
+- **standby is on a different build**: Railway is serving an older commit.
+  Re-run `deploy-backend.yml`; if it fails, its log names the step.
+- **every fingerprint differs → `JWT_SECRET`**: the two providers mint
+  mutually-invalid tokens; a fail-over logs everyone out at random. Copy the
+  Fly value to Railway exactly (no trailing newline).
+- **values DIFFER … `REDIS_URL`/`RATE_LIMIT_REDIS_URL`/`WS_REDIS_URL`**: the
+  providers are on different Redis instances — rate limits, OTP lockouts,
+  driver presence, WS pub/sub and loop leader locks are split. Re-point to
+  the shared alias per "Shared Redis behind a DNS alias".
+- **Fly only: `X`**: a feature configured on the primary is silently off on the
+  standby. Decide per variable; add it to Railway or accept and note it here.
+
+## Fail-over drill checklist (ACTION_ITEMS C1)
+
+Run in a low-traffic window once the monitor is green. Record real timings
+back into this file.
+
+1. Monitor green on the day (`standby-parity` issue closed, latest run green).
+2. `GET https://<railway>/deploy-info` and `GET https://spinr-backend-yyz.fly.dev/deploy-info`
+   (bearer `METRICS_AUTH_TOKEN`) show the same `build.sha` and it equals
+   `main`'s HEAD.
+3. Railway → service → scale replicas up **before** the switch (Capacity
+   asymmetry note above); confirm `/health` on the Railway host.
+4. Cloudflare: point the `api-spinr.spinr.ca` CNAME at the Railway domain.
+   Note the time. Watch `dig api-spinr.spinr.ca` until it resolves to Railway.
+5. Through `https://api-spinr.spinr.ca`: `/health`, `/deploy-info` (provider
+   must now read `railway`), rider login (OTP), driver go-online, one ride
+   search → accept → live WebSocket updates on both apps, a Stripe test
+   webhook (must process exactly once).
+6. Watch Railway logs, Sentry, and the loop watchdog for 15 minutes. Both
+   providers run every background loop; leader locks are only shared if the
+   Redis alias is genuinely shared (fingerprints equal in step 2).
+7. Fail back: CNAME → Fly. Repeat step 5 (provider must read `fly`).
+8. Scale Railway back down. Write timings and surprises below.
+
+Drill log: _(none yet)_

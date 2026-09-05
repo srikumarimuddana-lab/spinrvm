@@ -29,6 +29,10 @@ Three things are covered here:
    built a bare ``$in`` over the whole candidate pool (caps at 500). This one
    deliberately does NOT reuse ``get_rows_batched_in`` — see its class
    docstring below for why a same-named-attribute wrapper was required.
+4. ``services.dispatch_service.DispatchService._get_active_subscriptions_batched``
+   — the identical unbatched ``$in`` pattern in the one call site #4926 (item 3
+   above) explicitly flagged as a known, unfixed follow-up (different file,
+   not part of that incident's traced call chain). Fixed per #4949.
 
 All DB access is mocked — no real Supabase call is made.
 """
@@ -256,6 +260,90 @@ class TestGetActiveSubscriptionsBatched:
         batched, calls = self._install({}, monkeypatch)
 
         out = await batched([], "driver_id")
+
+        assert out == []
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# services.dispatch_service.DispatchService._get_active_subscriptions_batched
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchServiceGetActiveSubscriptionsBatched:
+    """Same failure class, fourth call site (#4949, follow-up to #4926).
+
+    ``DispatchService.find_candidate_drivers`` is a class method with its own
+    injected ``self.db``, so — unlike ``matching.py``'s module-level function
+    above, which had to preserve a same-named-attribute mock — this one is
+    tested directly against a ``DispatchService`` instance and a plain
+    ``AsyncMock`` for ``db.get_rows``. A pool under the batch size still makes
+    exactly one call with the exact pre-fix arguments, so every pre-existing
+    ``find_candidate_drivers`` test (``tests/services/test_dispatch_service.py``)
+    needed no changes for this fix.
+    """
+
+    @staticmethod
+    def _service(rows_by_id: dict):
+        from unittest.mock import AsyncMock
+
+        from services.dispatch_service import DispatchService
+
+        calls: list = []
+
+        async def _fake_get_rows(table, filters, *, columns="*", limit=None):
+            ids = filters["driver_id"]["$in"]
+            calls.append(
+                {
+                    "table": table,
+                    "ids": list(ids),
+                    "status": filters.get("status"),
+                    "columns": columns,
+                    "limit": limit,
+                }
+            )
+            return [row for i in ids for row in rows_by_id.get(i, [])]
+
+        db = AsyncMock()
+        db.get_rows = AsyncMock(side_effect=_fake_get_rows)
+        return DispatchService(db), calls
+
+    async def test_dispatch_pool_cap_is_split_into_url_safe_batches(self):
+        """500 candidates — the dispatch pool's own cap — must not go out as one $in."""
+        ids = [_uid(i) for i in range(500)]
+        rows = {i: [{"driver_id": i, "rides_per_day": None}] for i in ids}
+        svc, calls = self._service(rows)
+
+        out = await svc._get_active_subscriptions_batched(ids, "driver_id,started_at,expires_at,rides_per_day")
+
+        assert len(out) == 500, "every candidate's subscription row must still be resolved"
+        assert len(calls) > 1, "500 ids must be split across requests, not sent as one $in"
+        widest = max(len(c["ids"]) for c in calls)
+        assert widest * _CHARS_PER_ID < _URL_SAFE_CHARS, (
+            f"widest request carries {widest} ids (~{widest * _CHARS_PER_ID} chars) — "
+            "that is the request line the edge proxy rejects"
+        )
+        assert all(c["table"] == "driver_subscriptions" for c in calls)
+        assert all(c["status"] == "active" for c in calls)
+        assert all(c["columns"] == "driver_id,started_at,expires_at,rides_per_day" for c in calls)
+
+    async def test_small_pool_makes_exactly_one_call(self):
+        """The common case — every pre-existing dispatch test — is unchanged."""
+        ids = [_uid(i) for i in range(3)]
+        rows = {i: [{"driver_id": i}] for i in ids}
+        svc, calls = self._service(rows)
+
+        out = await svc._get_active_subscriptions_batched(ids, "driver_id,rides_per_day")
+
+        assert len(out) == 3
+        assert len(calls) == 1, "a pool under the batch size must issue exactly one request, as before this fix"
+        assert calls[0]["ids"] == ids
+        assert calls[0]["limit"] == 3
+
+    async def test_empty_pool_issues_no_query(self):
+        svc, calls = self._service({})
+
+        out = await svc._get_active_subscriptions_batched([], "driver_id")
 
         assert out == []
         assert calls == []

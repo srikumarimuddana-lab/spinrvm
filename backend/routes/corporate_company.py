@@ -919,6 +919,11 @@ def _aggregate_rows(rows: list[dict]) -> dict:
     allowance_total = _ZERO
     master_total = _ZERO
     tax_total = _ZERO
+    # #4074: tip_total is a breakdown of allowance_total + master_total
+    # (both stay tip-inclusive, matching the 2026-09-05 "keep billing the
+    # company" decision), not an additional charge — same relationship
+    # tax_total already has to those two totals below.
+    tip_total = _ZERO
     tax_by_type: dict[str, Decimal] = {}
     by_member: dict[str, dict] = {}
     for r in rows:
@@ -926,6 +931,7 @@ def _aggregate_rows(rows: list[dict]) -> dict:
         md = _d(r.get("master_fallback_amount"))
         allowance_total += ad
         master_total += md
+        tip_total += _d(r.get("tip_amount"))
         tax = _d(r.get("tax_amount"))
         tax_total += tax
         breakdown = r.get("tax_breakdown") or {}
@@ -965,6 +971,7 @@ def _aggregate_rows(rows: list[dict]) -> dict:
         "master_total": _money_str(master_total),
         "total": _money_str(total),
         "avg_fare": _money_str(total / len(rows)) if rows else "0.00",
+        "tip_total": _money_str(tip_total),
         "tax_total": _money_str(tax_total),
         "tax_by_type": {label: _money_str(amt) for label, amt in tax_by_type.items()},
         "by_member": by_member_out,

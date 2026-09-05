@@ -610,7 +610,7 @@ export default function CloudMessagingPage() {
                             <CardContent className="space-y-3">
                                 <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
                                     <div className="flex items-center gap-2.5"><Megaphone className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">This is marketing</span></div>
-                                    <Switch checked={form.is_marketing} onCheckedChange={(v) => setForm({ ...form, is_marketing: v })} />
+                                    <Switch aria-label="This is marketing" checked={form.is_marketing} onCheckedChange={(v) => setForm({ ...form, is_marketing: v })} />
                                 </div>
                                 {form.is_marketing ? (
                                     <p className="text-xs text-muted-foreground">
@@ -632,15 +632,15 @@ export default function CloudMessagingPage() {
                             <CardContent className="space-y-3">
                                 <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
                                     <div className="flex items-center gap-2.5"><Bell className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">Push Notification</span></div>
-                                    <Switch id="ch-push" checked={form.send_push} onCheckedChange={(v) => setForm({ ...form, send_push: v })} />
+                                    <Switch id="ch-push" aria-label="Push Notification" checked={form.send_push} onCheckedChange={(v) => setForm({ ...form, send_push: v })} />
                                 </div>
                                 <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
                                     <div className="flex items-center gap-2.5"><Mail className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">Email</span></div>
-                                    <Switch id="ch-email" checked={form.send_email} onCheckedChange={(v) => setForm({ ...form, send_email: v })} />
+                                    <Switch id="ch-email" aria-label="Email" checked={form.send_email} onCheckedChange={(v) => setForm({ ...form, send_email: v })} />
                                 </div>
                                 <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
                                     <div className="flex items-center gap-2.5"><Phone className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">SMS</span></div>
-                                    <Switch id="ch-sms" checked={form.send_sms} onCheckedChange={(v) => setForm({ ...form, send_sms: v })} />
+                                    <Switch id="ch-sms" aria-label="SMS" checked={form.send_sms} onCheckedChange={(v) => setForm({ ...form, send_sms: v })} />
                                 </div>
                             </CardContent>
                         </Card>
@@ -653,7 +653,7 @@ export default function CloudMessagingPage() {
                             <CardContent className="space-y-3">
                                 <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
                                     <div className="flex items-center gap-2.5"><Calendar className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">Schedule for later</span></div>
-                                    <Switch checked={form.is_scheduled} onCheckedChange={(v) => setForm({ ...form, is_scheduled: v })} />
+                                    <Switch aria-label="Schedule for later" checked={form.is_scheduled} onCheckedChange={(v) => setForm({ ...form, is_scheduled: v })} />
                                 </div>
                                 {form.is_scheduled && (
                                     <div className="space-y-1.5">

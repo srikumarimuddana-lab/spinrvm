@@ -130,9 +130,11 @@ async def test_no_teleport_for_a_small_jump_in_the_same_window():
 
 
 @pytest.mark.asyncio
-async def test_no_teleport_check_once_the_window_has_elapsed():
-    # Same large jump, but the previous point is stale (>= TELEPORT_MIN_SECONDS
-    # old) -- outside the window, so the jump is not flagged as teleportation.
+async def test_large_jump_still_flagged_past_the_narrow_window_via_computed_speed():
+    # #1231 Finding 11: the previous point is stale (>= TELEPORT_MIN_SECONDS
+    # old), so the narrow distance-only check no longer applies -- but the
+    # ~100km jump over just 10s is still ~36,000 km/h, so the computed-speed
+    # check (extended coverage past the narrow window) must still catch it.
     now = 1_800_000_000.0
     prev_raw = f"50.00,-104.00,{now - li.TELEPORT_MIN_SECONDS}"
     with (
@@ -141,6 +143,25 @@ async def test_no_teleport_check_once_the_window_has_elapsed():
         patch.object(li.time, "time", lambda: now),
     ):
         trusted, reason = await li.check_location_integrity("driver_1", 51.00, -104.00, accuracy=10)
+    assert trusted is False
+    assert reason == "teleport"
+
+
+@pytest.mark.asyncio
+async def test_realistic_sustained_speed_past_the_narrow_window_is_not_flagged():
+    # Same "past the narrow window" territory, but a plausible highway speed
+    # (2km in 30s = 240 km/h... use a safer 1.5km/30s = 180 km/h) must pass --
+    # the computed-speed check must not over-trigger on ordinary driving just
+    # because it now covers longer elapsed windows too.
+    now = 1_800_000_000.0
+    prev_raw = f"50.4500,-104.6200,{now - 30}"
+    with (
+        patch.object(li, "redis_get", AsyncMock(return_value=prev_raw)),
+        patch.object(li, "redis_set", AsyncMock()),
+        patch.object(li.time, "time", lambda: now),
+    ):
+        # ~1.5km east of the previous point at this latitude.
+        trusted, reason = await li.check_location_integrity("driver_1", 50.4500, -104.5990, accuracy=10)
     assert trusted is True
     assert reason is None
 

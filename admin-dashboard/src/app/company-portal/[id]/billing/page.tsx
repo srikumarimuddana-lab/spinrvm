@@ -62,6 +62,7 @@ function toCSV(statement: BillingStatement): string {
         "source_type",
         "allowance_debit_amount",
         "master_fallback_amount",
+        "tip_amount",
         "tax_amount",
         "policy_check_result",
         "created_at",
@@ -80,6 +81,7 @@ function toCSV(statement: BillingStatement): string {
                 r.source_type,
                 r.allowance_debit_amount,
                 r.master_fallback_amount,
+                r.tip_amount ?? "",
                 r.tax_amount ?? "",
                 r.policy_check_result ?? "",
                 r.created_at,
@@ -267,6 +269,14 @@ export default function BillingPage() {
                     label="Master fallback"
                     value={formatCAD(summary?.master_total)}
                     sub="Overflow debits"
+                />
+                {/* #4074: rider tips on corporate rides stay billed to the
+                    company (included in Allowance + Master above) — this is
+                    a breakdown for transparency, not an additional charge. */}
+                <Metric
+                    label="Tips"
+                    value={formatCAD(summary?.tip_total)}
+                    sub="Included in totals above"
                 />
                 {/* Corporate + admin portal review, round 2: "no GST/PST
                     breakdown on corporate statements" — for input-tax-credit

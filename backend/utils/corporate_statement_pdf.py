@@ -149,6 +149,9 @@ def generate_corporate_statement_pdf(company: dict, statement: dict) -> bytes:
     section_heading("SUMMARY")
     line_item("Member allowance debits", money("allowance_total"))
     line_item("Company master wallet fallback", money("master_total"))
+    # #4074: informational breakdown, same relationship tax has to the two
+    # totals above -- included in them, not additional to "Total" below.
+    line_item("Includes rider tips", money("tip_total"))
     tax_by_type = summary.get("tax_by_type") or {}
     if isinstance(tax_by_type, dict) and tax_by_type:
         for label, amount in tax_by_type.items():
@@ -218,8 +221,11 @@ def generate_corporate_statement_pdf(company: dict, statement: dict) -> bytes:
         pdf.cell(W, 6, "No rides in this period.", border=0, ln=True)
         pdf.set_text_color(*ink)
     else:
-        cols = [22, 40, 24, 26, 26, 20, 22]  # date, member, source, allowance, master, tax, ride
-        heads = ["Date", "Member", "Source", "Allowance", "Master", "Tax", "Ride"]
+        # #4074: added a Tip column (breakdown of Allowance+Master, not
+        # additive) -- shrank Date/Member/Ride by 2/12/2mm respectively to
+        # make room for it at 16mm, keeping the row at the fixed W=180 total.
+        cols = [20, 28, 24, 26, 26, 16, 20, 20]  # date, member, source, allowance, master, tip, tax, ride
+        heads = ["Date", "Member", "Source", "Allowance", "Master", "Tip", "Tax", "Ride"]
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_fill_color(*header_bg)
         for width, head in zip(cols, heads, strict=True):
@@ -229,7 +235,7 @@ def generate_corporate_statement_pdf(company: dict, statement: dict) -> bytes:
                 head,
                 border=0,
                 fill=True,
-                align="R" if head in ("Allowance", "Master", "Tax") else "L",
+                align="R" if head in ("Allowance", "Master", "Tip", "Tax") else "L",
             )
         pdf.ln()
         pdf.set_font("Helvetica", "", 7.5)
@@ -243,8 +249,9 @@ def generate_corporate_statement_pdf(company: dict, statement: dict) -> bytes:
             pdf.cell(cols[2], 5.5, source, border=0)
             pdf.cell(cols[3], 5.5, f"$ {row.get('allowance_debit_amount') or '0.00'}", border=0, align="R")
             pdf.cell(cols[4], 5.5, f"$ {row.get('master_fallback_amount') or '0.00'}", border=0, align="R")
-            pdf.cell(cols[5], 5.5, f"$ {row.get('tax_amount') or '0.00'}", border=0, align="R")
-            pdf.cell(cols[6], 5.5, ride_id, border=0, ln=True)
+            pdf.cell(cols[5], 5.5, f"$ {row.get('tip_amount') or '0.00'}", border=0, align="R")
+            pdf.cell(cols[6], 5.5, f"$ {row.get('tax_amount') or '0.00'}", border=0, align="R")
+            pdf.cell(cols[7], 5.5, ride_id, border=0, ln=True)
         hidden = len(line_items) - _MAX_LINE_ITEM_ROWS
         if hidden > 0:
             pdf.set_font("Helvetica", "I", 8)

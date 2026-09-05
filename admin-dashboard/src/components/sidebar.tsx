@@ -293,6 +293,17 @@ function SidebarInner() {
     // change; the collapsed icon-rail mode (collapsed store state) already
     // flattened children as sibling icons and is untouched by this.
     const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+    // #4998: a deterministic, DOM-observable signal that the localStorage
+    // read above has run (successfully or not) — set on both paths so a
+    // waiter never blocks forever on a thrown/blocked read. `isOpen` below
+    // is already correct on the very first render (expandedGroups starts
+    // `{}`, so it falls back to the route-based default before this effect
+    // ever fires), but a test capturing a screenshot has no way to know
+    // that from the outside without either reading application internals
+    // or waiting on a fixed timeout — which is exactly what let a
+    // CI-runner-specific rendering discrepancy go undetected (see
+    // e2e/visual-regression.spec.ts's use of this attribute).
+    const [navHydrated, setNavHydrated] = useState(false);
     useEffect(() => {
         try {
             const raw = localStorage.getItem("spinr-admin-nav-expanded");
@@ -300,6 +311,8 @@ function SidebarInner() {
         } catch {
             // Private-window/blocked storage: falls back to the route-based
             // default computed at render time (see isOpen below).
+        } finally {
+            setNavHydrated(true);
         }
     }, []);
     const toggleGroup = (href: string, next: boolean) => {
@@ -371,7 +384,7 @@ function SidebarInner() {
 
             {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" role="button" tabIndex={0} aria-label="Close navigation menu" onClick={() => setMobileOpen(false)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMobileOpen(false); } }} />}
 
-            <nav aria-label="Admin navigation" className={cn(
+            <nav aria-label="Admin navigation" data-nav-hydrated={navHydrated} className={cn(
                 "fixed inset-y-0 left-0 z-40 flex flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200 md:translate-x-0",
                 collapsed ? "w-[68px]" : "w-60",
                 mobileOpen ? "translate-x-0 w-60" : "-translate-x-full md:translate-x-0"

@@ -750,6 +750,14 @@ async def charge_late_corporate_tip(
                             "master_fallback_amount": _f(
                                 _d(existing.get("master_fallback_amount") or 0) + collected_via_master
                             ),
+                            # #4074: a late tip is still a tip — without this,
+                            # tip_amount would under-report by exactly the
+                            # amount collected here, the same under-reporting
+                            # bug this whole block exists to prevent for
+                            # allowance_debit_amount/master_fallback_amount.
+                            "tip_amount": _f(
+                                _d(existing.get("tip_amount") or 0) + collected_via_allowance + collected_via_master
+                            ),
                         },
                     )
                 else:
@@ -1085,6 +1093,32 @@ async def settle_corporate(
         )
 
     total = _round(_d(str(total_charge)))
+    # #4074: tip stays billed to the company (2026-09-05 product decision --
+    # matches the existing 2026-08-17 late-tip precedent) so `total` below
+    # continues to drive the allowance/master debit split unchanged. What
+    # was missing was REPORTING: the tip figure never reached
+    # ride_payment_sources as its own column, and the tip-inclusive `total`
+    # was fed into completion-phase policy evaluation as `final_fare` even
+    # though the booking-phase evaluation of the identical max_fare_per_ride
+    # rule uses `estimated_fare`, which never includes a tip (it doesn't
+    # exist yet at booking time) -- a generous tip could flip a ride from
+    # policy-compliant to a false-positive fare-cap violation purely because
+    # of a discretionary gratuity, not the trip cost the policy is about.
+    # `fare_only` restores that booking/completion consistency; it does NOT
+    # change what the company is charged.
+    tip_for_reporting = _round(_d(str(tip_amount)))
+    fare_only = total - tip_for_reporting
+    if fare_only < 0:
+        # Defensive only -- payments.py always builds total_charge as fare +
+        # tip, so tip should never exceed total. Never let a bad input push
+        # a negative figure into policy evaluation or the invoice line item.
+        logger.error(
+            "[PAYMENT] tip {} exceeds total {} for ride {} -- clamping fare_only to 0 for reporting",
+            tip_for_reporting,
+            total,
+            ride_id,
+        )
+        fare_only = _round(Decimal("0"))
     if allowance.get("type") == "unlimited":
         allowance_debit = total
         master_debit = _round(Decimal("0"))
@@ -1250,6 +1284,10 @@ async def settle_corporate(
             "source_type": "company_allowance",
             "allowance_debit_amount": _f(allowance_debit),
             "master_fallback_amount": _f(master_debit),
+            # #4074: reported separately for invoice/statement transparency.
+            # Not an additional charge -- always <= allowance_debit_amount +
+            # master_fallback_amount, both of which remain tip-inclusive.
+            "tip_amount": _f(tip_for_reporting),
             "member_id": membership["id"],
             "company_id": company_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1325,7 +1363,10 @@ async def settle_corporate(
         )
 
     completion_ctx = {
-        "final_fare": _f(total),
+        # fare_only, not total -- see #4074 note above the allowance/master
+        # split: max_fare_per_ride must evaluate the same quantity at both
+        # booking (estimated_fare, never tip-inclusive) and completion.
+        "final_fare": _f(fare_only),
         "phase": "completion",
         "allowance": allowance,
     }
@@ -1363,6 +1404,17 @@ async def settle_corporate(
     # R44 (ACTION_ITEMS.md N15): advance warning / exhaustion notice. Never
     # blocks or alters settlement (already committed above) — a push failure
     # here must not turn a successful ride payment into an error response.
+    #
+    # #4074 considered-but-rejected: excluding the tip from this threshold
+    # check too. remaining_before/remaining_after already reflect the TRUE
+    # post-debit balance (tip stays company-billed per the product
+    # decision), so the notification is accurate as-is. Computing the
+    # crossing on a fare-only debit instead would understate how much
+    # allowance the member actually has left — a worse outcome than the
+    # issue's original complaint, since it could let someone over-spend
+    # believing they have more room than they do. Left unchanged; only the
+    # invoice/statement reporting and policy fare-cap evaluation above
+    # needed the tip excluded.
     if allowance_applied and allowance.get("type") != "unlimited":
         try:
             await _notify_allowance_threshold(

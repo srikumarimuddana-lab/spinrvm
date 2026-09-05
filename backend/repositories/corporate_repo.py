@@ -1030,6 +1030,8 @@ async def list_company_ride_payment_sources(
 
     Each row is the source of truth for a work ride's billing split:
     allowance_debit_amount + master_fallback_amount = total billed to company.
+    tip_amount (migration 407, #4074) is a breakdown of that total, not an
+    additional charge -- always <= allowance_debit_amount + master_fallback_amount.
     """
     upper = offset + max(limit, 1) - 1
 

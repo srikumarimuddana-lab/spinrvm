@@ -91,10 +91,10 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
                     </select>
                 </Field>
                 <Field label="From">
-                    <input type="date" className="border rounded-lg px-3 py-2 text-sm bg-background" value={start} onChange={(e) => setStart(e.target.value)} />
+                    <input aria-label="From date" type="date" className="border rounded-lg px-3 py-2 text-sm bg-background" value={start} onChange={(e) => setStart(e.target.value)} />
                 </Field>
                 <Field label="To">
-                    <input type="date" className="border rounded-lg px-3 py-2 text-sm bg-background" value={end} onChange={(e) => setEnd(e.target.value)} />
+                    <input aria-label="To date" type="date" className="border rounded-lg px-3 py-2 text-sm bg-background" value={end} onChange={(e) => setEnd(e.target.value)} />
                 </Field>
                 {(serviceAreaId || start || end) && (
                     <button

@@ -1634,6 +1634,7 @@ function RiderCreatedAtBackfillSection() {
                         ref={fileInputRef}
                         type="file"
                         accept=".csv,text/csv"
+                        aria-label="Rider CSV for date backfill scan"
                         className="max-w-xs"
                         onChange={(e) => {
                             setFile(e.target.files?.[0] ?? null);

@@ -100,7 +100,7 @@ export default function TrendsPage() {
                 actions={
                     <div className="flex flex-wrap items-center gap-2">
                         <Select value={assignee} onValueChange={setAssignee}>
-                            <SelectTrigger className="w-44"><SelectValue placeholder="Assignee" /></SelectTrigger>
+                            <SelectTrigger className="w-44" aria-label="Filter by assignee"><SelectValue placeholder="Assignee" /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All assignees</SelectItem>
                                 {agents.map((a) => (
@@ -111,7 +111,7 @@ export default function TrendsPage() {
                             </SelectContent>
                         </Select>
                         <Select value={days} onValueChange={setDays}>
-                            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-32" aria-label="Time range"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="7">Last 7 days</SelectItem>
                                 <SelectItem value="14">Last 14 days</SelectItem>

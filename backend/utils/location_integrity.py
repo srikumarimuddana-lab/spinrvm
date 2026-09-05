@@ -6,9 +6,22 @@ and billing logic can act accordingly.
 
 Checks:
 1. Mock flag (Android `mocked=true` forwarded by client)
-2. Impossible speed (> 300 km/h between consecutive points)
+2. Client-reported impossible speed (> 300 km/h self-reported `speed` field)
 3. Accuracy sanity (0 or > 500 m — GPS chipsets don't produce these normally)
-4. Teleportation (> 10 km jump in < 10 s)
+4. Position-derived impossible speed against the previous known point:
+   - Teleportation (> 10 km jump in < 10 s) for closely-spaced points, or
+   - Computed speed (haversine distance / elapsed time) > 300 km/h for any
+     longer window up to the caller's own lookback horizon (#1231 Finding
+     11: closes the gap where a spoofed point spread over a longer window
+     could evade the narrow <10s check as long as the client's *self-
+     reported* `speed` (check 2) lied convincingly — this is derived from
+     the position delta instead, independent of anything the client claims)
+
+Checks 2 and 4 are deliberately separate: 2 trusts the client's own `speed`
+field as a cheap early-exit; 4 is the one server-verifiable signal that
+doesn't depend on the client reporting anything honestly at all. A modified
+app can always lie about `speed`/`accuracy`/`mocked` — it cannot make two
+real position fixes closer together in space or further apart in time.
 """
 
 from __future__ import annotations
@@ -80,15 +93,27 @@ def evaluate_gps_plausibility(
     if speed is not None and speed > (MAX_SPEED_KMH / 3.6):
         return False, "impossible_speed"
 
-    if (
-        prev_lat is not None
-        and prev_lng is not None
-        and elapsed_seconds is not None
-        and 0 < elapsed_seconds < TELEPORT_MIN_SECONDS
-    ):
+    if prev_lat is not None and prev_lng is not None and elapsed_seconds is not None and elapsed_seconds > 0:
         dist = _haversine_km(prev_lat, prev_lng, lat, lng)
-        if dist > TELEPORT_THRESHOLD_KM:
-            return False, "teleport"
+        if elapsed_seconds < TELEPORT_MIN_SECONDS:
+            if dist > TELEPORT_THRESHOLD_KM:
+                return False, "teleport"
+        else:
+            # #1231 Finding 11: the distance-only check above only covers
+            # elapsed < TELEPORT_MIN_SECONDS. A sustained jump spread over a
+            # longer window (e.g. 50km in 60s, 3000 km/h) previously sailed
+            # through untouched as long as the client's self-reported
+            # `speed` field lied convincingly -- this computes actual speed
+            # from the position delta instead of trusting that claim, for
+            # every elapsed window up to the caller's own cache/lookback
+            # horizon. MAX_SPEED_KMH (300) at exactly TELEPORT_MIN_SECONDS
+            # implies an ~833m minimum distance to trigger here -- clear of
+            # realistic GPS jitter even at the generous MAX_ACCURACY_METERS
+            # (500m) cutoff, and the required distance only grows as
+            # elapsed_seconds grows, so this stays conservative throughout.
+            computed_speed_kmh = (dist / elapsed_seconds) * 3600
+            if computed_speed_kmh > MAX_SPEED_KMH:
+                return False, "teleport"
 
     return True, None
 
@@ -130,16 +155,33 @@ async def check_location_integrity(
             if len(parts) == 3:
                 prev_lat, prev_lng, prev_ts = float(parts[0]), float(parts[1]), float(parts[2])
                 elapsed = time.time() - prev_ts
-                if 0 < elapsed < TELEPORT_MIN_SECONDS:
+                if elapsed > 0:
                     dist = _haversine_km(prev_lat, prev_lng, lat, lng)
-                    if dist > TELEPORT_THRESHOLD_KM:
-                        logger.warning(
-                            "[location_integrity] teleport detected driver=%s dist=%.1fkm elapsed=%.1fs",
-                            driver_id,
-                            dist,
-                            elapsed,
-                        )
-                        return False, "teleport"
+                    if elapsed < TELEPORT_MIN_SECONDS:
+                        if dist > TELEPORT_THRESHOLD_KM:
+                            logger.warning(
+                                "[location_integrity] teleport detected driver=%s dist=%.1fkm elapsed=%.1fs",
+                                driver_id,
+                                dist,
+                                elapsed,
+                            )
+                            return False, "teleport"
+                    else:
+                        # #1231 Finding 11 — see evaluate_gps_plausibility's
+                        # matching branch for the full rationale/threshold
+                        # analysis; this mirrors it exactly so the two never
+                        # drift.
+                        computed_speed_kmh = (dist / elapsed) * 3600
+                        if computed_speed_kmh > MAX_SPEED_KMH:
+                            logger.warning(
+                                "[location_integrity] implausible sustained speed driver=%s dist=%.1fkm "
+                                "elapsed=%.1fs computed_speed=%.0fkmh",
+                                driver_id,
+                                dist,
+                                elapsed,
+                                computed_speed_kmh,
+                            )
+                            return False, "teleport"
     except Exception as exc:
         logger.debug("[location_integrity] redis_get failed: %s", exc)
 

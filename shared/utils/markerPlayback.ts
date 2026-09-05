@@ -213,10 +213,39 @@ export function playbackPosition(
     return { coordinate: first, bearing: null, mode: 'waiting', speedMps: null };
   }
 
-  // Past the newest fix: dead-reckon along the last segment's velocity.
+  // Past the newest fix: dead-reckon along the last segment's velocity, but
+  // shrink how far into the future that's trusted when the two most recent
+  // segments show the car slowing down. MIN_EXTRAPOLATION_SPEED_MPS above
+  // only catches a car that was ALREADY slow/idling before the gap began —
+  // it does nothing for the far more common case of braking to a stop FROM
+  // real driving speed: the last buffered segment still reads well above
+  // that threshold, so the full cap gets used and the marker visibly drives
+  // on through the stop before snapping back once a real (stationary) fix
+  // lands or the cap expires ("went on, then came back" — live-testing
+  // report 2026-09-05). There's no reported instantaneous speed in this
+  // pipeline to know a car has JUST stopped, but a falling speed trend
+  // across the last two segments is a cheap, no-new-data signal that a stop
+  // may be close — so the extrapolation window is scaled down proportionally
+  // to that trend (never lengthened, only ever shortened or left as-is).
   const overshootMs = renderTimeMs - newest.timestampMs;
   const prev = buffer.length >= 2 ? buffer[buffer.length - 2] : null;
-  if (prev && overshootMs <= maxExtrapolationMs) {
+  const priorToPrev = buffer.length >= 3 ? buffer[buffer.length - 3] : null;
+  let effectiveMaxExtrapolationMs = maxExtrapolationMs;
+  if (prev && priorToPrev) {
+    const priorSegMs = prev.timestampMs - priorToPrev.timestampMs;
+    const priorSegM = distanceMeters(
+      priorToPrev.latitude, priorToPrev.longitude, prev.latitude, prev.longitude,
+    );
+    const priorSpeed = priorSegMs > 0 ? (priorSegM / priorSegMs) * 1000 : 0;
+    const lastSegMs = newest.timestampMs - prev.timestampMs;
+    const lastSegM = distanceMeters(prev.latitude, prev.longitude, newest.latitude, newest.longitude);
+    const lastSpeed = lastSegMs > 0 ? (lastSegM / lastSegMs) * 1000 : 0;
+    if (priorSpeed > 0) {
+      const decelRatio = Math.min(1, lastSpeed / priorSpeed);
+      effectiveMaxExtrapolationMs = maxExtrapolationMs * decelRatio;
+    }
+  }
+  if (prev && overshootMs <= effectiveMaxExtrapolationMs) {
     const segMs = newest.timestampMs - prev.timestampMs;
     const segM = distanceMeters(prev.latitude, prev.longitude, newest.latitude, newest.longitude);
     const speed = segMs > 0 ? (segM / segMs) * 1000 : 0;

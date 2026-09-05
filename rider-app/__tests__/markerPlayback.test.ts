@@ -89,6 +89,41 @@ describe('playbackPosition', () => {
     expect(p.coordinate.longitude).toBeCloseTo(-104.63 + 0.00003, 10);
   });
 
+  it('shrinks the extrapolation window when the last two segments show deceleration', () => {
+    // seg 10s->12s: 0.001 deg (~71m) in 2s ≈ 35.5 m/s. seg 12s->14s: 0.0001
+    // deg (~7.1m) in 2s ≈ 3.55 m/s — braking hard. Neither segment alone
+    // trips MIN_EXTRAPOLATION_SPEED_MPS (both well above 1.5 m/s), so
+    // without the deceleration-aware shrink this would extrapolate all the
+    // way to the full 1.5s cap — reproducing "went on, then came back" for
+    // a car braking to a stop from real speed (live-testing report
+    // 2026-09-05), which the pre-existing near-stopped-segment guard above
+    // does not cover (that guard only catches a car ALREADY slow/idling
+    // before the gap began).
+    const decelerating: PlaybackFix[] = [fix(10, 0), fix(12, 0.001), fix(14, 0.0011)];
+    // 300ms overshoot: comfortably under the full 1.5s cap, but should be
+    // shrunk well past by the ~10x speed drop (ratio ≈ 3.55/35.5 ≈ 0.1 →
+    // effective cap ≈ 150ms).
+    const p = playbackPosition(decelerating, 14_300)!;
+    expect(p.mode).toBe('holding');
+    expect(p.coordinate.longitude).toBeCloseTo(-104.63 + 0.0011, 10);
+  });
+
+  it('does not shrink (or lengthen) the window when speed is steady or increasing', () => {
+    // seg 10s->12s slower, seg 12s->14s faster — accelerating, not
+    // decelerating. The window must stay at the full cap.
+    const accelerating: PlaybackFix[] = [fix(10, 0), fix(12, 0.0001), fix(14, 0.0011)];
+    const p = playbackPosition(accelerating, 14_300)!;
+    expect(p.mode).toBe('extrapolating');
+  });
+
+  it('uses the full (unshrunk) window when there is no earlier segment to compare against', () => {
+    // Only 2 fixes buffered — nothing to detect a deceleration trend from.
+    // Must behave exactly as before this fix: full cap, normal extrapolation.
+    const twoFixes: PlaybackFix[] = [fix(10, 0), fix(14, 0.0004)];
+    const p = playbackPosition(twoFixes, 15_000)!;
+    expect(p.mode).toBe('extrapolating');
+  });
+
   it('reports the bracketing segment ground speed while interpolating', () => {
     const p = playbackPosition(buf, 12_000)!;
     // 0.0004 deg lng ≈ 28.4 m at lat 50.44, over 4 s ≈ 7.1 m/s.

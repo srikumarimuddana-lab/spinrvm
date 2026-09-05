@@ -411,7 +411,20 @@ async def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
     )
     fees_total = _d(fees_result.get("fees_total", 0))
     tax_amount = _d(fees_result.get("tax_amount", 0))
-    grand_total = _round(new_total + fees_total + tax_amount)
+    # N3 (2026-09-05 director review): this omitted `- discount`, unlike the
+    # settlement recompute in services/fare_service.py:468. Editing stops on a
+    # promo ride therefore silently re-added the discount to what the rider is
+    # charged (settlement charges the stored grand_total, routes/rides/payments.py),
+    # while the receipt still rendered the -$X promo line (_ride_receipt_lines
+    # below) — the charge and the disclosed line items no longer matched, which
+    # is the "every charge maps to a disclosed line item" rule in CLAUDE.md.
+    discount = _d(ride.get("discount_amount") or 0)
+    # Clamp at zero. fare_service.py has no clamp because its fare only ever
+    # grows relative to the booked one, but stops can be *removed* here
+    # (DELETE /{ride_id}/stops/{index}), which shrinks the fare — a ride whose
+    # remaining fare falls below the promo would otherwise produce a negative
+    # grand_total and a negative charge.
+    grand_total = max(_round(new_total + fees_total + tax_amount - discount), _d(0))
 
     result = {
         "distance_km": round(new_distance_km, 2),

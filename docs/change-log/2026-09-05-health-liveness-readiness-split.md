@@ -173,7 +173,7 @@ hitting a 404, and reverting the gates alone leaves a dead-DB build promotable.
 Without a redeploy, the runtime behaviour can be restored by editing
 `fly.toml`'s `[[http_service.checks]] path` to `/ready` and re-deploying —
 which is itself a deploy, so there is genuinely **no zero-deploy rollback** for
-the routing半 of this change. That is acceptable because the change only ever
+the routing half of this change. That is acceptable because the change only ever
 makes the probe *more* permissive: it cannot cause an outage it would not have
 had before, only fail to prevent one.
 

@@ -19,16 +19,23 @@ and built-in WebSocket support.
       build source.
     - Choose a service name (e.g., `backend`).
 4.  **Set Variables**:
-    Set secrets via `railway variables set KEY=VALUE` or in the dashboard:
+    The complete list of names a production deploy needs — and which of them
+    Railway must carry that Fly gets from `fly.toml` (`ENV`, `SUPABASE_REGION`)
+    — is `deploy/backend-required-env.txt`; the deploy workflow refuses to
+    deploy while any is missing. Set them in the dashboard or with the CLI
+    (v4 syntax is `railway variables --set`):
     ```bash
-    railway variables set \
-      SUPABASE_URL="your_supabase_url" \
-      SUPABASE_KEY="your_supabase_service_role_key" \
-      FIREBASE_SERVICE_ACCOUNT_JSON='{"type": "service_account", ...}' \
-      JWT_SECRET="your_strong_jwt_secret" \
-      RATE_LIMIT_REDIS_URL="$REDIS_URL"
+    railway variables --service spinr-backend \
+      --set SUPABASE_URL="your_supabase_url" \
+      --set SUPABASE_SERVICE_ROLE_KEY=<paste-from-supabase-settings-api> \
+      --set "FIREBASE_SERVICE_ACCOUNT_JSON=$(cat firebase-sa.json)" \
+      --set JWT_SECRET="your_strong_jwt_secret" \
+      --set ENV=production \
+      --set SUPABASE_REGION=ca-central-1 \
+      --set RATE_LIMIT_REDIS_URL="$REDIS_URL"
     ```
-    *Note: The Firebase JSON must be minified (on one line) or enclosed in single quotes.*
+    *Note: the backend reads `SUPABASE_SERVICE_ROLE_KEY` (`backend/core/config.py`); a variable named `SUPABASE_KEY` is ignored and production refuses to boot.*
+    *Note: `firebase-sa.json` is the service-account file downloaded from Firebase, minified to one line; pipe it from the file as shown so no shell quoting touches the embedded double quotes (same caveat as `fly secrets set` in `docs/runbooks/railway-fly-failover.md`). It must stay raw JSON, not base64.*
     *Note: `RATE_LIMIT_REDIS_URL` should point at the Railway Redis plugin (or Upstash).*
 5.  **Deploy**:
     ```bash

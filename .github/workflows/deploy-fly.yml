@@ -43,6 +43,9 @@ jobs:
     env:
       FLY_APP: spinr-backend-yyz
       FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+      # Optional: the backend's own METRICS_AUTH_TOKEN. With FLY_HEALTH_URL it
+      # enables the post-deploy "is the new SHA actually serving" check.
+      METRICS_AUTH_TOKEN: ${{ secrets.METRICS_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -87,6 +90,17 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+
+      # Stamp the commit into the image so the running replica can report it
+      # (backend/utils/build_info.py → GET /deploy-info). The standby-parity
+      # monitor compares this against Railway's to detect standby drift
+      # (ACTION_ITEMS.md C5). Written into backend/ = the Docker build context.
+      - name: Stamp build info
+        run: |
+          printf '{"sha":"%s","ref":"%s","built_at":"%s","provider":"fly"}\n' \
+            "${GITHUB_SHA}" "${GITHUB_REF}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > backend/build_info.json
+          cat backend/build_info.json
 
       # Rolling deploy (strategy=rolling, max_unavailable=1 in fly.toml). New
       # machines must pass the /health check before old ones are replaced, so a
@@ -139,4 +153,24 @@ jobs:
           echo "::error::Health check timed out after 3 minutes."
           echo "Fly keeps the previous release in traffic on a failed rolling deploy."
           echo "Inspect with: flyctl status -a spinr-backend-yyz && flyctl logs -a spinr-backend-yyz"
+          exit 1
+
+      # A green /health only proves *something* is serving. This proves it is
+      # THIS commit: /deploy-info returns the build stamp written above. Skipped
+      # (not failed) when either optional secret is absent.
+      - name: Verify the deployed build SHA is serving
+        if: ${{ env.FLY_HEALTH_URL != '' && env.METRICS_AUTH_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do
+            running=$(curl -sf --max-time 5 -H "Authorization: Bearer ${METRICS_AUTH_TOKEN}" \
+              "${FLY_HEALTH_URL}/deploy-info" | jq -r '.build.sha // empty' 2>/dev/null || true)
+            echo "  attempt ${i}/12 → running sha: ${running:-<none>}"
+            if [ "${running}" = "${GITHUB_SHA}" ]; then
+              echo "Fly is serving ${GITHUB_SHA}."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Stale build serving::Fly /deploy-info reports sha '${running:-<none>}', expected ${GITHUB_SHA}. Inspect with: flyctl releases -a ${FLY_APP}"
           exit 1

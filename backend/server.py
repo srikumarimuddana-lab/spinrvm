@@ -295,6 +295,91 @@ async def metrics(request: _Request) -> _MetricsResponse:
     )
 
 
+# ── Deploy provenance + config parity fingerprints ────────────────────────────
+# Consumed by .github/workflows/standby-parity-monitor.yml, which calls this on
+# BOTH the Fly primary and the Railway warm standby and diffs the results. It
+# answers the two questions ADR-007 requires to hold for the standby to be
+# real, and that nothing previously exposed: (1) which commit of main is each
+# provider actually running, and (2) are the production secrets byte-identical
+# across providers (a JWT_SECRET mismatch logs users out at random; a Redis URL
+# mismatch silently splits rate limits / OTP lockouts / WS pub-sub / leader
+# locks). See docs/runbooks/railway-fly-failover.md → "Standby readiness
+# automation".
+#
+# Nothing here ever returns a config VALUE. Each field is reduced to a
+# truncated HMAC-SHA256 keyed by JWT_SECRET, so a response reveals only
+# "same on both providers or not". Unset fields are reported as null (not the
+# HMAC of ""), so "missing on one side" is distinguishable from "differs". A
+# JWT_SECRET mismatch changes the key and therefore every row — the monitor
+# reads an all-rows-differ result as exactly that.
+#
+# Gated by the same METRICS_AUTH_TOKEN bearer as /metrics, but stricter: no
+# query-string token, and fail-closed in EVERY environment (503 when unset),
+# not just production — there is no local-dev use case for this endpoint.
+_PARITY_FIELDS: tuple[str, ...] = (
+    "ENV",
+    "JWT_SECRET",
+    "OTP_PEPPER",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_REGION",
+    "ADMIN_EMAIL",
+    "ADMIN_PASSWORD",
+    "FIREBASE_SERVICE_ACCOUNT_JSON",
+    "FIREBASE_DRIVER_APP_ID",
+    "FIREBASE_RIDER_APP_ID",
+    "REDIS_URL",
+    "RATE_LIMIT_REDIS_URL",
+    "WS_REDIS_URL",
+    "ALLOWED_ORIGINS",
+    "PUBLIC_API_BASE_URL",
+    "TRACKING_BASE_URL",
+    "PORTAL_BASE_URL",
+    "BREAK_GLASS_TOKEN_HASH",
+    "REVIEW_LOGIN_ACCOUNTS",
+    "DISPATCH_POOL_DSN",
+    "sentry_dsn",
+)
+_PARITY_FINGERPRINT_HEX_CHARS = 16
+
+
+def _config_fingerprints() -> dict:
+    import hashlib
+
+    key = (settings.JWT_SECRET or "").encode("utf-8")
+    out: dict = {}
+    for name in _PARITY_FIELDS:
+        value = getattr(settings, name, None)
+        if value is None or value == "":
+            out[name] = None
+            continue
+        digest = hmac.new(key, f"{name}:{value}".encode("utf-8"), hashlib.sha256).hexdigest()
+        out[name] = digest[:_PARITY_FINGERPRINT_HEX_CHARS]
+    return out
+
+
+@app.get("/deploy-info")
+async def deploy_info(request: _Request):
+    from fastapi import HTTPException
+
+    _token = _metrics_token()
+    if not _token:
+        raise HTTPException(status_code=503, detail="deploy-info endpoint not configured")
+    auth = request.headers.get("authorization", "")
+    presented = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not hmac.compare_digest(presented, _token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from utils.build_info import detect_provider, load_build_info
+
+    return {
+        "provider": detect_provider(),
+        "env": settings.ENV,
+        "build": load_build_info(),
+        "fingerprints": _config_fingerprints(),
+    }
+
+
 # Initialize middleware
 init_middleware(app)
 

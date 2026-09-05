@@ -1,0 +1,53 @@
+# Backend environment variables that MUST be present on a production deploy.
+#
+# Single source of truth for two workflows (never edit one list without the
+# other — that is how the standby drifted in the first place, ACTION_ITEMS C5):
+#   .github/workflows/deploy-backend.yml        — Railway: fails the deploy if any
+#                                                  scope=both / scope=railway name
+#                                                  is missing from the service.
+#   .github/workflows/standby-parity-monitor.yml — daily: checks Railway AND Fly
+#                                                  and files a tracked issue on
+#                                                  drift.
+# (bootstrap-fly.yml carries its own copy of the scope=both list — keep in sync.)
+#
+# Format: one variable per line, `NAME SCOPE`, `#` comments and blank lines
+# ignored. Values are NEVER read by these workflows — presence of the NAME
+# only. Value parity across providers is checked separately, at runtime,
+# through the backend's /deploy-info fingerprints (backend/server.py).
+#
+# SCOPE:
+#   both     — must exist on Fly (as a `fly secrets` entry) AND on Railway (as a
+#              service variable). Must be byte-identical across the two.
+#   railway  — must exist on Railway only. Fly gets these from the [env] table
+#              in backend/fly.toml, which Railway has no equivalent of
+#              (railway.json cannot carry env vars), so on Railway they are
+#              ordinary dashboard variables that are easy to forget.
+#
+# Why each one is required is documented where it is enforced:
+#   backend/core/config.py         _guard_production_secrets
+#   backend/core/middleware.py     _validate_production_config
+
+# ── Secrets: identical on both providers (ADR-007 "secret parity") ────────────
+SUPABASE_URL both
+SUPABASE_SERVICE_ROLE_KEY both
+JWT_SECRET both
+ADMIN_EMAIL both
+ADMIN_PASSWORD both
+FIREBASE_SERVICE_ACCOUNT_JSON both
+FIREBASE_DRIVER_APP_ID both
+FIREBASE_RIDER_APP_ID both
+REDIS_URL both
+RATE_LIMIT_REDIS_URL both
+WS_REDIS_URL both
+ALLOWED_ORIGINS both
+# Staged into Fly by deploy-fly.yml from the GitHub secret on every deploy;
+# Railway has no such step, so it must be set on the service by hand.
+SENTRY_DSN both
+
+# ── Non-secret config Fly reads from fly.toml [env]; Railway must set by hand ──
+# core/config.py refuses to boot in production without SUPABASE_REGION, and
+# every production guard above is skipped entirely unless ENV=production — a
+# Railway service missing ENV would boot "healthy" in development mode with
+# wildcard-tolerant CORS, dev OTP bypass "1234", and no secret-strength checks.
+ENV railway
+SUPABASE_REGION railway

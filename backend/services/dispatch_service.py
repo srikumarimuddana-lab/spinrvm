@@ -66,6 +66,11 @@ DEFAULT_MAX_CANDIDATE_POOL = 500
 #: written by some other path cannot reach the query as-is.
 MIN_CANDIDATE_POOL = 50
 MAX_CANDIDATE_POOL = 500
+#: Mirrors repositories._base's _IN_BATCH_SIZE (same edge-proxy URL-length
+#: ceiling, same 150 figure) and routes/rides/matching.py's identical
+#: constant — not imported from either to avoid a new cross-module
+#: dependency on a private constant for a single int.
+_SUBSCRIPTION_IN_BATCH_SIZE = 150
 
 
 def rank_by_eta_with_acceptance(
@@ -299,6 +304,38 @@ class DispatchService:
     def __init__(self, db):
         self.db = db
 
+    async def _get_active_subscriptions_batched(self, driver_ids: List[str], columns: str) -> List[Dict[str, Any]]:
+        """Fetch active ``driver_subscriptions`` rows for ``driver_ids``, batched.
+
+        2026-09-03 incident (#4926): a bare ``{"driver_id": {"$in": driver_ids}}``
+        renders as a PostgREST ``col=in.(…)`` URL query parameter. Once the
+        candidate pool (capped at up to 500 by ``max_candidate_pool``, migration
+        404) is large enough, the edge proxy in front of PostgREST rejects the
+        oversized URL with a plain-text 400 before PostgREST ever sees it —
+        surfacing as the opaque ``APIError: JSON could not be generated``, the
+        same failure class ``repositories._base``'s ``get_rows_batched_in``/
+        ``_IN_BATCH_SIZE`` documents and #4926 fixed for the three call sites in
+        ``routes/rides/matching.py`` (mirrored here per #4949's follow-up).
+
+        Loops ``self.db.get_rows`` in place (same call the one existing caller
+        already makes) rather than switching to that shared helper, so every
+        test mocking ``db.get_rows`` keeps working unchanged for the small
+        pools they use — a small pool makes exactly one iteration here,
+        identical to before this change. Only a real, large candidate pool is
+        actually split across requests.
+        """
+        out: List[Dict[str, Any]] = []
+        for i in range(0, len(driver_ids), _SUBSCRIPTION_IN_BATCH_SIZE):
+            chunk = driver_ids[i : i + _SUBSCRIPTION_IN_BATCH_SIZE]
+            rows = await self.db.get_rows(
+                "driver_subscriptions",
+                {"driver_id": {"$in": chunk}, "status": "active"},
+                columns=columns,
+                limit=len(chunk),
+            )
+            out.extend(rows or [])
+        return out
+
     async def resolve_matching_config(
         self,
         ride: Dict[str, Any],
@@ -482,11 +519,10 @@ class DispatchService:
                     _svc_sub_required = bool(_parent and _parent.get("subscription_required"))
 
                 candidate_ids = [d["id"] for d in rows]
-                active_subs = await self.db.get_rows(
-                    "driver_subscriptions",
-                    {"driver_id": {"$in": candidate_ids}, "status": "active"},
-                    columns="driver_id,started_at,expires_at,rides_per_day",
-                    limit=len(candidate_ids),
+                # Batched — see _get_active_subscriptions_batched's docstring
+                # (2026-09-03 incident, #4926/#4949).
+                active_subs = await self._get_active_subscriptions_batched(
+                    candidate_ids, "driver_id,started_at,expires_at,rides_per_day"
                 )
                 _now = datetime.now(timezone.utc)
                 subscribed_ids = set()

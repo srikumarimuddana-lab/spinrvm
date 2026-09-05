@@ -59,7 +59,7 @@ google-generativeai>=0.8.6
 # so the server boots and tests pass when they are absent — the AI assistant
 # ships dark behind app_settings.ai_assistant_enabled until the lockfile is
 # regenerated per docs/runbooks/dependency-update.md.
-anthropic>=0.40.0
+anthropic>=1.3.0
 openai>=1.60.0
 mcp>=1.9.0
 google-api-python-client>=2.194.0

@@ -16,6 +16,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TouchableOpacity, Text, Alert } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 const mockT = (key: string) => key;
 const mockLanguageState = { t: mockT };
@@ -107,6 +108,33 @@ describe('EmergencyContactsScreen', () => {
   it('shows the empty state when there are no contacts', async () => {
     const r = await renderScreen();
     expect(allText(r)).toContain('emergencyContacts.noContacts');
+  });
+
+  it('gives different relationships distinct icons and accent colors', async () => {
+    mockApiGet.mockResolvedValue({
+      data: {
+        contacts: [
+          { id: 'c1', name: 'Jane Doe', phone: '3065551234', relationship: 'Spouse' },
+          { id: 'c2', name: 'Sam Doe', phone: '3065555678', relationship: 'Friend' },
+        ],
+      },
+    });
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    const spouseIcon = icons.find((n) => n.props.name === 'heart');
+    const friendIcon = icons.find((n) => n.props.name === 'person-outline');
+    expect(spouseIcon).toBeTruthy();
+    expect(friendIcon).toBeTruthy();
+    expect(spouseIcon!.props.color).not.toBe(friendIcon!.props.color);
+  });
+
+  it('falls back to a neutral icon/color for an unrecognized relationship', async () => {
+    mockApiGet.mockResolvedValue({
+      data: { contacts: [{ id: 'c3', name: 'Alex Doe', phone: '3065559999', relationship: 'Neighbor' }] },
+    });
+    const r = await renderScreen();
+    const icons = r.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'person-circle-outline')).toBe(true);
   });
 
   it('formats a 10-digit phone number', async () => {

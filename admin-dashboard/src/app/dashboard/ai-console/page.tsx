@@ -549,7 +549,7 @@ export default function AiConsolePage() {
                                 aria-label="Message as this user"
                                 disabled={!target || sending}
                             />
-                            <Button onClick={() => send()} disabled={!target || sending || !input.trim()}>
+                            <Button onClick={() => send()} disabled={!target || sending || !input.trim()} aria-label="Send message">
                                 <Send className="h-4 w-4" />
                             </Button>
                         </div>

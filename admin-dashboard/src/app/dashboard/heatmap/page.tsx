@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, RefreshCw, Users, Car, Building2, AlertTriangle, TrendingUp, TrendingDown, MapPin } from "lucide-react";
 import Link from "next/link";
 import { useAuthStore } from "@/store/authStore";
@@ -379,6 +379,17 @@ export default function HeatMapPage() {
                                     <TabsTrigger value="corporate" className="flex-1">Corporate</TabsTrigger>
                                     <TabsTrigger value="regular" className="flex-1">Regular</TabsTrigger>
                                 </TabsList>
+                                {/* Used as a segmented filter, not real per-tab panels -- the
+                                    `filter` state drives the map query directly, elsewhere on
+                                    this page. Radix's TabsTrigger still generates aria-controls
+                                    pointing at a same-value TabsContent regardless, so without
+                                    these the attribute referenced a nonexistent element
+                                    (axe aria-valid-attr-value, #2803). Empty panels satisfy the
+                                    ARIA contract with no visual change -- Radix mounts only the
+                                    active one, and it has no children to render. */}
+                                <TabsContent value="all" />
+                                <TabsContent value="corporate" />
+                                <TabsContent value="regular" />
                             </Tabs>
                         </div>
 

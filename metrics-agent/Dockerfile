@@ -32,7 +32,17 @@ RUN apt-get update \
 COPY config.alloy /etc/alloy/config.alloy
 COPY discover-targets.sh /usr/local/bin/discover-targets.sh
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/discover-targets.sh /usr/local/bin/entrypoint.sh \
+# Strip any CRLF line endings before chmod/exec. A shell script checked out
+# on Windows can get \r\n endings from git's line-ending conversion, which
+# corrupts the #!/bin/sh shebang line (the kernel looks for an interpreter
+# literally named "/bin/sh\r" and fails with "No such file or directory" --
+# a confusing error since the file plainly exists). Confirmed via a real
+# `fly deploy` from a Windows machine, 2026-09-05: the image built fine but
+# every machine start failed with exactly that error. Normalizing here in
+# the build makes this immune to the committer's/checkout's line-ending
+# behavior entirely, rather than relying on .gitattributes alone.
+RUN sed -i 's/\r$//' /usr/local/bin/discover-targets.sh /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/discover-targets.sh /usr/local/bin/entrypoint.sh \
     && mkdir -p /etc/alloy \
     && touch /etc/alloy/targets.json \
     && chown -R alloy:alloy /etc/alloy 2>/dev/null || true

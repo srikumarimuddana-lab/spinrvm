@@ -13414,13 +13414,18 @@ record of what was assumed vs. what was actually true</summary>
   scaffolding merged** (PR #4055, 2026-08-17 — standalone `metrics-agent/`
   Fly app running Grafana Alloy, scrape config, dashboard panel, and the
   first 2 ADR-010 §3 alert rules, all committed as inert/undeployed
-  config). **Not yet live** — nothing scrapes or alerts in production until
-  a human completes the 8 steps `metrics-agent/README.md` lists (Grafana
-  Cloud account, `fly apps create`/`fly deploy` for the new app, 4 Fly
-  secrets, image-digest pin, Grafana rule import, smoke test). Tracked as
+  config); **`grafana/alloy` base image digest-pinned** (PR #5026,
+  2026-09-05 — was the one item PR #4055 left tag-only; resolved via a real
+  Docker Hub registry API call, not fabricated). **Not yet live** — nothing
+  scrapes or alerts in production until a human completes the remaining 7
+  steps `metrics-agent/README.md` lists (Grafana Cloud account, `fly apps
+  create`/`fly deploy` for the new app, 4 Fly secrets, Grafana rule import,
+  smoke test — digest pin no longer on this list). Tracked as
   **CR-2026-008**, issue
   [#3295](https://github.com/srikumarimuddana-lab/spinrvm/issues/3295)
-  (left open by design — see issue comments 2026-08-17).
+  (left open by design — see issue comments 2026-08-17 through 2026-09-05;
+  repo owner has since agreed to provide Grafana Cloud + Fly deploy access
+  to close out the remaining steps).
 - **What's wrong:** `backend/utils/metrics.py` is per-process only (its own
   docstring says so — no cross-replica aggregation, no exporter sidecar).
   `CLAUDE.md`'s P95 SLA table (dispatch offer→accept < 2s, fare calc < 300ms,
@@ -13449,12 +13454,12 @@ record of what was assumed vs. what was actually true</summary>
 - **Constraints:** the merged config still needs, before it does anything in
   production: (1) a Grafana Cloud account + remote-write API key, (2) `fly
   apps create`/`fly deploy` for the new `spinr-metrics-agent-yyz` app
-  (doesn't exist on Fly yet), (3) 4 Fly secrets on that new app, (4) the
-  `grafana/alloy` image's real digest pin (currently tag-only —
-  `metrics-agent/Dockerfile` has no registry access to resolve it from a
-  sandboxed session), (5) importing `metrics-agent/grafana/*.{json,yaml}`
-  into the real Grafana Cloud account and pointing its alert contact point
-  at the real `ALERT_WEBHOOK_URL`, (6) a smoke test against real traffic.
+  (doesn't exist on Fly yet), (3) 4 Fly secrets on that new app, (4)
+  importing `metrics-agent/grafana/*.{json,yaml}` into the real Grafana
+  Cloud account and pointing its alert contact point at the real
+  `ALERT_WEBHOOK_URL`, (5) a smoke test against real traffic. (The
+  `grafana/alloy` image's digest pin — previously constraint (4) here — was
+  closed by PR #5026, 2026-09-05.)
 - **Risk if left undone:** none of `CLAUDE.md`'s SLA/KPI numbers are
   verified; a real dispatch-latency or payment-failure regression during
   live app testing would only surface via user complaints/support tickets,
@@ -13463,10 +13468,10 @@ record of what was assumed vs. what was actually true</summary>
   payment/auth business logic — but see the Dockerfile/Trivy risk above if
   the colocated-agent option is chosen; otherwise routine additive-deploy
   risk only.
-- **Effort estimate:** config/code is done (PR #4055); remaining work is
-  account/deploy steps a human executes directly against Fly + Grafana
-  Cloud — likely under an hour of hands-on time once access exists, plus
-  Grafana Cloud account lead time and a smoke-test observation window.
+- **Effort estimate:** config/code is done (PR #4055, PR #5026); remaining
+  work is account/deploy steps a human executes directly against Fly +
+  Grafana Cloud — likely under an hour of hands-on time once access exists,
+  plus Grafana Cloud account lead time and a smoke-test observation window.
 - **Verification once implemented:** confirm the Grafana dashboard panel
   populates from real production traffic, confirm the 2 alert rules don't
   false-fire against normal load. `docker-image-scan` (Trivy) is

@@ -69,7 +69,11 @@ jest.mock('react-native-maps', () => {
     // fitToCoordinates/animateToRegion pair, silently discarding whatever
     // had just been called on the previous instance before a test could
     // assert on it.
-    ReactActual.useImperativeHandle(ref, () => ({ fitToCoordinates: jest.fn(), animateToRegion: jest.fn() }), []);
+    ReactActual.useImperativeHandle(
+      ref,
+      () => ({ fitToCoordinates: jest.fn(), animateToRegion: jest.fn(), animateCamera: jest.fn() }),
+      [],
+    );
     return ReactActual.createElement('MapView', props, props.children);
   });
   const Polygon = (props: any) =>
@@ -919,5 +923,75 @@ describe('map recenter control', () => {
       mapView.props.onRegionChange({ latitudeDelta: 0.02, longitudeDelta: 0.03 });
     });
     expect(mockDashboardState.currentRegionRef.current).toEqual({ latitudeDelta: 0.02, longitudeDelta: 0.03 });
+  });
+});
+
+describe('follow-camera throttle (CAMERA_ANIM_MS coalescing)', () => {
+  // rideState defaults to 'idle' (a COURSE_UP_RIDE_STATES member) and
+  // CarMarker is mocked to `() => null`, so onBearingChange/onPositionChange
+  // never fire — camBearingRef and markerPosRef stay null throughout, which
+  // means the effect's `center` is always exactly the current location's
+  // raw coords (no ahead-offset applied). That makes each animateCamera
+  // call's center a direct, assertable proxy for which location update it
+  // was fired for.
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('fires the first camera update immediately on mount (leading edge)', async () => {
+    await renderScreen();
+    expect(mockDashboardState.mapRef.current.animateCamera).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces location updates arriving within the throttle window into one trailing call', async () => {
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    expect(animateCamera).toHaveBeenCalledTimes(1);
+
+    // Two more fixes arrive 100ms apart — well under the 700ms window. iOS's
+    // distanceFilter-based watchPositionAsync has no time floor (see the
+    // effect's own comment in index.tsx), so this is a realistic cadence
+    // during driving, not a contrived one.
+    act(() => {
+      mockDashboardState.location = { coords: { latitude: 52.1001, longitude: -106.6, heading: 0 } };
+      jest.advanceTimersByTime(100);
+      r.update(<DriverDashboardScreen />);
+    });
+    expect(animateCamera).toHaveBeenCalledTimes(1); // still throttled — no second call yet
+
+    act(() => {
+      mockDashboardState.location = { coords: { latitude: 52.1002, longitude: -106.6, heading: 0 } };
+      jest.advanceTimersByTime(100);
+      r.update(<DriverDashboardScreen />);
+    });
+    expect(animateCamera).toHaveBeenCalledTimes(1); // still coalesced
+
+    // Advance past the remaining window (700ms - 200ms elapsed so far).
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+    expect(animateCamera).toHaveBeenCalledTimes(2);
+    // The trailing call must carry the LATEST location, not the first
+    // update's — a fast-changing position must never be silently dropped.
+    const lastCall = animateCamera.mock.calls[animateCamera.mock.calls.length - 1][0];
+    expect(lastCall.center.latitude).toBeCloseTo(52.1002, 4);
+  });
+
+  it('fires immediately again once the throttle window has fully elapsed with no pending update', async () => {
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    expect(animateCamera).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      jest.advanceTimersByTime(800); // past CAMERA_ANIM_MS, nothing pending
+    });
+    act(() => {
+      mockDashboardState.location = { coords: { latitude: 52.11, longitude: -106.6, heading: 0 } };
+      r.update(<DriverDashboardScreen />);
+    });
+    expect(animateCamera).toHaveBeenCalledTimes(2); // leading edge again, no wait
   });
 });

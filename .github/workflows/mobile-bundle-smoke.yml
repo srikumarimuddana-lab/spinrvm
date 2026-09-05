@@ -62,7 +62,15 @@ jobs:
           # --frozen-lockfile`, or switch to the restore/save split used in
           # mobile-dep-check.yml — a post-mutation save under this shared key
           # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
-          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
+          #
+          # v2- bump (2026-09-05, CR-2026-031): a *separate* stale/poisoned entry
+          # under this same key was found independently of the incident above --
+          # every PR touching rider-app/driver-app was failing here (and in the 2
+          # Playwright E2E jobs) at Metro bundle time on `@sentry/replay`, even
+          # though yarn.lock has had the correct @sentry/* sub-packages since PR
+          # #4921. The v2- prefix orphans the old entry so a clean install is
+          # forced once; drop it once confirmed stable.
+          key: ${{ runner.os }}-v2-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -96,7 +104,15 @@ jobs:
           # --frozen-lockfile`, or switch to the restore/save split used in
           # mobile-dep-check.yml — a post-mutation save under this shared key
           # poisoned rider-app-test repo-wide on 2026-08-28 (mixed jest tree).
-          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
+          #
+          # v2- bump (2026-09-05, CR-2026-031): a *separate* stale/poisoned entry
+          # under this same key was found independently of the incident above --
+          # every PR touching rider-app/driver-app was failing here (and in the 2
+          # Playwright E2E jobs) at Metro bundle time on `@sentry/replay`, even
+          # though yarn.lock has had the correct @sentry/* sub-packages since PR
+          # #4921. The v2- prefix orphans the old entry so a clean install is
+          # forced once; drop it once confirmed stable.
+          key: ${{ runner.os }}-v2-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile

@@ -253,6 +253,17 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // Where the marker was last animated TO (snapped when on-route) — the
     // travel-bearing fallback measures from here, not the raw prev fix.
     const prevTargetRef = useRef<TrackingLatLng>(coordinate);
+    // The last route segment the marker snapped to — passed back into
+    // snapToRoute as its continuity hint (see vehicleTracking.ts) so a
+    // momentary nearby-but-wrong-direction segment (a divided road, an
+    // out-and-back street, a crossing street at an intersection) can't win
+    // the nearest-distance search and flip the bearing 90–180° for one tick.
+    // Not explicitly reset on a route refresh: snapToRoute's own fallback
+    // (an unrestricted search whenever the continuity window finds nothing
+    // within maxSnapMeters) already covers a stale index from a genuinely
+    // different route, without losing continuity on the common case of a
+    // live-route poll re-fetching the same path.
+    const lastRouteSegmentIndexRef = useRef<number | null>(null);
     // Timestamped fix queue the playback ticker consumes. Seeded lazily on
     // first ingest so the initializer stays pure.
     const bufferRef = useRef<PlaybackFix[]>([]);
@@ -458,8 +469,16 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             if (!p) return;
 
             // Snap the played-back position onto the route when close enough;
-            // otherwise render it raw (off-route/detour honesty).
-            const snap = snapToRoute(p.coordinate, routeRef.current, MAX_ROUTE_SNAP_M);
+            // otherwise render it raw (off-route/detour honesty). Passes the
+            // last snapped segment as a continuity hint (see
+            // lastRouteSegmentIndexRef's own doc comment above).
+            const snap = snapToRoute(
+                p.coordinate,
+                routeRef.current,
+                MAX_ROUTE_SNAP_M,
+                lastRouteSegmentIndexRef.current,
+            );
+            lastRouteSegmentIndexRef.current = snap?.segmentIndex ?? null;
             const target = snap?.coordinate ?? p.coordinate;
             onPositionChangeRef.current?.(target);
 

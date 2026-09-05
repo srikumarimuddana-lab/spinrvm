@@ -42,7 +42,7 @@ export default function ReferralSpendSummary() {
                 <div className="flex items-center gap-2 mb-3">
                     {/* eslint-disable-next-line no-restricted-syntax -- decorative header icon tint, not a status signal (#2816) */}
                     <DollarSign className="h-4 w-4 text-emerald-500" />
-                    <h3 className="text-sm font-semibold">Referral spend — rider + driver combined</h3>
+                    <h2 className="text-sm font-semibold">Referral spend — rider + driver combined</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {/* eslint-disable-next-line no-restricted-syntax -- decorative KPI-card accent, not a status signal (#2816) */}
@@ -55,11 +55,14 @@ export default function ReferralSpendSummary() {
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground">
                     <div>
                         Riders: <span className="font-medium text-foreground">{formatCurrency(n(r?.total_paid))}</span>{" "}
-                        <span className="opacity-70">(referrer {formatCurrency(n(r?.referrer_paid))} / referee {formatCurrency(n(r?.referee_paid))})</span>
+                        {/* opacity-70 dropped: text-muted-foreground stacked with 70% opacity was only
+                            4.26:1, below AA's 4.5:1 (#2803) — text-muted-foreground alone already
+                            reads as de-emphasized secondary detail without needing the extra fade. */}
+                        <span>(referrer {formatCurrency(n(r?.referrer_paid))} / referee {formatCurrency(n(r?.referee_paid))})</span>
                     </div>
                     <div>
                         Drivers: <span className="font-medium text-foreground">{formatCurrency(n(d?.total_paid))}</span>{" "}
-                        <span className="opacity-70">(referrer {formatCurrency(n(d?.referrer_paid))} / referee {formatCurrency(n(d?.referee_paid))})</span>
+                        <span>(referrer {formatCurrency(n(d?.referrer_paid))} / referee {formatCurrency(n(d?.referee_paid))})</span>
                     </div>
                 </div>
             </CardContent>

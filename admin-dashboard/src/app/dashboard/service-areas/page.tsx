@@ -283,7 +283,7 @@ export default function ServiceAreasPage() {
       ) : areas.length === 0 ? (
         <div className="text-center py-16 bg-card rounded-2xl border">
           <MapPin className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h3 className="text-lg font-bold text-foreground">No service areas</h3>
+          <h2 className="text-lg font-bold text-foreground">No service areas</h2>
           <p className="text-muted-foreground">Create your first service area to start operations</p>
         </div>
       ) : (

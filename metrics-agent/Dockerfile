@@ -16,11 +16,18 @@
 # image too (not done here).
 FROM grafana/alloy:v1.4.3@sha256:06bdcbb51fc22b16c2e96b31cbdf9cb0972e3bdedfbac2cc55ed36743f7fb9aa AS alloy
 
-# `dig` (bind-tools) is needed by discover-targets.sh to resolve Fly's
-# per-machine DNS records (see README.md, "Fly .internal DNS problem").
-# grafana/alloy ships on a minimal base; install just what's needed.
+# `dig` is needed by discover-targets.sh to resolve Fly's per-machine DNS
+# records (see README.md, "Fly .internal DNS problem"). The original PR
+# assumed grafana/alloy shipped on an Alpine base (apk) — it doesn't:
+# grafana/alloy's own Dockerfile (github.com/grafana/alloy/Dockerfile) builds
+# FROM public.ecr.aws/ubuntu/ubuntu:noble, which uses apt-get. `apk add` fails
+# outright on this image ("apk: not found") — confirmed via a real `fly deploy`
+# build log, 2026-09-05. `dnsutils` is Ubuntu/Debian's package providing `dig`
+# (Alpine's equivalent package is `bind-tools`, which does not exist here).
 USER root
-RUN apk add --no-cache bind-tools
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends dnsutils \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY config.alloy /etc/alloy/config.alloy
 COPY discover-targets.sh /usr/local/bin/discover-targets.sh

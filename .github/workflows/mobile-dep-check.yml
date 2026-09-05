@@ -48,7 +48,13 @@ jobs:
           # Include patches/** in the key so changes to patch-package files
           # invalidate the cache (otherwise stale node_modules retains
           # already-applied hunks → patch-package fails to re-apply on top).
-          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
+          #
+          # v2- bump (2026-09-05, CR-2026-031): orphans a stale/poisoned entry
+          # under this same key (missing @sentry/replay sub-packages despite
+          # yarn.lock being correct since PR #4921) that was still failing
+          # mobile-bundle-smoke.yml and both Playwright E2E jobs, which share
+          # this exact key. Drop the prefix once confirmed stable.
+          key: ${{ runner.os }}-v2-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
           # No restore-keys: a partial restore from an older key gives us a
           # node_modules that already has prior patch hunks applied, then
           # patch-package fails to re-apply on top. Force a clean miss when
@@ -63,7 +69,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: rider-app/node_modules
-          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
+          key: ${{ runner.os }}-v2-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
 
       - name: Expo dependency version audit
         working-directory: rider-app
@@ -99,7 +105,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: driver-app/node_modules
-          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
+          # v2- bump (2026-09-05, CR-2026-031): same stale/poisoned-cache fix
+          # as the rider-app key above — see that comment for the full story.
+          key: ${{ runner.os }}-v2-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Install dependencies
         working-directory: driver-app
@@ -110,7 +118,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: driver-app/node_modules
-          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
+          key: ${{ runner.os }}-v2-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Expo dependency version audit
         working-directory: driver-app

@@ -54,6 +54,21 @@ export function bearingDegrees(
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
+// Segment-selection is otherwise a pure nearest-distance search across the
+// WHOLE route, with no notion of which way the car is actually moving. At
+// any point where two segments both fall within maxSnapMeters — a divided
+// road, an out-and-back street where the outbound and return legs run close
+// together, a crossing street near an intersection, or just GPS noise
+// nudging the point sideways for one tick — the globally-nearest segment can
+// legitimately run backward or across relative to true travel. The position
+// still looks fine (still near a road) but the attached bearing (the
+// segment's own direction) ends up 90–180° off, even though nothing else in
+// the pipeline disagrees. `preferredFromIndex` (the previous tick's own
+// `segmentIndex`) closes that gap: restrict the search to segments at or
+// after that index, with a small backward tolerance for legitimate GPS
+// correction, before ever falling back to the unrestricted global search.
+const SEGMENT_BACKWARD_TOLERANCE = 1;
+
 /**
  * Project a raw GPS fix onto the nearest segment of a route polyline.
  *
@@ -65,11 +80,20 @@ export function bearingDegrees(
  * the route is farther than `maxSnapMeters` (driver off-route / detour): the
  * caller should then fall back to the raw fix so the marker never lies about
  * where the car actually is.
+ *
+ * `preferredFromIndex`, when given, biases the search toward continuing
+ * forward from the previous tick's own `segmentIndex` (see the module-level
+ * comment above) instead of a pure global-nearest search — the fix for a car
+ * momentarily pointing backward or sideways while still snapped to the
+ * route. If nothing within that window is close enough (off-route, or a
+ * genuine reroute/restart past the tolerance), a full unrestricted search
+ * runs instead, so this can never permanently prevent re-snapping.
  */
 export function snapToRoute(
   point: TrackingLatLng,
   route: readonly TrackingLatLng[] | null | undefined,
   maxSnapMeters = 35,
+  preferredFromIndex?: number | null,
 ): RouteSnapResult | null {
   if (!route || route.length < 2) return null;
 
@@ -81,52 +105,67 @@ export function snapToRoute(
   const px = point.longitude * mPerDegLng;
   const py = point.latitude * mPerDegLat;
 
-  let best: RouteSnapResult | null = null;
-  let bestDistSq = Infinity;
+  const nearestFrom = (startIndex: number): RouteSnapResult | null => {
+    let best: RouteSnapResult | null = null;
+    let bestDistSq = Infinity;
 
-  for (let i = 0; i < route.length - 1; i++) {
-    const a = route[i];
-    const b = route[i + 1];
-    if (
-      !Number.isFinite(a?.latitude) || !Number.isFinite(a?.longitude) ||
-      !Number.isFinite(b?.latitude) || !Number.isFinite(b?.longitude)
-    ) {
-      continue;
-    }
-    const ax = a.longitude * mPerDegLng;
-    const ay = a.latitude * mPerDegLat;
-    const bx = b.longitude * mPerDegLng;
-    const by = b.latitude * mPerDegLat;
+    for (let i = startIndex; i < route.length - 1; i++) {
+      const a = route[i];
+      const b = route[i + 1];
+      if (
+        !Number.isFinite(a?.latitude) || !Number.isFinite(a?.longitude) ||
+        !Number.isFinite(b?.latitude) || !Number.isFinite(b?.longitude)
+      ) {
+        continue;
+      }
+      const ax = a.longitude * mPerDegLng;
+      const ay = a.latitude * mPerDegLat;
+      const bx = b.longitude * mPerDegLng;
+      const by = b.latitude * mPerDegLat;
 
-    const abx = bx - ax;
-    const aby = by - ay;
-    const lenSq = abx * abx + aby * aby;
-    // Zero-length segment (duplicate vertex) — treat as the point itself.
-    const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
-    const cx = ax + t * abx;
-    const cy = ay + t * aby;
-    const dx = px - cx;
-    const dy = py - cy;
-    const distSq = dx * dx + dy * dy;
-    if (distSq < bestDistSq) {
-      bestDistSq = distSq;
-      const snapped: TrackingLatLng = {
-        latitude: cy / mPerDegLat,
-        longitude: cx / mPerDegLng,
-      };
-      // Bearing of the segment itself; for a zero-length segment fall back to
-      // the next/previous distinct vertex handled by the caller's own bearing.
-      const bearing =
-        lenSq === 0
-          ? bearingDegrees(point.latitude, point.longitude, b.latitude, b.longitude)
-          : bearingDegrees(a.latitude, a.longitude, b.latitude, b.longitude);
-      best = {
-        coordinate: snapped,
-        bearing,
-        segmentIndex: i,
-        deviationMeters: Math.sqrt(distSq),
-      };
+      const abx = bx - ax;
+      const aby = by - ay;
+      const lenSq = abx * abx + aby * aby;
+      // Zero-length segment (duplicate vertex) — treat as the point itself.
+      const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
+      const cx = ax + t * abx;
+      const cy = ay + t * aby;
+      const dx = px - cx;
+      const dy = py - cy;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        const snapped: TrackingLatLng = {
+          latitude: cy / mPerDegLat,
+          longitude: cx / mPerDegLng,
+        };
+        // Bearing of the segment itself; for a zero-length segment fall back to
+        // the next/previous distinct vertex handled by the caller's own bearing.
+        const bearing =
+          lenSq === 0
+            ? bearingDegrees(point.latitude, point.longitude, b.latitude, b.longitude)
+            : bearingDegrees(a.latitude, a.longitude, b.latitude, b.longitude);
+        best = {
+          coordinate: snapped,
+          bearing,
+          segmentIndex: i,
+          deviationMeters: Math.sqrt(distSq),
+        };
+      }
     }
+    return best;
+  };
+
+  const minIndex =
+    preferredFromIndex != null && Number.isFinite(preferredFromIndex)
+      ? Math.max(0, Math.floor(preferredFromIndex) - SEGMENT_BACKWARD_TOLERANCE)
+      : 0;
+
+  let best = nearestFrom(minIndex);
+  if ((!best || best.deviationMeters > maxSnapMeters) && minIndex > 0) {
+    // Nothing close enough ahead of the continuity window — fall back to an
+    // unrestricted search rather than refusing to re-snap.
+    best = nearestFrom(0);
   }
 
   if (!best || best.deviationMeters > maxSnapMeters) return null;

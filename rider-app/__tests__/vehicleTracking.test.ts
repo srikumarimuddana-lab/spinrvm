@@ -77,6 +77,61 @@ describe('snapToRoute', () => {
     expect(snap).not.toBeNull();
     expect(Number.isFinite(snap!.coordinate.latitude)).toBe(true);
   });
+
+  // An out-and-back route: outbound leg (segments 0-1, eastbound) and a
+  // return leg (segments 3-4, westbound) running ~1.1m apart in parallel —
+  // the exact geometry (a divided road, a narrow loop) that let a pure
+  // nearest-distance search flip the bearing 90-180° for one tick.
+  const OUT_AND_BACK = [
+    { latitude: 50.4383, longitude: -104.63 },    // 0 — outbound start
+    { latitude: 50.4383, longitude: -104.625 },   // 1 — outbound mid
+    { latitude: 50.4383, longitude: -104.62 },    // 2 — turn point
+    { latitude: 50.43831, longitude: -104.62 },   // 3 — return start (~1.1m north)
+    { latitude: 50.43831, longitude: -104.625 },  // 4 — return mid
+    { latitude: 50.43831, longitude: -104.63 },   // 5 — return end
+  ];
+  // Slightly closer to the outbound leg (segment 0, ~0.33m away) than the
+  // return leg (segment 4, ~0.78m away) — simulates GPS jitter nudging a
+  // car that's actually on the return leg toward the nearby outbound one.
+  const AMBIGUOUS_FIX = { latitude: 50.4383 + 0.000003, longitude: -104.6275 };
+
+  it('without a continuity hint, picks the globally-nearest segment even if it runs backward', () => {
+    const snap = snapToRoute(AMBIGUOUS_FIX, OUT_AND_BACK);
+    expect(snap!.segmentIndex).toBe(0);
+    expect(snap!.bearing).toBeCloseTo(90, 0); // eastbound — wrong if the car is on the return leg
+  });
+
+  it('with a continuity hint, stays on the segment the car was actually snapped to', () => {
+    // Car was last snapped to segment 4 (the return leg, westbound).
+    const snap = snapToRoute(AMBIGUOUS_FIX, OUT_AND_BACK, 35, 4);
+    expect(snap!.segmentIndex).toBe(4);
+    expect(snap!.bearing).toBeCloseTo(270, 0); // westbound — correct
+  });
+
+  it('allows a small backward tolerance (1 segment) instead of only ever moving forward', () => {
+    // A bend: segment 0 runs east from v0 to v1, segment 1 turns north from
+    // v1 to v2. A fix just southwest of the bend is genuinely closer to
+    // segment 0 (~1.1m) than segment 1 (~7.2m clamped to v1) — but both are
+    // well within maxSnapMeters, so without ANY backward tolerance a
+    // continuity hint of 1 would restrict the search to segment 1 alone and
+    // happily accept that farther (wrong) match rather than falling back.
+    const bendRoute = [
+      { latitude: 50.4383, longitude: -104.63 },   // 0
+      { latitude: 50.4383, longitude: -104.625 },  // 1 — bend
+      { latitude: 50.439, longitude: -104.625 },   // 2
+    ];
+    const fix = { latitude: 50.43829, longitude: -104.6251 };
+    const snap = snapToRoute(fix, bendRoute, 35, 1);
+    expect(snap!.segmentIndex).toBe(0);
+  });
+
+  it('falls back to an unrestricted search when the continuity window has nothing close enough', () => {
+    // A continuity hint entirely out of range (e.g. after a route swap) must
+    // never permanently block re-snapping — it should just fall back to the
+    // same global search as if no hint were given.
+    const snap = snapToRoute(AMBIGUOUS_FIX, OUT_AND_BACK, 35, 100);
+    expect(snap!.segmentIndex).toBe(0);
+  });
 });
 
 describe('shortestArcRotationTarget', () => {

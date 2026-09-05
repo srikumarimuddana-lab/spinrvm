@@ -159,18 +159,41 @@ init_firebase()
 app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan, redirect_slashes=False)
 
 
-# /health is the readiness probe every platform gate hits: fly.toml
-# [[http_service.checks]], railway.json healthcheckPath, both Dockerfile
-# HEALTHCHECKs, and the CI post-deploy smoke test. It must verify the DB is
-# actually reachable — otherwise a replica whose Supabase connection is dead
-# (or whose circuit breaker is open) keeps returning 200, stays in the
-# load-balancer rotation, and answers every real request with a 503, while a
-# bad rolling deploy gets promoted. (F1: previously this returned a static
-# {"status":"healthy"} unconditionally.) The DB ping is cached for a few
-# seconds and time-bounded so frequent probes across replicas add no real load
-# and can't hang. Loop-staleness is intentionally NOT part of this probe — a
-# stale background loop must not pull a serving replica out of rotation; that
-# is covered separately by the loop watchdog alert.
+# Liveness (/health) and readiness (/ready) are deliberately SEPARATE probes.
+#
+# F1 originally made /health verify the DB, because a replica whose Supabase
+# connection is dead kept returning 200, stayed in the load-balancer rotation,
+# and answered every real request with a 503 — and a bad rolling deploy got
+# promoted. That reasoning is still correct, and it now lives on /ready.
+#
+# What it got wrong (2026-09-05 director review §1.8): the DB is a SHARED
+# dependency, so a Supabase hiccup fails the probe on EVERY machine at once.
+# The circuit breaker opens after 5 transient failures in 30 s and stays open
+# for 60 s (repositories/_base.py), while fly.toml's [[http_service.checks]]
+# polls every 30 s — so one blip takes the whole fleet out of rotation for the
+# full breaker window. Fly then stops routing ALL traffic, including WebSocket
+# keep-alives and cached reads that would have worked fine. A degraded
+# dependency became a total outage, and worse, an outage that also severed the
+# WS connections riders and drivers use to see ride state.
+#
+#   /health  — LIVENESS. Is this process serving? Always 200 while it is, with
+#              the DB's real state reported as db.status ok|degraded for
+#              observability. Used by the RUNTIME gates that decide whether to
+#              route traffic or restart a container: fly.toml's http_service
+#              check and both Dockerfile HEALTHCHECKs. A shared-dependency
+#              outage must never make these fail fleet-wide.
+#   /ready    — READINESS. Is this replica able to serve a DB-backed request?
+#              503 when the DB ping fails — exactly the old /health behaviour,
+#              byte for byte. Used by the DEPLOY-TIME gates that decide whether
+#              a new build is good: the post-deploy poll in deploy-fly.yml, the
+#              CI smoke test, and railway.json's healthcheckPath. A dead-DB
+#              deploy still fails here, so F1's protection is intact.
+#
+# The DB ping is cached for a few seconds and time-bounded so frequent probes
+# across replicas add no real load and can't hang; both probes share that cache.
+# Loop-staleness is intentionally NOT part of either probe — a stale background
+# loop must not pull a serving replica out of rotation; that is covered
+# separately by the loop watchdog alert.
 _HEALTH_CACHE_TTL = 5.0  # seconds — bound DB-ping load under frequent probing
 _HEALTH_PING_TIMEOUT = 3.0  # seconds — never let a hung DB hang the probe
 _health_cache: dict = {"at": 0.0, "ok": False, "detail": {}}
@@ -205,14 +228,36 @@ async def _db_ready() -> "tuple[bool, dict]":
 
 @app.get("/health")
 async def health():
+    """Liveness. 200 while this process is serving, whatever the DB is doing.
+
+    `db.status` still reports the truth (`ok` / `degraded`) so dashboards and
+    the external synthetic probe can see a dependency outage — it just does not
+    take the machine out of rotation. See the block comment above for why.
+    """
+    ok, detail = await _db_ready()
+    if ok:
+        return {"status": "healthy", "db": {"status": "ok", **detail}}
+    # Degraded, not unhealthy: this process can still serve WebSocket traffic,
+    # cached reads and anything not DB-backed. Reporting 503 here would remove
+    # every replica at once and turn a Supabase blip into a full outage.
+    return {"status": "healthy", "db": {"status": "degraded"}}
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness. 503 when the DB is unreachable — the original F1 behaviour.
+
+    Deploy-time gates use this so a build that cannot reach Supabase is never
+    promoted. Runtime routing must NOT use it (see the block comment above).
+    """
     from starlette.responses import JSONResponse
 
     ok, detail = await _db_ready()
     if ok:
-        return {"status": "healthy", "db": {"status": "ok", **detail}}
+        return {"status": "ready", "db": {"status": "ok", **detail}}
     return JSONResponse(
         status_code=503,
-        content={"status": "unhealthy", "db": {"status": "error"}},
+        content={"status": "not_ready", "db": {"status": "error"}},
     )
 
 

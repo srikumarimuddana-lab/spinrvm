@@ -115,9 +115,29 @@ class TestHealthEndpoint:
             result = await server.health()
         assert result == {"status": "healthy", "db": {"status": "ok", "ping_ms": 3}}
 
-    async def test_unhealthy_returns_503(self):
+    async def test_db_down_still_returns_200_as_degraded(self):
+        """2026-09-05 liveness/readiness split: /health is LIVENESS. It used to
+        503 here, which took every machine out of Fly's rotation at once
+        whenever Supabase blipped — a shared-dependency outage became a total
+        one, WebSockets included. The DB's real state is still reported."""
         with patch("backend.server._db_ready", AsyncMock(return_value=(False, {}))):
             result = await server.health()
+        assert result == {"status": "healthy", "db": {"status": "degraded"}}
+
+
+@pytest.mark.anyio
+class TestReadyEndpoint:
+    """/ready keeps the original F1 behaviour so deploy gates still catch a
+    build that cannot reach the DB."""
+
+    async def test_ready_returns_200_shape(self):
+        with patch("backend.server._db_ready", AsyncMock(return_value=(True, {"ping_ms": 3}))):
+            result = await server.ready()
+        assert result == {"status": "ready", "db": {"status": "ok", "ping_ms": 3}}
+
+    async def test_db_down_returns_503(self):
+        with patch("backend.server._db_ready", AsyncMock(return_value=(False, {}))):
+            result = await server.ready()
         assert isinstance(result, JSONResponse)
         assert result.status_code == 503
 

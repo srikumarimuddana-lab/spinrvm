@@ -86,11 +86,17 @@ checks:
       - us-east (secondary, to distinguish a CA-region network issue from
         a true platform-wide outage)
     notes: >
-      /health returns 503 (not 200) when the DB ping fails — see
-      backend/server.py's _db_ready(). A 503 here means the backend
-      process is up but Supabase is unreachable; alert copy should say
-      "DB unreachable", not "backend down", to route the on-call
-      responder correctly (see docs/runbooks/supabase-down.md).
+      Since the 2026-09-05 liveness/readiness split, /health is LIVENESS
+      only: it answers 200 whenever the process is serving, and reports a
+      Supabase outage as db.status="degraded" in the body rather than as a
+      503. So a non-200 here means the backend process itself is
+      unreachable — alert copy should say "backend down". To detect
+      "process up, Supabase unreachable", probe /ready (503 on DB failure)
+      or assert on this body's db.status field; see
+      docs/runbooks/supabase-down.md and the probe block comment in
+      backend/server.py. The split exists because /health is what Fly's
+      [[http_service.checks]] uses to decide routing, and a shared-dependency
+      503 took every machine out of rotation at once.
 
   - name: auth-flow-liveness
     description: >

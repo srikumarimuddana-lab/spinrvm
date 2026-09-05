@@ -228,9 +228,11 @@ async def test_teleport_warning_log_omits_raw_coordinates(caplog):
 
 
 @pytest.mark.anyio
-async def test_teleport_elapsed_too_large_is_not_flagged():
-    """>= TELEPORT_MIN_SECONDS elapsed disables the teleport check even
-    though the distance is large -- covers the `elapsed < ...` False arm."""
+async def test_teleport_elapsed_too_large_still_flagged_via_computed_speed():
+    """#1231 Finding 11: >= TELEPORT_MIN_SECONDS elapsed disables the
+    narrow distance-only teleport check (covers the `elapsed < ...` False
+    arm), but the computed-speed check must still catch this -- Regina to
+    Saskatoon (~230km) in 11s is ~75,000 km/h, nowhere near plausible."""
     now = 1_700_000_000.0
     prev_raw = f"50.4452,-104.6189,{now - li.TELEPORT_MIN_SECONDS - 1}"
     mock_set = AsyncMock()
@@ -240,6 +242,25 @@ async def test_teleport_elapsed_too_large_is_not_flagged():
         patch.object(li.time, "time", return_value=now),
     ):
         trusted, reason = await li.check_location_integrity("driver-1", 52.1332, -106.6700)
+    assert (trusted, reason) == (False, "teleport")
+    mock_set.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_realistic_sustained_speed_past_the_narrow_window_is_not_flagged():
+    """A plausible highway speed (~178 km/h over 30s) must pass even though
+    it's well past TELEPORT_MIN_SECONDS -- the computed-speed check must not
+    over-trigger on ordinary driving just because it now covers longer
+    elapsed windows too."""
+    now = 1_700_000_000.0
+    prev_raw = f"50.4500,-104.6200,{now - 30}"
+    mock_set = AsyncMock()
+    with (
+        patch.object(li, "redis_get", AsyncMock(return_value=prev_raw)),
+        patch.object(li, "redis_set", mock_set),
+        patch.object(li.time, "time", return_value=now),
+    ):
+        trusted, reason = await li.check_location_integrity("driver-1", 50.4500, -104.5990)
     assert (trusted, reason) == (True, None)
     mock_set.assert_awaited_once()
 
@@ -425,15 +446,46 @@ def test_evaluate_plausibility_small_movement_is_not_a_teleport():
     assert (trusted, reason) == (True, None)
 
 
-def test_evaluate_plausibility_elapsed_outside_window_skips_teleport_check():
-    """>= TELEPORT_MIN_SECONDS elapsed disables the check even for a huge
-    jump -- mirrors check_location_integrity's Redis-backed teleport window."""
+def test_evaluate_plausibility_elapsed_at_window_boundary_still_flagged_via_speed():
+    """#1231 Finding 11: at >= TELEPORT_MIN_SECONDS elapsed the narrow
+    distance-only check no longer applies, but the computed-speed check
+    (Regina to Saskatoon, ~230km, in exactly 10s -- ~82,800 km/h) must still
+    catch it. Mirrors check_location_integrity's Redis-backed window."""
     trusted, reason = li.evaluate_gps_plausibility(
         52.1332,
         -106.6700,
         prev_lat=50.4452,
         prev_lng=-104.6189,
         elapsed_seconds=li.TELEPORT_MIN_SECONDS,
+    )
+    assert (trusted, reason) == (False, "teleport")
+
+
+def test_evaluate_plausibility_realistic_speed_at_window_boundary_is_not_flagged():
+    """A small, plausible movement right at the TELEPORT_MIN_SECONDS boundary
+    (200m in 10s = 72 km/h) must still pass -- confirms the boundary itself
+    isn't over-eager now that it also runs the computed-speed check."""
+    trusted, reason = li.evaluate_gps_plausibility(
+        50.4470,
+        -104.6189,
+        prev_lat=50.4452,
+        prev_lng=-104.6189,
+        elapsed_seconds=li.TELEPORT_MIN_SECONDS,
+    )
+    assert (trusted, reason) == (True, None)
+
+
+def test_evaluate_plausibility_realistic_sustained_speed_is_not_flagged():
+    """A plausible highway speed (~178 km/h over 30s, well past
+    TELEPORT_MIN_SECONDS) must pass -- the computed-speed check must not
+    over-trigger on ordinary driving just because it now covers longer
+    elapsed windows too."""
+    trusted, reason = li.evaluate_gps_plausibility(
+        50.4500,
+        -104.5990,
+        prev_lat=50.4500,
+        prev_lng=-104.6200,
+        elapsed_seconds=30.0,
     )
     assert (trusted, reason) == (True, None)
 

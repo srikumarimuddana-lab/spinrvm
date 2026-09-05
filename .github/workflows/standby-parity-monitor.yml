@@ -100,8 +100,30 @@ jobs:
           if [ -z "${FLY_API_TOKEN}" ]; then
             echo "error=FLY_API_TOKEN GitHub secret is not set" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          if ! flyctl secrets list -a "${FLY_APP}" --json | jq -c '[.[].Name]' > evidence/fly_names.json; then
+          if ! flyctl secrets list -a "${FLY_APP}" --json > evidence/fly_raw.json; then
             echo "error=flyctl secrets list -a ${FLY_APP} failed" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # flyctl's --json field for a secret's name is lowercase `name`
+          # (confirmed 2026-09-05 after #5034: this line used to read
+          # `.[].Name`, which doesn't exist on the real object -- jq quietly
+          # evaluates a missing field to `null` rather than erroring, so
+          # every one of Fly's real secrets came back with an empty name,
+          # and the evaluator then reported all 13 required variables as
+          # "missing on Fly" even though the app had secrets set the whole
+          # time. `// .Name` is kept only in case a future flyctl version
+          # reintroduces the capitalized form.
+          if ! jq -c '[.[] | (.name // .Name // empty)]' evidence/fly_raw.json > evidence/fly_names.json; then
+            echo "error=failed to parse flyctl secrets list JSON for ${FLY_APP}" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Guard against this exact failure mode recurring under a *different*
+          # schema change: distinguish "flyctl returned zero secrets" (a real,
+          # if surprising, empty list) from "flyctl returned entries but none
+          # matched a name field we recognize" (a parse bug -- report it as
+          # a hard error instead of silently flowing through as "all missing").
+          raw_count=$(jq 'length' evidence/fly_raw.json)
+          named_count=$(jq '[.[] | select(. != "")] | length' evidence/fly_names.json)
+          if [ "${raw_count}" != "0" ] && [ "${named_count}" == "0" ]; then
+            echo "error=flyctl returned ${raw_count} secret(s) for ${FLY_APP} but none had a recognized name field -- flyctl's --json shape may have changed again" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "Fly secret names: $(jq -r 'join(", ")' evidence/fly_names.json)"
 

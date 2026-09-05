@@ -28,6 +28,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { TextInput, TouchableOpacity, Text } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { useRideStore } from '../store/rideStore';
 import SearchDestinationScreen from '../app/search-destination';
@@ -542,6 +543,16 @@ describe('Favourites and Saved Places rows', () => {
     const homeRow = renderer.root.findAllByProps({ accessibilityLabel: 'Home — 10 Home St' })[0];
     await act(async () => { await homeRow.props.onPress(); });
     expect(useRideStore.getState().dropoff).toMatchObject({ address: '10 Home St', lat: 50.4, lng: -104.6 });
+  });
+
+  it("uses a Favourite's own saved icon instead of always showing a star", async () => {
+    // Name alone ("Downtown Office") wouldn't match any known type by
+    // substring — only the persisted icon field ("work") identifies it.
+    // Before this fix every Favourite always rendered a star regardless.
+    mockSavedAddressesResponse = [{ name: 'Downtown Office', address: '5 Office Way', lat: 50.4, lng: -104.6, icon: 'work' }];
+    const renderer = await renderScreen();
+    const icons = renderer.root.findAllByType(Ionicons as any);
+    expect(icons.some((n) => n.props.name === 'briefcase')).toBe(true);
   });
 });
 

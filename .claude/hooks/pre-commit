@@ -13,7 +13,7 @@ echo -e "${BLUE}spinr pre-commit security check...${NC}"
 BLOCKED=0
 
 # 1. Secrets
-echo "1/6 Scanning for secrets..."
+echo "1/7 Scanning for secrets..."
 PATTERNS=(
   "sk_live_[a-zA-Z0-9]+"
   "pk_live_[a-zA-Z0-9]+"
@@ -44,7 +44,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 2. Forbidden files
-echo "2/6 Checking forbidden files..."
+echo "2/7 Checking forbidden files..."
 FORBIDDEN=(".env" ".env.local" ".env.production" ".env.staging" "*.pem" "*.key" "serviceAccountKey.json")
 FOUND=0
 for f in "${FORBIDDEN[@]}"; do
@@ -57,7 +57,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 3. PII in logs
-echo "3/6 Checking for PII in logs..."
+echo "3/7 Checking for PII in logs..."
 PII_PATTERNS=(
   "print.*lat.*lng"
   "print.*latitude"
@@ -77,7 +77,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 4. Branch protection
-echo "4/6 Checking branch..."
+echo "4/7 Checking branch..."
 BRANCH=$(git branch --show-current)
 if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
   echo -e "${RED}  BLOCKED — direct commits to $BRANCH not allowed${NC}"
@@ -89,7 +89,7 @@ else
 fi
 
 # 5. Float money check
-echo "5/6 Checking money arithmetic..."
+echo "5/7 Checking money arithmetic..."
 FLOAT=$(git diff --cached -U0 -- '*.py' '*.ts' | grep "^+" | grep -iE "(fare|price|amount|earning|payout)\s*[+\-\*\/]\s*[0-9]*\.[0-9]+" 2>/dev/null)
 if [ -n "$FLOAT" ]; then
   echo -e "${YELLOW}  WARNING — possible float money arithmetic. Use Decimal or integer cents.${NC}"
@@ -101,7 +101,7 @@ fi
 # Warning-only: reports backtick-quoted paths that look like repo files/dirs
 # but don't exist on disk. Never blocks a commit while in this mode.
 # TODO(2026-09-01): flip to blocking (exit 1) once the warning backlog is clear.
-echo "6/6 Checking doc-cited file paths (warning only)..."
+echo "6/7 Checking doc-cited file paths (warning only)..."
 DOC_PATH_TMP=$(mktemp 2>/dev/null)
 check_doc_paths() {
   set -e
@@ -147,6 +147,41 @@ else
   echo -e "${YELLOW}  ⚠️  doc-path check errored unexpectedly — skipping (warning mode)${NC}"
 fi
 rm -f "$DOC_PATH_TMP"
+
+# 7. Shared-component Change Impact Log reminder (warning only)
+# CLAUDE.md's pre-merge gate #3 requires a Change Impact Log entry (+ usually
+# a feature flag) for any change to a shared component used by 3+ pages. A
+# pre-commit hook can't see the eventual PR body (that's what
+# ci-guardrails.yml's own Change Impact Log check verifies), so this can only
+# nudge: flag a staged file that looks shared and hasn't been paired with a
+# new docs/change-log/ entry in the same commit, never block on it.
+echo "7/7 Checking shared-component Change Impact Log reminder (warning only)..."
+SHARED_DIRS='^(admin-dashboard/src/components/|rider-app/components/|driver-app/components/|shared/)'
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+STAGED_SHARED=$(printf '%s\n' "$STAGED_FILES" | grep -E "$SHARED_DIRS" | grep -viE '__tests__|\.(test|spec)\.' 2>/dev/null)
+HAS_CHANGE_LOG=$(printf '%s\n' "$STAGED_FILES" | grep -c '^docs/change-log/' 2>/dev/null)
+FOUND=0
+if [ -n "$STAGED_SHARED" ]; then
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    base=$(basename "$f")
+    base="${base%.*}"
+    # Count distinct OTHER files in the repo that reference this component's
+    # basename (import/require by name) — a rough, fast proxy for "how many
+    # pages use this," not a real import-graph resolution. False positives
+    # (a common name matching unrelated text) are expected and fine for a
+    # warning-only nudge.
+    REFS=$(git grep -l -w "$base" -- '*.ts' '*.tsx' '*.js' '*.jsx' ':!node_modules' ':!.next' ':!dist' ':!build' 2>/dev/null | grep -vF "$f" | wc -l)
+    if [ "$REFS" -ge 3 ]; then
+      if [ "$HAS_CHANGE_LOG" -eq 0 ]; then
+        echo -e "${YELLOW}  WARN — $f looks shared (referenced by ~$REFS other files) — CLAUDE.md gate #3 wants a Change Impact Log entry (PR body or docs/change-log/) and usually a feature flag for a change like this.${NC}"
+        FOUND=1
+      fi
+    fi
+  done <<< "$STAGED_SHARED"
+fi
+[ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
+[ $FOUND -eq 1 ] && echo -e "${YELLOW}  (warning-only — not blocking commit; the real gate is ci-guardrails.yml's Change Impact Log check on the PR)${NC}"
 
 echo ""
 if [ $BLOCKED -eq 1 ]; then

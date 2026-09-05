@@ -461,6 +461,10 @@ export interface BillingSummary {
     master_total: number;
     total: number;
     avg_fare: number;
+    // #4074: breakdown of allowance_total + master_total (both stay
+    // tip-inclusive), not an additional charge -- same relationship
+    // tax_total already has to those two totals.
+    tip_total: number;
     tax_total: number;
     tax_by_type: TaxByType;
     by_member: BillingMemberBreakdown[];
@@ -472,6 +476,8 @@ export interface BillingLineItem {
     source_type: string;
     allowance_debit_amount: number;
     master_fallback_amount: number;
+    // #4074: optional -- absent on a cached/older read, never on a fresh one.
+    tip_amount?: number;
     policy_check_result?: string;
     created_at: string;
     tax_amount?: number;
@@ -489,6 +495,7 @@ export interface BillingStatement {
         master_total: number;
         total: number;
         avg_fare: number;
+        tip_total: number;
         tax_total: number;
         tax_by_type: TaxByType;
         by_member: BillingMemberBreakdown[];

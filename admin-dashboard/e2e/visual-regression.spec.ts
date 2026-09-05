@@ -27,12 +27,12 @@ import { setupAdminMocks } from './admin-mocks';
  */
 
 const PAGES = [
-  { name: 'login', path: '/login', waitFor: '#email' },
-  { name: 'dashboard-home', path: '/dashboard', waitFor: 'main' },
-  { name: 'dashboard-rides', path: '/dashboard/rides', waitFor: 'h1' },
-  { name: 'dashboard-drivers', path: '/dashboard/drivers', waitFor: 'h1' },
-  { name: 'dashboard-monitoring', path: '/dashboard/monitoring', waitFor: 'main' },
-  { name: 'dashboard-settings', path: '/dashboard/settings', waitFor: 'main' },
+  { name: 'login', path: '/login', waitFor: '#email', hasSidebar: false },
+  { name: 'dashboard-home', path: '/dashboard', waitFor: 'main', hasSidebar: true },
+  { name: 'dashboard-rides', path: '/dashboard/rides', waitFor: 'h1', hasSidebar: true },
+  { name: 'dashboard-drivers', path: '/dashboard/drivers', waitFor: 'h1', hasSidebar: true },
+  { name: 'dashboard-monitoring', path: '/dashboard/monitoring', waitFor: 'main', hasSidebar: true },
+  { name: 'dashboard-settings', path: '/dashboard/settings', waitFor: 'main', hasSidebar: true },
 ];
 
 // A minimal, self-contained MapLibre GL style: no "sources", "glyphs", or
@@ -49,7 +49,7 @@ const STUB_MAP_STYLE = {
 };
 
 test.describe('Visual regression', () => {
-  for (const { name, path, waitFor } of PAGES) {
+  for (const { name, path, waitFor, hasSidebar } of PAGES) {
     test(`${name} matches baseline`, async ({ page }) => {
       await setupAdminMocks(page);
       await page.route('**/tiles.openfreemap.org/**', (route) =>
@@ -61,6 +61,21 @@ test.describe('Visual regression', () => {
       );
       await page.goto(path);
       await page.locator(waitFor).first().waitFor({ state: 'visible', timeout: 20000 });
+      if (hasSidebar) {
+        // #4998: the sidebar's collapsible nav groups (PR #4985) compute
+        // their open/closed state correctly on the very first render — the
+        // localStorage read that can override it is async, but the initial
+        // fallback (route-based default) is already right before that
+        // effect ever fires. The bug this closes wasn't the app being
+        // wrong; it was this test having no way to WAIT for a proven-
+        // settled render before capturing, and instead capturing after a
+        // fixed delay whose sufficiency depends on the CI runner's own
+        // Chromium build — see sidebar.tsx's data-nav-hydrated attribute,
+        // which flips only once that effect has actually run (success or
+        // caught failure), for a wait this test can assert on directly
+        // instead of inferring from a timeout.
+        await page.locator('nav[data-nav-hydrated="true"]').waitFor({ state: 'attached', timeout: 5000 });
+      }
       // Let any mount-time transitions/skeleton states settle before capture.
       await page.waitForTimeout(500);
 

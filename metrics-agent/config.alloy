@@ -17,8 +17,23 @@ discovery.file "backend_targets" {
   refresh_interval = "30s"
 }
 
+// prometheus.scrape has no "extra_labels" attribute (that's not part of its
+// config schema — confirmed by a real `fly deploy`, 2026-09-05: Alloy
+// rejected it with "unrecognized attribute name \"extra_labels\"" and never
+// started). A relabel rule with no source_labels and just a replacement is
+// the standard Prometheus/Alloy idiom for stamping a constant label onto
+// every target before it's scraped.
+discovery.relabel "backend_targets" {
+  targets = discovery.file.backend_targets.targets
+
+  rule {
+    target_label = "provider"
+    replacement  = "fly"
+  }
+}
+
 prometheus.scrape "backend" {
-  targets    = discovery.file.backend_targets.targets
+  targets    = discovery.relabel.backend_targets.output
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 
   // Matches ADR-010 §5 step 2 (15s scrape interval).
@@ -34,14 +49,6 @@ prometheus.scrape "backend" {
   bearer_token = env("METRICS_AUTH_TOKEN")
 
   // metric_path defaults to "/metrics", matching backend/server.py's route.
-
-  // Static label so every series is unambiguously tagged per ADR-010 §4 —
-  // required so a future Railway agent's loop-driven metrics are never
-  // silently summed with this one, and so split-brain DNS (simultaneous
-  // nonzero traffic on both providers) becomes visible instead of blended.
-  extra_labels = {
-    provider = "fly",
-  }
 }
 
 prometheus.remote_write "grafana_cloud" {

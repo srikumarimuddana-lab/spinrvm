@@ -1,0 +1,8 @@
+# Force LF line endings for shell scripts regardless of the committer's or
+# checkout machine's OS/git config. Without this, a Windows checkout can
+# convert a script's line endings to CRLF, which corrupts its #!/bin/sh
+# shebang line and breaks exec inside a Linux Docker image with a confusing
+# "No such file or directory" error even though the file plainly exists.
+# Found via metrics-agent/entrypoint.sh, 2026-09-05 (see that Dockerfile's
+# own defense-in-depth `sed` normalization for the same root cause).
+*.sh text eol=lf

@@ -102,7 +102,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
     sent: { label: "Sent", color: "bg-success/15 text-success", icon: CheckCircle2 },
     // eslint-disable-next-line no-restricted-syntax -- "scheduled" (future, neither good nor bad) has no semantic-token equivalent (#2816)
     scheduled: { label: "Scheduled", color: "bg-blue-500/15 text-blue-600", icon: Timer },
-    failed: { label: "Failed", color: "bg-destructive/15 text-destructive", icon: XCircle },
+    failed: { label: "Failed", color: "bg-destructive/15 text-destructive dark:text-[#ff453a]", icon: XCircle },
     pending: { label: "Pending", color: "bg-warning/15 text-warning", icon: Clock },
     cancelled: { label: "Cancelled", color: "bg-muted text-muted-foreground", icon: XCircle },
 };

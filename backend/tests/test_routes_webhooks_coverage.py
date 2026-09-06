@@ -1185,7 +1185,18 @@ class TestStripeWebhookPaymentFailedDriverLookupException:
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
             patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock(return_value={"id": "ride_x"})),
-            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(side_effect=Exception("db down"))),
+            # First call is the N1 CAS re-read (must succeed — its failure mode
+            # is unclaim+503, covered separately); second is the driver lookup
+            # this test is actually about.
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(
+                    side_effect=[
+                        {"id": "ride_x", "payment_status": "pending", "payment_intent_id": None},
+                        Exception("db down"),
+                    ]
+                ),
+            ),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(wh.stripe_webhook(request=_mock_req()))

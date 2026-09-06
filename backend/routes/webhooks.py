@@ -960,7 +960,24 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
             # is exactly what it looks like, and {"col": None} compiles to
             # `is.null` (repositories/_base.py) rather than silently matching
             # nothing.
-            current = await db_supabase.get_ride(ride_id)
+            try:
+                current = await db_supabase.get_ride(ride_id)
+            except Exception as _read_err:
+                # The event is ALREADY claimed at this point. Letting this
+                # propagate un-unclaimed loses the failure permanently: Stripe
+                # retries, claim_stripe_event reports a duplicate, and the
+                # webhook returns {"received": True, "duplicate": True} without
+                # ever recording the failure. Unclaim first so the retry can
+                # actually re-process, then surface a 503 (CLAUDE.md: a DB error
+                # is a 503 the client retries, never a swallowed warning).
+                logger.error(
+                    f"Webhook payment_intent.payment_failed: ride {ride_id} lookup failed — "
+                    f"unclaiming {event_id} so Stripe can retry: {_read_err}",
+                    exc_info=True,
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+                await unclaim_stripe_event(event_id)
+                raise HTTPException(status_code=503, detail="Ride lookup failed — Stripe will retry") from _read_err
             if current is None:
                 logger.error(
                     f"Webhook payment_intent.payment_failed: ride {ride_id} not found — "

@@ -329,7 +329,14 @@ class RideOTPRequest(BaseModel):
         ...,
         min_length=_PICKUP_OTP_MIN_LEN,
         max_length=_PICKUP_OTP_MAX_LEN,
-        pattern=r"^\d+$",
+        # [0-9], NOT \d: `\d` is Unicode-aware in both Python's re and
+        # pydantic v2's Rust regex, so it accepts Arabic-Indic "١٢٣٤",
+        # Devanagari, fullwidth digits and more. Those can never equal a
+        # generated ASCII code, so this was not a bypass — but "digit-only"
+        # has to mean the digits the generator actually produces, and a field
+        # that silently accepts other scripts is not that. Caught by this
+        # module's own test on the first CI run.
+        pattern=r"^[0-9]+$",
         description="Digits only. The pickup code the rider reads out to the driver.",
     )
 

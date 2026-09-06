@@ -16,34 +16,38 @@
 # job is surfacing the underlying write failure for investigation, not
 # covering an unrecoverable audit gap.
 #
-# NOT YET LOADED into any Grafana Cloud instance -- no account exists in
-# this session to provision against. A human imports this after account
-# creation, either via file provisioning (copy into Grafana's provisioning
-# directory / point Grafana Cloud's provisioning-as-code at this repo path)
-# or by pasting each rule into the Alerting UI. See metrics-agent/README.md
-# step 5.
+# NOT YET LOADED into any Grafana Cloud instance via file provisioning -- the
+# rules were instead entered by hand through the Alerting UI (issue #3295
+# step 6), since this repo's agent integration has no Grafana Cloud API
+# token/Actions-dispatch access to provision against a live stack. This file
+# stays the source of truth for the PromQL/thresholds/labels; keep it in
+# sync if a rule is edited in the UI.
 #
-# The contactPoints/uid `<ALERT_WEBHOOK_URL>` below is a placeholder for the
-# same Slack webhook `loop_watchdog` (backend/core/lifespan.py) already
-# pages through -- ADR-010 §5 step 5 says explicitly to reuse it rather than
-# standing up a second paging path. Replace with the real webhook URL when
-# provisioning; never commit the real value to this repo.
-
+# Contact point: Email, not the webhook originally sketched here. Decided
+# 2026-09-06 (issue #3295 walkthrough) -- Grafana Cloud's built-in Email
+# integration only sends to addresses that are members of the Grafana Cloud
+# org, which was reachable end-to-end in this session (see the org's
+# Members / Administration > Users and access > Users pages), whereas
+# standing up a distinct Slack workspace+webhook for this alone was judged
+# more setup for the same outcome. `loop_watchdog` (backend/core/lifespan.py)
+# keeps its own separate `ALERT_WEBHOOK_URL`/`ALERT_EMAIL_TO` config
+# (backend/core/config.py) -- this file's contact point is Grafana
+# Alerting's own, independent of that backend config.
 apiVersion: 1
 
 contactPoints:
   - orgId: 1
-    name: spinr-alert-webhook
+    name: spinr-alert-email
     receivers:
-      - uid: spinr-alert-webhook-1
-        type: webhook
+      - uid: spinr-alert-email-1
+        type: email
         settings:
-          url: "<ALERT_WEBHOOK_URL>"
-          httpMethod: POST
+          addresses: "<ALERT_EMAIL_TO>" # semicolon-separated if more than one; see backend/core/config.py's ALERT_EMAIL_TO comment on preferring a distribution list -- but see this file's header note above: Grafana Cloud's Email integration requires each address to be an accepted member of the Grafana Cloud org, so a shared inbox works only once someone with access to it accepts the org invite under that address.
+          singleEmail: false
 
 policies:
   - orgId: 1
-    receiver: spinr-alert-webhook
+    receiver: spinr-alert-email
     group_by: ["alertname"]
     routes: []
 

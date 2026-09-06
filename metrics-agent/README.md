@@ -86,10 +86,12 @@ Fly's own docs recommend for this exact "scrape all machines" case.
   alongside Alloy itself.
 - `grafana/dashboard-panel.json` — the ADR-010 §5 step-4 panel
   (dispatch-latency P95), importable once a Grafana Cloud account exists.
-- `grafana/alert-rules.yaml` — the two ADR-010 §5 step-5 alert rules
-  (dispatch-latency breach, payment-failure-rate breach) in Grafana
-  Alerting's provisioning YAML format, routed to a placeholder contact point
-  matching the existing `ALERT_WEBHOOK_URL` Slack channel.
+- `grafana/alert-rules.yaml` — the ADR-010 §5 step-5 alert rules
+  (dispatch-latency breach, payment-failure-rate breach, plus the
+  insurance-period write-failure rule added per ACTION_ITEMS.md C55) in
+  Grafana Alerting's provisioning YAML format, routed to a placeholder Email
+  contact point (decided 2026-09-06 — see the file's own header comment for
+  why Email over a new Slack webhook).
 
 ## What's blocked on human-provided credentials / access (not done here)
 
@@ -125,9 +127,11 @@ done and must be completed by a human:
    into the Grafana Cloud account from step 1 (UI import or
    `grafanactl`/Terraform if preferred — not scripted here since there's no
    account to target).
-6. **Point the alert contact point at the real `ALERT_WEBHOOK_URL`** value
-   (`grafana/alert-rules.yaml` ships with a placeholder webhook URL to be
-   replaced with the same Slack webhook `loop_watchdog` already uses).
+6. **Point the alert contact point at real email address(es)**
+   (`grafana/alert-rules.yaml` ships with an `<ALERT_EMAIL_TO>` placeholder;
+   each address must be an accepted member of the Grafana Cloud org before
+   Grafana's Email integration will send to it — see the file's header
+   comment).
 7. **Smoke-test** against real traffic once deployed — confirm the
    dashboard panel shows non-empty data and that a synthetic breach (or a
    `Test rule` in Grafana Alerting) actually fires before treating either

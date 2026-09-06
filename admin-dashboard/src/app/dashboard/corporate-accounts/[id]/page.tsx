@@ -87,7 +87,7 @@ interface ProfileFormData {
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-warning/15 text-warning hover:bg-warning/15",
     active: "bg-success/15 text-success hover:bg-success/15",
-    suspended: "bg-destructive/15 text-destructive hover:bg-destructive/15",
+    suspended: "bg-destructive/15 text-destructive dark:text-[#ff453a] hover:bg-destructive/15",
     closed: "bg-muted text-muted-foreground hover:bg-muted",
 };
 

@@ -48,7 +48,13 @@ copy.
 
 ## 3. Fix / remediation
 
-- `RideOTPRequest.otp` is now `Field(min_length=4, max_length=6, pattern=r"^\d+$")`.
+- `RideOTPRequest.otp` is now `Field(min_length=4, max_length=6, pattern=r"^[0-9]+$")`.
+  **Corrected 2026-09-06:** this shipped as `^\d+$`, which is Unicode-aware in
+  both Python's `re` and pydantic v2's Rust regex and so accepted Arabic-Indic
+  `١٢٣٤`, Devanagari and fullwidth digits. Not a bypass — none of those can
+  equal a generated ASCII code — but "digit-only" has to mean the digits the
+  generator actually produces. This file's own test caught it on the first CI
+  run; see `docs/change-log/2026-09-06-post-merge-ci-fixes.md`.
   The max is deliberately looser than the 4-digit generator so lengthening the
   code later needs no coordinated client release; the digit-only pattern is the
   security-relevant half.

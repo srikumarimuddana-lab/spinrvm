@@ -1177,9 +1177,17 @@ class TestPaymentIntentPaymentFailedBranches:
                 "backend.routes.webhooks.db_supabase.update_ride",
                 AsyncMock(return_value={"id": "ride_dl"}),
             ),
+            # First call is the N1 CAS re-read (must succeed — its failure mode
+            # is unclaim+503, covered by test_ride_read_failure_unclaims_and_503s);
+            # second is the driver lookup this test is actually about.
             patch(
                 "backend.routes.webhooks.db_supabase.get_ride",
-                AsyncMock(side_effect=Exception("db blip")),
+                AsyncMock(
+                    side_effect=[
+                        {"id": "ride_dl", "payment_status": "pending", "payment_intent_id": None},
+                        Exception("db blip"),
+                    ]
+                ),
             ),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
         ):

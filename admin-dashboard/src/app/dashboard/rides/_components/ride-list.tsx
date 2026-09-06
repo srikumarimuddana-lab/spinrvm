@@ -267,7 +267,10 @@ export default function RideList({
                                         Date <SortIcon col="created_at" />
                                     </button>
                                 </th>
-                                <th className="w-10"></th>
+                                {/* This column only ever holds the row's "view details" chevron —
+                                    axe empty-table-header (#2826); sr-only text names it for screen
+                                    readers without changing the visible (empty) header cell. */}
+                                <th className="w-10"><span className="sr-only">View details</span></th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
@@ -278,8 +281,13 @@ export default function RideList({
                                     }`}>
                                     <td className="py-3 px-5">{getStatusBadge(ride.status)}</td>
                                     <td className="py-3 px-4 max-w-[320px]">
+                                        {/* dark:text-[#ff453a] — text-primary/80 was only 2.88:1 on this dark
+                                            surface, below AA's 4.5:1 (#2826). Reuses the vibrant brand red
+                                            globals.css's dark theme already uses as text for both --primary and
+                                            --destructive (--sidebar-primary/--sidebar-destructive), and drops the
+                                            /80 opacity that was compounding the loss. */}
                                         {ride.ride_code && (
-                                            <p className="text-[11px] font-bold tracking-wide text-primary/80 mb-0.5">
+                                            <p className="text-[11px] font-bold tracking-wide text-primary dark:text-[#ff453a] mb-0.5">
                                                 {ride.ride_code}
                                             </p>
                                         )}
@@ -302,7 +310,10 @@ export default function RideList({
                                         )}
                                         <p className="text-sm font-medium truncate">{ride.pickup_address || "—"}</p>
                                         <p className="text-xs text-muted-foreground truncate mt-0.5">
-                                            <span className="text-muted-foreground/60">to</span> {ride.dropoff_address || "—"}
+                                            {/* opacity-60 dropped: text-muted-foreground alone was only 3.41:1
+                                                stacked with it, below AA's 4.5:1 (#2826) — already de-emphasized
+                                                enough by the parent's own text-muted-foreground/text-xs. */}
+                                            <span className="text-muted-foreground">to</span> {ride.dropoff_address || "—"}
                                         </p>
                                     </td>
                                     <td className="py-3 px-4 hidden lg:table-cell">

@@ -60,10 +60,13 @@ import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
+// dark:text-[#ff453a] on "suspended" — text-destructive alone is only 3.7:1
+// on this bg-destructive/15 tint, below AA's 4.5:1 (#2826, same fix as
+// disputes/promotions/users).
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-warning/15 text-warning hover:bg-warning/15",
     active: "bg-success/15 text-success hover:bg-success/15",
-    suspended: "bg-destructive/15 text-destructive hover:bg-destructive/15",
+    suspended: "bg-destructive/15 text-destructive dark:text-[#ff453a] hover:bg-destructive/15",
     closed: "bg-muted text-muted-foreground hover:bg-muted",
 };
 
@@ -485,9 +488,15 @@ export default function CorporateAccountsPage() {
                                         <TableCell>${account.credit_limit?.toLocaleString() || "0"}</TableCell>
                                         <TableCell>
                                             <Badge
-                                                variant={account.is_active ? "default" : "secondary"}
-                                                // eslint-disable-next-line no-restricted-syntax -- solid-fill white-text badge; dark-mode --success (2.02:1) fails WCAG AA against white text (#2816)
-                                                className={account.is_active ? "bg-emerald-500 hover:bg-emerald-600" : ""}
+                                                variant="secondary"
+                                                // #2826: this was a solid-fill white-text badge (bg-emerald-500) —
+                                                // the #2816 comment it carried already knew --success (2.02:1)
+                                                // fails white-text AA, but the emerald-500 substitute was never
+                                                // verified either (2.47:1, still failing). Switched to the same
+                                                // tinted bg-success/15 text-success idiom StatusPill already uses
+                                                // two lines up (9.78:1 as text on --card) instead of a second
+                                                // guess at a solid fill.
+                                                className={account.is_active ? "bg-success/15 text-success hover:bg-success/15" : ""}
                                             >
                                                 {account.is_active ? "Active" : "Inactive"}
                                             </Badge>

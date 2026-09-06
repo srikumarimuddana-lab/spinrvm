@@ -106,10 +106,12 @@ interface UserOption {
 
 // --- Constants ---
 
+// dark:text-[#ff453a] on "expired" — text-destructive alone is only 3.7:1 on
+// this bg-destructive/15 tint, below AA's 4.5:1 (#2826, same fix as disputes).
 const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
     active: { label: "Active", color: "bg-success/15 text-success" },
     inactive: { label: "Inactive", color: "bg-muted text-muted-foreground" },
-    expired: { label: "Expired", color: "bg-destructive/15 text-destructive" },
+    expired: { label: "Expired", color: "bg-destructive/15 text-destructive dark:text-[#ff453a]" },
 };
 
 const DATE_RANGES = [

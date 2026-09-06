@@ -301,7 +301,10 @@ export default function DriverListTable({
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-sm font-semibold truncate flex items-center gap-1.5">
-                                                        {driverDisplayName(driver) || <span className="text-muted-foreground/60 italic">Unnamed driver</span>}
+                                                        {/* opacity-60 dropped: text-muted-foreground alone already reads
+                                                            as de-emphasized; stacked with /60 it was 3.41:1, below AA's
+                                                            4.5:1 (#2826). */}
+                                                        {driverDisplayName(driver) || <span className="text-muted-foreground italic">Unnamed driver</span>}
                                                         {driver.legacy_import_metadata && Object.keys(driver.legacy_import_metadata).length > 0 && (
                                                             <span className="inline-block text-[10px] font-medium text-muted-foreground bg-muted rounded px-1.5 py-0.5 shrink-0">
                                                                 Imported
@@ -354,7 +357,9 @@ export default function DriverListTable({
                                             ) : driver.profile_completeness_score >= 70 ? (
                                                 <Badge variant="default" className="bg-warning/15 text-warning hover:bg-warning/15 text-[10px] px-1.5 py-0 border-warning/30">Incomplete ({driver.profile_completeness_score}%)</Badge>
                                             ) : (
-                                                <Badge variant="default" className="bg-destructive/15 text-destructive text-[10px] px-1.5 py-0">Missing ({driver.profile_completeness_score}%)</Badge>
+                                                // dark:text-[#ff453a] — text-destructive alone is only 3.7:1 on this
+                                                // bg-destructive/15 tint, below AA's 4.5:1 (#2826).
+                                                <Badge variant="default" className="bg-destructive/15 text-destructive dark:text-[#ff453a] text-[10px] px-1.5 py-0">Missing ({driver.profile_completeness_score}%)</Badge>
                                             )}
                                         </TableCell>
                                         <TableCell>
@@ -373,7 +378,8 @@ export default function DriverListTable({
                                         </TableCell>
                                         <TableCell>
                                             <span className="text-xs text-foreground/80">
-                                                {vehicleTypes.find(v => v.id === driver.vehicle_type_id)?.name || <span className="text-muted-foreground/60 italic">—</span>}
+                                                {/* Same #2826 opacity fix as "Unnamed driver" above. */}
+                                                {vehicleTypes.find(v => v.id === driver.vehicle_type_id)?.name || <span className="text-muted-foreground italic">—</span>}
                                             </span>
                                         </TableCell>
                                         <TableCell>
@@ -382,7 +388,10 @@ export default function DriverListTable({
                                                     <Car className="h-3.5 w-3.5" />
                                                     <span className="truncate max-w-[120px]">{[driver.vehicle_color, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(" ") || "No vehicle"}</span>
                                                 </div>
-                                                {driver.license_plate ? <span className="font-mono font-bold text-foreground/80 tracking-wider bg-muted px-1.5 py-0.5 rounded text-[10px] border shadow-sm self-start">{showPii ? driver.license_plate : maskPlate(driver.license_plate)}</span> : <span className="text-[10px] text-muted-foreground/60 italic">No plate</span>}
+                                                {/* opacity-60 dropped from the "No plate" fallback — same #2826 fix
+                                                    as above; the license_plate span's text-foreground/80 already
+                                                    clears AA by a wide margin, so it's untouched. */}
+                                                {driver.license_plate ? <span className="font-mono font-bold text-foreground/80 tracking-wider bg-muted px-1.5 py-0.5 rounded text-[10px] border shadow-sm self-start">{showPii ? driver.license_plate : maskPlate(driver.license_plate)}</span> : <span className="text-[10px] text-muted-foreground italic">No plate</span>}
                                             </div>
                                         </TableCell>
                                         <TableCell className="text-center">

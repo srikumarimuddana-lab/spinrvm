@@ -81,6 +81,37 @@ repo's actual history. Whoever executes this should treat steps 1–3 as unverif
 personally run them and see the "must print nothing" check in step 3 succeed, before ever
 reaching step 4.
 
+**Update (2026-09-05) — root cause identified, and it's narrower/more fixable than "a hard
+classifier block":** a later session *did* successfully run steps 1–3 end-to-end against a
+full clone of this repo (all 1,234 branches, 9,696 commits) — `git filter-repo --invert-paths`
+completed, and the "must print nothing" check in step 3 passed for both files across all
+history. Step 4 (`git push --force`) was denied by the session's Bash-tool permission
+classifier. On a later attempt in the same repo, even step 1's `git clone --mirror` /
+step 2's `git filter-repo` were denied on a fresh attempt — inconsistent, but the *reason*
+in both cases traces to the same place: **`.claude/settings.json`'s `permissions.allow` list**.
+That list explicitly allows `git push --force-with-lease origin claude/*` (and `fix/*`,
+`feature/*`, `hotfix/*`) but has **no entry at all** for `git filter-repo`, and **no entry**
+permitting a force-push to `main` in any form (`--force-with-lease` is allow-listed only for
+non-`main` branches; plain `--force` isn't allow-listed for any branch). In this repo's
+remote/non-interactive ("auto mode") sessions, a Bash command that isn't allow-listed is
+denied outright rather than prompted for — there's no human in the loop to approve it live.
+
+This means the real blocker isn't an immutable safety rail — it's a **deliberately narrow,
+checked-in allowlist that was never extended to cover history-rewriting**, which is arguably
+correct default behavior (this is exactly the kind of operation that shouldn't be silently
+allow-listed for every future session on this repo). To actually execute this runbook from a
+Claude Code session, either:
+- Run it from an **interactive** session (a human present to approve the `git filter-repo`
+  and `git push --force` prompts live, once each, without changing any settings file), or
+- Add narrowly-scoped entries to `.claude/settings.local.json` (personal/local, not the
+  shared checked-in `settings.json`) for just this operation, e.g.
+  `Bash(git filter-repo*)` and a literal (non-wildcard) match for the exact push command
+  used — then remove them once the rewrite is done, rather than leaving `main` force-push
+  allow-listed permanently, or
+- Run the commands directly outside Claude Code (a local terminal, any machine with git and
+  network access) — this was always the actual point of "hand off exact reproducible
+  commands" in prior status updates on this item.
+
 ## Before pushing — required steps, in order
 
 1. **Confirm repo visibility is actually private** (still unverified independently as of

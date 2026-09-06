@@ -567,10 +567,14 @@ export default function UsersPage() {
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge className={
-                                                        user.status === "banned" ? "bg-destructive/15 text-destructive"
+                                                        // dark:text-[#ff453a]/dark:text-orange-400 — text-destructive/
+                                                        // text-orange-600 alone are only ~3.7:1 on their own bg-X/15
+                                                        // tint, below AA's 4.5:1 (#2826); same fixes already applied
+                                                        // elsewhere for the identical pairing (#2803).
+                                                        user.status === "banned" ? "bg-destructive/15 text-destructive dark:text-[#ff453a]"
                                                         : user.status === "suspended" ? "bg-warning/15 text-warning"
                                                         // eslint-disable-next-line no-restricted-syntax -- pending_deletion has no semantic-token equivalent (#2816)
-                                                        : user.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
+                                                        : user.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600 dark:text-orange-400"
                                                         : "bg-success/15 text-success"
                                                     }>
                                                         {user.status === "banned" ? "Banned"
@@ -709,10 +713,11 @@ export default function UsersPage() {
                                 <Label className="text-xs text-muted-foreground mb-2 block">Account Status</Label>
                                 <div className="flex items-center gap-2 mb-3">
                                     <Badge className={
-                                        selectedUser.status === "banned" ? "bg-destructive/15 text-destructive"
+                                        // Same #2826 contrast fix as the list row above.
+                                        selectedUser.status === "banned" ? "bg-destructive/15 text-destructive dark:text-[#ff453a]"
                                         : selectedUser.status === "suspended" ? "bg-warning/15 text-warning"
                                         // eslint-disable-next-line no-restricted-syntax -- pending_deletion has no semantic-token equivalent (#2816)
-                                        : selectedUser.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
+                                        : selectedUser.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600 dark:text-orange-400"
                                         : "bg-success/15 text-success"
                                     }>
                                         {selectedUser.status === "banned" ? "Banned"

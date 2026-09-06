@@ -50,14 +50,17 @@ function statusClass(status: string): string {
     // eslint-disable-next-line no-restricted-syntax -- "open" (new/active) has no semantic-token equivalent; must stay visually distinct from hold/escalated/closed (#2816)
     if (s.includes("open")) return "bg-blue-100 text-blue-800 hover:bg-blue-100";
     if (s.includes("hold")) return "bg-warning/15 text-warning hover:bg-warning/15";
-    if (s.includes("escal")) return "bg-destructive/15 text-destructive hover:bg-destructive/15";
+    // dark:text-[#ff453a] — text-destructive alone is only 3.7:1 on this
+    // bg-destructive/15 tint, below AA's 4.5:1 (#2826, same fix used
+    // elsewhere for this pairing).
+    if (s.includes("escal")) return "bg-destructive/15 text-destructive dark:text-[#ff453a] hover:bg-destructive/15";
     if (s.includes("closed")) return "bg-muted text-muted-foreground hover:bg-muted";
     return "bg-muted text-muted-foreground hover:bg-muted";
 }
 
 function priorityClass(p: string): string {
     const s = (p || "").toLowerCase();
-    if (s === "high" || s === "urgent") return "bg-destructive/15 text-destructive hover:bg-destructive/15";
+    if (s === "high" || s === "urgent") return "bg-destructive/15 text-destructive dark:text-[#ff453a] hover:bg-destructive/15";
     if (s === "medium") return "bg-warning/15 text-warning hover:bg-warning/15";
     return "bg-muted text-muted-foreground hover:bg-muted";
 }

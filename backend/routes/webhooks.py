@@ -42,6 +42,14 @@ from datetime import datetime, timedelta, timezone
 _TWO_PLACES = Decimal("0.01")
 
 logger = logging.getLogger(__name__)
+
+# Terminal-success payment states. A `payment_intent.payment_failed` that
+# arrives (or is redelivered) for a ride already in one of these is stale by
+# definition and must never relabel it — see the N1 comment in the
+# payment_intent.payment_failed branch below. Mirrors the `_already_settled`
+# set used by the payment_succeeded branch, minus "processing": a ride still
+# processing has not settled, so a genuine failure on it must still be recorded.
+_SETTLED_PAYMENT_STATUSES = ("paid", "waived_admin", "refunded")
 api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 # B-P2-2: Explicit allowlist of Stripe event types we process. Any event type
@@ -929,27 +937,93 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
         failure_message = data_object.get("last_payment_error", {}).get("message", "Payment failed")
 
         if ride_id:
-            updated = await db_supabase.update_ride(
-                ride_id,
-                {
-                    "payment_status": "failed",
-                    "payment_intent_id": payment_intent_id,
-                    "payment_failure_reason": failure_message,
-                },
-            )
-            if updated is None:
+            # N1 (2026-09-05 director review): this used to be an unconditional
+            # update_ride filtered on id alone, with no predicate on the current
+            # payment_status or on which PaymentIntent the ride is actually
+            # settled against. A redelivered failure could therefore overwrite a
+            # ride that had since been PAID:
+            #
+            #   1. PI on card 1 fails            -> event A
+            #   2. a DB blip hits the unclaim below, so A is redelivered later
+            #   3. meanwhile the rider retries and event B settles the ride paid
+            #   4. redelivered A flips payment_status back to "failed"
+            #
+            # The rider is then prompted to pay a second time, and settle_card
+            # mints a fresh PI under a different idempotency key
+            # ("ride-charge-…" in utils/stripe_charge.py vs "ps-…" in
+            # routes/payments.py) — nothing keys off "a succeeded PI already
+            # exists", so the double charge goes through.
+            #
+            # Read first, then compare-and-swap on exactly what was read. The
+            # read decides *whether* the write is still valid; the CAS makes the
+            # decision race-free. Plain equality only (no $or) so the predicate
+            # is exactly what it looks like, and {"col": None} compiles to
+            # `is.null` (repositories/_base.py) rather than silently matching
+            # nothing.
+            current = await db_supabase.get_ride(ride_id)
+            if current is None:
                 logger.error(
-                    f"Webhook payment_intent.payment_failed: ride {ride_id} not found or 0 rows "
-                    f"updated — payment failure {payment_intent_id} unlinked",
-                    extra={
-                        "domain": "payments",
-                        "event_id": event_id,
-                        "ride_id": ride_id,
-                    },
+                    f"Webhook payment_intent.payment_failed: ride {ride_id} not found — "
+                    f"payment failure {payment_intent_id} unlinked",
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
                 )
                 await unclaim_stripe_event(event_id)
-                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
-            logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
+                raise HTTPException(status_code=500, detail="Ride lookup failed — Stripe will retry")
+
+            _observed_status = current.get("payment_status")
+            _observed_pi = current.get("payment_intent_id")
+
+            if _observed_status in _SETTLED_PAYMENT_STATUSES:
+                # The ride is already settled. This event is a redelivery of a
+                # superseded attempt — ack it (do NOT unclaim, do NOT 500), or
+                # Stripe retries for days and re-runs this same overwrite.
+                logger.info(
+                    "Webhook payment_intent.payment_failed: ride %s already settled (%s) — "
+                    "ignoring stale failure for %s",
+                    ride_id,
+                    _observed_status,
+                    payment_intent_id,
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+            elif _observed_pi and _observed_pi != payment_intent_id:
+                # A different PaymentIntent is linked. This failure belongs to a
+                # superseded attempt; recording it would relabel the live one.
+                logger.info(
+                    "Webhook payment_intent.payment_failed: ride %s is linked to a different "
+                    "PaymentIntent — ignoring stale failure for %s",
+                    ride_id,
+                    payment_intent_id,
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+            else:
+                updated = await db_supabase.update_one(
+                    "rides",
+                    {
+                        "id": ride_id,
+                        "payment_status": _observed_status,
+                        "payment_intent_id": _observed_pi,
+                    },
+                    {
+                        "$set": {
+                            "payment_status": "failed",
+                            "payment_intent_id": payment_intent_id,
+                            "payment_failure_reason": failure_message,
+                        }
+                    },
+                )
+                if updated is None:
+                    # Someone wrote between the read and the CAS — most likely a
+                    # concurrent success. Their write is newer, so this failure
+                    # is stale by definition. Ack rather than retry.
+                    logger.info(
+                        "Webhook payment_intent.payment_failed: ride %s changed under the CAS — "
+                        "ignoring stale failure for %s",
+                        ride_id,
+                        payment_intent_id,
+                        extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                    )
+                else:
+                    logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:
             try:

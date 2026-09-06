@@ -36,8 +36,13 @@ from ._deps import (  # noqa: F401
     timezone,
 )
 from ._shared import (  # noqa: F401
+    _PICKUP_OTP_MAX_FAILURES,
     RideOTPRequest,
     check_driver_documents_current,
+    check_pickup_otp_lockout,
+    clear_pickup_otp_failures,
+    pickup_otp_locked_exc,
+    record_pickup_otp_failure,
 )
 
 router = APIRouter()
@@ -851,6 +856,33 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     return {"success": True}
 
 
+def _notify_rider_pickup_otp_lockout(ride: dict) -> None:
+    """Tell the rider their ride's pickup code was locked after repeated misses.
+
+    Fire-and-forget: a notification failure must never change the 429 the driver
+    gets. IDs only in the payload — no code, no PII (PIPEDA).
+    """
+    rider_id = ride.get("rider_id")
+    if not rider_id:
+        return
+    ride_id = str(ride.get("id"))
+    spawn(
+        _deps.manager.send_personal_message(
+            {"type": "pickup_otp_locked", "ride_id": ride_id},
+            f"rider_{rider_id}",
+        )
+    )
+    spawn(
+        _deps.send_push_notification(
+            rider_id,
+            "Pickup code locked 🔒",
+            "Your driver entered the wrong pickup code too many times. "
+            "Check you are with the right driver — you can cancel if something feels wrong.",
+            data={"type": "pickup_otp_locked", "ride_id": ride_id},
+        )
+    )
+
+
 @router.post("/rides/{ride_id}/verify-otp")
 async def verify_pickup_otp(
     ride_id: str,
@@ -869,9 +901,40 @@ async def verify_pickup_otp(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    stored_otp = ride.get("pickup_otp", "")
+    # Brute-force gate, checked before any comparison. The pickup OTP is the
+    # only production path from driver_arrived -> in_progress (the no-OTP
+    # /start routes are 410 in production), so without this the assigned driver
+    # could walk the 4-digit space and open Period 3 with no rider aboard.
+    await check_pickup_otp_lockout(ride_id)
+
+    stored_otp = ride.get("pickup_otp") or ""
+    if not stored_otp:
+        # Legacy or admin-created ride whose pickup_otp is NULL/blank. Before
+        # this guard, compare_digest(None, ...) raised TypeError -> 500, and a
+        # blank stored code would have matched a blank submitted one. This is an
+        # unsatisfiable precondition on the ride row, not a bad client input, so
+        # it is a 409 rather than a 400 or a 500.
+        logger.error(
+            "verify_pickup_otp: ride %s has no pickup_otp; cannot confirm rider presence",
+            ride_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="This ride has no pickup code — contact support to start it",
+        )
+
     if not hmac.compare_digest(stored_otp, request.otp):
+        failures = await record_pickup_otp_failure(ride_id, driver["id"])
+        if failures >= _PICKUP_OTP_MAX_FAILURES:
+            # Threshold attempt: the ride is now locked. Tell the rider, whose
+            # code is being probed and who is the only party able to react
+            # (re-read the code, or cancel). Push + WS, best-effort.
+            _notify_rider_pickup_otp_lockout(ride)
+            raise pickup_otp_locked_exc()
         raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    # Correct code — drop the counter so a later leg of this ride is unaffected.
+    await clear_pickup_otp_failures(ride_id)
 
     # OTP correct — atomic transition guards against duplicate taps/retries
     guard = await _deps.db.update_one(

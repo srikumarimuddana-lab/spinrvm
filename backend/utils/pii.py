@@ -357,3 +357,103 @@ def first_name_only(user: dict | None, fallback: str = "") -> str:
     """
     first = ((user or {}).get("first_name") or "").strip()
     return first or fallback
+
+
+# ── 4xx error-detail redaction (WS-E) ───────────────────────────────
+# `utils/error_handling.py` sanitises 5xx details wholesale, because a 5xx
+# message is never useful to a client. 4xx is different: those strings ARE the
+# user-facing UX ("Invalid phone number", "Card declined"), so they cannot be
+# replaced — but ~30 routes build them with `detail=str(e)` or an f-string
+# interpolating an exception, and those exceptions carry things the client must
+# never see. `routes/admin/legacy_sin_dob_backfill.py` is the worst case: its
+# import service raises with the offending CSV row, so a SIN or date of birth
+# lands in the 400 body, and from there in browser history, Vercel logs and
+# Sentry breadcrumbs. PIPEDA does not care that only an admin saw it, and two
+# driver-facing sites (appeals, tax_exports) leak upstream text to a contractor.
+#
+# So this redacts the dangerous *content* out of a 4xx detail while leaving the
+# sentence readable. Order matters: email before the generic digit run, or the
+# digits inside an address get eaten first.
+#
+# This is a backstop, not a licence — the right fix at any individual site is
+# still to raise a vetted message instead of `str(e)`, and
+# `tests/test_no_raw_exception_in_4xx_detail.py` fails the build on new ones.
+
+_ERR_EMAIL_RE = _re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+# Stripe object ids and secrets, plus sk_/rk_/pk_ keys.
+#
+# Split into two alternations on purpose. Four Stripe prefixes — in_ (Invoice),
+# re_ (Refund), po_ (Payout), cs_ (Checkout Session) — are also the start of
+# ordinary snake_case identifiers that legitimately appear in 4xx copy:
+# "status must be one of in_progress, completed" (routes/admin/users.py) was
+# rewritten to "one of [redacted], completed" by the naive single pattern.
+# Those four therefore require a digit somewhere in the suffix, which every
+# real Stripe id has and no English word does.
+#
+# The unambiguous prefixes keep the plain rule — deliberately, because a
+# 14-char base62 id has roughly an 8% chance of containing no digit at all, so
+# a blanket digit requirement would silently miss about one id in twelve.
+_ERR_STRIPE_RE = _re.compile(
+    r"\b(?:pi|ch|cus|sub|pm|seti|txn|evt|dp|acct|price|prod)_[A-Za-z0-9]{8,}\b"
+    r"|\b(?:in|re|po|cs)_(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{8,}\b"
+    # Checkout Sessions carry a mode segment (cs_test_…/cs_live_…), so the
+    # single-segment rule above misses them: `_` is a word char, so its \b
+    # never fires mid-id.
+    r"|\bcs_(?:test|live)_[A-Za-z0-9]{8,}\b"
+    r"|\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{8,}\b"
+)
+# JWTs and long opaque bearer tokens.
+_ERR_JWT_RE = _re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\b")
+# UUIDs — ride/driver/user ids are safe to log server-side but a raw id in a
+# client-facing string is still an identifier we did not choose to disclose.
+_ERR_UUID_RE = _re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+# 7+ consecutive digits, optionally separated by space/dash: SIN (9), card PAN
+# (13-19), phone (10-11), driver's licence. Deliberately broad — a 4xx message
+# has no legitimate reason to carry a long digit run.
+_ERR_LONG_DIGITS_RE = _re.compile(r"\b(?:\d[ -]?){7,}\d\b")
+# ISO-ish dates: a date of birth in an import-error message.
+_ERR_DATE_RE = _re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+# Postgres / PostgREST internals: SQLSTATE codes, PGRST codes, and the
+# constraint/relation names that come with them.
+_ERR_DB_INTERNALS_RE = _re.compile(
+    r"\bPGRST\d{3}\b"
+    r"|\bSQLSTATE\s*\w+\b"
+    r"|\b23\d{3}\b"
+    r"|\b(?:duplicate key value violates unique constraint|violates foreign key constraint|"
+    r"null value in column|relation)\s+\"[^\"]+\""
+    r"|\bconstraint\s+\"[^\"]+\"",
+    _re.IGNORECASE,
+)
+
+_ERR_MAX_DETAIL_LEN = 300
+
+
+def redact_error_detail(detail: Any) -> Any:
+    """Scrub client-visible identifiers out of a 4xx ``HTTPException`` detail.
+
+    Returns non-string details untouched (FastAPI allows dicts/lists, and those
+    are structured payloads a route built deliberately). Strings come back with
+    emails, phone/SIN/PAN-shaped digit runs, dates, UUIDs, Stripe ids, JWTs and
+    Postgres internals replaced by ``[redacted]``, and are truncated to
+    ``_ERR_MAX_DETAIL_LEN`` — a 4xx message longer than that is a stack trace or
+    a dumped row, not UX copy.
+
+    Idempotent: running it on already-redacted text changes nothing.
+    """
+    if not isinstance(detail, str) or not detail:
+        return detail
+
+    out = detail
+    # Email first: its local part can contain digit runs and dots that the
+    # digit/date patterns would otherwise consume, leaving the domain exposed.
+    out = _ERR_EMAIL_RE.sub("[redacted]", out)
+    out = _ERR_JWT_RE.sub("[redacted]", out)
+    out = _ERR_STRIPE_RE.sub("[redacted]", out)
+    out = _ERR_UUID_RE.sub("[redacted]", out)
+    out = _ERR_DB_INTERNALS_RE.sub("[redacted]", out)
+    out = _ERR_DATE_RE.sub("[redacted]", out)
+    out = _ERR_LONG_DIGITS_RE.sub("[redacted]", out)
+
+    if len(out) > _ERR_MAX_DETAIL_LEN:
+        out = out[:_ERR_MAX_DETAIL_LEN].rstrip() + "…"
+    return out

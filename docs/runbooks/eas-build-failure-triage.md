@@ -307,7 +307,9 @@ assuming a green Actions tab means every configured check ran).
   settings, Gradle, provisioning profiles, credentials) — those don't
   reproduce via `expo export` (JS-bundle-only) and need an actual
   `eas build` run or Xcode/Android Studio locally. Different failure class,
-  different diagnostic path.
+  different diagnostic path. For Android signing/keystore specifically (a SHA-1
+  that differs between Play Console and EAS, a rejected AAB upload), see
+  `docs/runbooks/android-signing-fingerprint-mismatch.md`.
 - Runtime crashes after a successful bundle/build — see
   `docs/runbooks/MOBILE_SMOKE.md` for the human device-smoke checklist.
 - EAS service outages / credential expiry — check `expo.dev` status page

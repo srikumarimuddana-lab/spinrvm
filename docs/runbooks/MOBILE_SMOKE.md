@@ -301,7 +301,7 @@ Platforms covered: [ ] iOS  [ ] Android  [ ] Web
 | Failure | Likely cause | First check |
 |---|---|---|
 | OTP never arrives | Twilio creds wrong, or Firebase Phone Auth not enabled | `full_stack_smoke.py --backend ...` OTP check |
-| Map renders grey | Google Maps API key not whitelisted for the bundle ID | Google Cloud Console → API key restrictions |
+| Map renders grey | Google Maps API key not whitelisted for the bundle ID + SHA-1 | Google Cloud Console → API key restrictions; `docs/runbooks/android-signing-fingerprint-mismatch.md` §4a |
 | WS does not reconnect | Ingress dropping WS upgrades | Check nginx / LB websocket proxy config |
 | Rider stuck on "Finding driver" after driver accepts | WS event not published to `rider_{id}` channel | Backend logs for the accept handler |
 | Driver doesn't receive offer | `/ws/driver/{id}` not open, or push token missing | Driver's `/drivers/push-token` was called on login |

@@ -331,7 +331,7 @@ export default function DriverDetailSheet({
                                                     // eslint-disable-next-line no-restricted-syntax -- Spinr Pass brand violet, not a success/warning/destructive signal (#2816)
                                                     <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>
                                                 ))}
-                                                {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
+                                                {selected.subscription_status === "expired" && <Badge className="bg-destructive/15 text-destructive dark:text-[#ff453a]"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
                                             {/* Profile Completeness Summary */}
                                             {(() => {

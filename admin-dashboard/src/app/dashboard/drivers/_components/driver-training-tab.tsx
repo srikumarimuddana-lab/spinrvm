@@ -134,7 +134,7 @@ export function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: 
                                         {c.expires_at ? ` · expires ${fmtDate(c.expires_at)}` : ""}
                                     </p>
                                 </div>
-                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${c.status === "active" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"}`}>
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${c.status === "active" ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive dark:text-[#ff453a]"}`}>
                                     {c.status}
                                 </span>
                             </div>

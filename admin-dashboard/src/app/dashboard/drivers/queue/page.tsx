@@ -51,7 +51,7 @@ const formatTimeInQueue = (seconds: number) => {
 };
 
 const slaTone = (seconds: number) => {
-    if (seconds >= 86400) return "bg-destructive/15 text-destructive border-destructive/30";
+    if (seconds >= 86400) return "bg-destructive/15 text-destructive dark:text-[#ff453a] border-destructive/30";
     if (seconds >= 14400) return "bg-warning/15 text-warning border-warning/30";
     return "bg-success/15 text-success border-success/30";
 };

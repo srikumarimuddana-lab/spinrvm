@@ -72,6 +72,43 @@ function vehicleIconLabel(icon: string): string {
     return icon.replace(/-outline$/, "").split("-").map((w) => w[0]?.toUpperCase() + w.slice(1)).join(" ");
 }
 
+/* eslint-disable no-restricted-syntax -- categorical vehicle-type accent
+   color (4 distinct types), not a success/warning/destructive signal — too
+   many states for the 3-token system, see comment above (#2816). Hues match
+   the same icon keys' colors in rider-app/ride-options.tsx and
+   driver-app/vehicle-info.tsx, so a type reads as the same color across
+   admin, rider, and driver. */
+const VEHICLE_ICON_COLORS: Record<string, string> = {
+    "car-compact": "text-blue-600",
+    "car-sport": "text-amber-600",
+    "bus": "text-emerald-600",
+    "bus-outline": "text-violet-600",
+};
+const DEFAULT_VEHICLE_ICON_COLOR = "text-gray-500";
+
+function vehicleIconColor(icon: string): string {
+    return VEHICLE_ICON_COLORS[icon] || DEFAULT_VEHICLE_ICON_COLOR;
+}
+
+// Separate, fully-literal map (rather than interpolating an opacity modifier
+// onto VEHICLE_ICON_COLORS at runtime, e.g. `${vehicleIconColor(icon)}/40`)
+// for the muted card-preview fallback icon. Tailwind's scanner only
+// generates a utility for a class string that appears verbatim somewhere in
+// the source — a template-concatenated "text-blue-600/40" would never match
+// anything it emits, silently rendering with no color at all.
+const VEHICLE_ICON_MUTED_COLORS: Record<string, string> = {
+    "car-compact": "text-blue-300",
+    "car-sport": "text-amber-300",
+    "bus": "text-emerald-300",
+    "bus-outline": "text-violet-300",
+};
+const DEFAULT_VEHICLE_ICON_MUTED_COLOR = "text-muted-foreground/30";
+/* eslint-enable no-restricted-syntax */
+
+function vehicleIconMutedColor(icon: string): string {
+    return VEHICLE_ICON_MUTED_COLORS[icon] || DEFAULT_VEHICLE_ICON_MUTED_COLOR;
+}
+
 // Mirrors the icons bundled in the mobile apps (shared/components/CarMarker
 // CAR_IMAGES) and the backend's _VALID_MARKER_VARIANTS. Adding one requires
 // an app release, so the list is fixed here.
@@ -305,7 +342,7 @@ export default function VehicleTypesPage() {
                                 ) : (
                                     (() => {
                                         const FallbackIcon = VEHICLE_ICON_MAP[vt.icon] || Car;
-                                        return <FallbackIcon className="h-16 w-16 text-muted-foreground/30" />;
+                                        return <FallbackIcon className={`h-16 w-16 ${vehicleIconMutedColor(vt.icon)}`} />;
                                     })()
                                 )}
                             </div>
@@ -429,7 +466,7 @@ export default function VehicleTypesPage() {
                                                 : "border-input hover:bg-muted"
                                         }`}
                                     >
-                                        <Icon className="h-6 w-6" />
+                                        <Icon className={`h-6 w-6 ${vehicleIconColor(value)}`} />
                                         <span className="text-xs font-medium">{vehicleIconLabel(value)}</span>
                                     </button>
                                 ))}

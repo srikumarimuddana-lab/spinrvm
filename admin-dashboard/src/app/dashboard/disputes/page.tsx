@@ -30,8 +30,12 @@ import { getPartialRefundError } from "@/lib/disputeResolutionSchema";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import ChargebacksTab from "./chargebacks-tab";
 
+// dark:text-[#ff453a] on "open" — text-destructive alone is only 3.7:1 on
+// this bg-destructive/15 tint, below AA's 4.5:1 (#2826); reuses the vibrant
+// brand red globals.css's dark theme already uses for the same reason
+// (--sidebar-primary/--sidebar-destructive, and #2803's fix elsewhere).
 const STATUS_COLORS: Record<string, string> = {
-  open: "bg-destructive/15 text-destructive",
+  open: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
   under_review: "bg-warning/15 text-warning",
   resolved: "bg-success/15 text-success",
   rejected: "bg-muted text-muted-foreground",
@@ -252,7 +256,7 @@ export default function DisputesPage() {
                         <Badge variant="outline">{REASON_LABELS[d.reason] || d.reason}</Badge>
                       </TableCell>
                       <TableCell className="font-mono">${Number(d.original_fare || 0).toFixed(2)}</TableCell>
-                      <TableCell className="font-mono text-destructive">${Number(d.requested_amount || 0).toFixed(2)}</TableCell>
+                      <TableCell className="font-mono text-destructive dark:text-[#ff453a]">${Number(d.requested_amount || 0).toFixed(2)}</TableCell>
                       <TableCell>
                         <Badge className={STATUS_COLORS[d.status] || "bg-muted"}>{d.status}</Badge>
                       </TableCell>
@@ -309,7 +313,7 @@ export default function DisputesPage() {
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Requested Refund</span>
-                  <span className="font-mono text-destructive">${Number(selected.requested_amount || 0).toFixed(2)}</span>
+                  <span className="font-mono text-destructive dark:text-[#ff453a]">${Number(selected.requested_amount || 0).toFixed(2)}</span>
                 </div>
               </div>
 

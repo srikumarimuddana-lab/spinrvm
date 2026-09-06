@@ -765,10 +765,11 @@ export default function SubscriptionsPage() {
                                             </TableCell>
                                             <TableCell className="text-right">
                                                 <div className="flex justify-end gap-2">
-                                                    <Button size="sm" variant="outline" onClick={() => openEdit(plan)}>
+                                                    {/* aria-label on both — icon-only, no accessible name (#2826) */}
+                                                    <Button size="sm" variant="outline" aria-label={`Edit ${plan.name}`} onClick={() => openEdit(plan)}>
                                                         <Pencil className="h-3 w-3" />
                                                     </Button>
-                                                    <Button size="sm" variant="outline" onClick={() => openDelete(plan)}>
+                                                    <Button size="sm" variant="outline" aria-label={`Delete ${plan.name}`} onClick={() => openDelete(plan)}>
                                                         <Trash2 className="h-3 w-3 text-destructive" />
                                                     </Button>
                                                 </div>

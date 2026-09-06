@@ -22,20 +22,25 @@ bypass number.
 ## Current live submission (set 2026-09-05)
 
 `REVIEW_LOGIN_ACCOUNTS` is **live on both Fly (primary) and Railway (standby)**,
-confirmed via matching `/deploy-info` fingerprints and a real send-otp/verify-otp
-round trip against Fly production:
+confirmed via matching `/deploy-info` fingerprints and real send-otp/verify-otp
+round trips against Fly production. There is exactly **one** reviewer account,
+shared by both the rider and driver app submissions:
 
 | App | Phone | Code |
 |---|---|---|
-| Rider | `+13065550100` | `4821` |
-| Driver | `+13065550101` | `4832` |
+| Rider + Driver (same account) | `+16393824646` | `4821` |
 
-Both accounts exist in prod (`soavhtdhefowwvforzwb`). The driver account
-(`ae4e6bbe-bf68-468c-84f8-a6bb806ea90a` / driver row
-`8bb694be-2a57-4e2d-9e7d-df6f17f3271d`) is pre-approved: `status=active`,
-`is_verified=true`, all document expiries set to 2028, vehicle type Economy,
-service area Regina, `is_online=true`/`is_available=true` so it satisfies
-`go_online` immediately — a reviewer does not need to complete onboarding.
+The account (`d20924e6-cf8d-47a8-842d-105ccdae1a5c`) has `role=driver` +
+`is_driver=true` so it can sign into either app with the same phone/code. The
+driver row (`5cea417f-ddf6-460e-a240-482dfe7c0c7c`) is pre-approved:
+`status=active`, `is_verified=true`, all document expiries set to 2028,
+vehicle type Economy, service area Regina, `is_online=true`/`is_available=true`
+— satisfies `go_online` immediately, no onboarding needed.
+
+Earlier test accounts (`+13065550100`, `+13065550101`) have been retired: the
+rider test account was deleted; the driver test account was banned (not
+deleted — it has FK-referenced `driver_insurance_periods` rows) and demoted
+off the reviewer allow-list.
 
 **Reminder:** clear `REVIEW_LOGIN_ACCOUNTS` on both providers once the build is
 approved (see Security hygiene below) — this is the item most likely to be

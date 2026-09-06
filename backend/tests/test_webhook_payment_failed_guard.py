@@ -118,6 +118,32 @@ class TestGenuineFailureStillRecorded:
         m["update_one"].assert_awaited_once()
 
 
+class TestRideReadFailureIsNotSilentlyDropped:
+    async def test_ride_read_failure_unclaims_and_503s(self):
+        """The event is ALREADY claimed when the CAS re-read runs. If that read
+        raises and nothing unclaims, Stripe's retry short-circuits as a
+        duplicate and the payment failure is lost FOREVER — worse than the
+        mislabelling N1 was about. Caught by CI on the first real run of this
+        branch: two pre-existing tests blanket-patched get_ride to raise and
+        went red because the read was unguarded."""
+        from fastapi import HTTPException
+
+        from backend.routes import webhooks
+
+        unclaim = AsyncMock()
+        with (
+            patch.object(webhooks.db_supabase, "get_ride", AsyncMock(side_effect=RuntimeError("db blip"))),
+            patch.object(webhooks, "unclaim_stripe_event", unclaim),
+            patch.object(webhooks, "send_push_notification", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await webhooks._dispatch_stripe_event("evt_1", "payment_intent.payment_failed", {}, _data_object())
+        # 503 (DB error the client retries), and the claim released first so the
+        # retry can actually re-process rather than being deduped away.
+        assert exc.value.status_code == 503
+        unclaim.assert_awaited_once_with("evt_1")
+
+
 class TestMissingRideStillRetries:
     async def test_unknown_ride_unclaims_and_500s_so_stripe_retries(self):
         from fastapi import HTTPException

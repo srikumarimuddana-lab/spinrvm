@@ -12847,6 +12847,17 @@ record of what was assumed vs. what was actually true</summary>
   change log `docs/change-log/2026-09-04-railway-standby-parity-automation.md`.
   **Still open:** the token rotation itself, then C1's drill (checklist now
   in the runbook). Re-check the parity issue after both.
+- **Update (2026-09-05):** independently reconfirmed with the user — Railway
+  failover will not work today because the Railway credentials
+  (`RAILWAY_TOKEN`) are not available/valid, consistent with the 2026-09-04
+  root cause above. No change in status: **still consciously deferred**
+  until go-live/device testing winds down; not actioned this session.
+  (Same day, `standby-parity-monitor.yml`'s auto-filed issue #5034 flagged
+  both this Railway-token finding — real — and a separate "Fly missing 13
+  secrets" finding that turned out to be a false positive from a `jq`
+  field-name bug in the monitor script itself, fixed same-day in PR #5038.
+  Fly, the primary, was never actually missing secrets; only the
+  Railway-token half of #5034 reflects this still-deferred item.)
 
 ### C6. `docker-image-scan` (Trivy): stale-pinned base image fixed; msgpack/setuptools findings were REAL and are now fixed
 - [x] **Status:** done — but **the "false positive" conclusion recorded here

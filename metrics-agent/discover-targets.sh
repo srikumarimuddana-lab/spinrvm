@@ -3,18 +3,28 @@
 # per-machine .internal address and writes a Prometheus file_sd JSON file
 # that Alloy's discovery.file component watches.
 #
-# WHY per-machine, not the app-level `<app>.internal` name: Fly's app-level
-# `.internal` DNS load-balances a single resolution to ONE machine, so a
-# scrape config pointed at it only ever sees one of the ≥2 running backend
-# machines (docs/adr/010-metrics-aggregation-and-alerting.md's risk note;
-# issue #3295's "Risks of making this change" section). Fly additionally
-# publishes `vms.<app>.internal`, which resolves to one AAAA record PER
-# running machine — that fan-out is what makes per-machine scraping
-# possible without a Fly Machines API token.
+# WHY query `<app>.internal` directly (not `vms.<app>.internal`): an
+# earlier version of this script queried `vms.<app>.internal` for AAAA
+# records, believing it published one AAAA record per running machine.
+# That's wrong — confirmed via `dig` against the real spinr-backend-yyz
+# app, 2026-09-05: `vms.<app>.internal` is a TXT record listing
+# "<machine-id> <region>" pairs (e.g. "863994ce20016d yyz,894526a9005298
+# yyz"), not an address record, and querying it as AAAA either times out
+# or returns nothing depending on the resolver. The plain `<app>.internal`
+# name, by contrast, really does return one AAAA record per running
+# machine in a single answer (also confirmed via a live `dig AAAA
+# spinr-backend-yyz.internal` — both backend machines' addresses came
+# back in one response) — so no two-step TXT-then-per-machine lookup is
+# needed at all. The original per-machine-scrape *goal* still holds
+# (docs/adr/010-metrics-aggregation-and-alerting.md's risk note; issue
+# #3295's "Risks of making this change" section: a single scrape target
+# pointed at the hostname would only ever reach one machine per TCP
+# connection) — it's achieved here because Alloy's prometheus.scrape
+# connects to each literal IP this script writes out, never to the
+# hostname itself.
 #
 # Ref: Fly private networking docs, "Discover apps by 6PN network" /
-# "Instance Discovery" (per-machine `<id>.vm.<region>.<app>.internal` and
-# the `vms.<app>.internal` multi-A/AAAA record).
+# "Instance Discovery".
 set -u
 
 TARGETS_FILE="/etc/alloy/targets.json"
@@ -29,12 +39,12 @@ log() {
 }
 
 while true; do
-  # AAAA records for vms.<app>.internal — one per running machine, per Fly's
-  # documented multi-record discovery name.
-  addrs=$(dig AAAA +short "vms.${BACKEND_APP}.internal" 2>/dev/null | grep -E '^[0-9a-fA-F:]+$' || true)
+  # AAAA records for <app>.internal — one per running machine, returned in a
+  # single answer (verified via a live `dig`, see the header comment above).
+  addrs=$(dig AAAA +short "${BACKEND_APP}.internal" 2>/dev/null | grep -E '^[0-9a-fA-F:]+$' || true)
 
   if [ -z "$addrs" ]; then
-    log "WARNING: no addresses resolved for vms.${BACKEND_APP}.internal — leaving previous targets file in place (fails open on stale-but-valid targets, not empty)"
+    log "WARNING: no addresses resolved for ${BACKEND_APP}.internal — leaving previous targets file in place (fails open on stale-but-valid targets, not empty)"
   else
     tmp="${TARGETS_FILE}.tmp"
     {

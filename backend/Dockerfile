@@ -92,4 +92,19 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health')" || exit 1
 
-CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-4}"]
+# --host :: (not 0.0.0.0): 0.0.0.0 is IPv4-only, and Fly's private networking
+# (6PN, used for machine-to-machine traffic like the metrics-agent scraping
+# this app's /metrics — see metrics-agent/README.md, ADR-010) is IPv6-only.
+# A 0.0.0.0-bound socket is unreachable from another Fly machine's 6PN address
+# even though it's reachable from the public internet (Fly's edge proxy
+# forwards public HTTPS traffic to 127.0.0.1 inside the machine, which matches
+# an IPv4-only bind). :: is Linux's IPv6 wildcard and is dual-stack by default
+# (no bindv6only sysctl is set anywhere in this image or fly.toml), so it
+# accepts both IPv4 and IPv6 connections on the same socket — purely additive,
+# no change to existing public/IPv4 traffic. Confirmed via a live repro,
+# 2026-09-05: from inside a running spinr-backend-yyz machine,
+# `curl http://localhost:8000/health` succeeded (200) while
+# `curl http://[$FLY_PRIVATE_IP]:8000/health` (the same machine's own 6PN
+# address) failed with `ConnectionRefusedError: [Errno 111]` — proving no
+# socket was listening on IPv6 at all, not a firewall/routing issue.
+CMD ["sh", "-c", "uvicorn server:app --host :: --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-4}"]

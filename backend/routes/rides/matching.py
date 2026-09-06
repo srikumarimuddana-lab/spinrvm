@@ -95,6 +95,20 @@ async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
     return
 
 
+# Ride states that mean a driver has actually taken the ride, as opposed to
+# merely being offered it. Used by process_expired_offer to tell "this offer
+# timed out" from "this driver won the accept race" — see D1 there. Deliberately
+# excludes driver_assigned: on the single-offer path a ride sits in
+# driver_assigned with driver_id set while its offer is still pending, and
+# expiring that offer is the legitimate timeout, not a lost race.
+_POST_ACCEPT_STATUSES = (
+    RideStatus.DRIVER_ACCEPTED,
+    RideStatus.DRIVER_ARRIVED,
+    RideStatus.IN_PROGRESS,
+    RideStatus.COMPLETED,
+)
+
+
 # Cap the no-driver re-dispatch chain. At 10s/attempt this is ~5 min, matching
 # the stuck-ride sweeper's cancel window — defense-in-depth so a sweeper failure
 # can't leave a ride re-dispatching (and re-querying drivers) forever.
@@ -1714,6 +1728,73 @@ async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: in
         )
     )
     if not (getattr(claimed, "data", None) or []):
+        return False
+
+    # D1 (2026-09-05 director review): winning the OFFER claim above is not
+    # sufficient on the batch-offer path. There, accept_ride
+    # (routes/drivers/ride_flow.py) CASes the *ride* — {"status": SEARCHING,
+    # "driver_id": None} -> driver_accepted — independently of this offer row,
+    # and only flips the offer to "accepted" afterwards, for a metric. So a
+    # driver can win the ride and still lose this offer claim, and everything
+    # below would then punish the winner: miss-streak++, acceptance rate down,
+    # and either force-offline + Period 0 or set_driver_available(True) —
+    # i.e. a driver offline and in Period 0 *mid-trip*, or marked available
+    # while on an active ride (set_driver_available never checks for one).
+    #
+    # The single-offer path is already exclusive (both sides predicate on
+    # status=driver_assigned + this driver), and there an expiring offer on a
+    # ride still in driver_assigned is the legitimate timeout — so this check
+    # must key on the ride having reached a POST-acceptance state with this
+    # driver, never on driver_id alone.
+    #
+    # RESIDUAL, deliberately not closed here: this is a read after the claim,
+    # not part of it, so a window remains — reaper claims the offer, reads the
+    # ride as still `searching`, and only THEN does accept_ride's CAS land. The
+    # winner is still penalised in that ordering. Closing it fully needs the
+    # offer claim and the ride CAS to be one atomic unit (a Postgres function,
+    # the way corporate_wallet_apply_delta does it), which is a schema change
+    # and its own piece of work. What this guard does buy is the common case:
+    # the accept CAS normally lands well before the reaper's read, because the
+    # reaper only runs at/after the 15 s timeout while the accept that races it
+    # arrived just before. Narrower window, same failure if you lose it.
+    try:
+        _ride_now = await _deps.db_supabase.get_ride(ride_id)
+    except Exception:
+        # Fail closed: if we cannot tell whether the driver won, do NOT
+        # penalise. A missed penalty is recoverable; offlining a driver
+        # mid-trip and mis-recording their insurance period is not.
+        # loguru: no exc_info= kwarg; opt(exception=True) is how a traceback
+        # reaches the log line and the loguru->Sentry bridge (CLAUDE.md).
+        logger.opt(exception=True).error(
+            f"[DISPATCH] offer-expiry could not re-read ride {ride_id} to check for an "
+            f"accept race — skipping penalties for driver {driver_id}"
+        )
+        return False
+
+    if _ride_now and _ride_now.get("driver_id") == driver_id and _ride_now.get("status") in _POST_ACCEPT_STATUSES:
+        logger.info(
+            f"[DISPATCH] offer-expiry lost the race to accept_ride: driver {driver_id} already "
+            f"holds ride {ride_id} ({_ride_now.get('status')}) — restoring the offer row and "
+            "skipping penalties"
+        )
+        # accept_ride's own pending->accepted flip matched zero rows (this
+        # reaper had already taken the row to "expired"), so restore it here or
+        # the offer history shows "expired" for an offer that was accepted.
+        try:
+            await _deps.db_supabase.run_sync(
+                lambda: (
+                    _deps.db_supabase.supabase.table("ride_offers")
+                    .update({"status": "accepted", "responded_at": now_iso})
+                    .eq("ride_id", ride_id)
+                    .eq("driver_id", driver_id)
+                    .eq("status", "expired")
+                    .execute()
+                )
+            )
+        except Exception as e:
+            logger.opt(exception=True).error(
+                f"[DISPATCH] failed to restore accepted offer row ride={ride_id} driver={driver_id}: {e}"
+            )
         return False
 
     miss_count = await increment_miss_streak(driver_id)

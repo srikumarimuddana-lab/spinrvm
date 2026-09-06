@@ -15,6 +15,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 
+try:
+    from .pii import redact_error_detail as _redact_error_detail
+except ImportError:  # pragma: no cover — top-level vs package import
+    from utils.pii import redact_error_detail as _redact_error_detail  # type: ignore
+
 # B-P2-1: short ALL-CAPS sentinels (e.g. ERR_AUTH_UNAVAILABLE,
 # ERR_OTP_LOCKED) are vetted by the route author and let mobile clients
 # branch UI without parsing English. Anything else on a 5xx response is
@@ -723,8 +728,15 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     Stripe charge IDs, Supabase constraint names, JWT library errors,
     etc. straight to the client. The full detail still hits the server
     log paired with the request_id so ops can correlate via the id the
-    user quotes. 4xx pass through unchanged (those messages are
-    intended user-facing UX — "Invalid phone number", "Card declined").
+    user quotes.
+
+    WS-E: 4xx details are NOT replaced — they are intended user-facing UX
+    ("Invalid phone number", "Card declined") — but they are passed through
+    ``utils.pii.redact_error_detail`` so an interpolated exception cannot
+    carry a SIN, email, card number, Stripe id or Postgres constraint name
+    into the response body, browser history, Vercel logs or Sentry
+    breadcrumbs. The un-redacted detail is never logged here: unlike the 5xx
+    case, the raw text may itself be the PII.
 
     Also propagates ``exc.headers``: routes that raise HTTPException
     with `Retry-After` / `RateLimit-*` (e.g. the OTP lockout path,
@@ -737,7 +749,24 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
     detail = exc.detail
     sanitized = False
-    if exc.status_code >= 500 and _should_sanitize_5xx_detail(detail):
+    if 400 <= exc.status_code < 500:
+        # WS-E: 4xx details are user-facing UX and must stay readable, so they
+        # are NOT replaced wholesale like 5xx. But ~30 routes build them with
+        # `detail=str(e)` or an interpolated exception, and those carry things
+        # a client must never see — the SIN/DOB backfill import raises with the
+        # offending CSV row. Scrub the identifiers, keep the sentence.
+        _redacted = _redact_error_detail(detail)
+        if _redacted != detail:
+            try:
+                logger.opt(raw=True).warning(
+                    f"[{request_id}] Redacted 4xx HTTPException detail at "
+                    f"{request.method} {request.url.path}: status={exc.status_code}"
+                )
+            except Exception:  # noqa: S110
+                # Never let logging take down the error handler itself.
+                pass
+        detail = _redacted
+    elif exc.status_code >= 500 and _should_sanitize_5xx_detail(detail):
         try:
             logger.opt(raw=True).error(
                 f"[{request_id}] Sanitised 5xx HTTPException detail at "

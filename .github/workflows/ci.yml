@@ -1135,13 +1135,20 @@ jobs:
             exit 1
           fi
 
-      - name: Health check — confirm 200 + DB reachable
-        # /health performs a real DB readiness ping (F1): a dead-DB deploy
-        # returns 503 (curl -sf fails) or status!=healthy, turning this red.
+      - name: Readiness check — confirm 200 + DB reachable
+        # /ready performs the real DB readiness ping (F1): a dead-DB deploy
+        # returns 503 (curl -sf fails) or db.status != ok, turning this red.
+        #
+        # /ready, NOT /health: since the 2026-09-05 liveness/readiness split
+        # /health is liveness only and answers 200 with db.status="degraded"
+        # when Supabase is unreachable, so asserting on it would let a
+        # dead-DB deploy pass. The URL resolution step above deliberately
+        # still probes /health — it only needs "is something serving here",
+        # and a DB outage must not make it fail over to the legacy URL.
         run: |
-          BODY=$(curl -sf --retry 3 --retry-delay 5 "${{ steps.resolve.outputs.url }}/health")
+          BODY=$(curl -sf --retry 3 --retry-delay 5 "${{ steps.resolve.outputs.url }}/ready")
           echo "$BODY"
-          echo "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status') in ('ok','healthy'), f'bad status: {d}'; assert d.get('db', {}).get('status') == 'ok', f'DB not ready: {d}'"
+          echo "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status') in ('ok','ready'), f'bad status: {d}'; assert d.get('db', {}).get('status') == 'ok', f'DB not ready: {d}'"
 
       - name: Settings endpoint — confirm 200 + JSON
         run: |

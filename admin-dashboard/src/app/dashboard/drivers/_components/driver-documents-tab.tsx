@@ -116,11 +116,11 @@ export default function DriverDocumentsTab({
                                                     <div key={reqDoc.key}>
                                                         <div className="flex items-center gap-2 mb-3 flex-wrap">
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h3 className="text-sm font-semibold">{reqDoc.label}</h3>
-                                                            {matchingDocs.length === 0 && <Badge className="bg-destructive/15 text-destructive text-[10px]">Missing</Badge>}
+                                                            {matchingDocs.length === 0 && <Badge className="bg-destructive/15 text-destructive dark:text-[#ff453a] text-[10px]">Missing</Badge>}
                                                             {counts.pending > 0 && <Badge className="bg-warning/15 text-warning text-[10px]">{counts.pending} pending</Badge>}
                                                             {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-success/15 text-success text-[10px]">Approved</Badge>}
                                                             {expiryMissing && counts.pending === 0 && <Badge className="bg-warning/15 text-warning text-[10px]">Approved · expiry not recorded</Badge>}
-                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-destructive/15 text-destructive text-[10px]">Re-upload needed</Badge>}
+                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-destructive/15 text-destructive dark:text-[#ff453a] text-[10px]">Re-upload needed</Badge>}
                                                         </div>
                                                         {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} driverName={selected?.name || selected?.full_name || ''} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}

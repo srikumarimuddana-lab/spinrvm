@@ -145,7 +145,7 @@ export function PayoutsTab() {
     const statusBadge = (s: string) => {
         if (s === "completed") return "bg-success/15 text-success";
         if (s === "pending") return "bg-warning/15 text-warning";
-        if (s === "failed") return "bg-destructive/15 text-destructive";
+        if (s === "failed") return "bg-destructive/15 text-destructive dark:text-[#ff453a]";
         return "bg-muted text-muted-foreground";
     };
 

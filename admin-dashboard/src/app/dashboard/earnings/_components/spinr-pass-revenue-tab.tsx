@@ -379,7 +379,7 @@ export function SpinrPassRevenueTab() {
                                                 <Badge variant="secondary" className={
                                                     t.status === "active" ? "bg-success/15 text-success" :
                                                     t.status === "expired" ? "bg-warning/15 text-warning" :
-                                                    "bg-destructive/15 text-destructive"
+                                                    "bg-destructive/15 text-destructive dark:text-[#ff453a]"
                                                 }>{t.status}</Badge>
                                             </TableCell>
                                             <TableCell className="text-xs text-muted-foreground">{formatDate(t.started_at)}</TableCell>

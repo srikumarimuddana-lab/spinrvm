@@ -59,7 +59,7 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
     pending:   { label: "Pending",   cls: "bg-warning/15 text-warning" },
     // eslint-disable-next-line no-restricted-syntax -- "processing" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from the other four (#2816)
     processing:{ label: "Processing",cls: "bg-blue-500/15 text-blue-700 dark:text-blue-400" },
-    failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive" },
+    failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive dark:text-[#ff453a]" },
     cancelled: { label: "Cancelled", cls: "bg-muted text-muted-foreground" },
 };
 

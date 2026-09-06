@@ -37,7 +37,7 @@ const POLICY_RESULT_COLORS: Record<string, string> = {
     pass: "bg-success/15 text-success",
     // eslint-disable-next-line no-restricted-syntax -- "override" (manually approved despite a policy fail) has no semantic-token equivalent; must stay distinct from pass/fail (#2816)
     override: "bg-blue-100 text-blue-800",
-    fail: "bg-destructive/15 text-destructive",
+    fail: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
 };
 
 export default function ActivityPage() {

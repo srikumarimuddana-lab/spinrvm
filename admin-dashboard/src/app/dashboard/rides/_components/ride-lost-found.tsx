@@ -72,7 +72,7 @@ export default function RideLostFound({ rideId, items, onRefresh }: Props) {
                                     {(item.status === "reported" || item.status === "driver_notified") && (
                                         <div className="flex gap-1">
                                             <button onClick={() => handleResolve(item.id, "resolved")} className="text-[10px] px-2 py-0.5 rounded bg-success/15 text-success hover:bg-success/25">Resolved</button>
-                                            <button onClick={() => handleResolve(item.id, "unresolved")} className="text-[10px] px-2 py-0.5 rounded bg-destructive/15 text-destructive hover:bg-destructive/25">Unresolved</button>
+                                            <button onClick={() => handleResolve(item.id, "unresolved")} className="text-[10px] px-2 py-0.5 rounded bg-destructive/15 text-destructive dark:text-[#ff453a] hover:bg-destructive/25">Unresolved</button>
                                         </div>
                                     )}
                                 </div>

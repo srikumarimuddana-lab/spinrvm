@@ -17,6 +17,7 @@ import {
     type DriverImportReportItem,
 } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
+import { BackToMigrationChecklistLink } from "@/components/bulk-operations-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -247,6 +248,8 @@ export default function BulkImportPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
+            <BackToMigrationChecklistLink className="-ml-3" />
+
             <PageHeader
                 title="Bulk Driver Import"
                 description={
@@ -353,9 +356,12 @@ export default function BulkImportPage() {
 
             {committedSummary && (
                 <Card className="border-success">
-                    <CardContent className="flex items-center gap-3 py-4">
-                        <CheckCircle2 className="h-5 w-5 text-success" />
-                        <span className="text-sm">{committedSummary}</span>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+                        <div className="flex items-center gap-3">
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
+                            <span className="text-sm">{committedSummary}</span>
+                        </div>
+                        <BackToMigrationChecklistLink />
                     </CardContent>
                 </Card>
             )}

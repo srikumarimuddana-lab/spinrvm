@@ -191,7 +191,7 @@ function createStyles(colors: ThemeColors) {
     shareBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
     livePill: {
       flexDirection: 'row', alignItems: 'center', gap: 5,
-      backgroundColor: '#FEF2F2', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 20,
+      backgroundColor: colors.dangerBg, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 20,
     },
     liveDot: {
       width: 7, height: 7, borderRadius: 4, backgroundColor: colors.primary,

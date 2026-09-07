@@ -975,7 +975,7 @@ function createStyles(colors: ThemeColors) {
       flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4,
       backgroundColor: colors.surfaceLight, paddingVertical: 14, borderRadius: 14,
     },
-    actionBtnDanger: { backgroundColor: '#FEF2F2' },
+    actionBtnDanger: { backgroundColor: colors.dangerBg },
     actionBtnText: { fontSize: 12, fontWeight: '600', color: colors.text },
 
     // Dev

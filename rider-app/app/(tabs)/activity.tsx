@@ -208,7 +208,7 @@ export default function ActivityScreen() {
     switch (status) {
       case 'completed': return '#10B981';
       case 'cancelled': return '#999';
-      case 'in_progress': return '#3B82F6';
+      case 'in_progress': return colors.info;
       default: return '#FFB800';
     }
   };
@@ -559,8 +559,8 @@ export default function ActivityScreen() {
                 accessibilityRole="button"
                 accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}`}
               >
-                <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
-                  <Ionicons name="calendar" size={20} color="#3B82F6" />
+                <View style={[styles.rideIcon, { backgroundColor: colors.infoBg }]}>
+                  <Ionicons name="calendar" size={20} color={colors.info} />
                 </View>
                 <View style={styles.rideDetails}>
                   <Text style={styles.rideDestination} numberOfLines={1}>
@@ -575,8 +575,8 @@ export default function ActivityScreen() {
                     ${parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)).toFixed(2)}
                   </Text>
                   <View style={styles.rideStatusContainer}>
-                    <View style={[styles.statusDot, { backgroundColor: '#3B82F6' }]} />
-                    <Text style={[styles.rideStatus, { color: '#3B82F6' }]} allowFontScaling={false}>{t('activity.scheduled')}</Text>
+                    <View style={[styles.statusDot, { backgroundColor: colors.info }]} />
+                    <Text style={[styles.rideStatus, { color: colors.info }]} allowFontScaling={false}>{t('activity.scheduled')}</Text>
                   </View>
                 </View>
               </TouchableOpacity>

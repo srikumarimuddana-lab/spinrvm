@@ -97,7 +97,7 @@ export default function WorkAllowanceRequestScreen() {
           {/* Current balance summary */}
           {balance && (
             <View style={styles.balanceSummary}>
-              <Ionicons name="wallet-outline" size={18} color="#3B82F6" />
+              <Ionicons name="wallet-outline" size={18} color={colors.info} />
               <Text style={styles.balanceSummaryText}>
                 Current balance:{' '}
                 <Text style={styles.balanceSummaryAmount}>
@@ -225,7 +225,7 @@ function createStyles(colors: ThemeColors) {
     balanceSummary: {
       flexDirection: 'row', alignItems: 'center', gap: 8,
       margin: 16, marginBottom: 0,
-      backgroundColor: '#EFF6FF', borderRadius: 10,
+      backgroundColor: colors.infoBg, borderRadius: 10,
       paddingHorizontal: 14, paddingVertical: 10,
     },
     balanceSummaryText: { fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text },

@@ -665,8 +665,8 @@ function RideCompletedScreenContent() {
 
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
-              <View style={[styles.statIconWrap, { backgroundColor: '#EFF6FF' }]}>
-                <Ionicons name="time-outline" size={16} color="#3B82F6" />
+              <View style={[styles.statIconWrap, { backgroundColor: colors.infoBg }]}>
+                <Ionicons name="time-outline" size={16} color={colors.info} />
               </View>
               <Text style={styles.statVal} allowFontScaling={false}>{duration} min</Text>
               <Text style={styles.statLbl}>Duration</Text>
@@ -775,8 +775,8 @@ function RideCompletedScreenContent() {
             onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
             activeOpacity={0.7}
           >
-            <View style={[styles.actionIcon, { backgroundColor: '#EFF6FF' }]}>
-              <Ionicons name="chatbubble-ellipses" size={20} color="#3B82F6" />
+            <View style={[styles.actionIcon, { backgroundColor: colors.infoBg }]}>
+              <Ionicons name="chatbubble-ellipses" size={20} color={colors.info} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionBtnTitle}>Message Driver</Text>
@@ -810,7 +810,7 @@ function RideCompletedScreenContent() {
             onPress={handleLostFound}
             activeOpacity={0.7}
           >
-            <View style={[styles.actionIcon, { backgroundColor: '#FEF2F2' }]}>
+            <View style={[styles.actionIcon, { backgroundColor: colors.dangerBg }]}>
               <Ionicons name="bag-handle" size={20} color="#EF4444" />
             </View>
             <View style={{ flex: 1 }}>
@@ -904,7 +904,7 @@ function RideCompletedScreenContent() {
             >
               <View style={styles.modalCard}>
                 <View style={styles.modalHeader}>
-                  <View style={[styles.actionIcon, { backgroundColor: '#FEF2F2' }]}>
+                  <View style={[styles.actionIcon, { backgroundColor: colors.dangerBg }]}>
                     <Ionicons name="bag-handle" size={22} color="#EF4444" />
                   </View>
                   <Text style={styles.modalTitle}>Report Lost Item</Text>
@@ -970,7 +970,7 @@ function createStyles(colors: ThemeColors) {
   // correct in light mode and disappears on dark mode's near-white colors.text.
   const onInverse = colors.background;
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F5F5F5' },
+    container: { flex: 1, backgroundColor: colors.surfaceLight },
     content: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 20, gap: 10 },
 
     // ── Success header ──

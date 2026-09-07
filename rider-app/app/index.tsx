@@ -4,10 +4,12 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
+import { useTheme } from '@shared/theme/ThemeContext';
 
 export default function Index() {
   const router = useRouter();
   const { isInitialized, token, user } = useAuthStore();
+  const { colors } = useTheme();
 
   useEffect(() => {
     if (!isInitialized) return;
@@ -73,5 +75,5 @@ export default function Index() {
 
   // Transparent pass-through — BrandSplash (in _layout.tsx) is the only
   // branded loading screen. This screen just routes; it has no visual chrome.
-  return <View style={{ flex: 1, backgroundColor: '#FFFFFF' }} />;
+  return <View style={{ flex: 1, backgroundColor: colors.background }} />;
 }

@@ -110,7 +110,7 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <TouchableOpacity style={styles.row} onPress={() => setShowLangModal(true)}>
             <View style={[styles.rowIcon, { backgroundColor: '#DBEAFE' }]}>
-              <Ionicons name="globe" size={20} color="#3B82F6" />
+              <Ionicons name="globe" size={20} color={colors.info} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>{t('settings.language')}</Text>

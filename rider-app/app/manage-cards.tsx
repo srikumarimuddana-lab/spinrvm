@@ -468,8 +468,8 @@ export default function ManageCardsScreen() {
                       postalCodeEnabled={false}
                       placeholders={{ number: '4242 4242 4242 4242' }}
                       cardStyle={{
-                        backgroundColor: isDark ? '#2C2C2E' : '#FFFFFF',
-                        textColor: isDark ? '#F2F2F7' : '#1A1A1A',
+                        backgroundColor: isDark ? '#2C2C2E' : colors.surface,
+                        textColor: isDark ? '#F2F2F7' : colors.text,
                         placeholderColor: isDark ? '#8E8E93' : '#BBBBBB',
                         borderColor: colors.border,
                         borderRadius: 12,

@@ -36,6 +36,41 @@ Or via MCP: call `mcp__github__list_pull_requests` with
   new one.
 - Only proceed to create a new PR if **zero** open PRs exist for this branch.
 
+**Stale-branch-after-squash-merge guard (mandatory — this repo squash-merges everything):**
+Because every merge here is a squash (confirmed repeatedly: `PR #5060`→`#5063`→`#5073`), a
+branch's own pre-merge commits stop being ancestors of `main` the moment its PR merges — even
+though their content is fully on `main` under one new commit hash. If you keep committing more
+work to the *same* branch name after that merge (a legitimate pattern for a follow-up round),
+`git log origin/main..HEAD` and `git diff origin/main...HEAD` silently include the **entire old,
+already-merged diff again** — producing a PR body/diff that looks enormous and wrong. Detect and
+fix this *before* step 1, not after:
+
+```bash
+git fetch origin main -q
+gh pr list --head BRANCH --state merged --json number,mergeCommit,headRefOid --limit 1
+```
+
+- If this returns **no merged PR** for the branch → normal case, proceed to step 1.
+- If it returns a merged PR → capture its `headRefOid` (call it `MERGED_SHA`) and the branch's
+  current tip (`OLD_HEAD=$(git rev-parse HEAD)`). Verify `MERGED_SHA` is genuinely an ancestor of
+  `OLD_HEAD` (`git merge-base --is-ancestor MERGED_SHA OLD_HEAD`) — if it isn't, something else is
+  going on, stop and ask rather than guessing. If it is, rebuild the branch onto current `main`
+  and replay only the commits made *after* that merge:
+
+  ```bash
+  git checkout -B BRANCH origin/main
+  git cherry-pick MERGED_SHA..OLD_HEAD
+  ```
+  Cherry-picks apply cleanly here in the overwhelming majority of cases, since `MERGED_SHA`'s
+  *content* (not hash) is already part of `origin/main` — a real conflict would mean `main`
+  changed the same lines independently after the merge; resolve it the normal way, don't force
+  through it.
+- Push with `--force-with-lease` (this is a `claude/*` branch you're rebuilding from a known-good
+  state, not rewriting someone else's history) and continue to step 1 with the now-correct branch.
+- This is a repo-wide pattern, not specific to any one branch name — run this check every time,
+  even if you don't remember this branch having merged before; asking is cheap, an accidentally
+  doubled diff in a PR body is not.
+
 ## 1 · Gather facts
 
 Run these in parallel:

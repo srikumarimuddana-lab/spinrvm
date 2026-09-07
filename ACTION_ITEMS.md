@@ -21667,6 +21667,118 @@ how much they de-risk a public launch._
   computation and comment-vs-create branch), `.github/workflows/
   ci-error-audit.yml` (the `create-audit-issues` job that calls it).
 
+### A43. #5048 merged a 34-file security/money batch 47 seconds after opening, before CI finished, bypassing CLAUDE.md's own escalation gate — directly caused B42 and a live OTP-regex defect
+
+- [ ] **Status:** open — found 2026-09-07 while compiling a PR/backlog
+  status review of 2026-09-06 activity (PR #5048, #5050). Not a code
+  finding — a process/governance gap in how a live-tested-surface PR got
+  merged.
+- **What's wrong:** PR #5048 ("Fix critical audit findings: OTP lockout,
+  payment guards, health split") touched 34 files (+4303/-70) across
+  rides, payments, auth, and infra — the exact surface list CLAUDE.md's
+  pre-merge release gates flag as mandatory-caution ("Escalate, don't
+  silently ship, when in doubt", rule 9: *"the change touches
+  rides/payments/auth/corporate/safety and you're not confident of the
+  full impact, use `AskUserQuestion` before merging"*). It was created and
+  merged 47 seconds apart — before any CI job could report — and its own
+  Change Impact Log discloses the suite was never run locally (PyPI
+  blocked in-session). No `AskUserQuestion` escalation is on record for
+  this merge.
+- **Why it matters:** this isn't hypothetical risk — it materialized same
+  day. The untested merge shipped a Unicode-digit OTP-regex gap and the
+  webhook defect tracked as B42 below (payment_failed events silently
+  dropped), both requiring an emergency same-day follow-up (#5050) that
+  itself never ran the full suite either. A rule written specifically to
+  prevent this class of outcome existed and wasn't applied.
+- **Action:** treat this as a process near-miss, not just a one-off: (1)
+  confirm with the user whether an `AskUserQuestion` escalation happened
+  out-of-band and just isn't reflected in the PR; (2) if not, decide
+  whether merges to `main` touching rides/payments/auth should be
+  technically blocked pending CI completion (branch protection: require
+  status checks before merge) rather than relying on the agent to wait —
+  CLAUDE.md documents the gate but nothing in `.github/` enforces it
+  mechanically today.
+- **Files:** none changed by this finding — process gap, not code. Relevant
+  policy source: `CLAUDE.md` § "Pre-merge release gates", rule 9.
+- **What was NOT verified:** whether branch protection on `main` currently
+  requires status checks to pass before merge at all (if it already does,
+  #5048's 47-second merge implies either checks were bypassed by an admin
+  override or the required-check list doesn't cover the jobs #5050 later
+  found red — worth confirming which, since it changes the fix).
+
+### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet
+
+- [ ] **Status:** open — found 2026-09-07 while reviewing PR #5050's own
+  body, which disclosed the defect and fixed the code path but did not
+  include a production data remediation step.
+- **What's wrong:** #5048 (merged 2026-09-06 02:58:46Z) added a CAS
+  re-read to the `payment_failed` webhook handler with no `try`/`except`.
+  If that re-read raised, the Stripe event was already
+  `claim_stripe_event`-claimed (per this repo's Stripe-idempotency
+  convention) but never actually processed — so Stripe's automatic retry
+  saw the event as already-claimed and was silently deduped, permanently
+  losing the payment-failure record. #5050 (merged 2026-09-06 03:34:42Z)
+  fixed the handler to unclaim on failure and return a retryable 503, but
+  is scoped to the code fix only.
+- **Why it matters:** any real card-decline/payment-failure webhook that
+  hit this handler during the ~36-minute window `payment_failed` events were
+  claimed-but-unprocessed is now unrecoverable via Stripe's own retry —
+  the rider/driver-facing effects of a lost `payment_failed` (e.g. a
+  failed fare settlement never flagged for retry) are exactly the kind of
+  payment-path regression CLAUDE.md's Change Impact Log rules require
+  tracking to closure, not just patching the code.
+- **Action:** query `stripe_events` (and any linked `rides`/payment
+  records) for `payment_failed` events with `claimed_at` between
+  2026-09-06T02:58:46Z and 2026-09-06T03:34:42Z where no corresponding
+  processed/settled outcome exists; cross-check against Stripe Dashboard's
+  own webhook delivery log for that window (Stripe retains failed/retried
+  deliveries and can be manually resent) rather than relying on
+  `stripe_events` alone, since the whole failure mode is that our own
+  table under-records these. Manually replay any affected events via the
+  admin endpoint noted in #5050's PR body.
+- **Files:** the webhook handler touched by #5048/#5050 (payments route —
+  confirm exact path via `git show` on those two PRs; not independently
+  re-verified here). `stripe_events` table.
+- **What was NOT verified:** whether any real Stripe traffic actually hit
+  this handler during the window (i.e., whether the risk is theoretical or
+  realized) — that requires the query above, not yet run.
+
+### C73. CI reported green on #5048 despite tests #5050 found failing — release gate is decayed, not just this one PR's problem
+
+- [ ] **Status:** open — found 2026-09-07, flagged in PR #5050's own body
+  but never filed as a tracked item or a `[CR]` per CLAUDE.md's own rule
+  ("A CI check that's red for a reason unrelated to your diff is a signal
+  the gate itself has decayed... File a `[CR]`").
+- **What's wrong:** #5050 states it found 8 failing tests against #5048's
+  merged state, yet #5048 merged with a passing/green status — the same
+  symptom previously seen and resolved as a one-off measurement error in
+  C8 (`driver-app-test` reported success while its test failed locally),
+  but this is a **new, backend-focused recurrence** on the `payments`/
+  `rides` surface, not the same incident.
+- **Why it matters:** a required-status-check list that can show green
+  while real test failures exist underneath is the mechanism that let
+  A43's 47-second merge look safe. Until this is root-caused, every
+  "CI passed" signal on a rides/payments/auth PR is unreliable, which
+  undermines the entire pre-merge gate CLAUDE.md relies on.
+- **Action:** root-cause why the check(s) covering #5050's 8 failing tests
+  reported success on #5048's head commit — likely candidates: a step
+  swallowing pytest's exit code (`|| true`, `continue-on-error: true`), a
+  matrix leg not included in the branch protection required-checks list
+  (see C21, same class of gap), or a stale/cached check run. Cross-check
+  against C13's "required `pull_request` workflows silently never fire on
+  some PRs" and C24's Codecov-gate-can't-fail finding — this may be the
+  same underlying decay surfacing a third way, or a fourth distinct cause.
+  If accepted-risk rather than fixable now, file the `[CR]` per
+  `.github/ISSUE_TEMPLATE/ci_change_request.yml` as CLAUDE.md requires
+  rather than leaving it as PR-body prose.
+- **Files:** `.github/workflows/ci.yml` (or whichever workflow runs the
+  `payments`/`rides` test job — not independently re-verified here), the
+  branch-protection required-status-checks configuration for `main`.
+- **What was NOT verified:** the actual failing-check name(s) and their
+  exact swallow mechanism — #5050's body names the 8 test failures but
+  this entry has not independently re-run or inspected the workflow YAML
+  to confirm the root cause; that inspection is the action item itself.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

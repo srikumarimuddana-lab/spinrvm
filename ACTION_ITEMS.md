@@ -902,12 +902,25 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       tentative target, computed as **October 17, 2026** (every other
       step's date in the runbook's table is now similarly computable and
       was filled in); (4) `dual-run-driver-roster-policy.md` — confirmed
-      already approved and in effect. **Still not fully closed**: the
-      per-step `Owner` column for steps 2–9 and 11 (who actually executes/
-      confirms each individual step, distinct from the overall accountable
-      owner) is still `?` — worth its own follow-up interview if the
-      product owner wants those named now rather than closer to the actual
-      window. `dual-run-driver-roster-policy.md` itself was *not*
+      already approved and in effect.
+    - **2026-09-07, later same day — per-step owners named too, every
+      marker in the runbook now resolved.** Follow-up interview covering
+      steps 2–9 and 11's `Owner` column: steps 2–6 (drain, freeze, export,
+      export verification, zero-pending verification — everything needing
+      old-app dashboard/Stripe-platform access) go to the **product
+      owner**, who confirmed having that access. Step 7 (historical
+      migration into Supabase) goes to **engineering — Claude Code
+      sessions on this repo**, matching how the SIN/DOB, vehicle-history,
+      and duration-estimated backfills were already built. Steps 8
+      (reconciliation sign-off), 9 (DNS/app-store sunset), and 11
+      (7-year retention archive ownership) all go to the **product
+      owner** as well — step 8 explicitly stays with the same accountable
+      person rather than routing to a separate legal reviewer, and step
+      11 is flagged in the runbook itself as a long-horizon (7-year)
+      commitment that outlives any one session, not a one-time task.
+      `docs/runbooks/old-app-decommission.md`'s own table was updated in
+      place with every owner cell filled — zero `?` markers remain
+      anywhere in that file, confirmed by grep. `dual-run-driver-roster-policy.md` itself was *not*
       independently re-verified line-by-line this session (took the
       product owner's "approved and running" answer as given, per how this
       interview was scoped) — if anyone doubts that, re-check the policy

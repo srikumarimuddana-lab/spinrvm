@@ -122,7 +122,7 @@ The rollup is the worst verdict across all 21 plus the inline pass. Never soften
 - Do not pre-filter which agents run based on the diff's apparent domain — that's what `/review` is for; this command's entire value is running the full panel regardless
 - Do not run the 16 agents sequentially — batch them in one parallel dispatch; sequential defeats the purpose (wall-clock cost) and this task explicitly calls for independent, concurrent review
 - Do not auto-fix findings — every agent is audit-only; report, let the user decide
-- Do not treat this fleet as a substitute for CLAUDE.md's "PR review handling" section — no automated PR review runs on this repo, so a PR touching money, auth, migrations, dispatch, or safety still needs the manual auditor pass that section calls for, in addition to this fleet
+- Do not skip `Codex`-review context if present on a PR — cross-reference per CLAUDE.md's "PR review handling" section in addition to, not instead of, this fleet
 
 ## See also
 

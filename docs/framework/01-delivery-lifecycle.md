@@ -85,12 +85,10 @@ DISCUSS → BRAINSTORM → REQUIREMENTS → DESIGN → DEVELOP → VALIDATE → 
   `spinr-money-auditor`, `spinr-dispatch-reviewer`, `spinr-migration-reviewer`,
   `spinr-insurance-period-auditor`, …). Routing: `/review` picks reviewers by
   diff; `/full-audit` runs the whole fleet.
-- **No automated PR review runs on this repo.** The Codex integration was
-  removed (it went silent on 2026-07-30 and was never restored —
-  `ACTION_ITEMS.md` C9, closed); the Claude audit workflow remains off by
-  design (`ACTION_ITEMS.md` C7). Any PR touching money, auth, migrations,
-  dispatch, or safety gets a *manual* pass with the relevant auditor agents
-  before merge.
+- **No automated PR review is currently running** (Codex silent since
+  2026-07-30, Claude audit workflow off by design — `ACTION_ITEMS.md` C9/C7).
+  Until restored, any PR touching money, auth, migrations, dispatch, or
+  safety gets a *manual* pass with the relevant auditor agents before merge.
 - Every behavior-changing PR carries a Change Impact & Risk entry
   (`docs/templates/CHANGE_IMPACT_LOG.md`) — including the two honesty fields
   competitors' processes usually lack: **"What was NOT verified"** and a

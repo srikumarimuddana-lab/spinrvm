@@ -893,6 +893,25 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     §3 monitoring signals; also unowned/unapproved. Neither runbook is in
     effect until the owner slots in each are filled and the policy/plan is
     approved — do not treat either as closing this item.
+    - **2026-09-07, product-owner interview — `old-app-decommission.md`'s §0
+      gate is now fully cleared; the runbook itself was updated in place
+      (not just this tracker).** All four §0 prerequisites resolved: (1)
+      overall runbook owner — the product owner; (2) step 10 (irreversible
+      teardown) owner — same person, deliberately, not a default; (3) the
+      T-14 stop-new-bookings date — tied automatically to the Oct 31, 2026
+      tentative target, computed as **October 17, 2026** (every other
+      step's date in the runbook's table is now similarly computable and
+      was filled in); (4) `dual-run-driver-roster-policy.md` — confirmed
+      already approved and in effect. **Still not fully closed**: the
+      per-step `Owner` column for steps 2–9 and 11 (who actually executes/
+      confirms each individual step, distinct from the overall accountable
+      owner) is still `?` — worth its own follow-up interview if the
+      product owner wants those named now rather than closer to the actual
+      window. `dual-run-driver-roster-policy.md` itself was *not*
+      independently re-verified line-by-line this session (took the
+      product owner's "approved and running" answer as given, per how this
+      interview was scoped) — if anyone doubts that, re-check the policy
+      doc directly rather than assume this note settles it forever.
   - **STILL OPEN, unchanged**: open $16.63 Stripe dispute needs a response;
     **rider-referral legacy-signup gap FIXED 2026-08-31** (was: "rider-referral
     velocity/identity-cross-check gap unchanged (checked `utils/referral_payout.py`

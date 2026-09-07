@@ -347,7 +347,13 @@ async def execute_tool(
     arg_keys = sorted(args.keys()) if isinstance(args, dict) else []
     _schedule_tool_audit(
         {
-            "user_id": (user or {}).get("id"),
+            # ai_tool_audit.user_id is TEXT NOT NULL (migration 217); the "web"
+            # audience deliberately never carries a real user_id (see the
+            # identity guard above), so every anonymous call would otherwise
+            # fail this insert silently (caught by _schedule_tool_audit's own
+            # try/except) and leave no Layer-7 governance record at all for
+            # the one surface that most needs one.
+            "user_id": (user or {}).get("id") or ("web:anonymous" if audience == "web" else None),
             "audience": audience,
             "tool_name": name,
             "ok": ok,

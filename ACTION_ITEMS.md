@@ -17933,22 +17933,26 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `ai:quote:{conversation_id}` on "new conversation" or
   `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
 
-- [ ] **AI18. Anonymous web assistant's tool path is dead in production** —
+- [x] **AI18. Anonymous web assistant's tool path is dead in production** —
   found during AI16's review round, pre-existing and unrelated to that fix.
-  `backend/ai/public_assistant.py` deliberately builds its synthetic
-  `tool_user` with NO `id` key ("so any handler that reached for one would
-  raise loudly"), but `backend/ai/tools.py::_execute_tool_inner` fails
-  closed on a missing `user["id"]` *before* any handler runs
-  (`logger.error("ai tool blocked: no authenticated user id")` →
-  `{"error": "not authorized"}`). Every anonymous `search_faqs` /
-  `get_company_info` call therefore returns "not authorized" and emits an
-  error log; the model answers from the prompt alone. Not caught by
-  `tests/test_ai_public_assistant.py`, which mocks `execute_tool`. Fix
-  needs its own design — an explicit anonymous-scope allow-list on the
-  `ToolSpec` (e.g. `allow_anonymous=True` for the two web tools, honoured
-  only for audience `web`), never a blanket relaxation of the fail-closed
-  identity check — plus an integration test through the real
-  `execute_tool`. Until then the public site's assistant is prompt-only.
+  Fixed 2026-09-07 in PR #5082 (commit `e5bce05`): `_execute_tool_inner`'s
+  identity guard now exempts `audience == "web"` specifically (rider/driver
+  calls still fail closed unchanged), and `register()` gained a
+  registration-time check rejecting a web-audience tool that also declares
+  `owned_id_args`. Fixed the 7 `TestSearchFaqsPublicWeb` failures that had
+  been red on `main` since this finding was written. See
+  `docs/change-log/2026-09-07-web-audience-tool-identity-guard.md`.
+  **Follow-up (same day, `claude/pr-5085-5079-hardening-5a2aj7`):** the
+  landed fix let anonymous tool calls run but still fed `_schedule_tool_audit`
+  a `None` `user_id` for them — `ai_tool_audit.user_id` is `TEXT NOT NULL`
+  (migration 217), so every newly-unblocked web call was silently failing
+  its own audit-row insert. Patched to substitute a `"web:anonymous"`
+  sentinel when `audience == "web"`; see the change-log addendum above.
+  Independently validated during PR #5079's three-lens review (PR #5085,
+  `docs/audit/2026-09-07-pr-5079-validation-and-hardening-plan.md`), which
+  had flagged both the original bug and, in its not-yet-implemented PR-1
+  design, this exact audit-sentinel gap — confirmed still present in what
+  actually landed and fixed here.
 
 - [x] **D1. PostGIS surge query** — stale, already substantially done by
   another session before this pass. `utils/surge_engine.py` already: (1)

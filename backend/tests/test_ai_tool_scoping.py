@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from backend.ai import threat, tools, tools_rides
+from backend.ai import threat, tools, tools_rides, tools_support
 from backend.ai.tools import ToolSpec, execute_tool, register
 
 RIDER = {"id": "rider-1"}
@@ -167,6 +167,21 @@ class TestToolAudit:
         assert rec["ok"] is False and rec["outcome"] == "blocked"
         assert rec["arg_keys"] == ["rider_id"]  # the arg NAME is recorded
         assert "victim-123" not in str(rec)  # the arg VALUE is never logged
+
+    @pytest.mark.anyio
+    async def test_web_audience_audit_uses_anonymous_sentinel(self):
+        """ai_tool_audit.user_id is TEXT NOT NULL; the "web" audience never
+        carries a real user id, so the audit record must substitute a
+        sentinel rather than write None and silently fail the insert."""
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value={"ai_faq_semantic_enabled": False})),
+            patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=[])),
+            patch.object(tools, "_schedule_tool_audit") as sched,
+        ):
+            await execute_tool("search_faqs", {"query": "requirements"}, user={}, audience="web")
+        rec = sched.call_args[0][0]
+        assert rec["user_id"] == "web:anonymous"
+        assert rec["audience"] == "web"
 
     @pytest.mark.anyio
     async def test_non_dict_args_do_not_crash_audit(self):

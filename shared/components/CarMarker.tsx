@@ -525,6 +525,10 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
 
     const [tracksViewChanges, setTracksViewChanges] = useState(true);
     const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Whether the car Image has ever actually decoded — read by the ring
+    // re-arm effect below to decide whether a fresh snapshot can safely
+    // re-freeze quickly or must wait for the image itself.
+    const hasLoadedImageRef = useRef(false);
     useEffect(() => {
         // Hard cap: never re-snapshot indefinitely even if onLoad is lost.
         const cap = setTimeout(() => setTracksViewChanges(false), 5000);
@@ -536,10 +540,49 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     const handleImageLoaded = () => {
         // Image bitmap is decoded — keep tracking through one more frame so the
         // native Marker snapshot contains the car, then stop for perf.
+        hasLoadedImageRef.current = true;
         setTracksViewChanges(true);
         if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
         settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
     };
+
+    // Re-arm the snapshot on ANY ring identity change (color or presence),
+    // not just a transition into pulsing. Root cause (live-testing reports on
+    // driver-app: "only a green circle, no car icon" — persisting through
+    // later transitions too): a fresh mount with the ring already set (e.g.
+    // rider-app navigating ride-options -> driver-arriving -> driver-arrived
+    // -> ride-in-progress, or returning to the app mid-ride) races the car
+    // Image's decode against whatever moment the native renderer happens to
+    // snapshot. If the ring (a plain colored View, paints instantly) wins
+    // that race, the snapshot freezes with the ring but no car — and because
+    // a frozen Android marker snapshot ignores every later prop change, that
+    // broken bitmap then persists through subsequent ring changes too, since
+    // nothing re-arms tracksViewChanges on those either. Keying an effect on
+    // the ring's own identity closes both gaps: any appearance, color
+    // change, or disappearance of the ring now gets at least one fresh
+    // snapshot attempt. Ported from driver-app/components/CarMarker.tsx
+    // (2026-09-05 fix, originally for its own offline->online mapKey
+    // remount) — the same race, just triggered by screen navigation here
+    // instead of a forced remount.
+    const ringChangeKey = ring ? `${ring.color}:${ring.pulsing}` : null;
+    const prevRingChangeKeyRef = useRef<string | null>(null);
+    useEffect(() => {
+        const changed = prevRingChangeKeyRef.current !== ringChangeKey;
+        prevRingChangeKeyRef.current = ringChangeKey;
+        if (!changed) return;
+        setTracksViewChanges(true);
+        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        if (hasLoadedImageRef.current) {
+            // Image is already decoded — safe to re-freeze on the same
+            // schedule handleImageLoaded uses.
+            settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        }
+        // Else: leave tracksViewChanges true. The image hasn't loaded yet on
+        // this mount, so freezing now would just reproduce the bug this
+        // effect exists to fix — handleImageLoaded (once the image actually
+        // decodes) or the mount effect's 5s hard cap above will freeze it
+        // instead.
+    }, [ringChangeKey]);
 
     // One-shot "pop in" on mount — see the class doc comment above for why
     // this is a single spring rather than a loop. Native-driven: opacity and

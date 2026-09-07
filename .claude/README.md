@@ -103,12 +103,14 @@ All hooks exit 0. None block Claude's tool calls — they advise and auto-format
 | Situation | Reach for |
 |---|---|
 | About to commit money-touching code | `/fare-audit` |
+| Fix/gap-closure touching rides, dispatch, payments, auth, corporate, or safety | `/impact-log` — scaffolds the mandatory Change Impact & Risk Log before `/pr` |
 | Just added a SQL migration | `/migration-check` |
 | Production incident | `/incident` |
 | Non-trivial design decision | `/adr` |
 | Generic pre-commit scan | `/review` (existing) |
 | Broad security sweep | `spinr-security-auditor` via Agent tool |
 | Opening a PR | `/pr` — fills the tiered template from the diff |
+| Changed `.mcp.json`, a `.claude/hooks/*` hook, or the Claude-Adjacent Directories table | `/tooling-check` — `spinr-tooling-hygiene-reviewer` audits the config surface itself |
 | PR opened on GitHub | `.github/workflows/pr-checks.yml` validates + expands. `claude-review.yml` is **off** (no `ANTHROPIC_API_KEY`) — run the audit agents yourself if the diff warrants one |
 
 ## PR pipeline (what fires when a PR opens)

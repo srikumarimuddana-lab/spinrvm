@@ -532,6 +532,20 @@ These directories exist alongside `.claude/` but serve different tooling:
 | `.kilo/` | Active | Kilo Code AI assistant config |
 | `.emergent/` | Active | Emergent AI agent config |
 | `.maestro/` | Active | Maestro orchestration config |
+| `.codex/` | Active | OpenAI Codex CLI config (`agents/`, `hooks/`, `hooks.json`) |
+| `.agents/` | Active, undocumented | `docs/`, `roles/`, `standards/`, `workflows/` — role/standards definitions for another AI tool, distinct from both `.claude/agents/` (Claude Code subagents) and top-level `agents/` (the Python framework below). Not deeply inventoried; if you rely on it, verify it still matches what it claims first. |
+| `agents/` | Active, non-production | Separate Python SDK for multi-agent dev automation (`orchestrator.py`, `roles/`, `runs/`) — has its own `agents/CLAUDE.md`. Explicitly **not** part of the production runtime; conventions live in that file, not here. |
+| `.planning/` | Active, undocumented | `PROJECT.md`, `ROADMAP.md`, `STATE.md`, `HANDOFF.json`, `sketches/`, `graphs/` — planning/handoff notes, apparently from a different AI coding tool's own workspace. One of four separate "planning notes" locations in this repo (also `.claude/plans/`, `docs/superpowers/plans/`, root `plans/`) — none has been designated canonical. |
+| `docs/superpowers/` | Active, undocumented | `plans/`, `specs/` — origin and ownership unclear; flagged during the 2026-09-07 Claude config audit, not yet reconciled. |
+| `plans/` (root) | Active, undocumented | A fourth planning-notes location alongside the three above. |
+| `frontend/` | **Deprecated** | Carries its own `frontend/DEPRECATED.md`. Not one of the five surfaces in this file's Project Overview (`backend/`, `rider-app/`, `driver-app/`, `admin-dashboard/`, `shared/`) — do not add to or "fix" code here; it's dead, not just undocumented. |
 | `audit-framework/` | Active | Shared audit scripts for all AI assistants |
 | `memory/` | Archived | Originally for agent memory; contained only `.gitkeep`. Deleted 2026-05-05 in commit `223ec89b0` (PR #451). |
 | `discovery/` | Archived | Early Expo sandbox; was unreferenced by any surface. Deleted 2026-05-05 in commit `223ec89b0` (PR #451). |
+
+Rows marked "undocumented" were found on disk during the 2026-09-07 Claude config
+audit (published as the "Spinr Control Plane" reference) but have no owner or
+README explaining their purpose — this table records that they exist and what's
+in them at a glance, not that they're understood or actively maintained. If you
+own one of these, either document it properly (replace the row) or delete it;
+"exists, purpose unclear" should not be a permanent state.

@@ -27,7 +27,7 @@ you actually are right now*.
 | 6 | Fix Orphaned Legacy-Linked Accounts | `/dashboard/drivers/legacy-import` | One-time repair for a since-fixed bug in #2's link path — only has candidates once #2 has run |
 | 7 | Fix Backfilled Driver Join Dates | `/dashboard/drivers/legacy-import` | Repairs the `created_at` stamp #6 itself leaves behind — run after #6 |
 | 8 | Stripe Mapping Import | `/dashboard/bulk-operations` | drivers-kind's `old_driver_id` lookup only matches #1's marker specifically; riders-kind needs #3 (or organic) for a phone/email match to exist at all |
-| 9 | Bulk Driver Tax-ID Import | `/dashboard/bulk-operations` (API-only, no dedicated page yet) | Matches any existing driver by phone — needs #1 or #2 to have created the row |
+| 9 | Bulk Driver Tax-ID Import | `/dashboard/bulk-operations` | Matches any existing driver by phone — needs #1 or #2 to have created the row |
 | 10 | Legacy Saved-Address Backfill | `/dashboard/riders/legacy-saved-address-backfill` | Needs a rider account (`is_rider=true`) by phone — i.e. #3 (or organic) |
 | 11 | Legacy Booking Import | `/dashboard/bulk-operations` | Matches riders/drivers by phone against whatever accounts exist **at run time**, with no fallback creation — run after #1/#2/#3 or unmatched parties' ride history is silently skipped |
 | 12 | Fix Rider Join Dates | `/dashboard/bulk-operations` | Repairs #3's `created_at` stamp — only meaningful once #3 has run |

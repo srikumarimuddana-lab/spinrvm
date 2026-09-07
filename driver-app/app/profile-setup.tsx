@@ -570,7 +570,7 @@ export default function ProfileSetupScreen() {
           activeOpacity={0.85}
         >
           {isSubmitting || authLoading ? (
-            <ActivityIndicator color="#FFFFFF" size="small" />
+            <ActivityIndicator color={colors.surface} size="small" />
           ) : (
             <View style={styles.submitBtnContent}>
               <Text style={[styles.submitButtonText, !isFormValid && styles.submitButtonTextDisabled]}>
@@ -788,7 +788,7 @@ function createStyles(colors: ThemeColors) {
   submitButtonText: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   submitButtonTextDisabled: {
     color: colors.textDim,
@@ -831,7 +831,7 @@ function createStyles(colors: ThemeColors) {
     color: colors.textDim,
   },
   serviceAreaChipTextActive: {
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   serviceAreaHint: {
     fontSize: 11,

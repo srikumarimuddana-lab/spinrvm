@@ -364,7 +364,7 @@ export default function DocumentsScreen() {
                                 {/* Verification status badge */}
                                 {(() => {
                                     if (frontStatus === 'approved') return (
-                                        <View style={[styles.statusBadge, { backgroundColor: '#ECFDF5' }]}>
+                                        <View style={[styles.statusBadge, { backgroundColor: colors.successBg }]}>
                                             <Ionicons name="checkmark-circle" size={12} color={colors.success} />
                                             <Text style={[styles.statusBadgeText, { color: colors.success }]}>Verified</Text>
                                         </View>
@@ -376,7 +376,7 @@ export default function DocumentsScreen() {
                                         </View>
                                     );
                                     if (frontStatus === 'rejected') return (
-                                        <View style={[styles.statusBadge, { backgroundColor: '#FEF2F2' }]}>
+                                        <View style={[styles.statusBadge, { backgroundColor: colors.dangerBg }]}>
                                             <Ionicons name="close-circle" size={12} color={colors.error} />
                                             <Text style={[styles.statusBadgeText, { color: colors.error }]}>Rejected</Text>
                                         </View>
@@ -392,9 +392,9 @@ export default function DocumentsScreen() {
                                 {/* Expiry badge — only renders when document record has an expiry_date set */}
                                 {expiryInfo && expiryInfo.status !== 'none' && (
                                     <View style={[styles.statusBadge, {
-                                        backgroundColor: expiryInfo.status === 'expired' ? '#FEF2F2'
+                                        backgroundColor: expiryInfo.status === 'expired' ? colors.dangerBg
                                             : expiryInfo.status === 'expiring_soon' ? '#FFFBEB'
-                                            : '#ECFDF5',
+                                            : colors.successBg,
                                     }]}>
                                         <Ionicons name="calendar-outline" size={12} color={
                                             expiryInfo.status === 'expired' ? colors.error
@@ -633,7 +633,7 @@ function createStyles(colors: ThemeColors) {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 6,
-            backgroundColor: '#FEF2F2',
+            backgroundColor: colors.dangerBg,
             paddingHorizontal: 10,
             paddingVertical: 6,
             borderRadius: 8,

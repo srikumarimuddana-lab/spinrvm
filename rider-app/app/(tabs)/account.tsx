@@ -82,7 +82,7 @@ export default function AccountScreen() {
           key={i}
           name={i <= Math.round(rating) ? 'star' : 'star-outline'}
           size={14}
-          color={i <= Math.round(rating) ? '#FFD700' : 'rgba(255,255,255,0.3)'}
+          color={i <= Math.round(rating) ? colors.gold : 'rgba(255,255,255,0.3)'}
         />,
       );
     }
@@ -247,7 +247,7 @@ export default function AccountScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Rides & Places</Text>
             <View style={styles.card}>
-              <MenuRow styles={styles} colors={colors} icon="calendar" iconColor="#3B82F6" iconBg="rgba(59, 130, 246, 0.1)" label="Scheduled Rides" onPress={() => router.push('/scheduled-rides' as any)} />
+              <MenuRow styles={styles} colors={colors} icon="calendar" iconColor={colors.info} iconBg="rgba(59, 130, 246, 0.1)" label="Scheduled Rides" onPress={() => router.push('/scheduled-rides' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="location" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Saved Places" onPress={() => router.push('/saved-places' as any)} />
             </View>

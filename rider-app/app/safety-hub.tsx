@@ -93,7 +93,7 @@ export default function SafetyHubScreen() {
         <View style={styles.card}>
           <Row
             icon="call"
-            color="#DC2626"
+            color={colors.error}
             title={`Call ${cfg.emergencyNumber}`}
             subtitle="Opens your dialer — Spinr never calls for you"
             onPress={() => Linking.openURL(`tel:${cfg.emergencyNumber}`)}
@@ -139,7 +139,7 @@ export default function SafetyHubScreen() {
             <View style={styles.card}>
               <Row
                 icon="business"
-                color="#3B82F6"
+                color={colors.info}
                 title={cfg.authority.phone ? `Call ${cfg.authority.name}` : cfg.authority.name}
                 subtitle={`Report a ride concern — not for emergencies${
                   cfg.authority.hours ? ` · ${cfg.authority.hours}` : ''
@@ -164,7 +164,7 @@ export default function SafetyHubScreen() {
             <View style={styles.card}>
               <Row
                 icon="mail"
-                color="#3B82F6"
+                color={colors.info}
                 title="Email Spinr Safety"
                 subtitle={cfg.safetyTeamEmail}
                 onPress={() => Linking.openURL(`mailto:${cfg.safetyTeamEmail}`)}

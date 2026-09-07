@@ -435,7 +435,7 @@ function createStyles(colors: ThemeColors) {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#FEF2F2',
+    backgroundColor: colors.dangerBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -541,7 +541,7 @@ function createStyles(colors: ThemeColors) {
   saveButtonText: {
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   });
 }

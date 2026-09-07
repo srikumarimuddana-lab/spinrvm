@@ -450,7 +450,7 @@ function createStyles(colors: ThemeColors) {
       width: 40,
       height: 40,
       borderRadius: 20,
-      backgroundColor: '#FEF2F2',
+      backgroundColor: colors.dangerBg,
       justifyContent: 'center',
       alignItems: 'center',
     },

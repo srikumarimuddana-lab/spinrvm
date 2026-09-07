@@ -545,7 +545,7 @@ function PaymentConfirmScreenContent() {
                           <Text style={styles.fareDriverBadge}>100% goes to your driver · ride local, support local</Text>
                         </View>
                       ) : (
-                        <Text style={[styles.fareLabel, line.type === 'tax' && { color: '#6B7280' }, line.type === 'modifier' && { color: '#EF4444' }]}>
+                        <Text style={[styles.fareLabel, line.type === 'tax' && { color: colors.textSecondary }, line.type === 'modifier' && { color: '#EF4444' }]}>
                           {line.label}
                         </Text>
                       )}
@@ -949,7 +949,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
     fareLabel: {
       fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_400Regular',
-      color: '#6B7280',
+      color: colors.textSecondary,
     },
     fareDriverBadge: {
       fontSize: sf(11),

@@ -298,7 +298,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
             <LinearGradient
               colors={
                 !canGoOnline
-                  ? ['#E5E7EB', '#D1D5DB']
+                  ? [colors.border, '#D1D5DB']
                   : (isOnline ? ['#059669', '#10B981'] : [colors.primary, colors.primaryDark])
               }
               style={styles.goButtonInner}

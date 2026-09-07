@@ -19,13 +19,18 @@ description: Security requirements and best practices for the Spinr platform
 | Frontend secrets in `expo-secure-store` | Code review check |
 
 ## Authentication
+
+_(Corrected 2026-09-07 — this table previously described a Firebase-ID-token-primary model with a
+flat 30-day token expiry, which doesn't match how auth actually works. See root `CLAUDE.md`'s "JWT
+trust model" and "Token lifetimes" sections for the authoritative version.)_
+
 | Requirement | Implementation |
 |-------------|----------------|
-| Primary auth | Firebase ID tokens |
-| Fallback auth | Legacy JWT (HS256) |
-| Token expiry | 30 days (consider reducing) |
-| OTP expiry | 5 minutes |
-| Session management | Single-device enforcement |
+| Admin JWT | Fully trusted (role + email + modules in claims) |
+| Rider/driver role | Always re-read from the `users` table on every request — never trusted from the JWT role claim |
+| Access token expiry | 15 min (rider/driver), 1 hr (admin) |
+| Refresh token | 30 days, stored as SHA-256 hash, rotated on every use |
+| OTP | SHA-256 hashed at rest; 5 failures/hour triggers a 24-hour Redis lockout |
 | Admin role | Server-side verification only |
 | Password storage | Never stored — OTP-based auth |
 

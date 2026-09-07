@@ -33,8 +33,11 @@ describe('useSplashPhase', () => {
   });
 
   it('fades shortly after a real route mounts', () => {
+    // The parameter is annotated rather than destructured so renderHook can
+    // infer its Props type — @testing-library/react-native 13 widens it to
+    // `unknown` otherwise, and `result.current` goes with it.
     const { result, rerender } = renderHook(
-      ({ navReady, pathname }) => useSplashPhase({ navReady, pathname }),
+      (props: { navReady: boolean; pathname: string }) => useSplashPhase(props),
       { initialProps: { navReady: true, pathname: '/' } },
     );
 

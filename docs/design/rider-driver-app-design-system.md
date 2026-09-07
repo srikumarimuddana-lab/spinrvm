@@ -41,21 +41,37 @@ for the actual color values, brand rationale, and typography, see
 
 ## Known gap: adoption isn't total
 
-Both apps still have hardcoded hex colors outside the `ThemeColors` palette,
-in similar proportion — this is a shared inconsistency, not a rider-vs-driver
-split:
+**Partially closed (2026-09-07):** of the original ~46 rider-app / ~33
+driver-app files with hardcoded hex literals, every literal that was
+byte-identical to an existing `ThemeColors` value has been replaced with a
+`colors.<token>` reference (62 replacements / 21 files in rider-app, 37
+replacements / 15 files in driver-app) — value-identical in light mode, and
+now theme-correct in dark mode where the literal previously ignored it.
 
-- rider-app: hardcoded hex literals appear in ~46 files under `app/` and
-  `components/` (most frequently `#10B981`, `#EF4444`, `#F59E0B`, `#3B82F6`,
-  `#8B5CF6` — Tailwind-palette-shaped colors that aren't in `ThemeColors`).
-- driver-app: same pattern, ~33 files, same top offending values.
+What's deliberately still hardcoded, and why it's not simply "remaining
+debt" to sweep the same way:
 
-These aren't necessarily bugs (some may be legitimate one-offs — shadow
-colors, third-party map styling, etc.) but they mean "grep for `useTheme`"
-is a better test of whether a given screen is on-token than assuming the
-whole app is copy-clean. Do not add new hardcoded hex values in either app;
-extend `ThemeColors` in `shared/theme/index.ts` instead so both apps pick it
-up.
+- **No exact token match.** A hex value with no equal in `lightColors` isn't
+  a missed reference — it's either a genuine one-off (shadow colors,
+  third-party map styling) or a color that hasn't been promoted to a token
+  yet. Don't guess a "closest" token; if a real semantic need exists, extend
+  `ThemeColors` in `shared/theme/index.ts` first, then reference it.
+- **Module-level static color maps** defined outside any component (e.g.
+  status/tier/relationship-icon lookups) — `useTheme()` isn't in scope
+  there; these would need a structural refactor (turn the map into a
+  function of `colors`), not a literal swap.
+- **Fixed-contrast foreground on a colored/gradient surface** — text or
+  icons on a surface that intentionally stays one hue regardless of theme
+  (a brand-colored button, a card-face gradient). Swapping in a theme token
+  here would *break* contrast in dark mode, not fix consistency.
+- **Outside `ThemeProvider`'s tree** — `BrandSplash` (rendered before the
+  provider mounts) and the iOS Live Activity / car-display surfaces (no
+  React tree at all) have no theme context to read.
+
+So "grep for `useTheme`" is still a better test of whether a given screen is
+on-token than assuming either app is now fully clean — the remaining
+hardcoded values are the ones that don't mechanically reduce to a token
+swap, not an overlooked backlog.
 
 ## If you're changing a token
 

@@ -1,4 +1,4 @@
-# ADR-001: Web Auth Token Storage — sessionStorage + Mitigations (short-term) / Edge BFF (long-term)
+# ADR-015: Web Auth Token Storage — sessionStorage + Mitigations (short-term) / Edge BFF (long-term)
 
 - **Date**: 2026-04-30
 - **Status**: Accepted (short-term); Deferred (long-term target: Option 1)

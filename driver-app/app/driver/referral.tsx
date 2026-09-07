@@ -516,7 +516,7 @@ function createStyles(colors: ThemeColors) {
         color: colors.success,
     },
     badgeTextPending: {
-        color: '#F59E0B',
+        color: colors.warning,
     },
     emptyState: {
         backgroundColor: colors.surface,

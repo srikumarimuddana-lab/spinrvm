@@ -893,7 +893,7 @@ function RootLayoutInner({
   setConfirmSheet: React.Dispatch<React.SetStateAction<typeof confirmSheet>>;
   forceUpdate: { visible: boolean; minVersion?: string };
 }) {
-  const { isDark } = useTheme();
+  const { isDark, colors } = useTheme();
   useRideStatusNotification();
   return (
     <ErrorBoundary>
@@ -907,7 +907,7 @@ function RootLayoutInner({
         <SafeAreaProvider>
           <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
           {wsState === 'reconnecting' && (
-            <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+            <View style={{ backgroundColor: colors.warning, paddingVertical: 4, alignItems: 'center' }}>
               <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
                 Reconnecting to ride updates…
               </Text>

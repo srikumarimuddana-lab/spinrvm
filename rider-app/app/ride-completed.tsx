@@ -673,7 +673,7 @@ function RideCompletedScreenContent() {
             </View>
             <View style={styles.statCard}>
               <View style={[styles.statIconWrap, { backgroundColor: '#F0FDF4' }]}>
-                <Ionicons name="navigate-outline" size={16} color="#10B981" />
+                <Ionicons name="navigate-outline" size={16} color={colors.success} />
               </View>
               <Text style={styles.statVal} allowFontScaling={false}>{distance.toFixed(1)} km</Text>
               <Text style={styles.statLbl}>Distance</Text>
@@ -756,12 +756,12 @@ function RideCompletedScreenContent() {
             {/* Address overlay */}
             <View style={styles.mapOverlay}>
               <View style={styles.mapAddrRow}>
-                <View style={[styles.mapAddrDot, { backgroundColor: '#10B981' }]} />
+                <View style={[styles.mapAddrDot, { backgroundColor: colors.success }]} />
                 <Text style={styles.mapAddrText} numberOfLines={1}>{currentRide?.pickup_address || 'Pickup'}</Text>
               </View>
               <View style={styles.mapAddrDivider} />
               <View style={styles.mapAddrRow}>
-                <View style={[styles.mapAddrDot, { backgroundColor: '#EF4444' }]} />
+                <View style={[styles.mapAddrDot, { backgroundColor: colors.error }]} />
                 <Text style={styles.mapAddrText} numberOfLines={1}>{currentRide?.dropoff_address || 'Dropoff'}</Text>
               </View>
             </View>
@@ -792,7 +792,7 @@ function RideCompletedScreenContent() {
             activeOpacity={0.7}
           >
             <View style={[styles.actionIcon, { backgroundColor: '#F0FDF4' }]}>
-              <Ionicons name="mail" size={20} color="#10B981" />
+              <Ionicons name="mail" size={20} color={colors.success} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionBtnTitle}>Email Receipt</Text>
@@ -811,7 +811,7 @@ function RideCompletedScreenContent() {
             activeOpacity={0.7}
           >
             <View style={[styles.actionIcon, { backgroundColor: colors.dangerBg }]}>
-              <Ionicons name="bag-handle" size={20} color="#EF4444" />
+              <Ionicons name="bag-handle" size={20} color={colors.error} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.actionBtnTitle}>Report Lost Item</Text>
@@ -905,7 +905,7 @@ function RideCompletedScreenContent() {
               <View style={styles.modalCard}>
                 <View style={styles.modalHeader}>
                   <View style={[styles.actionIcon, { backgroundColor: colors.dangerBg }]}>
-                    <Ionicons name="bag-handle" size={22} color="#EF4444" />
+                    <Ionicons name="bag-handle" size={22} color={colors.error} />
                   </View>
                   <Text style={styles.modalTitle}>Report Lost Item</Text>
                 </View>
@@ -1136,7 +1136,7 @@ function createStyles(colors: ThemeColors) {
     },
     paidChip: {
       flexDirection: 'row', alignItems: 'center', gap: 3,
-      backgroundColor: '#10B981', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
+      backgroundColor: colors.success, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
       marginLeft: 4,
     },
     paidChipText: {
@@ -1214,7 +1214,7 @@ function createStyles(colors: ThemeColors) {
     },
     submitBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      backgroundColor: '#EF4444', paddingVertical: 16, borderRadius: 14,
+      backgroundColor: colors.error, paddingVertical: 16, borderRadius: 14,
     },
     googlePayBtn: {
       backgroundColor: '#3C4043', marginBottom: 10,
@@ -1275,7 +1275,7 @@ function createStyles(colors: ThemeColors) {
     },
     modalSubmitBtn: {
       flex: 1, paddingVertical: 14, borderRadius: 12,
-      backgroundColor: '#EF4444', alignItems: 'center',
+      backgroundColor: colors.error, alignItems: 'center',
     },
     modalSubmitText: {
       fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF',

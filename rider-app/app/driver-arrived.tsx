@@ -355,7 +355,7 @@ function DriverArrivedScreenContent() {
           <View style={styles.tripCard}>
             <View style={styles.tripRow}>
               <View style={styles.tripDots}>
-                <View style={[styles.tripDot, { backgroundColor: '#10B981' }]} />
+                <View style={[styles.tripDot, { backgroundColor: colors.success }]} />
                 <View style={styles.tripLine} />
                 <View style={[styles.tripDot, { backgroundColor: colors.primary }]} />
               </View>
@@ -492,7 +492,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24,
       elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
     },
-    pulseGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981', marginRight: 8 },
+    pulseGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success, marginRight: 8 },
     arrivedChipText: { fontSize: 14, fontWeight: '700', color: colors.text },
 
     // Sheet
@@ -586,10 +586,10 @@ function createStyles(colors: ThemeColors) {
     devBar: {
       flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
       marginTop: 8, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
-      borderWidth: 1, borderColor: '#F59E0B',
+      borderWidth: 1, borderColor: colors.warning,
     },
     devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
-    devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+    devBtn: { backgroundColor: colors.warning, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
     devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   });
 }

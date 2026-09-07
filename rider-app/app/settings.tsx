@@ -89,7 +89,7 @@ export default function SettingsScreen() {
         {/* Notifications */}
         <Text style={styles.sectionTitle}>{t('settings.notifications')}</Text>
         <View style={styles.card}>
-          <SettingToggle icon="notifications" iconColor="#F59E0B" iconBg="#FEF3C7"
+          <SettingToggle icon="notifications" iconColor={colors.warning} iconBg="#FEF3C7"
             title={t('settings.push_notifications')} subtitle={t('settings.push_notifications_subtitle')}
             value={pushEnabled} onToggle={handleNotificationToggle('push_enabled', setPushEnabled)} />
           <SettingToggle icon="mail" iconColor="#8B5CF6" iconBg="#EDE9FE"
@@ -150,7 +150,7 @@ export default function SettingsScreen() {
 
           <TouchableOpacity style={styles.row} onPress={() => router.push('/saved-places' as any)}>
             <View style={[styles.rowIcon, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="bookmark" size={20} color="#F59E0B" />
+              <Ionicons name="bookmark" size={20} color={colors.warning} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>{t('settings.saved_places')}</Text>

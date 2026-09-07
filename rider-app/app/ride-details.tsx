@@ -350,7 +350,7 @@ export default function RideDetailsScreen() {
           <Ionicons
             name={isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time'}
             size={18}
-            color={isCompleted ? '#10B981' : isCancelled ? '#EF4444' : '#F59E0B'}
+            color={isCompleted ? colors.success : isCancelled ? colors.error : colors.warning}
           />
           <Text style={[styles.statusText, { color: isCompleted ? '#065F46' : isCancelled ? '#991B1B' : '#92400E' }]}>
             {isCompleted ? 'Completed' : isCancelled ? 'Cancelled' : ride.status}
@@ -439,7 +439,7 @@ export default function RideDetailsScreen() {
         <View style={styles.routeCard}>
           <View style={styles.routeRow}>
             <View style={styles.routeDots}>
-              <View style={[styles.dot, { backgroundColor: '#10B981' }]} />
+              <View style={[styles.dot, { backgroundColor: colors.success }]} />
               <View style={styles.routeLine} />
               <View style={[styles.dot, { backgroundColor: colors.primary }]} />
             </View>
@@ -468,9 +468,9 @@ export default function RideDetailsScreen() {
                 <Ionicons
                   name={ride.payment_method === 'wallet' ? 'wallet' : ride.payment_method === 'company_allowance' ? 'business' : 'card'}
                   size={14}
-                  color={ride.payment_status === 'paid' ? '#10B981' : colors.textDim}
+                  color={ride.payment_status === 'paid' ? colors.success : colors.textDim}
                 />
-                <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: '#10B981' }]}>
+                <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: colors.success }]}>
                   {ride.payment_method === 'wallet'
                     ? 'Spinr Wallet'
                     : ride.payment_method === 'company_allowance'
@@ -495,7 +495,7 @@ export default function RideDetailsScreen() {
                         <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
                       </View>
                     ) : line.type === 'discount' ? (
-                      <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>{line.label}</Text>
+                      <Text style={[styles.fareBreakdownLabel, { color: colors.success }]}>{line.label}</Text>
                     ) : line.type === 'tip' ? (
                       <Text style={[styles.fareBreakdownLabel, { color: colors.info }]}>{line.label}</Text>
                     ) : line.type === 'tax' ? (
@@ -505,7 +505,7 @@ export default function RideDetailsScreen() {
                     )}
                     <Text style={[
                       styles.fareBreakdownValue,
-                      line.type === 'discount' && { color: '#10B981' },
+                      line.type === 'discount' && { color: colors.success },
                       line.type === 'tip' && { color: colors.info },
                     ]}>
                       {line.type === 'discount'
@@ -515,8 +515,8 @@ export default function RideDetailsScreen() {
                   </View>
                 ) : line.type === 'modifier' ? (
                   <View key={i} style={[styles.fareBreakdownRow, { gap: 4 }]}>
-                    <Ionicons name="flash" size={12} color="#F59E0B" />
-                    <Text style={[styles.fareBreakdownLabel, { color: '#F59E0B' }]}>{line.label}</Text>
+                    <Ionicons name="flash" size={12} color={colors.warning} />
+                    <Text style={[styles.fareBreakdownLabel, { color: colors.warning }]}>{line.label}</Text>
                   </View>
                 ) : null
               ))}
@@ -528,9 +528,9 @@ export default function RideDetailsScreen() {
                 <Ionicons
                   name={ride.payment_method === 'wallet' ? 'wallet' : ride.payment_method === 'company_allowance' ? 'business' : 'card'}
                   size={14}
-                  color={ride.payment_status === 'paid' ? '#10B981' : colors.textDim}
+                  color={ride.payment_status === 'paid' ? colors.success : colors.textDim}
                 />
-                <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: '#10B981' }]}>
+                <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: colors.success }]}>
                   {ride.payment_method === 'wallet'
                     ? 'Spinr Wallet'
                     : ride.payment_method === 'company_allowance'
@@ -659,7 +659,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.text,
     },
     fareBreakdownDriverBadge: {
-      fontSize: 10, fontFamily: 'PlusJakartaSans_500Medium', color: '#10B981', marginTop: 2,
+      fontSize: 10, fontFamily: 'PlusJakartaSans_500Medium', color: colors.success, marginTop: 2,
     },
     fareBreakdownTotal: {
       borderTopWidth: 1, borderTopColor: colors.border, marginTop: 4, paddingTop: 6,

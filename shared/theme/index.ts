@@ -56,10 +56,13 @@ export const lightColors: ThemeColors = {
   textSecondary: '#6B7280',
   border: '#E5E7EB',
   overlay: 'rgba(255, 255, 255, 0.95)',
-  error: '#DC2626',
-  success: '#34C759',
-  warning: '#d97706',
-  info: '#3B82F6',           // iOS-system-blue
+  error: '#EF4444',          // Tailwind red-500 — updated 2026-09-07, was #DC2626 (iOS red-600);
+                              // this shade was already the app's de facto majority convention
+                              // (rider-app used it 150x vs. 58x for the old token) before being
+                              // formally adopted here — see docs/design/rider-driver-app-design-system.md
+  success: '#10B981',        // Tailwind emerald-500 — updated 2026-09-07, was #34C759 (iOS green)
+  warning: '#F59E0B',        // Tailwind amber-500 — updated 2026-09-07, was #d97706 (amber-600)
+  info: '#3B82F6',           // iOS-system-blue (unchanged — already the dominant convention)
   successBg: '#ECFDF5',
   warningBg: '#FFF7ED',
   dangerBg:  '#FEF2F2',
@@ -67,7 +70,7 @@ export const lightColors: ThemeColors = {
   heatmapRamp: ['#FFE3E0', '#FFB3AC', '#FF7A6E', '#FF3B30', '#B71C1C'],
   accent: '#FF3B30',
   accentDim: '#D32F2F',
-  danger: '#DC2626',
+  danger: '#EF4444',         // legacy alias, kept mirroring `error` exactly
   orange: '#FF9500',
   gold: '#FFD700',
 };
@@ -83,10 +86,12 @@ export const darkColors: ThemeColors = {
   textSecondary: '#8E8E93', // iOS tertiary label
   border: '#38383A',        // iOS separator dark
   overlay: 'rgba(0, 0, 0, 0.92)',
-  error: '#FF453A',
-  success: '#30D158',       // iOS system green (dark)
-  warning: '#F59E0B',       // amber — readable on dark surfaces
-  info: '#0A84FF',          // iOS system blue (dark)
+  error: '#F87171',         // Tailwind red-400 — updated 2026-09-07 (was iOS red #FF453A), to
+                             // stay in the same Tailwind family as the new light-mode `error`
+  success: '#34D399',       // Tailwind emerald-400 — updated 2026-09-07 (was iOS green #30D158)
+  warning: '#FBBF24',       // Tailwind amber-400 — updated 2026-09-07 (was #F59E0B, which is now
+                             // the *light*-mode value; needed a distinct, brighter dark shade)
+  info: '#0A84FF',          // iOS system blue (dark) — unchanged
   // Surface tints — NOT just inverted; very-low-luminance versions of the
   // foreground hue so they read as a tinted dark surface, not a near-white
   // tint inverted to off-tone aubergine.
@@ -97,7 +102,7 @@ export const darkColors: ThemeColors = {
   heatmapRamp: ['#4E211E', '#7F2D26', '#B2382E', '#FF453A', '#FF8A80'],
   accent: '#FF453A',
   accentDim: '#D32F2F',
-  danger: '#FF453A',
+  danger: '#F87171',        // legacy alias, kept mirroring `error` exactly
   orange: '#FF9F0A',        // iOS system orange (dark)
   gold: '#FFD700',
 };

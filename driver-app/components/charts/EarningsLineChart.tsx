@@ -21,11 +21,12 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 export default function EarningsLineChart({
   data,
   height = 180,
-  color = '#EF4444',
+  color,
   showArea = true,
   formatValue = (v) => `$${v.toFixed(0)}`,
 }: EarningsLineChartProps) {
   const { colors } = useTheme();
+  const resolvedColor = color ?? colors.error;
   if (!data || data.length === 0) {
     return (
       <View style={[styles.emptyContainer, { height }]}>
@@ -72,8 +73,8 @@ export default function EarningsLineChart({
       <Svg width={chartWidth} height={chartHeight}>
         <Defs>
           <SvgGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%" stopColor={color} stopOpacity="0.3" />
-            <Stop offset="100%" stopColor={color} stopOpacity="0.02" />
+            <Stop offset="0%" stopColor={resolvedColor} stopOpacity="0.3" />
+            <Stop offset="100%" stopColor={resolvedColor} stopOpacity="0.02" />
           </SvgGradient>
         </Defs>
 
@@ -109,11 +110,11 @@ export default function EarningsLineChart({
         {showArea && <Path d={areaPath} fill="url(#areaGrad)" />}
 
         {/* Line */}
-        <Path d={linePath} stroke={color} strokeWidth={2.5} fill="none" strokeLinecap="round" />
+        <Path d={linePath} stroke={resolvedColor} strokeWidth={2.5} fill="none" strokeLinecap="round" />
 
         {/* Data points */}
         {points.map((p, i) => (
-          <Circle key={`dot-${i}`} cx={p.x} cy={p.y} r={3.5} fill="#fff" stroke={color} strokeWidth={2} />
+          <Circle key={`dot-${i}`} cx={p.x} cy={p.y} r={3.5} fill="#fff" stroke={resolvedColor} strokeWidth={2} />
         ))}
 
         {/* X-axis labels */}

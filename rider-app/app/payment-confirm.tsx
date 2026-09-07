@@ -324,7 +324,7 @@ function PaymentConfirmScreenContent() {
 
           <View style={styles.routeContainer}>
             <View style={styles.routePoint}>
-              <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+              <View style={[styles.routeDot, { backgroundColor: colors.success }]} />
               <View style={styles.routeInfo}>
                 <Text style={styles.routeLabel}>Pickup</Text>
                 <Text style={styles.routeAddress} numberOfLines={1}>{pickup?.address}</Text>
@@ -545,24 +545,24 @@ function PaymentConfirmScreenContent() {
                           <Text style={styles.fareDriverBadge}>100% goes to your driver · ride local, support local</Text>
                         </View>
                       ) : (
-                        <Text style={[styles.fareLabel, line.type === 'tax' && { color: colors.textSecondary }, line.type === 'modifier' && { color: '#EF4444' }]}>
+                        <Text style={[styles.fareLabel, line.type === 'tax' && { color: colors.textSecondary }, line.type === 'modifier' && { color: colors.error }]}>
                           {line.label}
                         </Text>
                       )}
                       {line.amount != null ? (
-                        <Text style={[styles.fareValue, line.type === 'modifier' && { color: '#EF4444' }]} allowFontScaling={false}>
+                        <Text style={[styles.fareValue, line.type === 'modifier' && { color: colors.error }]} allowFontScaling={false}>
                           ${parseFloat(String(line.amount)).toFixed(2)}
                         </Text>
                       ) : (
-                        <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
+                        <Text style={[styles.fareValue, { color: colors.error }]}>Applied</Text>
                       )}
                     </View>
                   ) : null
                 ))}
                 {appliedPromo && promoDiscount > 0 && (
                   <View style={[styles.fareRow, { marginTop: 2 }]}>
-                    <Text style={[styles.fareLabel, { color: '#10B981' }]}>Promo ({appliedPromo.code})</Text>
-                    <Text style={[styles.fareValue, { color: '#10B981' }]} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
+                    <Text style={[styles.fareLabel, { color: colors.success }]}>Promo ({appliedPromo.code})</Text>
+                    <Text style={[styles.fareValue, { color: colors.success }]} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
                   </View>
                 )}
               </View>
@@ -900,12 +900,12 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
     discountLabel: {
       fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_500Medium',
-      color: '#10B981',
+      color: colors.success,
     },
     discountAmount: {
       fontSize: sf(16),
       fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: '#10B981',
+      color: colors.success,
     },
     scheduledBadge: {
       flexDirection: 'row',
@@ -954,7 +954,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
     fareDriverBadge: {
       fontSize: sf(11),
       fontFamily: 'PlusJakartaSans_500Medium',
-      color: '#10B981',
+      color: colors.success,
       marginTop: 2,
     },
     fareValue: {

@@ -1,5 +1,10 @@
 # Pillar 3 — Architecture & Platform
 
+> **Superseded (2026-09-07):** the topology and architectural-principles content below has
+> been merged into the canonical [`ARCHITECTURE.md`](../../ARCHITECTURE.md) at the repo root.
+> Refer to that file first; it links onward to `docs/adr/` for decisions and `CLAUDE.md` for
+> conventions. This pillar remains below as historical/framework context.
+
 > The system shape, the invariants that hold it together, and the rules for
 > changing it. Source of truth for topology is `CLAUDE.md` → Architecture;
 > decisions live in `docs/adr/`; this pillar states the *principles* that

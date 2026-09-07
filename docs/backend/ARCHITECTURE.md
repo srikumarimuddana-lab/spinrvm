@@ -1,5 +1,11 @@
 # Spinr Backend — High-Level Architecture
 
+> **Superseded (2026-09-07):** this file's backend stack, topology, request-lifecycle,
+> and cross-cutting-concerns content has been merged into the canonical
+> [`ARCHITECTURE.md`](../../ARCHITECTURE.md) at the repo root. Refer to that file first;
+> the domain map and per-section detail below remain as a deeper reference and historical
+> record, but treat the root file as the source of truth for anything they disagree on.
+
 **Purpose:** Bird's-eye map of the Spinr backend — tech stack, topology, request lifecycle, cross-cutting concerns, and where each domain lives.
 
 **Audience:** Engineers onboarding to the codebase. Pair with the per-domain docs under `docs/backend/` and with `docs/CORPORATE_B2B.md` (which covers the corporate B2B sub-system in depth).

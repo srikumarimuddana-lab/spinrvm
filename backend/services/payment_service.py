@@ -302,7 +302,8 @@ async def record_refund_event(
     payment_intent_id: str | None = None,
     *,
     ride: dict | None = None,
-) -> None:
+    dedupe_key: str | None = None,
+) -> Optional[str]:
     """Append a stripe_refund row to the financial_events ledger (C3).
 
     A refund previously left NO ledger entry, so the 7-year tax/audit ledger
@@ -312,6 +313,12 @@ async def record_refund_event(
     — but we capture the reversed rider-side tax (proportional to the refund
     fraction) and note the retained driver amount for reconciliation.
     ``delta_cents`` is NEGATIVE (money leaving). Never raises.
+
+    ``dedupe_key`` (F1): forwarded to ``ledger_service.record_event`` so a
+    replayed/retried call for the same money movement books once, matching
+    the dispute path's pattern. Returns the ledger row id (``None`` if the
+    ledger write itself failed) so the caller can treat a failed ledger
+    write as a hard error on the money path rather than a soft no-op.
     """
     meta: Dict[str, Any] = {"source": "charge.refunded", "driver_pay_absorbed_by_platform": True}
     tax_reversed = Decimal("0")
@@ -337,14 +344,45 @@ async def record_refund_event(
     # metadata.tax_reversed (written above), keeping financial_event_entries
     # single-writer. driver_payable stays untouched either way: the driver
     # keeps their pay on a refund and the platform absorbs it (see docstring).
-    await ledger_service.record_event(
+    return await ledger_service.record_event(
         event_type="stripe_refund",
         user_id=user_id,
         ride_id=ride_id,
         delta_cents=-abs(int(refund_cents)),
         ref=payment_intent_id,
         metadata=meta,
+        dedupe_key=dedupe_key,
     )
+
+
+async def refund_booked_cents(payment_intent_id: str) -> int:
+    """Sum of already-booked ``stripe_refund`` ledger rows for this payment
+    intent, as a positive cent amount (F1 replay recovery).
+
+    Used to detect a partial-failure gap: a ride's ``refund_amount`` can
+    advance without a matching ledger row if the process crashed between the
+    two writes (pre-CAS). On a later redelivery with the same cumulative
+    amount, comparing this against the ride's recorded total tells the
+    handler how much (if any) ledger booking is still missing.
+    """
+    try:
+        rows = await db_supabase.get_rows(
+            "financial_events",
+            {"event_type": "stripe_refund", "ref": payment_intent_id},
+            columns="delta_cents",
+        )
+    except Exception:
+        logger.opt(exception=True).error(
+            "refund_booked_cents: financial_events read failed for payment_intent {} — money-path query, re-raising",
+            payment_intent_id,
+        )
+        raise
+    total = 0
+    for row in rows or []:
+        delta = row.get("delta_cents")
+        if isinstance(delta, (int, float)) and delta < 0:
+            total += -int(delta)
+    return total
 
 
 async def record_dispute_close_events(

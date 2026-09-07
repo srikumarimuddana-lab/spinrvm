@@ -761,7 +761,9 @@ class TestChargeRefundedFullDispatch:
         assert result["received"] is True
         upd_table, upd_filter, upd_fields = update_one_mock.await_args.args[:3]
         assert upd_table == "rides"
-        assert upd_filter == {"id": "ride_refunded"}
+        # F1 CAS: filter now also pins the pre-read refund_amount (None here,
+        # since the mocked ride row has no refund_amount key at all).
+        assert upd_filter == {"id": "ride_refunded", "refund_amount": None}
         assert upd_fields["payment_status"] == "refunded"
         assert upd_fields["refund_amount"] == "15.00"
         record_refund_mock.assert_awaited_once()

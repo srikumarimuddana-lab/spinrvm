@@ -71,3 +71,89 @@ async def test_refund_event_never_raises_on_ledger_error():
         AsyncMock(side_effect=Exception("db down")),
     ):
         await record_refund_event("r3", "u3", refund_cents=500, ride=None)  # no raise
+
+
+@pytest.mark.anyio
+async def test_refund_event_forwards_dedupe_key_and_returns_ledger_id():
+    """F1: dedupe_key must reach ledger_service.record_event (so a replay
+    books once, matching the dispute path's pattern), and the caller must get
+    back the ledger row id (not None) to distinguish success from failure."""
+    from backend.services.ledger_service import derive_event_id
+    from backend.services.payment_service import record_refund_event
+
+    with patch(
+        "backend.services.payment_service.db_supabase.insert_one",
+        AsyncMock(return_value={}),
+    ) as ins:
+        result = await record_refund_event(
+            "r4", "u4", refund_cents=1000, payment_intent_id="pi_4", dedupe_key="stripe_refund|pi_4|1000"
+        )
+
+    assert result == derive_event_id("stripe_refund|pi_4|1000")
+    assert ins.call_args.args[1]["id"] == derive_event_id("stripe_refund|pi_4|1000")
+
+
+@pytest.mark.anyio
+async def test_refund_event_returns_none_when_ledger_write_fails():
+    from backend.services.payment_service import record_refund_event
+
+    with patch(
+        "backend.services.payment_service.db_supabase.insert_one",
+        AsyncMock(side_effect=Exception("db down")),
+    ):
+        result = await record_refund_event("r5", "u5", refund_cents=500, dedupe_key="stripe_refund|pi_5|500")
+
+    assert result is None
+
+
+class TestRefundBookedCents:
+    @pytest.mark.anyio
+    async def test_sums_negative_deltas_as_positive_total(self):
+        from backend.services.payment_service import refund_booked_cents
+
+        rows = [{"delta_cents": -1000}, {"delta_cents": -500}]
+        with patch(
+            "backend.services.payment_service.db_supabase.get_rows",
+            AsyncMock(return_value=rows),
+        ):
+            assert await refund_booked_cents("pi_sum_1") == 1500
+
+    @pytest.mark.anyio
+    async def test_no_rows_returns_zero(self):
+        from backend.services.payment_service import refund_booked_cents
+
+        with patch(
+            "backend.services.payment_service.db_supabase.get_rows",
+            AsyncMock(return_value=[]),
+        ):
+            assert await refund_booked_cents("pi_sum_2") == 0
+
+    @pytest.mark.anyio
+    async def test_ignores_non_negative_rows(self):
+        """Defensive — only a refund's own negative delta_cents rows should
+        count; a positive row under the same ref (shouldn't happen for
+        stripe_refund, but this query filters on ref not event_type alone at
+        the DB layer in some paths) must not be double-subtracted."""
+        from backend.services.payment_service import refund_booked_cents
+
+        rows = [{"delta_cents": -1000}, {"delta_cents": 200}]
+        with patch(
+            "backend.services.payment_service.db_supabase.get_rows",
+            AsyncMock(return_value=rows),
+        ):
+            assert await refund_booked_cents("pi_sum_3") == 1000
+
+    @pytest.mark.anyio
+    async def test_raises_on_db_error_money_path(self):
+        """Unlike record_refund_event (best-effort, never raises), a read
+        failure here must surface loudly rather than silently reporting 0
+        already-booked — that would make the caller re-book money that may
+        already be recorded."""
+        from backend.services.payment_service import refund_booked_cents
+
+        with patch(
+            "backend.services.payment_service.db_supabase.get_rows",
+            AsyncMock(side_effect=Exception("db down")),
+        ):
+            with pytest.raises(Exception, match="db down"):
+                await refund_booked_cents("pi_sum_4")

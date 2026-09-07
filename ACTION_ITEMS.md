@@ -13292,7 +13292,24 @@ record of what was assumed vs. what was actually true</summary>
   later claim that it was still unfixed was wrong.
 
 ### C9. Codex auto-review stopped on 30 July — combined with C7, this repo has **no** automated PR review
-- [ ] **Status:** open. The `chatgpt-codex-connector` GitHub App is installed
+- [x] **Status:** CLOSED (2026-09-07) — resolved by removal, not by fixing the
+  stall. The root cause was never diagnosed as fixable from this side (still
+  needs GitHub org-admin access nobody in-repo has), and the user decided to
+  stop waiting on a reviewer that had been silent for ~200 PRs and rip out
+  the integration instead. `CLAUDE.md`'s "PR review handling" section was
+  rewritten to drop Codex entirely and state plainly that no automated PR
+  review runs — a human, or a manually-invoked `spinr-security-auditor` /
+  `spinr-money-auditor` / `spinr-migration-reviewer` subagent, reviews
+  money/auth/migration/dispatch/safety PRs instead. No `.github/workflows/`
+  file referenced Codex or the `chatgpt-codex-connector` bot, so nothing
+  needed removing there. Cross-references updated in
+  `.claude/commands/full-audit.md` and `docs/framework/01-delivery-lifecycle.md`.
+  This does **not** uninstall the GitHub App itself — that still requires an
+  org admin to remove it under GitHub Settings → GitHub Apps (or the repo's
+  Settings → Integrations) at the organization level; the app being
+  unreferenced in-repo does not revoke its installation or its ability to
+  comment if it ever resumes on its own.
+- **(historical) Status:** open. The `chatgpt-codex-connector` GitHub App is installed
   and has worked — it has commented on **183 PRs** historically — but it has
   reviewed nothing for two days. This is a **stall, not an absence**, which
   should make the cause findable.

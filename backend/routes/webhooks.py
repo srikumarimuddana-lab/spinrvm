@@ -302,7 +302,13 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
     amount_cents = invoice.get("amount_paid")
     if amount_cents is None:
         amount_cents = invoice.get("amount_due") or 0
-    payment_intent_id = _extract_invoice_payment_intent(invoice, stripe_secret)
+    # F8: _extract_invoice_payment_intent's fallback path makes a synchronous
+    # Stripe API call (Invoice.retrieve) — run off the event loop so a slow
+    # Stripe response doesn't stall every other coroutine on this worker
+    # (webhook processing has a <500ms SLA). The helper itself stays sync;
+    # several tests call it directly and patch stripe.Invoice.retrieve as a
+    # module attribute, which asyncio.to_thread still respects.
+    payment_intent_id = await asyncio.to_thread(_extract_invoice_payment_intent, invoice, stripe_secret)
     if not payment_intent_id:
         # No PI means later refund/dispute webhooks (keyed on payment_intent_id)
         # cannot find this ride. This is usually a transient Stripe-retrieve
@@ -1773,7 +1779,12 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 try:
                     import stripe as _stripe
 
-                    _sub_obj = _stripe.Subscription.retrieve(stripe_sub_id, api_key=stripe_secret)
+                    # F8: synchronous Stripe call — off the event loop (see
+                    # the comment on the analogous invoice.paid PI-extraction
+                    # call above).
+                    _sub_obj = await asyncio.to_thread(
+                        _stripe.Subscription.retrieve, stripe_sub_id, api_key=stripe_secret
+                    )
                     _meta_sub_id = (_sub_obj.get("metadata") or {}).get("subscription_id")
                     if _meta_sub_id:
                         row = await db_supabase.find_one("driver_subscriptions", {"id": _meta_sub_id})

@@ -68,9 +68,9 @@ export default function WorkAllowanceRequestScreen() {
   };
 
   const statusColor = (s: string) => {
-    if (s === 'approved' || s === 'auto_approved') return '#10B981';
-    if (s === 'denied') return '#EF4444';
-    return '#F59E0B';
+    if (s === 'approved' || s === 'auto_approved') return colors.success;
+    if (s === 'denied') return colors.error;
+    return colors.warning;
   };
 
   const statusLabel = (s: string) => {
@@ -114,7 +114,7 @@ export default function WorkAllowanceRequestScreen() {
           {/* Pending request warning */}
           {pendingRequest && (
             <View style={styles.pendingBanner}>
-              <Ionicons name="time-outline" size={18} color="#F59E0B" />
+              <Ionicons name="time-outline" size={18} color={colors.warning} />
               <Text style={styles.pendingText}>
                 You have a pending request for ${parseFloat(pendingRequest.amount).toFixed(2)} awaiting admin review.
                 You cannot submit another until it is decided.
@@ -235,7 +235,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row', alignItems: 'flex-start', gap: 10,
       margin: 16, marginBottom: 0,
       backgroundColor: '#FFFBEB', borderRadius: 10,
-      padding: 12, borderLeftWidth: 3, borderLeftColor: '#F59E0B',
+      padding: 12, borderLeftWidth: 3, borderLeftColor: colors.warning,
     },
     pendingText: { flex: 1, fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text, lineHeight: 18 },
 

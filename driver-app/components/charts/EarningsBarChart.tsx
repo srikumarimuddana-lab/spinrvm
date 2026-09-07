@@ -22,11 +22,12 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 export default function EarningsBarChart({
   data,
   height = 180,
-  primaryColor = '#EF4444',
+  primaryColor,
   secondaryColor,
   formatValue = (v) => `$${v.toFixed(0)}`,
 }: EarningsBarChartProps) {
   const { colors } = useTheme();
+  const resolvedPrimaryColor = primaryColor ?? colors.error;
   const resolvedSecondaryColor = secondaryColor ?? colors.gold;
   if (!data || data.length === 0) {
     return (
@@ -60,8 +61,8 @@ export default function EarningsBarChart({
       <Svg width={chartWidth} height={chartHeight}>
         <Defs>
           <SvgGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%" stopColor={primaryColor} stopOpacity="1" />
-            <Stop offset="100%" stopColor={primaryColor} stopOpacity="0.7" />
+            <Stop offset="0%" stopColor={resolvedPrimaryColor} stopOpacity="1" />
+            <Stop offset="100%" stopColor={resolvedPrimaryColor} stopOpacity="0.7" />
           </SvgGradient>
           <SvgGradient id="tipGrad" x1="0" y1="0" x2="0" y2="1">
             <Stop offset="0%" stopColor={resolvedSecondaryColor} stopOpacity="0.9" />

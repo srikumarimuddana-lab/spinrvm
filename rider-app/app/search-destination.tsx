@@ -462,7 +462,7 @@ export default function SearchDestinationScreen() {
       <View style={styles.inputsContainer}>
         {/* Pickup */}
         <View style={styles.inputRow}>
-          <View style={[styles.dot, { backgroundColor: '#10B981' }]} />
+          <View style={[styles.dot, { backgroundColor: colors.success }]} />
           <View style={[styles.inputWrapper, activeField === 'pickup' && styles.inputActive]}>
             <TextInput
               ref={pickupRef}
@@ -629,7 +629,7 @@ export default function SearchDestinationScreen() {
                       accessibilityHint="Sets your GPS position as the pickup point"
                     >
                       <View style={[styles.predictionIcon, { backgroundColor: '#E8F5E9' }]}>
-                        <Ionicons name="navigate" size={20} color="#10B981" />
+                        <Ionicons name="navigate" size={20} color={colors.success} />
                       </View>
                       <View style={styles.predictionContent}>
                         <Text style={styles.predictionMainText}>Current Location</Text>

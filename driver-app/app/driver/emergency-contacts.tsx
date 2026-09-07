@@ -217,7 +217,7 @@ export default function EmergencyContactsScreen() {
                     style={styles.deleteButton}
                     onPress={() => handleDelete(contact)}
                   >
-                    <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                    <Ionicons name="trash-outline" size={20} color={colors.error} />
                   </TouchableOpacity>
                 </View>
                 );

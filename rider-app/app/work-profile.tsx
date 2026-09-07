@@ -359,7 +359,7 @@ export default function WorkProfileScreen() {
             rides.map(ride => (
               <View key={ride.id} style={styles.rideRow}>
                 <View style={styles.rideIcon}>
-                  <Ionicons name="checkmark-circle" size={18} color={ride.status === 'cancelled' ? colors.textDim : '#10B981'} />
+                  <Ionicons name="checkmark-circle" size={18} color={ride.status === 'cancelled' ? colors.textDim : colors.success} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rideAddress} numberOfLines={1}>{ride.dropoff_address || 'Unknown'}</Text>

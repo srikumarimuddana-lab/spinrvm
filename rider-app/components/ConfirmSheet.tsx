@@ -214,7 +214,7 @@ function createStyles(colors: ThemeColors) {
       color: '#fff',
     },
     destructiveButton: {
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.error,
     },
     cancelButton: {
       backgroundColor: colors.surfaceLight,

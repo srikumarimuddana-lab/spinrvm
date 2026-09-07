@@ -44,7 +44,7 @@ describe('Input', () => {
     expect(getByText('Enter a valid email')).toBeTruthy();
     const flatStyle = Object.assign({}, ...[].concat(getByPlaceholderText('Email').props.style));
     // colors.danger in the default (light) palette — see shared/theme/index.ts.
-    expect(flatStyle.borderColor).toBe('#DC2626');
+    expect(flatStyle.borderColor).toBe('#EF4444');
   });
 
   it('respects editable=false (disabled state)', () => {

@@ -463,7 +463,7 @@ export default function RideStatusScreen() {
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{currentDriver?.name}</Text>
             <Text style={styles.arrivedText}>
-              <Ionicons name="checkmark-circle" size={14} color="#10B981" /> Arrived at pickup
+              <Ionicons name="checkmark-circle" size={14} color={colors.success} /> Arrived at pickup
             </Text>
           </View>
           {/* No call button: rider↔driver contact is chat-only. */}
@@ -955,10 +955,10 @@ function createStyles(colors: ThemeColors) {
     arrivedText: {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_500Medium',
-      color: '#10B981',
+      color: colors.success,
     },
     completeButton: {
-      backgroundColor: '#10B981',
+      backgroundColor: colors.success,
       borderRadius: 28,
       padding: 18,
       alignItems: 'center',
@@ -988,7 +988,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: '#FEF3C7',
       borderRadius: 12,
       borderWidth: 1,
-      borderColor: '#F59E0B',
+      borderColor: colors.warning,
     },
     devLabel: {
       fontSize: 11,
@@ -997,7 +997,7 @@ function createStyles(colors: ThemeColors) {
       marginRight: 4,
     },
     devBtn: {
-      backgroundColor: '#F59E0B',
+      backgroundColor: colors.warning,
       paddingHorizontal: 12,
       paddingVertical: 6,
       borderRadius: 8,

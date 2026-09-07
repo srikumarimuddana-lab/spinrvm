@@ -170,7 +170,7 @@ export default function ReportSafetyScreen() {
                     showsVerticalScrollIndicator={false}
                 >
                     <View style={styles.warningBox}>
-                        <Ionicons name="warning" size={24} color="#F59E0B" />
+                        <Ionicons name="warning" size={24} color={colors.warning} />
                         <Text style={styles.warningText}>
                             If this is an emergency, please contact local authorities immediately using the Emergency Assist button in settings.
                         </Text>
@@ -227,7 +227,7 @@ export default function ReportSafetyScreen() {
                             <View key={i} style={styles.photoThumb}>
                                 <Image source={{ uri }} style={styles.photoImage} contentFit="cover" />
                                 <TouchableOpacity style={styles.photoRemove} onPress={() => removePhoto(i)}>
-                                    <Ionicons name="close-circle" size={22} color="#EF4444" />
+                                    <Ionicons name="close-circle" size={22} color={colors.error} />
                                 </TouchableOpacity>
                             </View>
                         ))}

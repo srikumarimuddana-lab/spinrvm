@@ -477,7 +477,7 @@ export default function DriverLostAndFoundChatScreen() {
                   onPress={() => respond(false)}
                   disabled={responding}
                 >
-                  <Text style={[styles.respondBtnText, { color: '#EF4444' }]}>Not in my vehicle</Text>
+                  <Text style={[styles.respondBtnText, { color: colors.error }]}>Not in my vehicle</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -648,8 +648,8 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       borderWidth: 1,
     },
-    respondBtnYes: { backgroundColor: '#10B981', borderColor: '#10B981' },
-    respondBtnNo: { backgroundColor: colors.surface, borderColor: '#EF4444' },
+    respondBtnYes: { backgroundColor: colors.success, borderColor: colors.success },
+    respondBtnNo: { backgroundColor: colors.surface, borderColor: colors.error },
     respondBtnText: { fontSize: 14, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#fff' },
 
     // Chat

@@ -154,7 +154,7 @@ export default function PrivacySettingsScreen() {
         <Text style={styles.sectionTitle}>{t('privacy.notifications_section')}</Text>
         <View style={styles.card}>
           <SettingRow
-            icon="notifications" iconColor="#F59E0B" iconBg="#FEF3C7"
+            icon="notifications" iconColor={colors.warning} iconBg="#FEF3C7"
             title={t('privacy.push_notifications')}
             subtitle={t('privacy.push_notifications_subtitle')}
             toggle value={pushNotifications} onToggle={handlePushToggle}

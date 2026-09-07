@@ -41,12 +41,26 @@ for the actual color values, brand rationale, and typography, see
 
 ## Known gap: adoption isn't total
 
-**Partially closed (2026-09-07):** of the original ~46 rider-app / ~33
-driver-app files with hardcoded hex literals, every literal that was
-byte-identical to an existing `ThemeColors` value has been replaced with a
+**Largely closed in two passes (2026-09-07).** Pass 1: every hex literal
+byte-identical to an existing `ThemeColors` value was replaced with a
 `colors.<token>` reference (62 replacements / 21 files in rider-app, 37
 replacements / 15 files in driver-app) — value-identical in light mode, and
 now theme-correct in dark mode where the literal previously ignored it.
+
+Pass 2 found something bigger than leftover debt: `#10B981`/`#EF4444`/
+`#F59E0B` (Tailwind emerald/red/amber-500) were being used in exactly the
+same semantic spots (`success`/`error`/`warning`) as the official tokens,
+just with different shades — not one-offs. Actual usage was split and
+inconsistent between the apps (rider-app: 150 Tailwind-shade uses vs. 58
+token uses; driver-app: 51 vs. 141 the other way), so this was escalated
+to the user rather than resolved unilaterally. **Decision: the Tailwind
+shades became the official tokens** (`shared/theme/index.ts`'s
+`error`/`success`/`warning`/`danger` updated to `#EF4444`/`#10B981`/
+`#F59E0B` light, with new Tailwind-family dark counterparts
+`#F87171`/`#34D399`/`#FBBF24`; `info` was untouched — never actually
+contested). Both apps were then swept again onto the new values: 26
+replacements / 16 files in driver-app, 123 replacements / 34 files in
+rider-app.
 
 What's deliberately still hardcoded, and why it's not simply "remaining
 debt" to sweep the same way:

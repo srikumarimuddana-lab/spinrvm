@@ -142,7 +142,7 @@ export default function LoyaltyScreen() {
           <Text style={styles.historyDesc} numberOfLines={2}>{item.description}</Text>
           <Text style={styles.historyDate}>{formatDate(item.created_at)}</Text>
         </View>
-        <Text style={[styles.historyPoints, { color: isPositive ? '#10B981' : '#EF4444' }]}>
+        <Text style={[styles.historyPoints, { color: isPositive ? colors.success : colors.error }]}>
           {isPositive ? '+' : ''}{item.points.toLocaleString()} pts
         </Text>
       </View>
@@ -230,7 +230,7 @@ export default function LoyaltyScreen() {
                 {/* Points info row */}
                 <View style={styles.infoRow}>
                   <View style={styles.infoCard}>
-                    <Ionicons name="star" size={20} color="#F59E0B" />
+                    <Ionicons name="star" size={20} color={colors.warning} />
                     <Text style={styles.infoValue}>{loyalty.points.toLocaleString()}</Text>
                     <Text style={styles.infoLabel}>Current Points</Text>
                   </View>

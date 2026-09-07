@@ -275,6 +275,6 @@ function createStyles(colors: ThemeColors) {
         badgePending: { backgroundColor: 'rgba(245,158,11,0.12)' },
         badgeText: { fontSize: 12, fontWeight: '600' },
         badgeTextEarned: { color: colors.success },
-        badgeTextPending: { color: '#F59E0B' },
+        badgeTextPending: { color: colors.warning },
     });
 }

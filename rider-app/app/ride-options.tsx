@@ -806,7 +806,7 @@ function RideOptionsScreenContent() {
           />
           {stops.map((stop, i) => (
             <Marker key={`stop-${i}`} coordinate={{ latitude: stop.lat, longitude: stop.lng }} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: '#F59E0B' }]} /></View>
+              <View style={styles.markerContainer}><View style={[styles.markerDot, { backgroundColor: colors.warning }]} /></View>
             </Marker>
           ))}
           {nearbyDrivers.filter(d =>
@@ -899,7 +899,7 @@ function RideOptionsScreenContent() {
           {/* Loading skeleton */}
           {fetchError ? (
             <View style={styles.errorContainer}>
-              <Ionicons name="alert-circle-outline" size={36} color="#EF4444" />
+              <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
               <Text style={styles.errorText}>{fetchError}</Text>
               <TouchableOpacity style={styles.retryButton} onPress={handleFetchEstimates}>
                 <Text style={styles.retryButtonText}>Retry</Text>
@@ -1065,8 +1065,8 @@ function RideOptionsScreenContent() {
                   ))}
                   {appliedPromo && promoDiscount > 0 && (
                     <View style={[styles.fareBreakdownRow, { marginTop: 2 }]}>
-                      <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>Promo ({appliedPromo.code})</Text>
-                      <Text style={[styles.fareBreakdownValue, { color: '#10B981' }]}>-${promoDiscount.toFixed(2)}</Text>
+                      <Text style={[styles.fareBreakdownLabel, { color: colors.success }]}>Promo ({appliedPromo.code})</Text>
+                      <Text style={[styles.fareBreakdownValue, { color: colors.success }]}>-${promoDiscount.toFixed(2)}</Text>
                     </View>
                   )}
                   <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
@@ -1322,7 +1322,7 @@ function RideOptionsScreenContent() {
 
           {/* Manual code entry */}
           <View style={styles.promoInputRow}>
-            <View style={[styles.promoInputWrap, promoError ? { borderColor: '#EF4444' } : {}]}>
+            <View style={[styles.promoInputWrap, promoError ? { borderColor: colors.error } : {}]}>
               <Ionicons name="pricetag-outline" size={16} color={colors.textDim} style={{ marginLeft: 12 }} />
               <BottomSheetTextInput
                 style={[styles.promoInputField, { color: colors.text }]}
@@ -1346,7 +1346,7 @@ function RideOptionsScreenContent() {
           </View>
           {promoError ? (
             <View style={styles.promoErrorRow}>
-              <Ionicons name="alert-circle-outline" size={14} color="#EF4444" />
+              <Ionicons name="alert-circle-outline" size={14} color={colors.error} />
               <Text style={styles.promoErrorText}>{promoError}</Text>
             </View>
           ) : null}
@@ -1382,7 +1382,7 @@ function RideOptionsScreenContent() {
                 activeOpacity={0.75}
               >
                 <View style={[styles.promoRowIcon, { backgroundColor: isSelected ? '#D1FAE5' : isIneligible ? '#F3F4F6' : '#F0FDF4' }]}>
-                  <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : isIneligible ? '#9CA3AF' : '#10B981'} />
+                  <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : isIneligible ? '#9CA3AF' : colors.success} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -1395,7 +1395,7 @@ function RideOptionsScreenContent() {
                     <Text style={styles.promoRowDesc}>{promo.description}</Text>
                   ) : null}
                   {isIneligible && promo.min_ride_fare > 0 && (
-                    <Text style={{ fontSize: 11, color: '#EF4444', marginTop: 2 }}>Min. fare ${Number(promo.min_ride_fare).toFixed(2)}</Text>
+                    <Text style={{ fontSize: 11, color: colors.error, marginTop: 2 }}>Min. fare ${Number(promo.min_ride_fare).toFixed(2)}</Text>
                   )}
                 </View>
                 {isSelected
@@ -1427,7 +1427,7 @@ function RideOptionsScreenContent() {
               style={styles.promoRemoveRow}
               onPress={() => applyPromo(null)}
             >
-              <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
+              <Ionicons name="close-circle-outline" size={18} color={colors.error} />
               <Text style={styles.promoRemoveText}>Remove applied code</Text>
             </TouchableOpacity>
           )}
@@ -1727,7 +1727,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     errorText: {
       fontSize: sf(13),
       fontFamily: 'PlusJakartaSans_400Regular',
-      color: '#EF4444',
+      color: colors.error,
     },
     retryButton: {
       paddingHorizontal: 24,
@@ -1806,7 +1806,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       flexDirection: 'row',
       alignItems: 'center',
       gap: 3,
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.error,
       borderRadius: 8,
       paddingHorizontal: 5,
       paddingVertical: 2,
@@ -1819,7 +1819,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     surgeNotice: {
       fontSize: sf(10),
       fontFamily: 'PlusJakartaSans_400Regular',
-      color: '#EF4444',
+      color: colors.error,
       marginTop: 1,
     },
     capacityBadge: {
@@ -1839,7 +1839,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     optionETA: {
       fontSize: sf(12),
       fontFamily: 'PlusJakartaSans_400Regular',
-      color: '#10B981',
+      color: colors.success,
       marginTop: 2,
     },
     unavailableText: {
@@ -1866,7 +1866,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     optionPriceDiscounted: {
       fontSize: sf(17),
       fontFamily: 'PlusJakartaSans_700Bold',
-      color: '#10B981',
+      color: colors.success,
     },
     selectedCheck: {
       marginTop: 3,
@@ -2033,7 +2033,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     fareBreakdownDriverBadge: {
       fontSize: sf(10),
       fontFamily: 'PlusJakartaSans_500Medium',
-      color: '#10B981',
+      color: colors.success,
       marginTop: 2,
     },
     fareBreakdownTotal: {
@@ -2228,7 +2228,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     promoErrorText: {
       fontSize: sf(12),
       fontFamily: 'PlusJakartaSans_500Medium',
-      color: '#EF4444',
+      color: colors.error,
     },
     promoSectionLabel: {
       fontSize: sf(11),
@@ -2316,7 +2316,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     promoRemoveText: {
       fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: '#EF4444',
+      color: colors.error,
     },
 
 

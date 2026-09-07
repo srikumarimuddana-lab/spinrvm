@@ -402,12 +402,12 @@ export default function SubscriptionScreen() {
                   </Text>
                 </View>
                 <View style={styles.planDetail}>
-                  <Ionicons name="cash-outline" size={18} color="#10B981" />
+                  <Ionicons name="cash-outline" size={18} color={colors.success} />
                   <Text style={styles.planDetailText}>0% commission — keep all fares</Text>
                 </View>
                 {(plan.features || []).map((f, i) => (
                   <View key={i} style={styles.planDetail}>
-                    <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                    <Ionicons name="checkmark-circle" size={18} color={colors.success} />
                     <Text style={styles.planDetailText}>{f}</Text>
                   </View>
                 ))}
@@ -438,7 +438,7 @@ export default function SubscriptionScreen() {
             <Text style={styles.freeTitle}>It&apos;s Free Right Now!</Text>
             <Text style={styles.freeMessage}>{freeMessage}</Text>
             <View style={styles.freeBadge}>
-              <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+              <Ionicons name="checkmark-circle" size={16} color={colors.success} />
               <Text style={styles.freeBadgeText}>No subscription needed</Text>
             </View>
           </View>

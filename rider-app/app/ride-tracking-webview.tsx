@@ -124,7 +124,7 @@ export default function RideTrackingWebviewScreen() {
       {/* URL bar */}
       {resolvedUrl ? (
         <View style={styles.urlBar}>
-          <Ionicons name="lock-closed" size={13} color="#10B981" />
+          <Ionicons name="lock-closed" size={13} color={colors.success} />
           <Text style={styles.urlText} numberOfLines={1}>{resolvedUrl}</Text>
           {webLoading && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
         </View>

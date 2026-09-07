@@ -337,7 +337,7 @@ function createStyles(colors: ThemeColors) {
       width: 10,
       height: 10,
       borderRadius: 5,
-      backgroundColor: '#10B981',
+      backgroundColor: colors.success,
       borderWidth: 2,
       borderColor: '#FFF',
     },

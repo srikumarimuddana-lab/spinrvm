@@ -200,7 +200,7 @@ export default function AccountScreen() {
                 {!!user?.email && (
                   isEmailVerified ? (
                     <View style={styles.emailVerifiedPill} accessibilityLabel="Email verified">
-                      <Ionicons name="checkmark-circle" size={12} color="#10B981" />
+                      <Ionicons name="checkmark-circle" size={12} color={colors.success} />
                       <Text style={styles.emailVerifiedPillText}>Verified</Text>
                     </View>
                   ) : (
@@ -219,7 +219,7 @@ export default function AccountScreen() {
                   <View style={styles.cardDivider} />
                   <View style={styles.cardRow}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
-                      <Ionicons name="person" size={16} color="#F59E0B" />
+                      <Ionicons name="person" size={16} color={colors.warning} />
                     </View>
                     <View style={styles.cardInfo}>
                       <Text style={styles.cardLabel}>Gender</Text>
@@ -238,7 +238,7 @@ export default function AccountScreen() {
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="card" iconColor="#7C3AED" iconBg="rgba(124, 58, 237, 0.1)" label="Payment Methods" onPress={() => router.push('/manage-cards' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="pricetag" iconColor="#10B981" iconBg="rgba(16, 185, 129, 0.1)" label="Promotions" onPress={() => router.push('/promotions' as any)} />
+              <MenuRow styles={styles} colors={colors} icon="pricetag" iconColor={colors.success} iconBg="rgba(16, 185, 129, 0.1)" label="Promotions" onPress={() => router.push('/promotions' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="gift" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="Refer & Earn" onPress={() => router.push('/referral' as any)} />
             </View>
@@ -249,7 +249,7 @@ export default function AccountScreen() {
             <View style={styles.card}>
               <MenuRow styles={styles} colors={colors} icon="calendar" iconColor={colors.info} iconBg="rgba(59, 130, 246, 0.1)" label="Scheduled Rides" onPress={() => router.push('/scheduled-rides' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="location" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Saved Places" onPress={() => router.push('/saved-places' as any)} />
+              <MenuRow styles={styles} colors={colors} icon="location" iconColor={colors.warning} iconBg="rgba(245, 158, 11, 0.1)" label="Saved Places" onPress={() => router.push('/saved-places' as any)} />
             </View>
           </View>
 
@@ -291,11 +291,11 @@ export default function AccountScreen() {
                   replacing them: riders who already know where "Emergency
                   Contacts" lives keep their path, and the hub gives everyone
                   else one place to check their whole safety setup. */}
-              <MenuRow styles={styles} colors={colors} icon="shield-checkmark" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)" label="Safety" onPress={() => router.push('/safety-hub' as any)} />
+              <MenuRow styles={styles} colors={colors} icon="shield-checkmark" iconColor={colors.error} iconBg="rgba(239, 68, 68, 0.05)" label="Safety" onPress={() => router.push('/safety-hub' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="people" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)" label="Emergency Contacts" onPress={() => router.push('/emergency-contacts' as any)} />
+              <MenuRow styles={styles} colors={colors} icon="people" iconColor={colors.error} iconBg="rgba(239, 68, 68, 0.05)" label="Emergency Contacts" onPress={() => router.push('/emergency-contacts' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="alert-circle" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Report a Safety Issue" onPress={() => router.push('/report-safety' as any)} />
+              <MenuRow styles={styles} colors={colors} icon="alert-circle" iconColor={colors.warning} iconBg="rgba(245, 158, 11, 0.1)" label="Report a Safety Issue" onPress={() => router.push('/report-safety' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="lock-closed" iconColor={colors.textDim} iconBg={colors.surfaceLight} label="Privacy & Settings" onPress={() => router.push('/privacy-settings' as any)} />
               <View style={styles.cardDivider} />
@@ -332,7 +332,7 @@ export default function AccountScreen() {
               ]);
             }}
           >
-            <Ionicons name="log-out-outline" size={18} color="#EF4444" />
+            <Ionicons name="log-out-outline" size={18} color={colors.error} />
             <Text style={styles.signOutText}>Sign Out</Text>
           </TouchableOpacity>
 
@@ -422,7 +422,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     alignSelf: 'center', gap: 8, paddingVertical: 14, marginTop: 4,
   },
-  signOutText: { fontSize: 15, fontWeight: '700', color: '#EF4444' },
+  signOutText: { fontSize: 15, fontWeight: '700', color: colors.error },
   avatarPlaceholder: {
     width: 100, height: 100, borderRadius: 50,
     justifyContent: 'center', alignItems: 'center',
@@ -487,7 +487,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     backgroundColor: 'rgba(16, 185, 129, 0.1)', borderRadius: 12,
     paddingVertical: 5, paddingHorizontal: 10,
   },
-  emailVerifiedPillText: { color: '#10B981', fontSize: 12, fontWeight: '700' },
+  emailVerifiedPillText: { color: colors.success, fontSize: 12, fontWeight: '700' },
   emailVerifyPill: {
     backgroundColor: colors.primary, borderRadius: 12,
     paddingVertical: 6, paddingHorizontal: 12,

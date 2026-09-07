@@ -247,7 +247,7 @@ export default function PickOnMapScreen() {
       <View style={styles.bottomCard}>
         <View style={styles.addressRow}>
           <View style={[styles.addressDot, {
-            backgroundColor: field === 'pickup' ? '#10B981' : colors.primary,
+            backgroundColor: field === 'pickup' ? colors.success : colors.primary,
           }]} />
           <View style={styles.addressContent}>
             {geocoding ? (

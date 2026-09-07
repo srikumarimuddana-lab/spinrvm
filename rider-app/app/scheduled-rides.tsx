@@ -135,7 +135,7 @@ export default function ScheduledRidesScreen() {
 
         <View style={styles.routeSection}>
           <View style={styles.routePoint}>
-            <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+            <View style={[styles.routeDot, { backgroundColor: colors.success }]} />
             <Text style={styles.routeAddress} numberOfLines={1}>{item.pickup_address}</Text>
           </View>
           <View style={styles.routeConnector} />
@@ -152,7 +152,7 @@ export default function ScheduledRidesScreen() {
             <Text style={styles.statText}>{item.duration_minutes} min</Text>
           </View>
           <TouchableOpacity style={styles.cancelButton} onPress={() => handleCancel(item.id)}>
-            <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
+            <Ionicons name="close-circle-outline" size={18} color={colors.error} />
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
         </View>
@@ -244,7 +244,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row', alignItems: 'center', gap: 4,
       backgroundColor: colors.primary + '15', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12,
     },
-    timeBadgeImminent: { backgroundColor: '#F59E0B' },
+    timeBadgeImminent: { backgroundColor: colors.warning },
     timeBadgeText: { fontSize: 13, fontWeight: '700', color: colors.primary },
     fareText: { fontSize: 18, fontWeight: '800', color: colors.text },
 
@@ -265,7 +265,7 @@ function createStyles(colors: ThemeColors) {
     statText: { fontSize: 13, color: colors.textDim },
     statDot: { fontSize: 13, color: colors.border },
     cancelButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
-    cancelText: { fontSize: 14, fontWeight: '600', color: '#EF4444' },
+    cancelText: { fontSize: 14, fontWeight: '600', color: colors.error },
 
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40 },

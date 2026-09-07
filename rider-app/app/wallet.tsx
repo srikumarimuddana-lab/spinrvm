@@ -168,11 +168,11 @@ export default function WalletScreen() {
           {hasRideDetails && (
             <View style={styles.txnMeta}>
               <View style={styles.txnMetaRow}>
-                <Ionicons name="location" size={11} color="#10B981" />
+                <Ionicons name="location" size={11} color={colors.success} />
                 <Text style={styles.txnMetaText} numberOfLines={1}>{meta!.pickup_address}</Text>
               </View>
               <View style={styles.txnMetaRow}>
-                <Ionicons name="flag" size={11} color="#EF4444" />
+                <Ionicons name="flag" size={11} color={colors.error} />
                 <Text style={styles.txnMetaText} numberOfLines={1}>{meta!.dropoff_address}</Text>
               </View>
               {bookingId && (
@@ -185,7 +185,7 @@ export default function WalletScreen() {
           <Text style={styles.txnDate}>{formatDate(item.created_at)}</Text>
         </View>
         <View style={styles.txnAmountCol}>
-          <Text style={[styles.txnAmount, { color: isCredit ? '#10B981' : '#EF4444' }]}>
+          <Text style={[styles.txnAmount, { color: isCredit ? colors.success : colors.error }]}>
             {isCredit ? '+' : ''}{amountNum < 0 ? '-' : ''}${Math.abs(amountNum).toFixed(2)}
           </Text>
           {canOpenRide && (

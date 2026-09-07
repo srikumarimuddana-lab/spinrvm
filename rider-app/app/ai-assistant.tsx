@@ -767,7 +767,7 @@ const createStyles = (colors: ThemeColors) =>
       marginRight: 4,
     },
     micButtonActive: {
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.error,
     },
     stopButton: {
       width: 38,

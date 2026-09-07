@@ -605,7 +605,7 @@ function DriverArrivingScreenContent() {
               {/* Trip summary */}
               <View style={styles.tripSummary}>
                 <View style={styles.tripDotLine}>
-                  <View style={[styles.tripDot, { backgroundColor: '#10B981' }]} />
+                  <View style={[styles.tripDot, { backgroundColor: colors.success }]} />
                   <View style={styles.tripConnector} />
                   <View style={[styles.tripDot, { backgroundColor: colors.primary }]} />
                 </View>
@@ -735,7 +735,7 @@ function DriverArrivingScreenContent() {
               {/* Trip route */}
               <View style={styles.tripSummary}>
                 <View style={styles.tripDotLine}>
-                  <View style={[styles.tripDot, { backgroundColor: '#10B981' }]} />
+                  <View style={[styles.tripDot, { backgroundColor: colors.success }]} />
                   <View style={styles.tripConnector} />
                   <View style={[styles.tripDot, { backgroundColor: colors.primary }]} />
                 </View>
@@ -829,7 +829,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24,
       shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6, elevation: 6,
     },
-    greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981', marginRight: 8 },
+    greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success, marginRight: 8 },
     etaText: { fontSize: sf(15), fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
 
     // ── Bottom sheet ──
@@ -956,10 +956,10 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     devBar: {
       flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
       marginHorizontal: 16, marginTop: 8, padding: 10,
-      backgroundColor: '#FEF3C7', borderRadius: 10, borderWidth: 1, borderColor: '#F59E0B',
+      backgroundColor: '#FEF3C7', borderRadius: 10, borderWidth: 1, borderColor: colors.warning,
     },
     devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E' },
-    devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
+    devBtn: { backgroundColor: colors.warning, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
     devBtnText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
   });
 }

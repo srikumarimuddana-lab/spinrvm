@@ -1,5 +1,6 @@
 import React from 'react';
 import { TouchableOpacity, View, StyleSheet } from 'react-native';
+import { useTheme } from '@shared/theme/ThemeContext';
 
 interface CustomToggleProps {
   value?: boolean;
@@ -21,7 +22,8 @@ export default function CustomToggle({
   accessibilityLabel,
   accessibilityHint,
 }: CustomToggleProps) {
-  const resolvedThumbColor = thumbColor ?? (value ? '#EF4444' : '#FFF');
+  const { colors } = useTheme();
+  const resolvedThumbColor = thumbColor ?? (value ? colors.error : '#FFF');
 
   return (
     <TouchableOpacity

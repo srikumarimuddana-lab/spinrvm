@@ -110,7 +110,7 @@ export default function SafetyHubScreen() {
         <View style={styles.card}>
           <Row
             icon="people"
-            color="#EF4444"
+            color={colors.error}
             title="Emergency contacts"
             subtitle={
               contacts.length > 0
@@ -124,7 +124,7 @@ export default function SafetyHubScreen() {
           <View style={styles.divider} />
           <Row
             icon="alert-circle"
-            color="#F59E0B"
+            color={colors.warning}
             title="Report a safety issue"
             subtitle="Tell our team about something that happened"
             onPress={() => router.push('/report-safety' as any)}

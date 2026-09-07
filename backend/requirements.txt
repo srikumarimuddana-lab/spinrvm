@@ -372,7 +372,7 @@ python-dateutil==2.9.0.post0
     #   botocore
     #   pandas
     #   strictyaml
-python-docx==1.1.2
+python-docx==1.2.0
     # via -r requirements.in
 python-dotenv==1.2.3
     # via

@@ -12,8 +12,9 @@ description: Code style and formatting standards for Python and TypeScript in th
 ## Python (Backend)
 
 ### Style
-- **Formatter**: Black (line length 120)
-- **Linter**: Flake8 (line length 120)
+- **Formatter**: `ruff format` (corrected 2026-09-07 — this file previously said Black; the repo's
+  actual toolchain per root `CLAUDE.md` is ruff, not Black/Flake8)
+- **Linter**: `ruff check`
 - **Naming**: `snake_case` for functions and variables, `PascalCase` for classes
 - **Imports**: Group in order — stdlib, third-party, local. Absolute imports preferred.
 

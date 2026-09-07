@@ -107,6 +107,11 @@ def _match_tokens(text: str) -> set:
     return tokens | concepts
 
 
+# Ranking nudge toward the audience the website visitor said they are. Small on
+# purpose: it settles ties between two comparably-relevant articles and must
+# never outrank a materially better match from the other side.
+_PREFERRED_AUDIENCE_BOOST = 0.02
+
 # How many un-embedded FAQ rows one search may (re)embed + persist inline.
 # Bounds first-call latency and write fan-out; remaining rows are embedded on
 # subsequent searches until steady state (all embedded → query-only embed call).
@@ -118,10 +123,19 @@ _NO_MATCH = {
 
 
 def _faq_view(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {"question": row.get("question"), "answer": row.get("answer"), "category": row.get("category")}
+    # ``audience`` is included so the model can say who an answer applies to.
+    # It matters on the public site, where one turn can now see both rider- and
+    # driver-tagged rows: a driver-side answer handed to someone asking as a
+    # rider must read as "for drivers", not as a rule about their own trips.
+    return {
+        "question": row.get("question"),
+        "answer": row.get("answer"),
+        "category": row.get("category"),
+        "audience": row.get("audience"),
+    }
 
 
-def _lexical_results(rows: list, query: str) -> list:
+def _lexical_results(rows: list, query: str, preferred: Optional[str] = None) -> list:
     q_tokens = _match_tokens(query)
     scored = []
     for row in rows:
@@ -131,8 +145,11 @@ def _lexical_results(rows: list, query: str) -> list:
         question_overlap = len(q_tokens & _match_tokens(row.get("question", "")))
         body_overlap = len(q_tokens & _match_tokens(f"{row.get('answer', '')} {row.get('category', '')}"))
         score = question_overlap * 2 + body_overlap
-        if score:
-            scored.append((score, row))
+        if not score:
+            continue
+        # Tie-break only (+1 < the 2 points one extra question-word is worth),
+        # so a genuinely better match from the other side still wins.
+        scored.append((score + (1 if preferred and row.get("audience") == preferred else 0), row))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     return [_faq_view(r) for _, r in scored[:5]]
 
@@ -177,7 +194,7 @@ def _merge_results(primary: list, secondary: list) -> list:
     return out[:5]
 
 
-async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
+async def _semantic_results(rows: list, query: str, settings: Dict[str, Any], preferred: Optional[str] = None):
     """Rank FAQs by cosine similarity. Returns (results, complete) or None when
     embeddings are unavailable (caller uses lexical). ``complete`` is False when
     some rows had no vector this pass (cold rollout beyond the embed cap) — the
@@ -209,6 +226,10 @@ async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
         covered += 1
         sim = embeddings.cosine(q_vec, vec)
         if sim >= min_score:
+            # Boost applied AFTER the floor test, so the preferred side is
+            # never promoted over the relevance bar — only ahead of a peer.
+            if preferred and row.get("audience") == preferred:
+                sim += _PREFERRED_AUDIENCE_BOOST
             scored.append((sim, row))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     return [_faq_view(r) for _, r in scored[:5]], covered == len(rows)
@@ -258,20 +279,40 @@ def _in_area_scope(row_area_ids, scope: set) -> bool:
     return bool(set(row_area_ids) & scope)
 
 
-def _faq_audience(user: Dict[str, Any]) -> str:
-    """The FAQ-row audience to query for.
+def _faq_audiences(user: Dict[str, Any]) -> list:
+    """The FAQ-row audiences to query for.
 
     ``faqs.audience`` is tagged rider/driver/both, so for the in-app assistant
-    the tool audience already IS the FAQ audience. The public website assistant
-    runs under the "web" tool audience — a narrower, anonymous tool set that is
-    not an FAQ tag — and carries the kind of visitor the site is serving
-    separately. Falls back to rider, the website's primary audience.
+    the tool audience already IS the FAQ audience: a signed-in rider searches
+    rider+both and a driver searches driver+both, and neither should be handed
+    the other side's answer.
+
+    The public website assistant is different. It runs under the "web" tool
+    audience — a narrower, anonymous tool set that is not an FAQ tag — and the
+    site is ONE page for everyone: a visitor reading rider pages still asks
+    "what do I need to drive?". Scoping that turn to the visitor_type the
+    widget happened to send made every driver-tagged article unreachable, so a
+    question the help centre answers came back as "I don't have that detail"
+    (see docs/change-log/2026-09-06-public-faq-audience-scope.md). Every FAQ
+    row is public marketing content with no per-user data, so an anonymous
+    turn searches the whole corpus; ``_preferred_audience`` keeps the declared
+    side ahead on ties rather than gating what is visible at all.
     """
     audience = user.get("ai_audience", "rider")
     if audience == WEB:
-        requested = user.get("_web_visitor_type")
-        return requested if requested in _BOTH else "rider"
-    return audience
+        return ["both", "rider", "driver"]
+    return ["both", audience]
+
+
+def _preferred_audience(user: Dict[str, Any]) -> Optional[str]:
+    """Which side to favour when two FAQs match equally well, or None when the
+    corpus is already single-audience (the in-app assistants). Web only: the
+    visitor_type the site sent is a hint about what the reader came for, not a
+    permission boundary — it breaks ties, it never hides a row."""
+    if user.get("ai_audience", "rider") != WEB:
+        return None
+    requested = user.get("_web_visitor_type")
+    return requested if requested in _BOTH else "rider"
 
 
 async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
@@ -281,7 +322,8 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     # value to _current_area_scope would send an anonymous "driver-type"
     # visitor down the driver lookup, which needs a real user id.
     audience = user.get("ai_audience", "rider")
-    faq_audience = _faq_audience(user)
+    faq_audiences = _faq_audiences(user)
+    preferred = _preferred_audience(user)
     settings = await get_app_settings()
     semantic = bool(settings.get("ai_faq_semantic_enabled"))
     # Only pull the (large JSONB) embedding vector when the semantic path will
@@ -294,7 +336,7 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     rows = (
         await db_supabase.get_rows(
             "faqs",
-            {"is_active": True, "audience": {"$in": ["both", faq_audience]}},
+            {"is_active": True, "audience": {"$in": faq_audiences}},
             limit=200,
             columns=columns,
         )
@@ -315,15 +357,15 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
 
     results = None
     if semantic:
-        sem = await _semantic_results(rows, query, settings)
+        sem = await _semantic_results(rows, query, settings, preferred)
         if sem is not None:
             sem_results, complete = sem
             # When not every row was embedded yet, merge keyword matches so a
             # relevant un-embedded FAQ can't be omitted by a semantic-only pass.
-            results = sem_results if complete else _merge_results(sem_results, _lexical_results(rows, query))
+            results = sem_results if complete else _merge_results(sem_results, _lexical_results(rows, query, preferred))
     # None (embeddings unavailable) or empty (nothing above floor) → lexical.
     if not results:
-        results = _lexical_results(rows, query)
+        results = _lexical_results(rows, query, preferred)
     out = dict(_NO_MATCH) if not results else {"results": results[:5]}
     if location_scoped:
         # Meta flag, popped by the orchestrator — never serialized to the model.

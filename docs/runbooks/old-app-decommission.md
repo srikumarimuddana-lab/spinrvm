@@ -99,6 +99,36 @@ pending money isn't yet provably zero — the export itself is what makes "zero"
 provable later. Don't let a slow Stripe reconciliation delay the one
 time-boxed, freeze-dependent step.
 
+**Step 8's provisional sign-off structure (added 2026-09-07, reasoned through
+with the product owner rather than left as a flat "blocked until Oct 30"):**
+the financial and identity risk categories both depend on data the real
+Oct-30 export hasn't delivered yet, so step 8 doesn't have to be all-or-
+nothing — record a named, dated risk-acceptance per category now, and
+replace each line with the real resolved figure/finding once the export
+lands (never just delete the risk-acceptance note without replacing it):
+
+- **Financial**: $185.31 confirmed owed (Stripe cross-check,
+  `docs/change-log/2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a);
+  $42.77 across 2 buckets (`350b5267…` $33.32, `93a899d5…` $9.45) unresolved
+  — needs live `driver_stripe_ledger`/`driver_stripe_payouts` queries no
+  session has had access to run yet, **and** a separate open question on
+  whether that table mirrors the old app's Stripe, the new app's, or both
+  blended (product owner says blended; the same doc's own dated evidence —
+  all observed transactions May–August 2026 — points toward new-Spinr-only
+  and was never independently confirmed against Stripe directly; this
+  contradiction is unresolved, see `ACTION_ITEMS.md` A34); $22.43
+  provisionally excluded as likely-already-paid via Stripe.
+- **Identity**: full three-way driver/customer crosswalk not yet built —
+  the Mongo-ObjectID half is done (`bookings.driver_id`↔`drivers._id`
+  96/96, `bookings.customer_id`↔`customers._id` 172/173); the numeric-ID
+  Saskatoon-CSV half waits on a new Mongo extract the product owner has
+  staged, to be used once confirmed ready (not confirmed as the same batch
+  as `Mongo_20260904` referenced under A41).
+- **Regulatory**: CR #4081 (reconstruct-and-flag) already decided this
+  once for the first 186 rides — this line needs an explicit
+  re-confirmation that the same call applies to whatever the final export
+  adds, not an assumption that it silently carries over.
+
 **Communications checkpoints** (timeline only — this runbook does not draft
 copy): sunset notice at step 1; forced-migration messaging steps 1 through 3;
 driver payout-status communication before step 3 if any of the outstanding

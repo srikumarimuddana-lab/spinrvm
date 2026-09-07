@@ -123,7 +123,8 @@ echo "7/10 Running ruff (staged backend/*.py)..."
 STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '^backend/.*\.py$' || true)
 if [ -n "$STAGED_PY" ]; then
   if command -v ruff >/dev/null 2>&1; then
-    if ! ruff check $STAGED_PY || ! ruff format --check $STAGED_PY; then
+    mapfile -t PY_FILES <<< "$STAGED_PY"
+    if ! ruff check "${PY_FILES[@]}" || ! ruff format --check "${PY_FILES[@]}"; then
       echo -e "${RED}  BLOCKED — ruff check/format failed${NC}"
       BLOCKED=1
     else
@@ -140,8 +141,12 @@ fi
 echo "8/10 Running eslint (staged admin-dashboard/src)..."
 STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep '^admin-dashboard/src/.*\.\(ts\|tsx\)$' || true)
 if [ -n "$STAGED_TS" ]; then
+  # shellcheck disable=SC2001  # per-line ^-anchored strip; a bash-native
+  # ${var//pattern/repl} replace-all has no per-line anchor and could strip
+  # a mid-path match too — sed's line-by-line ^ is the correct semantics here.
   TS_FILES=$(echo "$STAGED_TS" | sed 's|^admin-dashboard/||')
-  if (cd admin-dashboard && npx --no-install eslint $TS_FILES); then
+  mapfile -t TS_FILE_ARR <<< "$TS_FILES"
+  if (cd admin-dashboard && npx --no-install eslint "${TS_FILE_ARR[@]}"); then
     echo -e "${GREEN}  ✅ Clean${NC}"
   else
     echo -e "${RED}  BLOCKED — eslint failed${NC}"

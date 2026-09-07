@@ -220,6 +220,20 @@ not pre-fill them, or the expander will see the marker and skip:
 Tier 7 · Conflict & Debug Log: if step 1 detected merge commits, leave a short
 stub referencing the `merge-conflict-detect` advisory the workflow will post.
 
+## 7b · `Type` has no `mixed` option — pick the dominant one, don't invent a value
+
+The template's `required-fields` check validates `Type` against a fixed enum
+(`feat`/`fix`/`chore`/`refactor`/`perf`/`security`/`docs`/`trivial`) — there
+is no `mixed`, even when the PR genuinely bundles several kinds of commit.
+Don't write `mixed`; it fails CI. Pick whichever single type the PR's most
+consequential change actually is (a `fix` commit outranks an accompanying
+`chore`/`docs` commit for this purpose) and say in Tier 1's Summary that the
+PR also contains the others. Same discipline applies to `Linked issue`: it
+must literally start with `Fixes #`, `Refs #`, or `none` — a backlog item ID
+from `ACTION_ITEMS.md` (e.g. `B25`) is not a GitHub issue number, so write
+`none — references ACTION_ITEMS.md item B25` rather than pasting the ID in
+after `Refs #`.
+
 ## 8 · Trivial escape hatch
 
 If and only if the entire diff is:

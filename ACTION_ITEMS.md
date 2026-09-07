@@ -824,6 +824,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     current pending-money figure, anything post-2026-07-26, Stripe-side
     everything, and the numeric-ID crosswalk half — all need the Oct-30
     fresh export the user says is coming.
+  - **2026-09-07 — confirmed still genuinely open, not resolved by
+    `Mongo_20260904`.** A41's product-owner interview surfaced a new export
+    batch, `Mongo_20260904`. Asked directly whether that's the Oct-30
+    export arriving early: **product owner confirmed it's a separate,
+    earlier interim batch** — the real fresh export this item's still-open
+    items (pending-money figure, crosswalk, Stripe-side reconciliation)
+    are waiting on has not landed yet. Do not treat `Mongo_20260904`'s
+    processing (tracked under A41) as closing any of these. The Oct 31,
+    2026 decommission target itself was not challenged when asked — treat
+    it as still standing, tentative as always.
   - **VERIFIED LIVE (2026-08-24)**: the 3 monitoring signals from PR #3954
     (`dual_run_monitoring_enabled`) confirmed still wired — `record_go_online_flip`
     called from `backend/routes/drivers/status.py`, payout counter emitted from
@@ -5357,6 +5367,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     reviewer exists in this repo. Whoever gets assigned to close R-G should
     review both request packages in the same pass. See A41's 2026-09-07
     interview addendum for the full context.
+  - **2026-09-07, later same day — reviewer named.** Interviewed the
+    product owner directly on who should take this: **the product owner
+    themselves** will do the review (both R-G here and the tied-in A41
+    consent-sufficiency question). This closes the "no named
+    reviewer" blocker as a role-assignment gap — the actual determination
+    itself is still pending, now that a real reviewer is attached. Next
+    step is on the product owner: read
+    `reports/legal/data-transfer-implied-consent-review.md` and
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`,
+    record the determination in the PIA's Section 8/9 sign-off table per
+    the request package's own "what a closed-out review looks like"
+    instructions, and update this item's Status line when done.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -6716,6 +6738,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
      limitation as the original build) — worth a human spot-check on the
      next few real PRs that this labels correctly (native-touching PRs get
      labeled, doc/test-only PRs on those same paths don't).
+- **2026-09-07, product-owner interview — scope narrowed, one blocker
+  still unconfirmed.** Asked about both blockers together (secrets
+  existence, and Apple Developer credentials for iOS). Product owner's
+  answer addressed scope, not secrets: **"Android-only is fine for now,
+  skip iOS."** This is a real, deliberate scope decision — action item #4
+  (provision Apple Developer credentials, add an iOS `eas.json` profile +
+  workflow job) is now explicitly deprioritized, not just blocked; treat
+  it as intentionally deferred rather than an open gap to chase. **Item #1
+  (whether `EXPO_TOKEN`/`MAESTRO_CLOUD_API_KEY` are actually set in repo
+  secrets) was not answered by this and remains genuinely unconfirmed** —
+  don't infer either way from the scope answer. Action items #1 (confirm/
+  add the two secrets) and #2 (run the workflow once to prove the Android
+  lane completes) are the only two still needed to get real device
+  coverage live; both still need a repo/org admin, same as before.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —
@@ -12778,6 +12814,35 @@ record of what was assumed vs. what was actually true</summary>
 - **What was NOT verified:** pre-change default profile resolution under
   `--non-interactive` with no `--profile` flag — this needs EAS
   dashboard/build-history access no session here has had yet.
+- **2026-09-07, product-owner interview — direction set, item stays open
+  (not closed by this).** Asked whether to pin `--profile production` now
+  or check `eas build:list` history first. Product owner's answer changes
+  the shape of the fix rather than picking one of the two offered options:
+  - **Immediate mitigation, already in effect operationally, not in code:**
+    the product owner is triggering builds manually from git for now
+    specifically to avoid an unintended profile shipping via the
+    `[build]`-commit-message CI trigger. This doesn't fix `ci.yml` itself —
+    the job still omits `--profile` — but it means the live risk this item
+    describes (wrong profile shipping unnoticed) is currently
+    human-mitigated, not a change to the workflow.
+  - **Target design, not yet built:** branch-aware profile selection —
+    **`main` → `production`, `staging` → `preview`** — rather than a single
+    pinned profile regardless of branch. This is a bigger change than the
+    original "just pin production" fix that was held back: it needs the
+    `mobile-build` job to read `github.ref`/the triggering branch and
+    select `--profile` conditionally, plus confirming `eas.json` has a
+    `preview` profile shaped correctly for staging distribution (not just
+    named that way).
+  - **Action, updated:** do not implement the original single-profile pin.
+    Scope a new fix instead: conditional `--profile` selection keyed to
+    branch (`main`→`production`, `staging`→`preview`), verified against
+    `eas.json`'s actual profile definitions for both apps before merging —
+    this is exactly the kind of live-tested-deploy-path change CLAUDE.md's
+    release gates want dry-run-verified, not shipped on a guess. The
+    original `eas build:list` history question is now moot for the
+    `production` guess specifically (the target state no longer treats
+    `main` as ambiguous) but may still matter for confirming `staging`'s
+    current/intended behavior before the conditional logic ships.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

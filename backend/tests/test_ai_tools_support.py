@@ -149,6 +149,24 @@ class TestSearchFaqsPublicWeb:
     back as "I don't have that detail on hand" while the help centre had the
     answer: the turn was scoped to the visitor_type the widget sent, so every
     driver-tagged row was invisible. visitor_type now ranks, it does not gate.
+
+    These call ``tools_support.search_faqs`` DIRECTLY rather than through
+    ``execute_tool``, unlike every other class in this file. That is not a
+    shortcut: ``_execute_tool_inner`` fails closed on a missing ``user["id"]``
+    before any handler runs, and the real anonymous caller
+    (``ai/public_assistant.py``) deliberately builds a tool_user with no id —
+    so an ``execute_tool(..., audience="web")`` call returns
+    ``{"error": "not authorized"}`` and never reaches this code. That is
+    ACTION_ITEMS.md **AI18** ("Anonymous web assistant's tool path is dead in
+    production"), a separate open bug with its own prescribed fix (an explicit
+    anonymous-scope allow-list on the ToolSpec). Until AI18 lands, routing
+    these through execute_tool would assert on the identity guard instead of on
+    the audience scoping they exist to pin. Do NOT "fix" them by handing the
+    test user an ``id`` — that would make them pass against a caller shape
+    production never uses, and hide AI18 all over again.
+
+    ``ai_audience`` is set by hand here because execute_tool is what normally
+    injects it (``handler_user = {**user, "ai_audience": audience}``).
     """
 
     @pytest.fixture(autouse=True)
@@ -165,11 +183,15 @@ class TestSearchFaqsPublicWeb:
         """Whatever the "I am a" pill said — or if the widget sent nothing at
         all — an anonymous turn sees the whole public corpus."""
         get_rows = AsyncMock(return_value=[])
-        user = {"_web_visitor_type": visitor_type} if visitor_type is not None else {}
+        user = {"ai_audience": "web"}
+        if visitor_type is not None:
+            user["_web_visitor_type"] = visitor_type
         with patch.object(tools_support.db_supabase, "get_rows", get_rows):
-            await execute_tool("search_faqs", {"query": "requirements"}, user=user, audience="web")
-        faqs_call = next(c for c in get_rows.await_args_list if c.args[0] == "faqs")
-        assert faqs_call.args[1]["audience"] == {"$in": ["both", "rider", "driver"]}
+            await tools_support.search_faqs(user, "requirements")
+        # get_app_settings is patched, so the faqs read is the only get_rows call.
+        assert get_rows.await_count == 1
+        assert get_rows.await_args.args[0] == "faqs"
+        assert get_rows.await_args.args[1]["audience"] == {"$in": ["both", "rider", "driver"]}
 
     @pytest.mark.anyio
     async def test_driver_answer_reachable_from_a_rider_typed_visitor(self):
@@ -191,13 +213,10 @@ class TestSearchFaqsPublicWeb:
             },
         ]
         with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)):
-            result, ok = await execute_tool(
-                "search_faqs",
-                {"query": "what are the requirements to drive with spinr"},
-                user={"_web_visitor_type": "rider"},
-                audience="web",
+            result = await tools_support.search_faqs(
+                {"ai_audience": "web", "_web_visitor_type": "rider"},
+                "what are the requirements to drive with spinr",
             )
-        assert ok
         top = result["results"][0]
         assert top["question"].startswith("What are the requirements to drive")
         # The row's own audience rides along so the model can frame it as
@@ -223,11 +242,9 @@ class TestSearchFaqsPublicWeb:
             },
         ]
         with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)):
-            result, _ = await execute_tool(
-                "search_faqs",
-                {"query": "how do I cancel a ride"},
-                user={"_web_visitor_type": "driver"},
-                audience="web",
+            result = await tools_support.search_faqs(
+                {"ai_audience": "web", "_web_visitor_type": "driver"},
+                "how do I cancel a ride",
             )
         # Declared side first, other side still present — ranked, not filtered.
         assert [r["audience"] for r in result["results"]] == ["driver", "rider"]
@@ -251,11 +268,9 @@ class TestSearchFaqsPublicWeb:
             },
         ]
         with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)):
-            result, _ = await execute_tool(
-                "search_faqs",
-                {"query": "where can I find the airport pickup zone"},
-                user={"_web_visitor_type": "rider"},
-                audience="web",
+            result = await tools_support.search_faqs(
+                {"ai_audience": "web", "_web_visitor_type": "rider"},
+                "where can I find the airport pickup zone",
             )
         assert result["results"][0]["audience"] == "driver"
 

@@ -172,14 +172,50 @@ back on.
   article present and active, no area scoping involved.
 - `ruff check` and `ruff format` clean on both modified files.
 
+## 9b. CI outcome (added 2026-09-07, after merge)
+
+PR #5056 was merged before its own CI finished. The results, once they landed:
+
+- `Run backend test suite with coverage (shared)` — **passed**.
+- `backend-test` — **failed**: `7 failed, 14001 passed, 6 skipped, 1 xfailed`.
+  **All 7 failures were the new tests in this change; nothing pre-existing
+  broke.** The production diff in `ai/tools_support.py` is therefore sound —
+  every existing test of the in-app assistants and of
+  `test_ai_public_assistant.py` passed against it.
+
+Root cause of the 7: the new tests drove `search_faqs` through
+`execute_tool(..., audience="web")` with a user dict carrying no `id`, the
+shape the real anonymous caller uses. `_execute_tool_inner` fails closed on a
+missing `user["id"]` **before any handler runs**, so every one of those calls
+returned `{"error": "not authorized"}` — hence `assert False`, `KeyError:
+'results'`, and (from `next()` over an empty `await_args_list` inside a
+coroutine) `RuntimeError: coroutine raised StopIteration`. Fixed by calling the
+handler directly, with the reasoning pinned in the test class docstring so it
+is not "corrected" back later by handing the test user an id.
+
+**This surfaced a more important finding, already tracked as ACTION_ITEMS.md
+AI18** ("Anonymous web assistant's tool path is dead in production"): that same
+fail-closed identity check means every anonymous `search_faqs` /
+`get_company_info` call on the live website returns "not authorized", and the
+model answers from the system prompt alone. So the reported symptom — "what are
+the requirements for drivers" answered with "I don't have that detail on hand" —
+is caused by AI18, **not** by the audience scoping this change fixes. The
+audience-scoping bug documented above is real and independently worth fixing,
+but on its own it does not restore the website assistant: it makes driver rows
+reachable by a search that is not currently running at all. AI18 needs its own
+fix (an explicit anonymous-scope allow-list on the two web `ToolSpec`s, honoured
+only for audience `web` — never a blanket relaxation of the identity check) plus
+an integration test through the real `execute_tool`.
+
 ## 10. What was NOT verified
 
-- **`pytest` was never run.** PyPI is unreachable from this environment (403 through the
-  agent proxy), so backend dependencies could not be installed. The 6 new test cases in
-  `TestSearchFaqsPublicWeb` are **written but unexecuted** — their assertions were
-  validated by the equivalent source-extracted harness above, which is not the same thing
-  as running them under pytest with the real `conftest.py` fixtures. **Run
-  `pytest tests/test_ai_tools_support.py tests/test_ai_public_assistant.py` before merge.**
+- **`pytest` was never run locally.** PyPI is unreachable from this environment (403
+  through the agent proxy), so backend dependencies could not be installed. This is what
+  let the 7 broken tests reach `main` — see §9b. The corrected tests were re-verified by
+  loading the real `ai/tools_support.py` through its dual-import fallback (heavy leaf deps
+  stubbed) and executing the actual test bodies against it, which does exercise the real
+  `search_faqs` code path — but it is still not pytest with the real `conftest.py`
+  fixtures and the `anyio` parametrization. CI remains the authority.
 - **No live reproduction.** `api-spinr.spinr.ca` is blocked from this environment (403 on
   CONNECT), so the end-to-end turn was not exercised against the deployed backend, and the
   conclusion that the widget's "I am a" pill was not reaching the backend as

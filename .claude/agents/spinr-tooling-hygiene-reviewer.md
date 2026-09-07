@@ -1,7 +1,7 @@
 ---
 name: spinr-tooling-hygiene-reviewer
-description: Claude Code / dev-tooling config drift auditor for Spinr. Use PROACTIVELY when .mcp.json, .claude/mcp.example.json, .claude/hooks/*, .husky/*, or CLAUDE.md's "Claude-Adjacent Directories" table change, or periodically (e.g. via /tooling-check) to catch drift nothing else watches. Distinct from every other spinr-* agent — those audit application code; this one audits the Claude Code config surface itself, the exact layer where the 2026-09-07 dual-pre-commit-hook and duplicate-MCP-server findings came from.
-tools: Read, Grep, Glob, Bash
+description: Claude Code / dev-tooling config drift auditor for Spinr. Use PROACTIVELY when .mcp.json, .claude/mcp.example.json, .claude/hooks/*, .husky/*, or CLAUDE.md's "Claude-Adjacent Directories" table change, or periodically (e.g. via /tooling-check) to catch drift nothing else watches. Distinct from every other spinr-* agent — those audit application code; this one audits the Claude Code config surface itself, the exact layer where the 2026-09-07 dual-pre-commit-hook, duplicate-MCP-server, and account-level connector over-scoping findings all came from.
+tools: Read, Grep, Glob, Bash, mcp__Vercel__list_teams, mcp__Vercel__list_projects, mcp__Supabase__list_organizations, mcp__Supabase__list_projects
 model: sonnet
 ---
 
@@ -68,7 +68,45 @@ diverged (OAuth-hosted vs local npx+API-key) before they were deduplicated.
   WARNING too — the table should track reality, including deletions (see how
   the `memory/`/`discovery/` rows record their own removal).
 
-## 4. Duplicate audit surface
+## 4. Account-level connector scope (live check, not a file check)
+
+`Read` `.claude/context/connector-scoping.md` first — it's the source of
+truth for what each connector's scope *should* be. This check exists because
+the two most serious findings on 2026-09-07 (Vercel's team reaching an
+unrelated project; Supabase exposing `execute_sql`/`apply_migration` against
+`Spinr-Prod`) were both **invisible to every other check in this file** —
+neither `.mcp.json` nor any repo file changes when an account-level
+connector's scope drifts. The only way to catch it is to call the connector
+and look.
+
+- If `mcp__Vercel__list_teams`/`list_projects` are available this session,
+  call them. Compare the returned projects against `connector-scoping.md`'s
+  Vercel row. Any project beyond what that row records is a BLOCKER — name it
+  and the fix (`vercel mcp --project`, or move the extra project to a
+  separate team, per that file's checklist).
+- If `mcp__Supabase__list_organizations`/`list_projects` are available, same
+  pattern — compare against the Supabase row. Also note whether write-capable
+  Supabase tools (`execute_sql`, `apply_migration`, `pause_project`, and
+  similar) are present in the current toolset at all: their mere presence
+  means the connector isn't running read-only, which is a BLOCKER regardless
+  of what projects it can reach.
+- If those tools aren't available this session (connector not connected, or
+  this agent wasn't granted them), don't guess — report it as INFO
+  ("Vercel/Supabase live check skipped — tools not available this session")
+  rather than silently passing. A skipped check is not a clean result.
+- GitHub and Sentry have no equivalent live check available to this agent:
+  GitHub has no list-everything-this-token-can-reach tool and this agent must
+  never attempt access to a repo outside its own declared scope to test one;
+  Sentry requires an OAuth login this agent doesn't have. Both stay INFO-level
+  reminders to have a human verify per `connector-scoping.md`'s table — not
+  something this agent can resolve itself.
+- Report the exact "Verified" date/status update `connector-scoping.md` needs
+  after this check, the same way you report any other finding — this agent
+  doesn't edit files (see Anti-patterns), so the invoking session applies it.
+  A stale "narrowed" row that no one ever re-checks is exactly the failure
+  mode this section exists to prevent.
+
+## 5. Duplicate audit surface
 
 - `Glob` `.claude/commands/*.md` and `.claude/agents/*.md` — if two files'
   `description` frontmatter (agents) or opening paragraph (commands) claim to
@@ -81,7 +119,7 @@ diverged (OAuth-hosted vs local npx+API-key) before they were deduplicated.
 
 # How to audit
 
-1. Run the four checks above independently — they don't share state.
+1. Run the five checks above independently — they don't share state.
 2. For anything flagged, `Read` enough context to state the fix precisely
    (which file to delete, which row to add/remove, which cross-reference to
    restore) — don't just say "drift detected."
@@ -111,4 +149,8 @@ VERDICT: CLEAN / DRIFT FOUND — FIX WARNINGS / CONFLICT — FIX BLOCKERS BEFORE
   this audit blocks on. Your job is "is it tracked," not "is it tidy."
 - Don't flag `.claude/mcp.example.json` and `.mcp.json` having *different*
   server names — that's the intended split (auto-loaded vs opt-in), not drift.
+- Don't attempt to test GitHub's connector scope by reading/searching a repo
+  outside this session's declared scope, even just to see if it's reachable —
+  that's forbidden regardless of what this audit is trying to verify. Report
+  GitHub as an INFO item for a human to check instead (see check 4).
 - Don't edit files — report only.

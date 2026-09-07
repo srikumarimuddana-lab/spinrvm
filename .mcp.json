@@ -1,5 +1,5 @@
 {
-  "$comment": "Spinr MCP server scaffold. NONE of these are wired to live credentials — every value below is a placeholder or an ${ENV_VAR} reference. Fill in env vars locally (never commit real secrets here) before a server will actually connect. See per-server notes for the specific sandboxing rule each one requires before use against Spinr.",
+  "$comment": "Spinr MCP server scaffold — auto-loaded for every Claude Code session opened in this repo. NONE of these are wired to live credentials — every value below is a placeholder or an ${ENV_VAR} reference. Fill in env vars locally (never commit real secrets here) before a server will actually connect. See per-server notes for the specific sandboxing rule each one requires before use against Spinr. For servers that need local hardware (a real browser, a mobile simulator) or a sensitive per-developer token and so are opt-in rather than auto-loaded (supabase, vercel, playwright, maestro), see .claude/mcp.example.json instead — don't duplicate a server name across both files; whichever loads second can silently shadow the other.",
 
   "mcpServers": {
     "stripe": {

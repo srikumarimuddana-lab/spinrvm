@@ -1,5 +1,5 @@
 {
-  "_comment": "Template for Spinr MCP server configuration. Do NOT commit real keys. Copy the block(s) you want into .claude/settings.local.json (gitignored) under a top-level 'mcpServers' key, replacing the ${...} placeholders with real values from 1Password / settings.",
+  "_comment": "Template for Spinr's OPT-IN, per-developer MCP servers — ones that need local hardware (a real browser, a mobile simulator) or a sensitive token you provision yourself, so they aren't auto-loaded for every session the way root .mcp.json's servers are. Do NOT commit real keys. Copy the block(s) you want into .claude/settings.local.json (gitignored) under a top-level 'mcpServers' key, replacing the ${...} placeholders with real values from 1Password / settings. context7 and stripe are NOT listed here even though official servers exist for local use — root .mcp.json already auto-loads both (OAuth-hosted Stripe, no-credential Context7); adding a second same-named entry here would let whichever one loads last silently shadow the other, which is exactly what happened before this file was cleaned up (the Stripe entry here used to run a completely different local npx+API-key mechanism than the OAuth one in .mcp.json, so which server actually ran depended on load order, not on either config being wrong). If you specifically need a local Stripe MCP with a test-mode secret key instead of the OAuth one, that's a deliberate exception to raise with the team, not a default copy-paste.",
   "mcpServers": {
     "supabase": {
       "_comment": "Read-only Supabase MCP. Use a service key with row-level read access scoped to non-PII tables, OR use the anon key restricted by RLS. NEVER put the service role key here — that bypasses RLS and defeats PIPEDA guardrails.",
@@ -9,19 +9,6 @@
         "SUPABASE_URL": "${SPINR_SUPABASE_URL}",
         "SUPABASE_ACCESS_TOKEN": "${SPINR_SUPABASE_READONLY_TOKEN}"
       }
-    },
-    "context7": {
-      "_comment": "Context7 for up-to-date library documentation (FastAPI, Supabase, Stripe, Expo, Next.js). Free tier is fine for read-only docs; no user data ever leaves to this service.",
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp@latest"],
-      "env": {
-        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
-      }
-    },
-    "stripe": {
-      "_comment": "Official Stripe MCP. Use a RESTRICTED, TEST-MODE secret key (sk_test_...) scoped to the minimum resources needed — never the live secret key or an unrestricted key. Verifying webhook/idempotency fixes against real event payloads is the main use case; it should never touch live customer charges from an editor session.",
-      "command": "npx",
-      "args": ["-y", "@stripe/mcp", "--api-key=${SPINR_STRIPE_TEST_SECRET_KEY}"]
     },
     "vercel": {
       "_comment": "Official Vercel MCP — remote server, OAuth on first connect (no key to store here). Gives read access to admin-dashboard's deployments/build logs. The OAuth flow authorizes whatever Vercel account/team you sign in with, so use a team member scoped to this project if you don't want broader org access.",

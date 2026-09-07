@@ -316,22 +316,38 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
         if _token_version_mismatch(payload, staff):
             raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
         _IDLE_SECONDS = 30 * 60
+        # F12: this write previously ran unconditionally on every admin
+        # request — an uncached staff read plus an unconditional update_one
+        # on every single request, purely to serve a 30-min idle check that
+        # only needs roughly-current staleness. Coalescing writes within this
+        # interval trades up to _ACTIVITY_TOUCH_INTERVAL_S of idle-detection
+        # slack (a revoked/idle session could go undetected up to this much
+        # longer) for far fewer writes under normal dashboard polling
+        # (5-60s). NULL or malformed last_activity_at always falls through to
+        # a write below, same as before this change.
+        _ACTIVITY_TOUCH_INTERVAL_S = 60
         last_active_raw = staff.get("last_activity_at")
+        last_active_parsed: Optional[datetime] = None
         if last_active_raw:
             try:
-                last_active = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
-                if (datetime.now(timezone.utc) - last_active).total_seconds() > _IDLE_SECONDS:
+                last_active_parsed = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - last_active_parsed).total_seconds() > _IDLE_SECONDS:
                     raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
             except HTTPException:
                 raise
             except Exception as _ts_err:
                 logger.warning(f"Malformed last_activity_at for staff {user_id} — letting through: {_ts_err}")
-        try:
-            await db_supabase.update_one(
-                "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
-            )
-        except Exception as _upd_err:
-            logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
+        activity_is_fresh = (
+            last_active_parsed is not None
+            and (datetime.now(timezone.utc) - last_active_parsed).total_seconds() < _ACTIVITY_TOUCH_INTERVAL_S
+        )
+        if not activity_is_fresh:
+            try:
+                await db_supabase.update_one(
+                    "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
+                )
+            except Exception as _upd_err:
+                logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
     return {
         "id": user_id,
         "email": payload.get("email"),

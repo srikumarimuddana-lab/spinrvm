@@ -282,6 +282,60 @@ async def test_verify_admin_payload_activity_stamp_failure_lets_through():
     assert result["_admin_verified"] is True
 
 
+async def test_verify_admin_payload_skips_activity_write_when_fresh():
+    """F12: a stamp younger than the coalescing interval must not trigger
+    another write — this is the throttle's whole point."""
+    fresh_activity = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    with (
+        patch(
+            "dependencies.db_supabase.get_rows",
+            AsyncMock(
+                return_value=[
+                    {
+                        "id": "staff-1",
+                        "is_active": True,
+                        "token_version": 0,
+                        "last_activity_at": fresh_activity,
+                    }
+                ]
+            ),
+        ),
+        patch("dependencies.db_supabase.update_one", AsyncMock()) as update_mock,
+    ):
+        from dependencies import _verify_admin_payload
+
+        result = await _verify_admin_payload(_admin_payload())
+    assert result["_admin_verified"] is True
+    update_mock.assert_not_awaited()
+
+
+async def test_verify_admin_payload_writes_when_stale_but_not_idle():
+    """F12: a stamp older than the coalescing interval but still well under
+    the 30-min idle timeout must still be refreshed."""
+    stale_but_active = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    with (
+        patch(
+            "dependencies.db_supabase.get_rows",
+            AsyncMock(
+                return_value=[
+                    {
+                        "id": "staff-1",
+                        "is_active": True,
+                        "token_version": 0,
+                        "last_activity_at": stale_but_active,
+                    }
+                ]
+            ),
+        ),
+        patch("dependencies.db_supabase.update_one", AsyncMock()) as update_mock,
+    ):
+        from dependencies import _verify_admin_payload
+
+        result = await _verify_admin_payload(_admin_payload())
+    assert result["_admin_verified"] is True
+    update_mock.assert_awaited_once()
+
+
 async def test_verify_admin_payload_non_admin_payload_returns_none():
     with patch("dependencies.db_supabase.get_rows", AsyncMock()):
         from dependencies import _verify_admin_payload

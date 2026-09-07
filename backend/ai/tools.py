@@ -26,10 +26,14 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 try:
     from .. import db_supabase
+    from ..utils.background import log_task_exception as _log_task_exception
+    from ..utils.background import spawn as _spawn
     from .pii import ScrubPolicy, scrub_pii_deep
 except ImportError:  # pragma: no cover — top-level run
     import db_supabase
     from ai.pii import ScrubPolicy, scrub_pii_deep  # type: ignore
+    from utils.background import log_task_exception as _log_task_exception  # type: ignore
+    from utils.background import spawn as _spawn  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -316,8 +320,12 @@ def _schedule_tool_audit(record: Dict[str, Any]) -> None:
             logger.error("ai tool-audit write failed", exc_info=True, extra={"tool": record.get("tool_name")})
 
     try:
-        task = asyncio.create_task(_run())
-        task.add_done_callback(lambda t: t.exception())
+        # F7: spawn() also keeps a strong reference until the task completes
+        # and clears the request deadline, appropriate for an audit write
+        # that must land even after the response is sent.
+        task = _spawn(_run())
+        if task is not None:
+            task.add_done_callback(_log_task_exception)
     except RuntimeError:
         # No running loop (e.g. sync test context) — skip; auditing is best-effort.
         pass

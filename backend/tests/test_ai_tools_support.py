@@ -305,10 +305,15 @@ class TestSearchFaqsSemantic:
         # this test flaky. Capture the actual task the production code creates
         # and await it directly instead, so draining it is deterministic rather
         # than time-based.
+        # F7: production now schedules this via utils.background.spawn(), not
+        # asyncio.create_task directly (spawn() keeps a strong reference and
+        # clears the request deadline) — capture at that seam instead. spawn()
+        # itself is exercised by its own dedicated tests; this test only needs
+        # a real, awaitable Task back.
         created_tasks = []
         real_create_task = asyncio.create_task
 
-        def _capture_create_task(coro, *args, **kwargs):
+        def _capture_spawn(coro, *args, **kwargs):
             task = real_create_task(coro, *args, **kwargs)
             created_tasks.append(task)
             return task
@@ -318,7 +323,7 @@ class TestSearchFaqsSemantic:
             patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())),
             patch.object(tools_support.embeddings, "embed_texts", embed),
             patch.object(tools_support.db_supabase, "update_one", update),
-            patch.object(tools_support.asyncio, "create_task", side_effect=_capture_create_task),
+            patch.object(tools_support, "spawn", side_effect=_capture_spawn),
         ):
             result, ok = await execute_tool("search_faqs", {"query": "when do I get my earnings"}, user=RIDER)
             # Await the captured task(s) while the patches above are still

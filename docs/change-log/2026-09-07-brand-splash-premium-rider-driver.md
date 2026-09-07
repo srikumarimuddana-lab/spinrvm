@@ -172,17 +172,46 @@ to remediate — only pixels.
       spinner, `onNativeHideReady` fires once and only after the mark paints, the exit always
       completes exactly once even if the animation callback is dropped, the slow-boot hairline
       only appears after the threshold, reduce-motion parks the mark, and the type waits for the font.
-- [ ] **`yarn lint` / `tsc --noEmit` / `jest` / `expo export` were NOT run.** They cannot run in
-      this environment: the npm registry is blocked by the egress proxy (`registry.npmjs.org`
-      returns 403 through the CONNECT proxy), so `node_modules` cannot be installed for either
-      app. **These must go green in CI, or locally, before merge.**
+- [ ] **`yarn lint` / `tsc --noEmit` / `jest` / `expo export` were NOT run locally.** They cannot
+      run in this environment: the npm registry is blocked by the egress proxy
+      (`registry.npmjs.org` returns 403 through the CONNECT proxy), so `node_modules` cannot be
+      installed for either app. **CI is the gate.**
 - [ ] **Production build not run** for either app (same reason).
+
+### CI round 1 (run 34145052729, head `2640a8e`) — three real defects, all fixed
+
+Static analysis is not a typechecker, and CI proved it. On `main` (run 6317) `rider-app-test`,
+`driver-app-test` and the driver E2E were all green, so all three were this PR's:
+
+1. **`StyleSheet.absoluteFillObject` does not exist on this RN version's `StyleSheet` type**
+   (TS2551, both apps). `styles.root` now spells the four edges out. The separate
+   `StyleSheet.absoluteFill` used as a value in a style *array* was always fine.
+2. **`renderHook` could not infer its `Props`** from a destructured, untyped callback parameter
+   under `@testing-library/react-native@13` (driver-app), widening `result.current` to `unknown`
+   (TS2345 + two TS18046). The parameter is annotated now, in both apps' copies.
+3. **`driver-app/e2e/smoke.spec.ts`'s "authed verified driver lands on /driver dashboard" was
+   passing vacuously.** It seeded a session and sampled the URL after a fixed 2.5s; the old 3000ms
+   driver splash hold kept `<Stack>` unmounted past that window, so the URL was still `/` and the
+   `not.toMatch(/\/login$/)` assertion never observed the routing outcome. Dropping the hold to
+   1800ms surfaced the real result, `/login` — correct behaviour, because `fixtures.ts` documents
+   that `authStore` keeps web sessions memory-only and `seedAuthedDriverSession`'s localStorage
+   writes are never read on web. The test now drives the real login via `loginAsDriver`, the flow
+   that doc names as the only working one, already used by `online-toggle`, `payout` and
+   `complete-trip` — all of which passed in the same run this one failed in. A broken test was
+   repaired, not skipped.
+
+`G4b · yarn audit (JS deps)` was also red on both apps. That is the known permanently-red gate,
+not this PR's: the fix already existed on `main` as #5078 (a dependency bump in both apps'
+`package.json` + `yarn.lock`), and this branch was cut one commit before it. `origin/main` is
+merged in rather than waited on; it no-ops for the gate once the base carries it.
 
 ## 10. What was NOT verified
 
-- **No test, typecheck, lint or build was executed.** Everything above is static analysis plus
-  browser-rendered simulation of the same maths and the same image files. The components have
-  never been executed by a JavaScript engine.
+- **No test, typecheck, lint or build was executed locally** — everything verified here is static
+  analysis plus browser-rendered simulation of the same maths and the same image files. CI has
+  since executed the typecheck (see round 1 above); at the time of writing, the jest suites and
+  the E2E run against the fixed code have not yet reported. The components have still never been
+  executed by a JavaScript engine in this environment.
 - **Nothing was verified on a device or simulator.** In particular: the iOS storyboard frame,
   Android 12+ sizing of the splash icon inside its ~192 dp circular mask (the halo is designed
   to reach zero alpha at its rim so a clip is invisible, but this is reasoned, not observed),

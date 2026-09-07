@@ -727,8 +727,39 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     1 bucket ($22.43) likely already paid via Stripe, correctly excluded;
     buckets 16–20 ($26.08) unaffected, still blocked on driver re-link.
     Structural finding: the Stripe mirror schema can never definitively link a
-    ledger row to a specific ride — "likely" is the ceiling. Still open: which
-    Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
+    ledger row to a specific ride — "likely" is the ceiling.
+    - **2026-09-07, product-owner interview — Stripe-account scope
+      answered, with a flagged discrepancy against prior dated evidence.**
+      Asked which Stripe account `driver_stripe_ledger`/
+      `driver_stripe_payouts` covers. **Product owner: both, blended
+      together** (confirmed a second time after the discrepancy below was
+      raised — stands as the authoritative answer). Flagging, not
+      overriding: this 08-16 doc's own "What was NOT verified" section
+      says *"all observed transaction dates are May–August 2026
+      (post-migration), so this mirror structurally cannot contain
+      old-app-era evidence either way"* — i.e. the dated evidence on file
+      pointed toward new-Spinr-only, not blended, and was never
+      independently confirmed against Stripe directly. Both facts are now
+      on record; whoever next has live Stripe access should reconcile
+      them rather than assume either is settled — a blended mirror with
+      no ride-link field (per the structural finding above) is a
+      materially harder reconciliation problem than a single-account one,
+      so this matters for how much confidence the $185.31–$228.08 range
+      above actually deserves.
+    - **2026-09-07, same interview — the 2 ambiguous buckets ($42.77):
+      product owner wants this investigated now, but it can't be done
+      from this session.** Resolving `350b5267…` ($33.32, a payment row
+      with no matching payout) and `93a899d5…` ($9.45, two equally-clean
+      payment→payout pairs 3 weeks apart) both need live queries against
+      `driver_stripe_ledger`/`driver_stripe_payouts` in the real
+      production Supabase project — this session's Supabase MCP access
+      only reaches a marketing-content project and an empty staging
+      project (same blocker as B42). Left for whoever has real prod
+      access, or the product owner directly; the exact queries needed are
+      already described in `docs/change-log/
+      2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a's own
+      per-bucket findings — re-run the same lookup, not a new
+      methodology.
   - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
     2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
     **Correction (2026-08-17, later same day):** that change-log's claim that
@@ -760,6 +791,47 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     open**: what `tax_amount` itself should read for those 186 rows is a
     business/legal decision, not resolved by the backfill — needs an owner
     + due date.
+    - **2026-09-07, product-owner interview — decision made, execution
+      still pending.** Interviewed the product owner directly on D1 (owner
+      + due date were the missing pieces). Three answers, taken together:
+      1. **Fix it, not accept-as-is.** Product owner: investigate root
+         cause and correct `tax_amount` for the 186 rows "when we run the
+         new migration today" — i.e. scoped into today's active migration
+         work (see A41's 2026-09-07 addendum re: `Mongo_20260904`), not
+         deferred indefinitely.
+      2. **Use the preserved `old_payout_gst_amount` figure ($102.09
+         total), but validate it as part of today's run** — not a blind
+         copy. Product owner picked "trust old_payout_gst_amount" but
+         qualified it with "let's validate that this time in the
+         migration" — read this as: cross-check the figure (e.g. against
+         `bookings.csv`'s source rows again, or a 5%-of-fare sanity check)
+         before writing it into `tax_amount`, not skip verification.
+      3. **No rider-facing receipt-correction question exists.** Product
+         owner: "all receipts had the gst populated and we have validated
+         right from the day that it is the right amount for the ride
+         complete" — the dollar amount riders were actually charged and
+         shown was correct at the time; the bug is that the backend's
+         `tax_amount` column captured commission-side GST instead of the
+         rider-facing fare-side GST (see
+         `docs/change-log/2026-08-15-legacy-import-gst-preservation.md`'s
+         root-cause finding) — a backend categorization/bookkeeping fix,
+         not a pricing error ever exposed to a rider. No refund, receipt
+         reissue, or disclosure question follows from this.
+      - **Execution note, not yet done by this session:** this session
+        has no `DATABASE_URL`/production write access (same constraint as
+        every other write in this file), so the actual `UPDATE` is left
+        for whoever runs today's migration. Before it runs: (a) remember
+        `old_payout_gst_amount` is stored as a JSONB number and
+        deserializes via `supabase-py` as a Python `float` — per the
+        preservation change-log's own explicit warning, wrap it as
+        `to_decimal(str(value))` before any money arithmetic, never use
+        the raw float; (b) this is a write to `tax_amount` on 186 live
+        `rides` rows — a Change Impact Log is required per CLAUDE.md's
+        live-testing rules, and a `spinr-money-auditor` review before the
+        write executes is strongly recommended given this repo's own
+        precedent of catching real bugs in exactly this kind of
+        legacy-money backfill (see A41's B32/B33 findings, same class of
+        near-miss).
   - **RESOLVED (2026-08-18)**: insurance-period audit-trail gap for the 186
     legacy-imported rides — **CR #4081**, decision: reconstruct-and-flag,
     approved by this session's user (confirmed to hold the SGI-facing
@@ -810,7 +882,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     driver/customer crosswalk is now buildable (`bookings.driver_id`↔
     `drivers._id` 96/96, `bookings.customer_id`↔`customers._id` 172/173) —
     the numeric-ID Saskatoon CSV side still isn't in this zip, so the full
-    three-way crosswalk remains open. New, previously-unscoped finding:
+    three-way crosswalk remains open.
+    - **2026-09-07, product-owner interview — not resolved, tied to a
+      staged extract instead.** Asked whether tool #1's existing Saskatoon
+      CSV (already used for Bulk Driver Import) might already be the
+      numeric-ID source this crosswalk needs. Product owner's answer
+      didn't confirm or rule that out — instead: **a new Mongo DB extract
+      is staged and will be used once "confirmed ready."** Read this as:
+      the crosswalk question stays open until that extract (which may or
+      may not be `Mongo_20260904` — not explicitly confirmed as the same
+      one) is actually processed; do not assume tool #1's CSV alone
+      settles the numeric-ID side without checking directly first.
+    New, previously-unscoped finding:
     `driverlocationlogs.csv` has real Period-boundary phase timestamps
     (`idle`/`going_to_pickup`/`on_ride`, keyed to `ride_id` = `bookings._id`
     100% of the time) that could tighten migration 332's insurance-period
@@ -824,6 +907,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     current pending-money figure, anything post-2026-07-26, Stripe-side
     everything, and the numeric-ID crosswalk half — all need the Oct-30
     fresh export the user says is coming.
+  - **2026-09-07 — confirmed still genuinely open, not resolved by
+    `Mongo_20260904`.** A41's product-owner interview surfaced a new export
+    batch, `Mongo_20260904`. Asked directly whether that's the Oct-30
+    export arriving early: **product owner confirmed it's a separate,
+    earlier interim batch** — the real fresh export this item's still-open
+    items (pending-money figure, crosswalk, Stripe-side reconciliation)
+    are waiting on has not landed yet. Do not treat `Mongo_20260904`'s
+    processing (tracked under A41) as closing any of these. The Oct 31,
+    2026 decommission target itself was not challenged when asked — treat
+    it as still standing, tentative as always.
   - **VERIFIED LIVE (2026-08-24)**: the 3 monitoring signals from PR #3954
     (`dual_run_monitoring_enabled`) confirmed still wired — `record_go_online_flip`
     called from `backend/routes/drivers/status.py`, payout counter emitted from
@@ -842,7 +935,68 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     §3 monitoring signals; also unowned/unapproved. Neither runbook is in
     effect until the owner slots in each are filled and the policy/plan is
     approved — do not treat either as closing this item.
-  - **STILL OPEN, unchanged**: open $16.63 Stripe dispute needs a response;
+    - **2026-09-07, product-owner interview — `old-app-decommission.md`'s §0
+      gate is now fully cleared; the runbook itself was updated in place
+      (not just this tracker).** All four §0 prerequisites resolved: (1)
+      overall runbook owner — the product owner; (2) step 10 (irreversible
+      teardown) owner — same person, deliberately, not a default; (3) the
+      T-14 stop-new-bookings date — tied automatically to the Oct 31, 2026
+      tentative target, computed as **October 17, 2026** (every other
+      step's date in the runbook's table is now similarly computable and
+      was filled in); (4) `dual-run-driver-roster-policy.md` — confirmed
+      already approved and in effect.
+    - **2026-09-07, later same day — per-step owners named too, every
+      marker in the runbook now resolved.** Follow-up interview covering
+      steps 2–9 and 11's `Owner` column: steps 2–6 (drain, freeze, export,
+      export verification, zero-pending verification — everything needing
+      old-app dashboard/Stripe-platform access) go to the **product
+      owner**, who confirmed having that access. Step 7 (historical
+      migration into Supabase) goes to **engineering — Claude Code
+      sessions on this repo**, matching how the SIN/DOB, vehicle-history,
+      and duration-estimated backfills were already built. Steps 8
+      (reconciliation sign-off), 9 (DNS/app-store sunset), and 11
+      (7-year retention archive ownership) all go to the **product
+      owner** as well — step 8 explicitly stays with the same accountable
+      person rather than routing to a separate legal reviewer, and step
+      11 is flagged in the runbook itself as a long-horizon (7-year)
+      commitment that outlives any one session, not a one-time task.
+      `docs/runbooks/old-app-decommission.md`'s own table was updated in
+      place with every owner cell filled — zero `?` markers remain
+      anywhere in that file, confirmed by grep. `dual-run-driver-roster-policy.md` itself was *not*
+      independently re-verified line-by-line this session (took the
+      product owner's "approved and running" answer as given, per how this
+      interview was scoped) — if anyone doubts that, re-check the policy
+      doc directly rather than assume this note settles it forever.
+    - **2026-09-07, later same day — step 8's reconciliation sign-off gets
+      a provisional structure, reasoned through with the product owner
+      rather than left as a flat "blocked until Oct 30."** Recorded
+      directly in `docs/runbooks/old-app-decommission.md`'s step 8 row
+      (see that file for the full text) — summary here: three named,
+      dated risk-acceptances, each swappable for a real answer once the
+      Oct-30 export lands, instead of treating the whole gate as binary
+      open/closed:
+      - **Financial**: $185.31 confirmed owed; $42.77 unresolved pending
+        the Stripe-mirror-scope clarification and the two ambiguous-bucket
+        queries above; $22.43 provisionally excluded as likely-paid.
+      - **Identity**: full three-way crosswalk not yet built — Mongo-
+        ObjectID half done, numeric-ID half waits on the staged Mongo
+        extract noted above.
+      - **Regulatory**: CR #4081's reconstruct-and-flag call already made
+        once for the first 186 rows — needs an explicit confirmation it
+        still applies to whatever the final export adds, not an assumed
+        carryover.
+      This doesn't close step 8 — it makes the gap explicit and named
+      instead of silent, so the sequence isn't blocked on all-or-nothing
+      certainty. Whoever finalizes step 8 for real should replace each
+      provisional line with the actual resolved figure/finding, not just
+      delete the risk-acceptance note.
+  - **STILL OPEN, deliberately not touched — 2026-09-07 product-owner
+    instruction**: the $16.63 Stripe dispute needs a response, but the
+    product owner explicitly asked not to check or act on it right now —
+    they will identify root cause and validate it themselves first, then
+    decide what has to be done. Do not investigate, respond to, or close
+    this out on an engineering session's own initiative until that
+    happens; wait for the product owner to bring a decision back.
     **rider-referral legacy-signup gap FIXED 2026-08-31** (was: "rider-referral
     velocity/identity-cross-check gap unchanged (checked `utils/referral_payout.py`
     2026-08-24 — confirmed zero legacy/signup-recency awareness, same as the
@@ -5357,6 +5511,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     reviewer exists in this repo. Whoever gets assigned to close R-G should
     review both request packages in the same pass. See A41's 2026-09-07
     interview addendum for the full context.
+  - **2026-09-07, later same day — reviewer named.** Interviewed the
+    product owner directly on who should take this: **the product owner
+    themselves** will do the review (both R-G here and the tied-in A41
+    consent-sufficiency question). This closes the "no named
+    reviewer" blocker as a role-assignment gap — the actual determination
+    itself is still pending, now that a real reviewer is attached. Next
+    step is on the product owner: read
+    `reports/legal/data-transfer-implied-consent-review.md` and
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`,
+    record the determination in the PIA's Section 8/9 sign-off table per
+    the request package's own "what a closed-out review looks like"
+    instructions, and update this item's Status line when done.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -6716,6 +6882,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
      limitation as the original build) — worth a human spot-check on the
      next few real PRs that this labels correctly (native-touching PRs get
      labeled, doc/test-only PRs on those same paths don't).
+- **2026-09-07, product-owner interview — scope narrowed, one blocker
+  still unconfirmed.** Asked about both blockers together (secrets
+  existence, and Apple Developer credentials for iOS). Product owner's
+  answer addressed scope, not secrets: **"Android-only is fine for now,
+  skip iOS."** This is a real, deliberate scope decision — action item #4
+  (provision Apple Developer credentials, add an iOS `eas.json` profile +
+  workflow job) is now explicitly deprioritized, not just blocked; treat
+  it as intentionally deferred rather than an open gap to chase. **Item #1
+  (whether `EXPO_TOKEN`/`MAESTRO_CLOUD_API_KEY` are actually set in repo
+  secrets) was not answered by this and remains genuinely unconfirmed** —
+  don't infer either way from the scope answer. Action items #1 (confirm/
+  add the two secrets) and #2 (run the workflow once to prove the Android
+  lane completes) are the only two still needed to get real device
+  coverage live; both still need a repo/org admin, same as before.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —
@@ -12778,6 +12958,35 @@ record of what was assumed vs. what was actually true</summary>
 - **What was NOT verified:** pre-change default profile resolution under
   `--non-interactive` with no `--profile` flag — this needs EAS
   dashboard/build-history access no session here has had yet.
+- **2026-09-07, product-owner interview — direction set, item stays open
+  (not closed by this).** Asked whether to pin `--profile production` now
+  or check `eas build:list` history first. Product owner's answer changes
+  the shape of the fix rather than picking one of the two offered options:
+  - **Immediate mitigation, already in effect operationally, not in code:**
+    the product owner is triggering builds manually from git for now
+    specifically to avoid an unintended profile shipping via the
+    `[build]`-commit-message CI trigger. This doesn't fix `ci.yml` itself —
+    the job still omits `--profile` — but it means the live risk this item
+    describes (wrong profile shipping unnoticed) is currently
+    human-mitigated, not a change to the workflow.
+  - **Target design, not yet built:** branch-aware profile selection —
+    **`main` → `production`, `staging` → `preview`** — rather than a single
+    pinned profile regardless of branch. This is a bigger change than the
+    original "just pin production" fix that was held back: it needs the
+    `mobile-build` job to read `github.ref`/the triggering branch and
+    select `--profile` conditionally, plus confirming `eas.json` has a
+    `preview` profile shaped correctly for staging distribution (not just
+    named that way).
+  - **Action, updated:** do not implement the original single-profile pin.
+    Scope a new fix instead: conditional `--profile` selection keyed to
+    branch (`main`→`production`, `staging`→`preview`), verified against
+    `eas.json`'s actual profile definitions for both apps before merging —
+    this is exactly the kind of live-tested-deploy-path change CLAUDE.md's
+    release gates want dry-run-verified, not shipped on a guess. The
+    original `eas build:list` history question is now moot for the
+    `production` guess specifically (the target state no longer treats
+    `main` as ambiguous) but may still matter for confirming `staging`'s
+    current/intended behavior before the conditional logic ships.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 

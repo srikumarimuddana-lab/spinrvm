@@ -21,11 +21,13 @@ try:
     from . import db_supabase
     from .core.config import settings
     from .utils.error_handling import DatabaseError, ServiceUnavailableException
+    from .utils.pii import redact_error_detail
     from .utils.redis_client import redis_get
 except ImportError:
     import db_supabase
     from core.config import settings
     from utils.error_handling import DatabaseError, ServiceUnavailableException
+    from utils.pii import redact_error_detail
     from utils.redis_client import redis_get
 
 db = db_supabase  # legacy alias
@@ -476,7 +478,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise
     except Exception as e:
         logger.opt(exception=True).error(f"Unexpected error looking up user from DB: {e}")
-        raise DatabaseError(details={"original": str(e)}) from e
+        # F2 defense-in-depth: redact before it ever reaches DatabaseError.details
+        # (the loguru→Sentry bridge also reads this exception object — CLAUDE.md
+        # forbids phone/email in Sentry events regardless of the response handler).
+        raise DatabaseError(details={"original": redact_error_detail(str(e))}) from e
 
     if user:
         # Multi-device sessions: rider/driver may stay signed in on several
@@ -530,7 +535,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise
     except Exception as e:
         logger.opt(exception=True).error(f"Unexpected error looking up driver row: {e}")
-        raise DatabaseError(details={"original": str(e)}) from e
+        # F2 defense-in-depth: redact before it ever reaches DatabaseError.details
+        # (the loguru→Sentry bridge also reads this exception object — CLAUDE.md
+        # forbids phone/email in Sentry events regardless of the response handler).
+        raise DatabaseError(details={"original": redact_error_detail(str(e))}) from e
     _enforce_account_active(user)
     # Defense in depth: the admin gate is a private marker only
     # _verify_admin_payload sets. Strip it from any DB-sourced user row so a

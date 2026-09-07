@@ -341,13 +341,19 @@ async def test_jwt_path_user_lookup_unexpected_error_wrapped_as_database_error()
         patch("dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
         patch(
             "dependencies.db_supabase.get_user_by_id",
-            AsyncMock(side_effect=RuntimeError("boom")),
+            AsyncMock(side_effect=RuntimeError("boom user@example.com +13065551234")),
         ),
     ):
         from dependencies import get_current_user
 
-        with pytest.raises(DatabaseError):
+        with pytest.raises(DatabaseError) as exc_info:
             await get_current_user(_creds(token))
+        # F2 defense-in-depth: redacted before it ever reaches DatabaseError.details,
+        # not just at the response-handler layer (this also feeds the loguru→Sentry
+        # bridge — CLAUDE.md forbids phone/email in Sentry events).
+        original = exc_info.value.details["original"]
+        assert "user@example.com" not in original
+        assert "+13065551234" not in original
 
 
 async def test_jwt_path_driver_lookup_database_error_propagates():
@@ -368,6 +374,29 @@ async def test_jwt_path_driver_lookup_database_error_propagates():
 
         with pytest.raises(DatabaseError):
             await get_current_user(_creds(token))
+
+
+async def test_jwt_path_driver_lookup_unexpected_error_redacted():
+    from utils.error_handling import DatabaseError
+
+    token = _mint_jwt()
+    user_row = {"id": "u1", "phone": "+1", "token_version": 0}
+    with (
+        patch("dependencies.settings.JWT_SECRET", "test-secret-32-chars-minimum!!!!"),
+        patch("dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
+        patch("dependencies.db_supabase.get_user_by_id", AsyncMock(return_value=dict(user_row))),
+        patch(
+            "dependencies.db_supabase.get_driver_by_user_id_cached",
+            AsyncMock(side_effect=RuntimeError("boom user@example.com +13065551234")),
+        ),
+    ):
+        from dependencies import get_current_user
+
+        with pytest.raises(DatabaseError) as exc_info:
+            await get_current_user(_creds(token))
+        original = exc_info.value.details["original"]
+        assert "user@example.com" not in original
+        assert "+13065551234" not in original
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@
  * routes auth correctly, and doesn't throw fatal JS errors.
  */
 import { test, expect } from '@playwright/test';
-import { mockDriverBackend, seedAuthedDriverSession } from './fixtures';
+import { loginAsDriver, mockDriverBackend, seedAuthedDriverSession } from './fixtures';
 
 test.describe('driver-app web: smoke', () => {
   test('app boots and renders without fatal JS errors', async ({ page }) => {
@@ -31,12 +31,19 @@ test.describe('driver-app web: smoke', () => {
   });
 
   test('authed verified driver lands on /driver dashboard', async ({ page }) => {
-    await seedAuthedDriverSession(page);
+    // Drives the real login rather than seeding storage: authStore keeps web
+    // sessions memory-only (no client-readable token is ever persisted), so
+    // seedAuthedDriverSession's localStorage writes are never read on web and
+    // the app correctly falls through to /login. See fixtures.ts.
+    //
+    // This test used to seed and then wait a fixed 2.5s, which passed only
+    // because the splash held <Stack> unmounted past that window — the URL was
+    // still '/' when it was sampled, so the assertion never observed the real
+    // routing outcome. mockDriverBackend must be registered first; Playwright
+    // matches routes in reverse registration order.
     await mockDriverBackend(page);
-    await page.goto('/');
-    await page.waitForTimeout(2500);
-    const url = page.url();
-    expect(url).not.toMatch(/\/login$/);
+    await loginAsDriver(page);
+    expect(page.url()).not.toMatch(/\/login$/);
   });
 
   test('onboarding-incomplete driver is not routed to dashboard', async ({ page }) => {

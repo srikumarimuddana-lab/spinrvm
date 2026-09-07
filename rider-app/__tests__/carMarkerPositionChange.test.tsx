@@ -15,6 +15,9 @@
  */
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
+import { Platform } from 'react-native';
+import { Marker } from 'react-native-maps';
+import { Image } from 'expo-image';
 import { CarMarker } from '@shared/components/CarMarker';
 import { playbackPosition } from '@shared/utils/markerPlayback';
 
@@ -96,6 +99,112 @@ describe('CarMarker — onPositionChange (shared position source for rider follo
   it('is optional — omitting it does not throw even though the ticker still selects a position', () => {
     const { unmount } = render(<CarMarker coordinate={coord} />);
     expect(() => act(() => jest.advanceTimersByTime(500))).not.toThrow();
+    unmount();
+  });
+});
+
+/**
+ * Ported from driver-app's own copy of this component (see
+ * driver-app/__tests__/components/CarMarker.test.tsx, "Android ring-change
+ * re-arms the frozen snapshot" describe block, 2026-09-05 fix) after the same
+ * root cause was found to still be present in rider-app: driver-arriving.tsx,
+ * driver-arrived.tsx, and ride-in-progress.tsx all mount CarMarker with the
+ * `ring` prop already set on first render (screen navigation, or returning to
+ * the app mid-ride), which races the car icon's image decode the same way
+ * driver-app's offline->online mapKey remount did.
+ */
+describe('CarMarker — Android ring-change re-arms the frozen snapshot', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+  });
+
+  // Fires the car Image's onLoad, then lets its 350ms settle timer freeze
+  // tracksViewChanges — the ordinary (working) mount path.
+  function loadImageAndSettle(root: any) {
+    act(() => {
+      root.findByType(Image).props.onLoad();
+    });
+    act(() => {
+      jest.advanceTimersByTime(350);
+    });
+  }
+
+  it('immediately re-arms tracksViewChanges when the ring prop changes after freezing', () => {
+    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={null} />);
+    loadImageAndSettle(UNSAFE_root);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    // Ring appears (e.g. a ride status update) — must re-arm immediately,
+    // before any timer advances, so the native renderer gets a fresh chance
+    // to snapshot the car image alongside the now-visible ring.
+    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    // And settles back to false on the same 350ms schedule, since the image
+    // was already loaded before this ring change.
+    act(() => {
+      jest.advanceTimersByTime(350);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    unmount();
+  });
+
+  it('re-arms again when the ring disappears, clearing a stale frozen ring', () => {
+    const { UNSAFE_root, rerender, unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />,
+    );
+    loadImageAndSettle(UNSAFE_root);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    rerender(<CarMarker coordinate={coord} ring={null} />);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    unmount();
+  });
+
+  it('does not re-freeze prematurely if the ring changes before the image has ever loaded', () => {
+    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={null} />);
+    // No onLoad fired yet — tracksViewChanges is still true from mount.
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
+    // Still true — must not schedule a 350ms freeze ahead of the image
+    // actually loading, or this reproduces the exact bug being fixed.
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+    act(() => {
+      jest.advanceTimersByTime(350);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+
+    // Only the hard cap (or a real onLoad) may freeze it from here.
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    unmount();
+  });
+
+  it('is a no-op when re-rendered with the same ring identity (no redundant re-arm)', () => {
+    const ring = { color: '#10B981', pulsing: false };
+    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={ring} />);
+    loadImageAndSettle(UNSAFE_root);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
+    // Same color/pulsing, new object identity (e.g. a parent re-render) —
+    // must NOT re-arm; only an actual identity (color/pulsing) change should.
+    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+
     unmount();
   });
 });

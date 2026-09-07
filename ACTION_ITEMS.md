@@ -6674,6 +6674,39 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   action item #2 below needs a repo admin (or a session with real
   Actions-dispatch access) rather than leaving it an unverified assumption
   — same underlying gap as B38, not a Maestro-specific one.
+- **2026-09-07 recheck, two findings:**
+  1. **Failure signature unchanged.** Checked the 10 most recent
+     `maestro-e2e.yml` runs on `main` through `0b66ae5` — every one is
+     `completed`/`failure` with 0 jobs scheduled, identical to what this
+     item already documented. Items #1/#2/#4 remain blocked on repo/org-admin
+     access; nothing has changed there. Read the workflow YAML in full again
+     too — no bug in `maestro-e2e.yml` itself, it's ready to work the moment
+     the two secrets exist.
+  2. **Item #3's "not exercised against a real PR event" caveat is now
+     stale — and superseded by a real bug.** `label-run-maestro.yml` has
+     been running for real on every PR since 2026-08-31 (confirmed via
+     job logs). But its `dorny/paths-filter` block had a real logic bug:
+     `dorny/paths-filter` ORs every rule (positive and `!negated`)
+     independently rather than ANDing a negation against a prior positive
+     match — a well-known gotcha, not a misconfiguration typo — so a
+     trailing `!**/*.md` matched "any non-markdown file," which is nearly
+     everything. Confirmed empirically: an `admin-dashboard`-only PR and a
+     `backend`-only PR (both touching neither `rider-app/` nor
+     `driver-app/`) each got `native: true` and the `run-maestro` label
+     applied. This defeated the entire cost-discipline rationale item #3
+     itself gives for gating `maestro-e2e.yml` behind a label — the label
+     was landing on nearly every PR, so once secrets exist it would fire
+     (a real, billed EAS build + Maestro Cloud run) on nearly every PR too.
+     **Fixed the same day**: the `filters:` block now does only the
+     positive `rider-app/**`/`driver-app/**` match; the e2e/`.md`/
+     `__tests__`/`.test.ts(x)` exclusions moved into the labeling script,
+     applied per-file against `dorny/paths-filter`'s `list-files: json`
+     output, where AND actually means AND. See the workflow's own header
+     comment for the full explanation. Not yet exercised against a real PR
+     event post-fix (same "no `act`/real runner in this environment"
+     limitation as the original build) — worth a human spot-check on the
+     next few real PRs that this labels correctly (native-touching PRs get
+     labeled, doc/test-only PRs on those same paths don't).
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —

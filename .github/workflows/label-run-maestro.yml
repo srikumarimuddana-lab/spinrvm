@@ -22,7 +22,7 @@ name: Label run-maestro on native changes
 #     Maestro Cloud run, no billed mobile-build minutes.
 #
 # PATH FILTER (adjust here if native-relevant surfaces change -- keep this
-# comment in sync with the `filters:` block below):
+# comment in sync with the filter step + exclusion list below):
 #   Included : anything under rider-app/** or driver-app/**
 #   Excluded : rider-app/e2e/**, driver-app/e2e/** (Playwright-only, already
 #              covered by ci.yml's driver-app-test/rider-app-test jobs --
@@ -38,6 +38,19 @@ name: Label run-maestro on native changes
 #   secret) maestro-e2e.yml run once those secrets exist -- cheap. A false
 #   negative defeats the point of B25 #3. When genuinely unsure whether a
 #   changed path is native-relevant, prefer including it.
+#
+#   Found 2026-09-07 (during a wider CI-lifecycle audit): the exclusions
+#   above used to live inside dorny/paths-filter's own `filters:` block as
+#   trailing `!pattern` lines. That doesn't do what it looks like it does --
+#   dorny/paths-filter ORs every rule (positive and negated) independently
+#   rather than ANDing a negation against a prior positive match, so a
+#   standalone `!**/*.md` matches "any file that isn't markdown", which is
+#   nearly everything -- confirmed empirically against real PR runs, where
+#   admin-dashboard-only and backend-only diffs were both labeled
+#   native=true despite touching neither rider-app/ nor driver-app/. The
+#   filter step below now only does the positive rider-app/**|driver-app/**
+#   match; the exclusions are applied per-file in the labeling script,
+#   where AND actually means AND.
 
 on:
   pull_request:
@@ -63,16 +76,11 @@ jobs:
         id: filter
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
+          list-files: json
           filters: |
             native:
               - 'rider-app/**'
               - 'driver-app/**'
-              - '!rider-app/e2e/**'
-              - '!driver-app/e2e/**'
-              - '!**/*.md'
-              - '!**/__tests__/**'
-              - '!**/*.test.ts'
-              - '!**/*.test.tsx'
 
       - name: Ensure run-maestro label exists and apply it
         if: steps.filter.outputs.native == 'true'
@@ -81,6 +89,27 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const LABEL = 'run-maestro';
+
+            // The filter step above only does the positive rider-app/**|
+            // driver-app/** match (dorny/paths-filter can't correctly AND a
+            // negation against a prior positive match -- see the header
+            // comment). Exclusions are applied here, per file, against the
+            // real changed-file list.
+            const nativeFiles = JSON.parse(`${{ steps.filter.outputs.native_files }}`);
+            const EXCLUDE = [
+              /^rider-app\/e2e\//,
+              /^driver-app\/e2e\//,
+              /\.md$/,
+              /\/__tests__\//,
+              /\.test\.tsx?$/,
+            ];
+            const relevant = nativeFiles.filter(f => !EXCLUDE.some(re => re.test(f)));
+
+            if (relevant.length === 0) {
+              core.info(`${nativeFiles.length} rider-app/driver-app file(s) changed, but all are e2e/docs/test-only -- not labeling: ${nativeFiles.join(', ')}`);
+              return;
+            }
+            core.info(`native-relevant files: ${relevant.join(', ')}`);
 
             // Idempotent create: a 422 here means the label already
             // exists -- that's the expected steady-state, not a failure.

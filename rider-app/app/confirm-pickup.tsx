@@ -442,7 +442,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       width: 12,
       height: 12,
       borderRadius: 6,
-      backgroundColor: '#10B981',
+      backgroundColor: colors.success,
     },
     addressText: {
       fontSize: sf(15),

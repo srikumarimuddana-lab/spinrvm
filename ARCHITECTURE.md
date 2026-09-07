@@ -1,399 +1,254 @@
-# Spinr — Architecture Document
+# Spinr — Architecture
 
-## Overview
-Spinr is a ride-sharing platform built for the Canadian market (Saskatchewan-first) with a **0% commission model** — drivers keep 100% of fares and pay a flat subscription fee (Spinr Pass).
-
----
-
-## System Architecture
-
-```
-                         ┌─────────────┐
-                         │   CLIENTS   │
-                         └──────┬──────┘
-                                │
-          ┌─────────────────────┼─────────────────────┐
-          │                     │                     │
-   ┌──────▼──────┐      ┌──────▼──────┐      ┌──────▼──────┐
-   │  Rider App  │      │ Driver App  │      │Admin Dashboard│
-   │  Expo/RN    │      │  Expo/RN    │      │  Next.js 16  │
-   │  SDK 54     │      │  SDK 54     │      │  Tailwind    │
-   │  iOS+Android│      │  iOS+Android│      │  Web         │
-   └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
-          │                     │                     │
-          └─────────────────────┼─────────────────────┘
-                                │ HTTPS / WSS
-                                │
-                    ┌───────────▼───────────┐
-                    │    FastAPI Backend    │
-                    │    Python 3.12       │
-                    │    Uvicorn (ASGI)    │
-                    │    Docker Container  │
-                    └───────────┬───────────┘
-                                │
-          ┌─────────────────────┼─────────────────────┐
-          │                     │                     │
-   ┌──────▼──────┐      ┌──────▼──────┐      ┌──────▼──────┐
-   │  Supabase   │      │   Stripe    │      │  Firebase   │
-   │  PostgreSQL │      │  Payments   │      │  FCM (Push) │
-   │  Database   │      │  Connect    │      │  Crashlytics│
-   │  Auth       │      │  Cards      │      │  App Check  │
-   └─────────────┘      └─────────────┘      └─────────────┘
-```
+Canonical architecture reference for Spinr, a Canadian ride-sharing platform
+(Saskatchewan-first) built on a **0% commission model** — drivers keep 100%
+of fares and pay a flat subscription fee (Spinr Pass). This file merges what
+previously lived in `docs/backend/ARCHITECTURE.md` and
+`docs/framework/03-architecture-platform.md`; both now point back here.
+Conventions and invariants that must hold day-to-day (money math, state
+machine, insurance periods, RLS, etc.) live in `CLAUDE.md` and are only
+cross-referenced below, not restated. Decisions and their rationale live in
+`docs/adr/`.
 
 ---
 
-## Tech Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Rider App** | React Native (Expo SDK 54) | iOS + Android rider experience |
-| **Driver App** | React Native (Expo SDK 54) | iOS + Android driver dashboard |
-| **Admin Dashboard** | Next.js 16 + Tailwind + shadcn/ui | Web-based admin panel |
-| **Shared Code** | TypeScript modules | API client, components, stores, config |
-| **Backend** | FastAPI (Python 3.12) | REST API + WebSocket |
-| **Database** | Supabase (PostgreSQL) | All data storage |
-| **Payments** | Stripe (Cards + Connect) | Rider payments, driver payouts |
-| **Push Notifications** | Firebase Cloud Messaging (FCM) | Push to iOS + Android |
-| **Crash Reporting** | Firebase Crashlytics | Production crash monitoring |
-| **API Security** | Firebase App Check | Block fake API requests |
-| **Maps** | Google Maps Platform | Maps, Places, Directions, Geocoding |
-| **SMS (Production)** | Twilio | OTP verification |
-| **Hosting** | Railway (Docker) | Backend hosting (test + prod) |
-| **Mobile CI/CD** | EAS Build (Expo) | Build + OTA updates |
-| **Web CI/CD** | GitHub Actions | Test + deploy |
-
----
-
-## Directory Structure
+## 1. System Topology
 
 ```
-spinr/
-├── backend/                    FastAPI Backend
-│   ├── server.py               App entry point
-│   ├── dependencies.py         Auth middleware (JWT)
-│   ├── db.py                   Database abstraction
-│   ├── db_supabase.py          Supabase driver
-│   ├── schemas.py              Pydantic models
-│   ├── core/config.py          Environment settings
-│   ├── routes/
-│   │   ├── auth.py             Phone + OTP authentication
-│   │   ├── rides.py            Ride lifecycle (30+ endpoints)
-│   │   ├── drivers.py          Driver management (40+ endpoints)
-│   │   ├── payments.py         Stripe card CRUD + payment processing
-│   │   ├── promotions.py       Promo codes (10+ targeting rules)
-│   │   ├── admin.py            Admin CRUD + staff + subscriptions
-│   │   ├── corporate_accounts.py
-│   │   ├── notifications.py    FCM tokens + in-app notifications
-│   │   ├── fares.py            Vehicle types + fare engine
-│   │   ├── disputes.py         Dispute management
-│   │   ├── users.py            User profiles
-│   │   ├── addresses.py        Saved places
-│   │   ├── webhooks.py         Stripe webhooks
-│   │   └── websocket.py        Real-time driver tracking
-│   └── utils/
-│       └── email_receipt.py    HTML receipt generator
-│
-├── rider-app/                  Rider Mobile App
-│   ├── app/                    Expo Router screens
-│   │   ├── (tabs)/             Tab navigation (Home, Activity, Account)
-│   │   ├── search-destination  Address search
-│   │   ├── ride-options        Vehicle selection
-│   │   ├── payment-confirm     Payment + fare breakdown
-│   │   ├── driver-arriving     Driver tracking (live map)
-│   │   ├── driver-arrived      OTP + driver details
-│   │   ├── ride-in-progress    Live ride tracking
-│   │   ├── ride-completed      Rating + tip + payment + invoice
-│   │   ├── manage-cards        Stripe card management
-│   │   ├── saved-places        Favourite locations
-│   │   ├── promotions          Promo code entry
-│   │   └── privacy-settings    Privacy controls
-│   └── store/rideStore.ts      Zustand state management
-│
-├── driver-app/                 Driver Mobile App
-│   ├── app/driver/
-│   │   ├── index.tsx           Dashboard + map + online toggle
-│   │   ├── earnings.tsx        Earnings breakdown
-│   │   ├── payout.tsx          Stripe Connect + payouts
-│   │   ├── subscription.tsx    Spinr Pass plans
-│   │   └── rides.tsx           Trip history
-│   ├── components/
-│   │   ├── CarMarker.tsx       3D car marker for maps
-│   │   └── dashboard/          Dashboard sub-components
-│   └── hooks/
-│       └── useDriverDashboard  Location + WebSocket + ride state
-│
-├── admin-dashboard/            Admin Web Panel
-│   └── src/app/dashboard/
-│       ├── page.tsx            Stats + revenue dashboard
-│       ├── rides/              Ride detail (split-panel)
-│       ├── drivers/            Driver verify (split-panel)
-│       ├── service-areas/      CONFIG HUB (5 tabs)
-│       ├── subscriptions/      Spinr Pass plan management
-│       ├── staff/              Multi-admin with module access
-│       ├── audit-logs/         Admin action tracking
-│       └── ...                 12 more pages
-│
-├── shared/                     Shared Code
-│   ├── api/client.ts           HTTP client with JWT
-│   ├── components/             SOSButton, CarMarker, ErrorBoundary
-│   ├── config/                 Firebase, Spinr config
-│   ├── services/firebase.ts    FCM, Crashlytics, App Check
-│   └── store/                  Auth + Location stores (Zustand)
-│
-└── .github/workflows/          CI/CD Pipelines
-    ├── ci.yml                  Production pipeline
-    └── test-env.yml            Test environment pipeline
+Rider App ──┐
+Driver App ─┤── REST + WebSocket ──► FastAPI (Fly.io primary / Railway standby)
+Admin ───────┘                            │
+                             Supabase(Postgres+RLS)  Redis  Stripe
+                             Firebase  Twilio  FCM  Cloudinary
 ```
 
----
+- **Clients:** Rider App and Driver App (Expo/React Native, iOS + Android),
+  Admin Dashboard (Next.js, web). All three talk to the backend over
+  HTTPS/WSS using the same REST + WebSocket contract.
+- **Backend:** one horizontally-scalable FastAPI process (Python), deployed
+  to **both** Fly.io (Toronto, intended primary) and Railway (Canada, warm
+  standby) in parallel, routed via a Cloudflare CNAME with DNS-level
+  fail-over — see `CLAUDE.md` → Deployment and
+  `docs/adr/007-fly-primary-railway-standby.md` for why, and
+  `docs/runbooks/railway-fly-failover.md` for the fail-over procedure.
+  Current standby status (Railway auto-deploy has been blocked) is tracked
+  in `ACTION_ITEMS.md` C5 — check there before assuming standby is live.
+- **Durable state:** Supabase (Postgres + RLS), in a Canadian region — moving
+  it is a compliance event, not a config change.
+- **Ephemeral state:** Redis — rate limiting, OTP lockout, fare cache,
+  WebSocket fan-out across replicas via the `spinr:ws:dispatch` pub/sub
+  channel. Falls back to an in-process dict when unset (dev only; required
+  in production).
+- **External services:** Stripe (rider payments + driver Connect payouts),
+  Firebase (auth token verification, FCM push, Crashlytics, App Check),
+  Twilio (SMS/OTP, console fallback in dev), Google Maps Platform (maps,
+  places, directions, geocoding), Cloudinary (user image uploads).
 
-## CI/CD Pipeline
+## 2. Tech Stack
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                    CI/CD PIPELINE                        │
-└──────────────────────────────────────────────────────────┘
+| Layer | Technology |
+|-------|-----------|
+| Rider App | React Native (Expo SDK 54), Expo Router, Zustand |
+| Driver App | React Native (Expo SDK 54), Expo Router, Zustand |
+| Admin Dashboard | Next.js 16 + TypeScript + Tailwind + shadcn/ui |
+| Shared package (`@spinr/shared`) | TypeScript — API client, Zustand stores, shared types/components |
+| Backend | FastAPI (Python 3.12), Pydantic v2, Uvicorn (ASGI) |
+| Database | Supabase (Postgres), accessed via `supabase-py` service-role client |
+| Auth | Firebase ID token + short-lived JWT (HS256) + rotating refresh tokens |
+| Cache / pub-sub | Redis |
+| Background jobs | `asyncio.create_task` loops spawned from `core/lifespan.py` (see `CLAUDE.md` for the current registry — 41 as of this writing) |
+| Payments | Stripe (PaymentIntents, SetupIntents, Connect) |
+| SMS | Twilio |
+| Push / crash / integrity | Firebase Cloud Messaging, Crashlytics, App Check |
+| File storage | Supabase Storage (`driver-documents`), Cloudinary |
+| Observability | Loguru (JSON to stderr) + Sentry (10% traces/profiles) |
+| Hosting | Fly.io (primary) + Railway (standby) for backend; Vercel for admin; EAS Build for mobile |
 
-DEVELOPMENT WORKFLOW:
+## 3. Backend Architecture
 
-  Developer
-      │
-      ▼
-  Feature Branch ──push──► GitHub
-      │
-      ▼
-  Pull Request to develop
-      │
-      ├── GitHub Actions (test-env.yml)
-      │   ├── Backend: Python tests
-      │   ├── Rider App: TypeScript check
-      │   ├── Driver App: TypeScript check
-      │   └── Admin: Next.js build
-      │
-      ▼
-  Merge to develop ──auto──► Railway (Test Backend)
-      │                       https://spinr-backend-test.up.railway.app
-      │
-      ├── EAS Build (test profile)
-      │   ├── Android APK (internal distribution)
-      │   └── iOS IPA (internal distribution)
-      │
-      ▼
-  QA Testing on Test Environment
-      │
-      ▼
-  Merge to main ──auto──► Railway (Production Backend)
-      │                    https://spinr-backend-production.up.railway.app
-      │
-      ├── EAS Build (production profile)
-      │   ├── Android APK ──► Google Play Store
-      │   └── iOS IPA ──► Apple App Store
-      │
-      ├── Admin Dashboard ──► Vercel / Railway
-      │
-      └── OTA Updates (JS-only changes, no rebuild)
-          eas update --branch production
+Layering: **routers → services → repositories.** `backend/routes/` holds
+~25 domain routers (one file/folder per domain — rides, drivers, auth,
+payments, wallet, corporate, fares, notifications, websocket, admin/...);
+`backend/services/` is a thin service layer (dispatch, fare, corporate
+wallet/membership/allowance); `backend/repositories/` (via `db_supabase.py`,
+~66 helpers) owns DB access and query-filter escaping — see CLAUDE.md's
+query-filter rules before touching any `$regex`/`$or` filter.
 
-
-ENVIRONMENTS:
-
-  ┌────────────┬────────────────────────────────────────────────┐
-  │ Environment│ Details                                        │
-  ├────────────┼────────────────────────────────────────────────┤
-  │ Local Dev  │ Backend: localhost:8000                        │
-  │            │ Apps: Expo Go / Dev Client                     │
-  │            │ OTP: 1234 (no Twilio)                         │
-  │            │ Payments: Stripe test mode                     │
-  ├────────────┼────────────────────────────────────────────────┤
-  │ Test       │ Backend: spinr-backend-test.up.railway.app    │
-  │            │ Apps: EAS build (test profile)                │
-  │            │ Branch: develop                                │
-  │            │ Auto-deploy on push                            │
-  ├────────────┼────────────────────────────────────────────────┤
-  │ Production │ Backend: spinr-backend-production.up.railway.app│
-  │            │ Apps: EAS build (production profile)           │
-  │            │ Branch: main                                   │
-  │            │ OTP: Twilio (real SMS)                         │
-  │            │ Payments: Stripe live mode                     │
-  └────────────┴────────────────────────────────────────────────┘
-
-
-BUILD PROFILES (eas.json):
-
-  ┌─────────────┬──────────────┬───────────────┬──────────────┐
-  │ Profile     │ Dev Server   │ Distribution  │ Backend URL  │
-  ├─────────────┼──────────────┼───────────────┼──────────────┤
-  │ development │ Required     │ Internal      │ localhost    │
-  │ test        │ Required     │ Internal      │ test railway │
-  │ preview     │ Not needed   │ APK (standalone)│ prod railway│
-  │ production  │ Not needed   │ Store ready   │ prod railway │
-  └─────────────┴──────────────┴───────────────┴──────────────┘
-```
-
----
-
-## API Endpoints (100+)
-
-### Authentication
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/auth/send-otp` | Send OTP to phone number |
-| POST | `/auth/verify-otp` | Verify OTP and get JWT token |
-| GET | `/auth/me` | Get current user profile |
-
-### Rides (30+ endpoints)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/rides/estimate` | Get fare estimates |
-| POST | `/rides` | Create ride + auto-match driver |
-| GET | `/rides/active` | Get rider's active ride (resume) |
-| GET | `/rides/history` | Past rides (completed/cancelled) |
-| GET | `/rides/{id}` | Ride details |
-| POST | `/rides/{id}/tip` | Add tip |
-| POST | `/rides/{id}/rate` | Rate driver |
-| POST | `/rides/{id}/cancel` | Cancel ride |
-| POST | `/rides/{id}/emergency` | SOS alert |
-| POST | `/rides/{id}/process-payment` | Charge card (idempotent) |
-| GET | `/rides/{id}/share` | Create share link |
-
-### Drivers (40+ endpoints)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/drivers/me` | Driver profile |
-| PUT | `/drivers/{id}/status` | Go online/offline (subscription gated) |
-| GET | `/drivers/nearby` | Nearby drivers (service area filtered) |
-| GET | `/drivers/balance` | Earnings balance |
-| GET | `/drivers/earnings` | Earnings by period |
-| POST | `/drivers/rides/{id}/accept` | Accept ride |
-| POST | `/drivers/rides/{id}/complete` | Complete ride |
-| GET | `/drivers/subscription/plans` | Available Spinr Pass plans |
-| POST | `/drivers/subscription/subscribe` | Subscribe to plan |
-| POST | `/drivers/stripe-onboard` | Stripe Connect setup |
-
-### Payments
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/payments/cards` | List cards (from Stripe) |
-| POST | `/payments/cards` | Add card (Stripe SetupIntent) |
-| POST | `/payments/cards/{id}/default` | Set default card |
-| DELETE | `/payments/cards/{id}` | Remove card |
-
-### Promotions
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/promo/validate` | Validate code (10+ rules) |
-| POST | `/promo/apply` | Apply promo to ride |
-| GET | `/promo/available` | User's available promos |
-
-### Admin (50+ endpoints)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/admin/auth/login` | Admin/staff login |
-| GET | `/admin/service-areas` | List service areas |
-| POST | `/admin/service-areas` | Create (full config hub) |
-| GET | `/admin/subscription-plans` | Spinr Pass plans |
-| GET | `/admin/staff` | List staff members |
-| POST | `/admin/staff` | Create staff with module access |
-| GET | `/admin/audit-logs` | Admin action history |
-| GET | `/admin/stats` | Dashboard statistics |
-
----
-
-## Business Model
+### Request lifecycle
 
 ```
-┌──────────────────────────────────────────┐
-│           SPINR BUSINESS MODEL           │
-│         0% Commission Platform           │
-└──────────────────────────────────────────┘
+HTTP request
+  → CORSMiddleware              (ALLOWED_ORIGINS env; "*" rejected in prod)
+  → SecurityHeadersMiddleware   (X-Frame-Options, HSTS prod-only, CSP)
+  → RelativeRedirectMiddleware
+  → SlowAPI RateLimitMiddleware (Redis-backed; per-route overrides)
+  → FastAPI router              (server.py mounts ~25 routers)
+  → Dependencies                (get_current_user, get_admin_user)
+  → Route handler                (Pydantic validates → services/repositories)
+  → Exception handlers          (SpinrException → schema; 422; X-Request-ID)
+```
 
+WebSocket (`routes/websocket.py`): client connects to
+`/ws/{client_type}/{client_id}`, first message must be
+`{"type": "auth", "token": "<jwt>"}`, connection is registered as
+`"driver_{id}"` / `"rider_{id}"`, a heartbeat runs (10 s interval per
+`CLAUDE.md` — tightened from 30 s), and messages are rate-limited
+(30 msg/s, 64 KB max). Outbound server → client fan-out goes through Redis
+pub/sub so a driver on one replica can message a rider on another; every
+replica's subscriber delivers locally only if the target client is
+connected there. Full message catalog: `docs/backend/RIDES_AND_DISPATCH.md`.
+
+### Domain map
+
+For "where do I find X", the per-domain deep-dives under `docs/backend/`
+are the reference, not this file:
+
+| Domain | Doc |
+|---|---|
+| Auth, users, staff | `docs/backend/AUTH_AND_USERS.md` |
+| Rides, dispatch, drivers, fares | `docs/backend/RIDES_AND_DISPATCH.md` |
+| Wallet, payments, loyalty, promotions | `docs/backend/WALLET_AND_PAYMENTS.md` |
+| Corporate B2B | `docs/CORPORATE_B2B.md` |
+| Infrastructure / platform (server, lifespan, middleware, config) | `docs/backend/INFRASTRUCTURE.md` |
+| Admin / ops | `docs/backend/ADMIN_AND_OPS.md` |
+| Function/class index | `docs/backend/REFERENCE.md` |
+
+### Cross-cutting concerns
+
+CORS, security headers, auth, rate limiting, OTP brute-force protection,
+error handling, logging, DB access, caching, pub/sub, background-loop
+replay safety, and config-in-DB are all handled centrally — see
+`docs/backend/INFRASTRUCTURE.md` for the implementation map and `CLAUDE.md`
+→ Critical Conventions for the rules that must not be violated (dual-import
+pattern, Decimal-only money math, `_require_ride_in_state()` guards, JWT
+trust model, Stripe idempotency, insurance-period logging).
+
+## 4. Frontend Surfaces
+
+| Surface | Framework | Notes |
+|---|---|---|
+| Rider App (`rider-app/`) | Expo/React Native, Expo Router, Zustand, Stripe React Native | Booking, live tracking, payments, SOS |
+| Driver App (`driver-app/`) | Expo/React Native, Expo Router, Zustand | Dashboard, earnings, Stripe Connect payouts, SOS |
+| Admin Dashboard (`admin-dashboard/`) | Next.js 16, TypeScript, Vercel-hosted | Service-area config hub, ride/driver detail, staff, audit logs |
+| Shared (`shared/`, `@spinr/shared`) | TypeScript | API client, Zustand stores, shared components (e.g. `SOSButton`) — consumed by all three above |
+
+All three client surfaces consume the same REST/WS contract; shared logic
+belongs in `shared/`, and a change to a shared component must name every
+importer in its blast radius before merge (see `CLAUDE.md` pre-merge gates).
+See root-level directory listing in this repo, or each surface's own
+manifest, for its full file layout.
+
+## 5. Payments Architecture
+
+At booking, the backend places a **manual-capture** Stripe PaymentIntent
+(a hold) on the rider's card; money is captured only at ride completion via
+`POST /rides/{id}/process-payment`, which is guarded by a DB-level
+optimistic-lock claim and dispatches to one of three settlement paths —
+wallet (atomic RPC), corporate allowance (`corporate_wallet_apply_delta`),
+or card (Stripe capture/charge). Every mutating Stripe call carries an
+idempotency key; webhooks are deduplicated via a `stripe_events` claim
+table (`claim_stripe_event` / `unclaim_stripe_event` on failure so Stripe's
+retry isn't lost); all money movement is recorded to the append-only
+`financial_events` ledger (7-year retention).
+
+This is a summary only — the full request/response flows, sequence and
+flowchart diagrams, 3DS/SCA behavior, webhook event catalog, background
+reconciliation loops, and the currently-known gaps (e.g. the rider app's
+unreachable in-app 3DS challenge path) are documented in the dedicated
+deep-dive:
+
+**→ `docs/architecture/payments-rider-stripe.md`**
+
+For the invariants that must never be violated (Decimal-only arithmetic,
+`claim_stripe_event` before processing any webhook), see `CLAUDE.md` →
+Critical Conventions.
+
+## 6. Business Model
+
+```
 Revenue Sources:
-  1. Spinr Pass (Driver Subscriptions)
-     ├── Basic:     $19.99/month (4 rides/day)
-     ├── Pro:       $49.99/month (unlimited)
-     └── Configured per service area
-
-  2. Cancellation Fees
-     ├── Driver arrived: $4.50
-     │   ├── $4.00 → Driver
-     │   └── $0.50 → Platform
-     └── Ride started: Full fare
-
-  3. Platform Fees (per ride)
-     └── Configurable per service area
+  1. Spinr Pass (driver subscriptions) — Basic/Pro tiers, configured per service area
+  2. Cancellation fees — split between driver and platform
+  3. Platform fees (per ride) — configurable per service area
 
 Driver Earnings:
-  ├── 100% of ride fare (0% commission)
-  ├── 100% of tips
-  └── Cancellation fee share
+  100% of ride fare (0% commission) + 100% of tips + cancellation fee share
 
-Service Area = Primary Configuration Unit:
-  ├── Vehicle pricing (base/km/min per type)
-  ├── Fees & taxes (platform/city/airport/GST/PST)
-  ├── Cancellation fees (with driver/admin split)
-  ├── Spinr Pass plans (which plans available)
-  └── Required driver documents
+Service Area = primary configuration unit:
+  vehicle pricing, fees & taxes, cancellation fees, Spinr Pass plans, required driver documents
 ```
 
----
+See "What Spinr Is NOT" in `CLAUDE.md` for the guardrails this model
+implies (never a commission-taking marketplace, never unbounded surge,
+never a hidden-fee operator).
 
-## Security
+## 7. Security
 
 | Layer | Implementation |
 |-------|---------------|
-| **API Auth** | JWT tokens (Bearer) |
-| **Admin Auth** | JWT + role-based module access |
-| **OTP** | Twilio SMS (production), 1234 (dev) |
-| **Payments** | Stripe (PCI-DSS compliant, no card data stored) |
-| **App Integrity** | Firebase App Check |
-| **Crash Monitoring** | Firebase Crashlytics |
-| **Push** | Firebase Cloud Messaging (APNs + FCM) |
-| **HTTPS** | Enforced on Railway |
-| **CORS** | Configured in FastAPI |
-| **Rate Limiting** | Per-endpoint rate limits |
-| **Audit Trail** | Admin action logging |
+| API auth | JWT (Bearer); admin JWTs trusted (role+email+modules in claims), rider/driver role always re-read from `users` table |
+| OTP | Twilio SMS (production), `1234` dev bypass when `ENV != production`; SHA-256 hashed at rest, 24 h lockout after 5 failures/hour |
+| Payments | Stripe (PCI-DSS compliant, no card data stored) |
+| App integrity | Firebase App Check |
+| Transport | HTTPS enforced; CORS configured per environment |
+| Rate limiting | Per-endpoint, Redis-backed (SlowAPI) |
+| Audit trail | Admin action logging |
+| RLS | Second, independent enforcement layer in Supabase under the API |
+
+Full rules (JWT trust model, OTP lockout mechanics, RLS coverage) live in
+`CLAUDE.md` → Critical Conventions; RLS policy tests live in
+`backend/tests/rls/`.
+
+## 8. Architectural Principles
+
+These hold the system coherent as it grows; full detail and rationale live
+in `docs/framework/03-architecture-platform.md` (Pillar 3):
+
+1. **State machines over statuses** — `rides.status` is an enumerated,
+   guarded transition graph, not a free-form field; any value outside it is
+   a contract violation.
+2. **Money is Decimal, once-written, idempotent** — one way to move money in
+   each direction; new code calls it, never reimplements it.
+3. **Layered trust, re-verified at the boundary** — admin JWTs are trusted;
+   rider/driver role is re-read from the DB every request; RLS is a second,
+   independent layer.
+4. **Derived truth over duplicated truth** — e.g. `is_available` is computed
+   from `is_online` + ride/offer state, never set independently; insurance
+   periods derive from ride state, not driver UI.
+5. **Degrade loudly, never silently** — Redis/DB/payment/dispatch failures
+   surface as errors with documented consequences, never a silent fallback
+   that masks the symptom.
+6. **Config over deploys** — rotatable secrets and operational toggles live
+   in the `app_settings` table, not `.env`.
+7. **Additive schema evolution** — migrations are append-only,
+   filename-keyed; prefer a new column/flag over repurposing one.
+8. **The corporate layer is a lamination, not a fork** — corporate billing
+   attaches at the settlement/notification/reporting seams of the consumer
+   product; it does not fork the core ride lifecycle.
+
+Deliberately **not** built (yet): microservices, Kubernetes, event-sourcing,
+multi-region active-active, service meshes — see Pillar 3 §"What we
+deliberately do not build" and Pillar 7 (scorecard) for the triggers that
+would revisit this.
+
+## 9. Where Decisions Live
+
+Structural decisions — deployment topology, trust-model changes, new
+external dependencies, new background loops — are recorded as ADRs, not
+restated here:
+
+**→ `docs/adr/`** (see `docs/adr/README.md` for the index; e.g.
+`001-supabase-postgres.md`, `002-expo-react-native.md`,
+`003-fastapi-backend.md`, `005-jwt-firebase-dual-auth.md`,
+`006-railway-deployment.md`, `007-fly-primary-railway-standby.md`)
+
+Sprint-scoped context, domain deep-dives (dispatch, payments, corporate,
+safety), and regulatory obligations are loaded on demand per `CLAUDE.md`'s
+Context Imports section rather than duplicated here.
 
 ---
 
-## Key Features
-
-### Rider App
-- Phone + OTP login
-- Google Places search + set on map
-- Multi-stop rides + scheduling
-- Vehicle selection with pricing
-- Orange→red gradient routes
-- 3D car markers (like Uber/Waze)
-- Auto-apply best promo code
-- Real-time driver tracking
-- SOS emergency button (long-press)
-- In-ride chat
-- Rating + tipping
-- Invoice download/share
-- Active ride resume on app launch
-- Card management (Stripe)
-- Saved places (home/work/favourites)
-
-### Driver App
-- Online/offline toggle (subscription gated)
-- Live map with GPS tracking
-- Ride accept/decline with countdown
-- OTP verification at pickup
-- Earnings dashboard
-- Spinr Pass subscription
-- Stripe Connect payouts
-- Service area selection
-- SOS emergency button
-- Referral program
-
-### Admin Dashboard
-- Collapsible sidebar with dark mode
-- Role-based access (super_admin, operations, support, finance, custom)
-- Service area as config hub (5 tabs)
-- Split-panel ride/driver detail views
-- Spinr Pass plan management
-- Promo code engine (10+ targeting rules)
-- Staff management with module access
-- Audit logs
-- CSV export
+*Last reorganized 2026-09-07, consolidating `docs/backend/ARCHITECTURE.md`
+and `docs/framework/03-architecture-platform.md` into this file per the
+same pattern used for `docs/PRD.md`. Update this file whenever system
+architecture changes; update the deep-dives it links to for domain detail.*

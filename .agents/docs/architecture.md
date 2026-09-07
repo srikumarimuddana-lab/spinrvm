@@ -1,5 +1,9 @@
 # Spinr Platform Architecture
 
+> **Superseded (2026-09-07):** this file is a stale, unmaintained duplicate from the legacy
+> `.agents/` scaffold. The canonical architecture reference is [`ARCHITECTURE.md`](../../ARCHITECTURE.md)
+> at the repo root — refer to that file first. Left below, unmodified, for historical record.
+
 > **Living Document** — Update this file whenever the system architecture changes.
 > Last updated: 2026-04-25
 

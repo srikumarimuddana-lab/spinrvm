@@ -200,7 +200,7 @@ function createStyles(colors: ThemeColors) {
     },
     button: { width: '100%', paddingVertical: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
     buttonText: { fontSize: 16, fontWeight: '600', color: '#fff' },
-    destructiveButton: { backgroundColor: '#EF4444' },
+    destructiveButton: { backgroundColor: colors.error },
     cancelButton: { backgroundColor: colors.surfaceLight },
     cancelButtonText: { color: colors.textSecondary },
   });

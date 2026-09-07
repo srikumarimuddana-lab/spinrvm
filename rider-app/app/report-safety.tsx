@@ -80,7 +80,7 @@ export default function ReportSafetyScreen() {
                     showsVerticalScrollIndicator={false}
                 >
                     <View style={styles.warningBox}>
-                        <Ionicons name="warning" size={24} color="#F59E0B" />
+                        <Ionicons name="warning" size={24} color={colors.warning} />
                         <Text style={styles.warningText}>
                             If this is an emergency, please contact local authorities immediately using the Emergency Assist button in settings.
                         </Text>

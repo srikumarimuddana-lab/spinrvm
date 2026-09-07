@@ -221,7 +221,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.border,
     },
-    cardUrgent: { borderColor: '#F59E0B' },
+    cardUrgent: { borderColor: colors.warning },
     urgentDot: {
       position: 'absolute',
       top: 10,
@@ -229,7 +229,7 @@ function createStyles(colors: ThemeColors) {
       width: 8,
       height: 8,
       borderRadius: 4,
-      backgroundColor: '#F59E0B',
+      backgroundColor: colors.warning,
     },
     iconBadge: {
       width: 44,

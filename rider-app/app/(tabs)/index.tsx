@@ -444,7 +444,7 @@ export default function HomeScreen() {
             <View style={styles.notifBanner}>
               <View style={styles.notifBannerLeft}>
                 <View style={styles.notifBannerIconBg}>
-                  <Ionicons name="notifications" size={20} color="#F59E0B" />
+                  <Ionicons name="notifications" size={20} color={colors.warning} />
                 </View>
                 <View style={styles.notifBannerTextContainer}>
                   <Text style={styles.notifBannerTitle}>Turn on notifications</Text>
@@ -839,7 +839,7 @@ function createStyles(colors: ThemeColors) {
     notifBadge: {
       position: 'absolute', top: 6, right: 6,
       minWidth: 16, height: 16, borderRadius: 8,
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.error,
       justifyContent: 'center', alignItems: 'center',
       paddingHorizontal: 3,
     },

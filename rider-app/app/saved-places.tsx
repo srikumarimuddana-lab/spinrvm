@@ -232,7 +232,7 @@ export default function SavedPlacesScreen() {
 
                   {selectedPlace && (
                     <View style={styles.selectedAddr}>
-                      <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+                      <Ionicons name="checkmark-circle" size={16} color={colors.success} />
                       <Text style={styles.selectedAddrText} numberOfLines={2}>{selectedPlace.address}</Text>
                     </View>
                   )}

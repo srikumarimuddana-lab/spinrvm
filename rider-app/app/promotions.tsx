@@ -184,7 +184,7 @@ function createStyles(colors: ThemeColors) {
     codeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
     promoCode: { fontSize: 16, fontWeight: '800', color: colors.text, letterSpacing: 1 },
     discountBadge: { backgroundColor: colors.successBg, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-    discountText: { fontSize: 12, fontWeight: '700', color: '#10B981' },
+    discountText: { fontSize: 12, fontWeight: '700', color: colors.success },
     promoDesc: { fontSize: 13, color: colors.textDim, marginBottom: 2 },
     promoExpiry: { fontSize: 11, color: colors.textDim },
 

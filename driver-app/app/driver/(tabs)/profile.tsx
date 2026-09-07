@@ -474,7 +474,7 @@ function ProfileScreenInner() {
                     <View style={styles.cardDivider} />
                     <View style={styles.cardRow}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
-                        <Ionicons name="person" size={16} color={'#F59E0B'} />
+                        <Ionicons name="person" size={16} color={colors.warning} />
                     </View>
                     <View style={styles.cardInfo}>
                         <Text style={styles.cardLabel}>Gender</Text>
@@ -507,7 +507,7 @@ function ProfileScreenInner() {
             <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={() => router.push('/vehicle-info' as any)}>
                 <View style={styles.cardRow}>
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
-                    <FontAwesome5 name="car" size={16} color={'#10B981'} />
+                    <FontAwesome5 name="car" size={16} color={colors.success} />
                 </View>
                 <View style={styles.cardInfo}>
                     <Text style={styles.cardLabel}>Vehicle</Text>
@@ -693,7 +693,7 @@ function ProfileScreenInner() {
                     menu entry can always be visible. */}
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/subscription' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
-                        <Ionicons name="card" size={18} color="#10B981" />
+                        <Ionicons name="card" size={18} color={colors.success} />
                     </View>
                     <Text style={styles.actionText}>Spinr Pass</Text>
                     <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
@@ -701,7 +701,7 @@ function ProfileScreenInner() {
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/referral' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
-                        <Ionicons name="gift" size={18} color={'#F59E0B'} />
+                        <Ionicons name="gift" size={18} color={colors.warning} />
                     </View>
                     <Text style={styles.actionText}>Referral Program</Text>
                     <Ionicons name="chevron-forward" size={18} color={colors.textDim} />

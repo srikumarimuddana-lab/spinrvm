@@ -299,7 +299,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
               colors={
                 !canGoOnline
                   ? [colors.border, '#D1D5DB']
-                  : (isOnline ? ['#059669', '#10B981'] : [colors.primary, colors.primaryDark])
+                  : (isOnline ? ['#059669', colors.success] : [colors.primary, colors.primaryDark])
               }
               style={styles.goButtonInner}
             >

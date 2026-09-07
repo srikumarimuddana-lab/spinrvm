@@ -428,15 +428,15 @@ export default function SettingsScreen() {
                             onPress={() => Alert.alert(t('settings.emergencyServicesTitle'), t('settings.emergencyServicesMsg'), [{ text: t('settings.cancel'), style: 'cancel' }, { text: t('settings.call911'), style: 'destructive', onPress: () => Linking.openURL('tel:911') }])}
                         >
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
-                                <Ionicons name="call" size={18} color="#EF4444" />
+                                <Ionicons name="call" size={18} color={colors.error} />
                             </View>
-                            <Text style={[styles.settingLabel, { color: '#EF4444' }]}>{t('settings.callEmergency')}</Text>
+                            <Text style={[styles.settingLabel, { color: colors.error }]}>{t('settings.callEmergency')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
                         <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/report-safety' as any)}>
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
-                                <Ionicons name="warning" size={18} color="#F59E0B" />
+                                <Ionicons name="warning" size={18} color={colors.warning} />
                             </View>
                             <Text style={styles.settingLabel}>{t('settings.reportSafety')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />

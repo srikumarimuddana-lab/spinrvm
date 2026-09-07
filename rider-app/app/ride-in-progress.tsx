@@ -522,7 +522,7 @@ function RideInProgressScreenContent() {
       <View style={styles.tripCard}>
         <View style={styles.tripRow}>
           <View style={styles.tripDots}>
-            <View style={[styles.tripDot, { backgroundColor: '#10B981' }]} />
+            <View style={[styles.tripDot, { backgroundColor: colors.success }]} />
             <View style={styles.tripConnector} />
             <View style={[styles.tripDot, { backgroundColor: colors.primary }]} />
           </View>
@@ -668,7 +668,7 @@ function RideInProgressScreenContent() {
           </View>
         ) : error && !currentRide ? (
           <View style={styles.mapPlaceholder}>
-            <Ionicons name="alert-circle" size={48} color="#EF4444" />
+            <Ionicons name="alert-circle" size={48} color={colors.error} />
             <Text style={styles.mapPlaceholderText}>Could not load ride</Text>
             <TouchableOpacity
               style={styles.retryBtn}
@@ -865,7 +865,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24,
       shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
     },
-    greenDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#10B981', marginRight: 10 },
+    greenDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.success, marginRight: 10 },
     statusText: { fontSize: 15, fontWeight: '600', color: colors.text },
     sosOverlay: {
       position: 'absolute', top: 0, right: 16, zIndex: 20,
@@ -963,7 +963,7 @@ function createStyles(colors: ThemeColors) {
     },
     liveIndicator: {
       flexDirection: 'row', alignItems: 'center',
-      backgroundColor: '#EF4444', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 10,
+      backgroundColor: colors.error, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 10,
     },
     liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF', marginRight: 4 },
     liveText: { fontSize: 10, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
@@ -982,10 +982,10 @@ function createStyles(colors: ThemeColors) {
     devBar: {
       flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
       marginTop: 16, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
-      borderWidth: 1, borderColor: '#F59E0B',
+      borderWidth: 1, borderColor: colors.warning,
     },
     devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
-    devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+    devBtn: { backgroundColor: colors.warning, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
     devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   });
 }

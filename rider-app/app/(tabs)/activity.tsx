@@ -206,7 +206,7 @@ export default function ActivityScreen() {
 
   const getStatusColor = (status: string): string => {
     switch (status) {
-      case 'completed': return '#10B981';
+      case 'completed': return colors.success;
       case 'cancelled': return '#999';
       case 'in_progress': return colors.info;
       default: return '#FFB800';
@@ -360,7 +360,7 @@ export default function ActivityScreen() {
       accessibilityRole="button"
       accessibilityLabel="Retry loading more rides"
     >
-      <Text style={[styles.listFooterText, { color: '#EF4444' }]}>{loadMoreError}</Text>
+      <Text style={[styles.listFooterText, { color: colors.error }]}>{loadMoreError}</Text>
       <Text style={styles.listFooterAction}>Tap to retry</Text>
     </TouchableOpacity>
   ) : !nextCursor && rides.length > 0 ? (
@@ -447,7 +447,7 @@ export default function ActivityScreen() {
                 </View>
                 <View style={styles.statDivider} />
                 <View style={styles.statItem}>
-                  <Text style={[styles.statValue, { color: '#10B981' }]}>${stats?.total_saved ?? '0.00'}</Text>
+                  <Text style={[styles.statValue, { color: colors.success }]}>${stats?.total_saved ?? '0.00'}</Text>
                   <Text style={styles.statLabel}>Saved</Text>
                 </View>
                 <View style={styles.statDivider} />
@@ -484,8 +484,8 @@ export default function ActivityScreen() {
               contentContainerStyle={styles.emptyState}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
-              <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-              <Text style={[styles.emptyTitle, { color: '#EF4444' }]}>Could not load rides</Text>
+              <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
+              <Text style={[styles.emptyTitle, { color: colors.error }]}>Could not load rides</Text>
               <Text style={styles.emptyText}>Pull down to refresh.</Text>
             </ScrollView>
           ) : loading && rides.length === 0 ? (
@@ -686,7 +686,7 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   rideFareContainer: { alignItems: 'flex-end' },
   rideFare: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 4 },
   rideFareCancelled: { color: colors.textDim },
-  rideFareBreakdown: { fontSize: 10, color: '#10B981', marginBottom: 3 },
+  rideFareBreakdown: { fontSize: 10, color: colors.success, marginBottom: 3 },
   rideStatusContainer: { flexDirection: 'row', alignItems: 'center' },
   statusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 4 },
   rideStatus: { fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium' },

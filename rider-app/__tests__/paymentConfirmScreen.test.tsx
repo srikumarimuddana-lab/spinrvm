@@ -67,7 +67,8 @@ jest.mock('expo-router', () => ({
 }));
 
 const COLORS = {
-  primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB', danger: '#DC2626',
+  primary: '#EF4444', surface: '#FFF', surfaceLight: '#F5F5F5', text: '#111', textDim: '#666', border: '#E5E7EB', danger: '#EF4444',
+  error: '#EF4444', success: '#10B981', warning: '#F59E0B', info: '#3B82F6',
 };
 jest.mock('@shared/theme/ThemeContext', () => ({ useTheme: () => ({ colors: COLORS, isDark: false }) }));
 jest.mock('@shared/utils/responsive', () => ({ useResponsive: () => ({ sf: (n: number) => n }) }));

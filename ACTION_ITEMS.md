@@ -925,7 +925,13 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       product owner's "approved and running" answer as given, per how this
       interview was scoped) — if anyone doubts that, re-check the policy
       doc directly rather than assume this note settles it forever.
-  - **STILL OPEN, unchanged**: open $16.63 Stripe dispute needs a response;
+  - **STILL OPEN, deliberately not touched — 2026-09-07 product-owner
+    instruction**: the $16.63 Stripe dispute needs a response, but the
+    product owner explicitly asked not to check or act on it right now —
+    they will identify root cause and validate it themselves first, then
+    decide what has to be done. Do not investigate, respond to, or close
+    this out on an engineering session's own initiative until that
+    happens; wait for the product owner to bring a decision back.
     **rider-referral legacy-signup gap FIXED 2026-08-31** (was: "rider-referral
     velocity/identity-cross-check gap unchanged (checked `utils/referral_payout.py`
     2026-08-24 — confirmed zero legacy/signup-recency awareness, same as the

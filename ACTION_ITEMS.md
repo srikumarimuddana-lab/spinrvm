@@ -760,6 +760,47 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     open**: what `tax_amount` itself should read for those 186 rows is a
     business/legal decision, not resolved by the backfill — needs an owner
     + due date.
+    - **2026-09-07, product-owner interview — decision made, execution
+      still pending.** Interviewed the product owner directly on D1 (owner
+      + due date were the missing pieces). Three answers, taken together:
+      1. **Fix it, not accept-as-is.** Product owner: investigate root
+         cause and correct `tax_amount` for the 186 rows "when we run the
+         new migration today" — i.e. scoped into today's active migration
+         work (see A41's 2026-09-07 addendum re: `Mongo_20260904`), not
+         deferred indefinitely.
+      2. **Use the preserved `old_payout_gst_amount` figure ($102.09
+         total), but validate it as part of today's run** — not a blind
+         copy. Product owner picked "trust old_payout_gst_amount" but
+         qualified it with "let's validate that this time in the
+         migration" — read this as: cross-check the figure (e.g. against
+         `bookings.csv`'s source rows again, or a 5%-of-fare sanity check)
+         before writing it into `tax_amount`, not skip verification.
+      3. **No rider-facing receipt-correction question exists.** Product
+         owner: "all receipts had the gst populated and we have validated
+         right from the day that it is the right amount for the ride
+         complete" — the dollar amount riders were actually charged and
+         shown was correct at the time; the bug is that the backend's
+         `tax_amount` column captured commission-side GST instead of the
+         rider-facing fare-side GST (see
+         `docs/change-log/2026-08-15-legacy-import-gst-preservation.md`'s
+         root-cause finding) — a backend categorization/bookkeeping fix,
+         not a pricing error ever exposed to a rider. No refund, receipt
+         reissue, or disclosure question follows from this.
+      - **Execution note, not yet done by this session:** this session
+        has no `DATABASE_URL`/production write access (same constraint as
+        every other write in this file), so the actual `UPDATE` is left
+        for whoever runs today's migration. Before it runs: (a) remember
+        `old_payout_gst_amount` is stored as a JSONB number and
+        deserializes via `supabase-py` as a Python `float` — per the
+        preservation change-log's own explicit warning, wrap it as
+        `to_decimal(str(value))` before any money arithmetic, never use
+        the raw float; (b) this is a write to `tax_amount` on 186 live
+        `rides` rows — a Change Impact Log is required per CLAUDE.md's
+        live-testing rules, and a `spinr-money-auditor` review before the
+        write executes is strongly recommended given this repo's own
+        precedent of catching real bugs in exactly this kind of
+        legacy-money backfill (see A41's B32/B33 findings, same class of
+        near-miss).
   - **RESOLVED (2026-08-18)**: insurance-period audit-trail gap for the 186
     legacy-imported rides — **CR #4081**, decision: reconstruct-and-flag,
     approved by this session's user (confirmed to hold the SGI-facing

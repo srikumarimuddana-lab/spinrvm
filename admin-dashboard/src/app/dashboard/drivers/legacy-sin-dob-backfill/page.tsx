@@ -46,6 +46,17 @@ import {
     TableRow,
     TableCell,
 } from "@/components/ui/table";
+import {
+    AlertDialog,
+    AlertDialogTrigger,
+    AlertDialogContent,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogCancel,
+    AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { exportToCsv } from "@/lib/export-csv";
@@ -430,14 +441,36 @@ export default function LegacySinDobBackfillPage() {
                         )}
 
                         <div className="flex items-center gap-3 pt-2">
-                            <Button onClick={handleCommit} disabled={!report.can_commit || committing}>
-                                {committing ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                    <CheckCircle2 className="mr-2 h-4 w-4" />
-                                )}
-                                Commit backfill
-                            </Button>
+                            <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                    <Button disabled={!report.can_commit || committing}>
+                                        {committing ? (
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <CheckCircle2 className="mr-2 h-4 w-4" />
+                                        )}
+                                        Commit backfill
+                                    </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                        <AlertDialogTitle>Write SIN/DOB for {counts?.to_update ?? 0} driver(s)?</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            This writes a vault-encrypted SIN and/or date of birth to{" "}
+                                            {counts?.to_update ?? 0} driver(s) matched by phone in batch{" "}
+                                            <span className="font-mono">{report.batch}</span>. A value already on
+                                            file is never overwritten — only NULL columns are filled. Once
+                                            written, a SIN can only be changed later through the driver&apos;s own
+                                            update-SIN action (audited, with a reason), not by re-running this
+                                            tool.
+                                        </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                        <AlertDialogAction onClick={handleCommit}>Commit backfill</AlertDialogAction>
+                                    </AlertDialogFooter>
+                                </AlertDialogContent>
+                            </AlertDialog>
                             {!report.can_commit && (
                                 <span className="text-sm text-muted-foreground">
                                     Resolve all errors to enable commit.

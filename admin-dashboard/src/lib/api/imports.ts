@@ -781,6 +781,71 @@ export const adminBackfillRiderCreatedAt = (file: File, apply: boolean) => {
     });
 };
 
+/* ── Legacy Tax-ID (SIN + GST/HST BN) Backfill ───── */
+// Admin-dashboard wrapper for backend/routes/admin/tax_id_import.py — a
+// one-time migration path for drivers whose SIN/GST BN were collected on
+// the previous app. Single CSV, header exactly "phone,sin,gst_bn"; phone is
+// the match key, sin/gst_bn each optional per row but at least one
+// required. Fill policy is NULL-only for both columns (immutability rule
+// for SIN, anti-revert rule for GST) — a re-run of the same CSV converges
+// rather than clobbering a value a driver has since corrected in the app.
+// Reports carry only row_ref (CSV line + phone last-4) / field / message —
+// never a SIN, BN, or full phone number.
+export interface TaxIdBackfillReportItem {
+    row_ref: string;
+    field: string;
+    message: string;
+}
+export interface TaxIdBackfillCounts {
+    rows: number;
+    to_write: number;
+    sin_to_write: number;
+    gst_to_write: number;
+    skipped: number;
+}
+export interface TaxIdBackfillReport {
+    batch: string;
+    can_commit: boolean;
+    counts: TaxIdBackfillCounts;
+    warnings: TaxIdBackfillReportItem[];
+    errors: TaxIdBackfillReportItem[];
+}
+export interface TaxIdBackfillCommitResult {
+    batch: string;
+    committed: boolean;
+    written_sin?: number;
+    written_gst?: number;
+    // "started" | "not_applicable" — whether freshly-imported SINs were
+    // handed to Stripe in the background for drivers with a Connect account.
+    stripe_push?: string;
+    warnings?: TaxIdBackfillReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    counts?: TaxIdBackfillCounts;
+    errors?: TaxIdBackfillReportItem[];
+}
+
+function taxIdBackfillFormData(file: File, batch?: string): FormData {
+    const fd = new FormData();
+    fd.append("tax_csv", file);
+    if (batch) fd.append("batch", batch);
+    return fd;
+}
+
+/** Dry-run: parse + validate the tax-ID CSV and return the report (no writes). */
+export const adminValidateTaxIdBackfill = (file: File, batch?: string) =>
+    request<TaxIdBackfillReport>("/api/admin/tax-ids/import/validate", {
+        method: "POST",
+        body: taxIdBackfillFormData(file, batch),
+    });
+
+/** Commit the tax-ID backfill. Returns committed=false + errors if the CSV no longer validates. */
+export const adminCommitTaxIdBackfill = (file: File, batch?: string) =>
+    request<TaxIdBackfillCommitResult>("/api/admin/tax-ids/import/commit", {
+        method: "POST",
+        body: taxIdBackfillFormData(file, batch),
+    });
+
 /* ── Legacy SIN/DOB Backfill (2 CSVs) ─────── */
 // Admin-dashboard wrapper for the CLI-only
 // backend/scripts/backfill_legacy_driver_sin_dob.py (Phase 2 of the

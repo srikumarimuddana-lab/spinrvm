@@ -54,6 +54,7 @@ import {
 import { MapPin } from "lucide-react";
 import { LegacyBookingImport } from "./_components/LegacyBookingImport";
 import { LegacyWalletImport } from "./_components/LegacyWalletImport";
+import { LegacyTaxIdImport } from "./_components/LegacyTaxIdImport";
 import { PreLaunchDataFlag } from "./_components/PreLaunchDataFlag";
 import { DataQualityScan } from "./_components/DataQualityScan";
 import { DriverRepairPass } from "./_components/DriverRepairPass";
@@ -622,10 +623,12 @@ export default function BulkOperationsPage() {
                     },
                 ]}
             >
-                <p className="text-xs text-muted-foreground">
-                    Bulk Driver Tax-ID Import (GST/BN) also belongs in this phase but has no
-                    dedicated page yet — API-only for now.
-                </p>
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <Upload className="h-4 w-4" />
+                    Bulk Driver Tax-ID Import — fill SIN and GST/HST business number for drivers
+                    whose numbers were collected on the previous app
+                </div>
+                <LegacyTaxIdImport />
 
                 <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     <CreditCard className="h-4 w-4" />

@@ -5348,6 +5348,15 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   not specific to this item). The module's P0 gaps (access-control, missing
   PIA) were fixed 2026-07-28 (PRs #2685, #2687); this item tracks the PIA's
   own follow-up recommendations.
+  - **2026-09-07:** the product owner directed that A41's legacy-migration
+    consent-legal-sufficiency question (whether the old app's consent basis
+    was sufficient for the 2026-07-29 migration — fact sheet already
+    prepared at `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-
+    factsheet.md`) be tied to this item rather than tracked separately,
+    since it shares the exact same blocker: no named Privacy Officer/legal
+    reviewer exists in this repo. Whoever gets assigned to close R-G should
+    review both request packages in the same pass. See A41's 2026-09-07
+    interview addendum for the full context.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -20198,6 +20207,82 @@ how much they de-risk a public launch._
     simulator/device available across all five passes) and the underlying
     legal sufficiency-of-old-consent judgment itself (business/counsel
     decision).
+- **2026-09-07, product-owner interview — status confirmed and a new
+  export is now in scope:**
+  - **08-22 booking-import batch (980 rows): CONFIRMED COMPLETE.** Product
+    owner confirms the batch was committed and verified after the 08-29
+    NOT-NULL/batch-mixing fix — resolves the "not yet re-run" gap the fix's
+    own Change Impact Log left open.
+  - **The other three capabilities (SIN/DOB backfill, vehicle-history
+    backfill, duration-estimated marker backfill) have NOT been run against
+    production since** — product owner: "nothing was done" after the 08-22
+    batch. The 2026-08-20 "run all four now" sign-off is therefore only
+    half-exercised; the remaining three still need their own commit runs
+    whenever the product owner is ready, via the admin routes built 08-28
+    (SIN/DOB, vehicle-history) or the CLI script (duration-estimated,
+    still unwired to an admin route — see the 2026-09-07 status refresh
+    above).
+  - **A new export exists: `Mongo_20260904`, not yet processed.** Per
+    product owner, this needs to go through the full migration chain again
+    — use `docs/runbooks/migration-tool-order.md`'s 18-tool dependency
+    order (§ above) rather than re-deriving sequencing from scratch, and
+    check the live Bulk Operations status panel (`GET
+    /api/admin/migration-status`) before starting, since some tools (e.g.
+    Stripe Mapping Import, Bulk Driver Tax-ID Import) match by phone/old ID
+    against whatever accounts already exist and could behave differently
+    against a second batch than they did against the first.
+  - **Migration 373 — product owner wants it applied now.** This session
+    has no `DATABASE_URL` (confirmed: unset, no `backend/.env` in this
+    checkout), so it cannot run the migration itself — same constraint as
+    every session that touched this backfill chain. Whoever has
+    migrate-apply access should run:
+    ```
+    cd backend && python -m backend.scripts.run_migrations
+    ```
+    (or target the single file directly per that script's own
+    `--status`/`--dry-run` flags) to pick up
+    `373_saved_addresses_legacy_import_metadata.sql`. Confirm success via
+    `--status` afterward — it should move from `pending` to `applied`, and
+    the Bulk Operations status panel's Legacy Saved-Address Backfill entry
+    should stop reporting `manual_check_required` with the missing-column
+    warning.
+  - **Consent legal-sufficiency judgment — tied to B11, not tracked
+    separately.** Product owner's call: don't treat "was the old app's
+    consent legally sufficient for this migration" as its own open
+    question — it shares B11's exact blocker (no named Privacy Officer/
+    legal reviewer exists in this repo at all, per B11's own entry and
+    `reports/legal/data-transfer-implied-consent-review.md`'s Status
+    table). Whoever gets assigned to close B11's R-G should pick up this
+    question in the same pass — the fact sheet at
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`
+    is already prepared and waiting, same as B11's request package.
+  - **7 anomalous rows — re-validation requested, blocked on data this
+    session doesn't have.** Product owner: no balance was left pending on
+    the (currently still live) old app's backend or Stripe at migration
+    time, which is reason enough to double-check whether the 7 rows are
+    genuinely anomalous rather than trust the 08-20 conclusion as final —
+    and wants trip dates plus driver/rider names identified as part of
+    processing `Mongo_20260904`. **This session cannot do that
+    re-validation**: neither the original cached export the 08-20
+    investigation used (`payments.csv`/`customers.csv`, session-scratchpad
+    only, not persisted to the repo) nor `Mongo_20260904` itself is
+    present anywhere in this environment (checked: no matching files
+    anywhere on disk, empty scratchpad). Whoever runs `Mongo_20260904`
+    through the tool chain should re-run the same cross-check the 08-20
+    investigation did (`docs/change-log/
+    2026-08-20-anomalous-legacy-rows-payment-verification.md`'s method:
+    match against `payments.csv`, check `customers.csv`'s `block_reason`,
+    check for `you_earn > total_amount`) against the fresh export, and
+    extend it to the 7 original rows too, now that "nothing was pending in
+    the old app" is a confirmed fact rather than an assumption. **Handle
+    the driver/rider-name identification outside this file**: CLAUDE.md's
+    logging/PII rules ("Full names — use user_id") apply to durable
+    written records generally, and `ACTION_ITEMS.md` is exactly that — the
+    actual name-level findings belong in a scoped, access-appropriate doc
+    (matching the existing pattern:
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`-
+    style, or a new dated `docs/audit/` entry), not written into this
+    backlog file. This entry tracks the *task*, not the result.
 - **Files:** full original findings in
   `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` and
   `docs/runbooks/legacy-migration-playbook.md` (the repeatable

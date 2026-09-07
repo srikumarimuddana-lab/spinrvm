@@ -21721,11 +21721,43 @@ how much they de-risk a public launch._
   for the bypass question, the merge event's actor/method in the repo's
   audit log, which this session also cannot read).
 
-### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet
+### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
 
-- [ ] **Status:** open — found 2026-09-07 while reviewing PR #5050's own
-  body, which disclosed the defect and fixed the code path but did not
-  include a production data remediation step.
+- [ ] **Status:** open, blocked on data access — found 2026-09-07 while
+  reviewing PR #5050's own body, which disclosed the defect and fixed the
+  code path but did not include a production data remediation step.
+  **2026-09-07 follow-up:** attempted the read-only query below with user
+  sign-off and this session's Supabase MCP access; discovered neither
+  reachable project is the real production database — see "Blocker" below.
+  This is itself worth a human's attention independent of B42's original
+  finding.
+- **Blocker (found while attempting the Action below):** `mcp__Supabase__
+  list_projects` in this session shows exactly two projects: `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`, `ca-central-1`) and `MobileAppStaging`
+  (`mvmyygoinicjdpqprizr`, `ca-central-1`, created 2026-08-28). Despite its
+  name, **`Spinr-Prod` has no `rides`/`stripe_events`/`financial_events`
+  tables at all** — `information_schema.tables` shows only marketing/CMS/
+  AI-assistant content tables (`faqs`, `legal_docs`, `seo_pages`,
+  `help_articles`, `knowledge_base`, `agent_conversations`,
+  `promotion_coupons`, `promotion_signups`, `promotions`, …) — this looks
+  like the public-website/marketing Supabase project, not the rides/
+  payments backend. `MobileAppStaging` **does** have the right schema
+  (`stripe_events`, `rides`, `financial_events`, `public.users`,
+  `auth.users`) but `stripe_events` has **0 rows** (`select count(*) ...`
+  confirmed empty, no `payment_failed` or any other event type present) —
+  it is a genuinely empty staging project, not a mirror of the incident
+  window's real traffic. Neither project this session can reach contains
+  the data B42 needs. Which Supabase project backend/.env's
+  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` actually points to in the
+  live-running backend was not independently confirmed here (no shell
+  access to the deployed Fly/Railway environment's env vars from this
+  session) — it may be a third project this session's Supabase MCP
+  connection simply isn't wired to, or the naming may be misleading
+  (`Spinr-Prod` not actually being prod). Either way this is a **new**,
+  separate finding worth a human's attention: whoever has the Supabase
+  organization's project list should confirm which project the live
+  backend actually writes to, and why the MCP connection available here
+  doesn't reach it.
 - **What's wrong:** #5048 (merged 2026-09-06 02:58:46Z) added a CAS
   re-read to the `payment_failed` webhook handler with no `try`/`except`.
   If that re-read raised, the Stripe event was already
@@ -21742,21 +21774,38 @@ how much they de-risk a public launch._
   failed fare settlement never flagged for retry) are exactly the kind of
   payment-path regression CLAUDE.md's Change Impact Log rules require
   tracking to closure, not just patching the code.
-- **Action:** query `stripe_events` (and any linked `rides`/payment
-  records) for `payment_failed` events with `claimed_at` between
-  2026-09-06T02:58:46Z and 2026-09-06T03:34:42Z where no corresponding
-  processed/settled outcome exists; cross-check against Stripe Dashboard's
-  own webhook delivery log for that window (Stripe retains failed/retried
-  deliveries and can be manually resent) rather than relying on
-  `stripe_events` alone, since the whole failure mode is that our own
-  table under-records these. Manually replay any affected events via the
-  admin endpoint noted in #5050's PR body.
+- **Action:** (1) a human needs to identify the actual production Supabase
+  project (Settings → Project Settings on the correct project, or read
+  `SUPABASE_URL` from the live Fly/Railway backend's environment) and
+  either grant this session's Supabase MCP connection access to it, or run
+  the query below directly. (2) Once pointed at the real project: query
+  `stripe_events` (and any linked `rides`/payment records) for
+  `payment_failed` events with `received_at`/claim-timestamp between
+  2026-09-06T02:58:46Z and 2026-09-06T03:34:42Z where `processed_at IS
+  NULL` (schema confirmed via `MobileAppStaging`: `event_id, event_type,
+  payload, received_at, processed_at` — the real prod table likely matches
+  this shape but confirm columns on the actual project before relying on
+  them, since even this schema assumption is only verified against
+  staging). (3) Cross-check against Stripe Dashboard's own webhook
+  delivery log for that window (Stripe retains failed/retried deliveries
+  and can be manually resent) rather than relying on `stripe_events`
+  alone, since the whole failure mode is that our own table under-records
+  these — this session also has no authorized Stripe MCP access (listed as
+  requiring OAuth this session) so this step needs a human regardless. (4)
+  Manually replay any affected events via the admin endpoint noted in
+  #5050's PR body.
 - **Files:** the webhook handler touched by #5048/#5050 (payments route —
   confirm exact path via `git show` on those two PRs; not independently
-  re-verified here). `stripe_events` table.
+  re-verified here). `stripe_events` table (real production project, not
+  yet identified — see Blocker).
 - **What was NOT verified:** whether any real Stripe traffic actually hit
   this handler during the window (i.e., whether the risk is theoretical or
-  realized) — that requires the query above, not yet run.
+  realized) — the query needed to answer that could not be run this
+  session against real data (see Blocker above); it was run successfully
+  against `MobileAppStaging` only, which returned 0 rows because that
+  project has never processed any Stripe traffic at all, staging or
+  otherwise — that result says nothing about the actual incident and must
+  not be read as "no events were affected."
 
 ### C73. `main`'s merge path doesn't wait for `backend-test` (or block on an already-failed check) — #5048 merged while both were still failing/in-flight
 

@@ -503,6 +503,43 @@ def _tool_18_driver_repair() -> ToolStatus:
     return ToolStatus(18, "driver_repair", "Driver-Repair Pass", state, detail, "/dashboard/bulk-operations")
 
 
+def _tool_19_id_crosswalk_backfill(eligible_ids: list[str]) -> ToolStatus:
+    """Driver-side coverage only, same shape as #4/#5 -- rider coverage has
+    no equivalent fixed "eligible" population computed elsewhere in this
+    module, so it isn't folded into this ratio; the tool's own preview
+    report breaks out rider stats separately (see legacy_id_crosswalk_
+    service.build_rider_crosswalk_plan)."""
+    if not eligible_ids:
+        return ToolStatus(
+            19,
+            "id_crosswalk_backfill",
+            "Legacy ID Crosswalk Backfill",
+            "not_started",
+            "No eligible drivers yet (run Bulk Driver Import or Legacy Driver Import first)",
+            "/dashboard/bulk-operations",
+        )
+    rows = (
+        supabase.table("legacy_id_crosswalk")
+        .select("spinr_user_id")
+        .eq("entity_type", "driver")
+        .in_("spinr_user_id", eligible_ids)
+        .execute()
+        .data
+        or []
+    )
+    with_crosswalk = len({r["spinr_user_id"] for r in rows if r.get("spinr_user_id")})
+    total = len(eligible_ids)
+    state = "done" if with_crosswalk == total else ("not_started" if with_crosswalk == 0 else "partial")
+    return ToolStatus(
+        19,
+        "id_crosswalk_backfill",
+        "Legacy ID Crosswalk Backfill",
+        state,
+        f"{with_crosswalk}/{total} eligible drivers have a crosswalk row (rider coverage tracked separately)",
+        "/dashboard/bulk-operations",
+    )
+
+
 def _safe_status(order: int, tool_id: str, name: str, admin_path: str, compute: Callable[[], ToolStatus]) -> ToolStatus:
     """Run one tool's status computation in isolation.
 
@@ -539,7 +576,7 @@ def _safe_status(order: int, tool_id: str, name: str, admin_path: str, compute: 
 
 
 def get_migration_status() -> MigrationStatusReport:
-    """Read-only. Runs every count query above and returns all 18 tool
+    """Read-only. Runs every count query above and returns all 19 tool
     statuses in the verified dependency order. No writes, no side effects.
 
     Every tool status goes through _safe_status so one tool's query failure
@@ -720,6 +757,13 @@ def get_migration_status() -> MigrationStatusReport:
             ),
             _safe_status(
                 18, "driver_repair", "Driver-Repair Pass", "/dashboard/bulk-operations", _tool_18_driver_repair
+            ),
+            _needs_eligible(
+                19,
+                "id_crosswalk_backfill",
+                "Legacy ID Crosswalk Backfill",
+                "/dashboard/bulk-operations",
+                _tool_19_id_crosswalk_backfill,
             ),
         ]
     )

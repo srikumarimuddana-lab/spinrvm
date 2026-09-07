@@ -16,6 +16,7 @@ import {
     shouldResetBuffer,
     type PlaybackFix,
 } from '../utils/markerPlayback';
+import { smoothFix, isImplausibleJump, type SmoothingState } from '../utils/gpsSmoothing';
 import type { FixFeed, MarkerFix } from '../utils/fixFeed';
 
 const CAR_IMAGES = {
@@ -232,9 +233,30 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // Where the marker was last animated TO (snapped when on-route) — the
     // travel-bearing fallback measures from here, not the raw prev fix.
     const prevTargetRef = useRef<TrackingLatLng>(coordinate);
+    // The last route segment the marker snapped to — passed back into
+    // snapToRoute as its continuity hint (see vehicleTracking.ts) so a
+    // momentary nearby-but-wrong-direction segment (a divided road, an
+    // out-and-back street, a crossing street at an intersection) can't win
+    // the nearest-distance search and flip the bearing 90–180° for one tick.
+    // Ported from driver-app/components/CarMarker.tsx — same shared
+    // vehicleTracking.ts, same glitch class, riders watch this icon too.
+    const lastRouteSegmentIndexRef = useRef<number | null>(null);
     // Timestamped fix queue the playback ticker consumes. Seeded lazily on
     // first ingest so the initializer stays pure.
     const bufferRef = useRef<PlaybackFix[]>([]);
+    // Running Kalman-style smoothing estimate (see gpsSmoothing.ts), applied
+    // to every raw fix BEFORE it enters bufferRef — damps single-fix GPS
+    // jitter that the playback buffer's spline only smooths BETWEEN fixes,
+    // not within one. Re-seeded (set to null) whenever the buffer itself
+    // resets, so a real teleport isn't dragged back toward the old estimate.
+    const smoothingStateRef = useRef<SmoothingState | null>(null);
+    // Last RAW (pre-smoothing) fix that passed isImplausibleJump — the
+    // physics baseline the next fix is checked against. Deliberately not
+    // smoothingStateRef (a damped estimate) or bufferRef's tail (already fed
+    // into the playback buffer): this must be the last fix actually accepted
+    // as real, so a run of rejected glitches can never compound into a
+    // baseline that itself drifted away from the truth.
+    const lastAcceptedRawFixRef = useRef<{ latitude: number; longitude: number; timestampMs: number } | null>(null);
     // Latest heading prop, read by the ticker (which must not re-fire per
     // heading change). Synced in an effect, never during render.
     const headingRef = useRef<number | null | undefined>(heading);
@@ -327,19 +349,36 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // effect. Reads only refs — stable by construction.
     const ingestFix = useCallback((fix: MarkerFix) => {
         const now = Date.now();
-        const coord = { latitude: fix.latitude, longitude: fix.longitude };
-        if (shouldResetBuffer(bufferRef.current, coord, SNAP_DISTANCE_M)) {
-            bufferRef.current.length = 0;
-            hasMovementBearingRef.current = false;
-            if (Platform.OS === 'android') {
-                setAndroidCoord(coord);
-                prevTargetRef.current = coord;
-            }
-        }
+        const rawCoord = { latitude: fix.latitude, longitude: fix.longitude };
         const ts =
             Number.isFinite(fix.timestampMs) && Math.abs(now - fix.timestampMs) < 60_000
                 ? fix.timestampMs
                 : now;
+        // Physics-based rejection (Uber Beacon-style, without full sensor
+        // fusion): a fix implying an impossible speed since the last
+        // accepted one is GPS noise/multipath, not a real position — drop it
+        // outright rather than accepting it or letting SNAP_DISTANCE_M below
+        // treat it as a legitimate teleport. Elapsed time is what tells a
+        // real gap (backgrounding, tunnel) apart from a glitch, not distance
+        // alone — see isImplausibleJump's own doc.
+        if (isImplausibleJump(lastAcceptedRawFixRef.current, { ...rawCoord, timestampMs: ts })) {
+            return;
+        }
+        lastAcceptedRawFixRef.current = { ...rawCoord, timestampMs: ts };
+        if (shouldResetBuffer(bufferRef.current, rawCoord, SNAP_DISTANCE_M)) {
+            bufferRef.current.length = 0;
+            // Stale estimate would otherwise drag the newly-reset position
+            // back toward wherever the car used to be — re-seed at the raw
+            // (unsmoothed) fix instead.
+            smoothingStateRef.current = null;
+            hasMovementBearingRef.current = false;
+            if (Platform.OS === 'android') {
+                setAndroidCoord(rawCoord);
+                prevTargetRef.current = rawCoord;
+            }
+        }
+        smoothingStateRef.current = smoothFix(smoothingStateRef.current, { ...rawCoord, timestampMs: ts });
+        const coord = { latitude: smoothingStateRef.current.latitude, longitude: smoothingStateRef.current.longitude };
         pushFix(bufferRef.current, { ...coord, timestampMs: ts }, now);
     }, []);
 
@@ -402,8 +441,16 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             if (!p) return;
 
             // Snap the played-back position onto the route when close enough;
-            // otherwise render it raw (off-route/detour honesty).
-            const snap = snapToRoute(p.coordinate, routeRef.current, MAX_ROUTE_SNAP_M);
+            // otherwise render it raw (off-route/detour honesty). Passes the
+            // last snapped segment as a continuity hint (see
+            // lastRouteSegmentIndexRef's own doc comment above).
+            const snap = snapToRoute(
+                p.coordinate,
+                routeRef.current,
+                MAX_ROUTE_SNAP_M,
+                lastRouteSegmentIndexRef.current,
+            );
+            lastRouteSegmentIndexRef.current = snap?.segmentIndex ?? null;
             const target = snap?.coordinate ?? p.coordinate;
             onPositionChangeRef.current?.(target);
 

@@ -1,7 +1,7 @@
 """Admin route for the legacy-migration checklist status panel.
 
 One read-only endpoint -- no file upload, no writes. Answers "what's
-already run, and what's still pending" across all 18 migration/import/
+already run, and what's still pending" across all 19 migration/import/
 backfill tools tracked by services/migration_status_service.py, in their
 verified dependency order (docs/runbooks/migration-tool-order.md).
 
@@ -28,7 +28,7 @@ router = APIRouter()
 
 @router.get("/migration-status")
 async def admin_get_migration_status(admin: dict = Depends(get_admin_user)):
-    """Read-only. Returns all 18 tool statuses in dependency order."""
+    """Read-only. Returns all 19 tool statuses in dependency order."""
     report = svc.get_migration_status()
     return {
         "tools": [

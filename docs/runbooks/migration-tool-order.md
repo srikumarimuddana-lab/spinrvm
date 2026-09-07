@@ -37,6 +37,7 @@ you actually are right now*.
 | 16 | Pre-Launch Legacy Data Flagging | `/dashboard/bulk-operations` | Needs #1/#2's source markers on drivers **and** #11's written rides — run last so the full population exists before deciding what's dormant/pre-launch |
 | 17 | Migration Data Quality Scan | `/dashboard/bulk-operations` | Needs #11's written rides (checks completed rows for a missing driver/rider, a placeholder address, or \$0 fare) — run last, as a final audit pass over everything the chain above produced, not a dependency any other step reads |
 | 18 | Driver-Repair Pass | `/dashboard/bulk-operations` | Needs #17's `missing_driver` finding and the CURRENT `drivers` table (#1/#2, including any later batch) — re-checks rides #17 flagged against whoever exists in `drivers` *now*, so it must run after #2 (or any later driver import) adds the driver a delta booking import ran ahead of. Driver-side only — see `docs/runbooks/migration-driver-rider-repair-scope.md` for why there is no rider-side equivalent yet |
+| 19 | Legacy ID Crosswalk Backfill | `/dashboard/bulk-operations` | Reads `drivers.legacy_import_metadata` (needs #1/#2's source markers) and `rides.legacy_import_metadata.old_customer_id` grouped by `rider_id` (needs #11's written rides) to populate `legacy_id_crosswalk` (migration 328). A final consolidation pass like #16-18 — run last so both driver- and rider-side old-ID linkage are as complete as the chain above ever makes them. Does not gate any other step. |
 
 Not part of the ordered chain above (unwired or already one-shot):
 
@@ -54,6 +55,8 @@ Not part of the ordered chain above (unwired or already one-shot):
 
 ## Verification performed for this doc
 
-Built from a full codebase inventory (grepped every `backend/routes/admin/*.py` and its matching service, plus the admin-dashboard pages that reach them) cross-checked against the module-level dependency guards actually written in each service's code — not inferred from either older doc's own claims. The 17-item order above matches exactly what `migration_status_service.py` computes live.
+Built from a full codebase inventory (grepped every `backend/routes/admin/*.py` and its matching service, plus the admin-dashboard pages that reach them) cross-checked against the module-level dependency guards actually written in each service's code — not inferred from either older doc's own claims. The order above matches exactly what `migration_status_service.py` computes live.
 
 **Added 2026-08-31**: #17 (Migration Data Quality Scan) — see `docs/runbooks/migration-data-quality-strategy.md` for what it checks and why it's a read-and-tag audit pass, not a data-repair tool. It doesn't gate any step above; it exists to catch what the chain above didn't fully resolve.
+
+**Added 2026-09-08**: #19 (Legacy ID Crosswalk Backfill) — populates migration 328's `legacy_id_crosswalk` table so a future support/audit lookup can go from an old-app ID straight to a Spinr UUID. Sourced entirely from linkage Supabase already has (no CSV); a rider whose own rides disagree on the old customer ID is reported as ambiguous and skipped rather than guessed. See `docs/change-log/2026-09-08-legacy-id-crosswalk-backfill.md`.

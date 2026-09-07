@@ -19610,6 +19610,69 @@ how much they de-risk a public launch._
   (`docs/change-log/2026-08-19-driver-earnings-tip-underpayment.md` — that
   incident itself was confirmed **unrelated** to the migration, a general
   delta-math bug, already fixed).
+- **2026-09-07 status refresh — the "STILL OPEN" section below (as of
+  2026-08-20) is now materially stale; read this first.** Checked this
+  entry against the repo's own later work rather than trusting its last
+  update. Between 2026-08-21 and 2026-08-31, later sessions built well
+  past where this entry left off, none of which A41 itself was ever
+  updated to reflect:
+  - **The "CLI-only, product owner must run it themselves" framing is now
+    wrong for 2 of the 4 capabilities.** Admin-dashboard validate→review→commit
+    UIs were built for the SIN/DOB backfill and the vehicle-history backfill
+    (`docs/change-log/2026-08-28-legacy-sin-dob-backfill-admin-route.md`,
+    `docs/change-log/2026-08-28-legacy-vehicle-history-backfill-admin-route.md`)
+    — same pattern as the pre-existing Legacy Driver Import page. The
+    **Duration-Estimated Marker Backfill is the one capability still
+    genuinely CLI-only** (confirmed current as of `docs/runbooks/
+    migration-tool-order.md`, 2026-08-31 — it explicitly lists this as the
+    still-unwired exception, "has a commit path and a CLI script... but no
+    admin route/UI").
+  - **The cancelled/failed booking import was actually attempted against
+    real production** (the 2026-08-22 export, 980 rides) and hit a real
+    bug: a PostgREST bulk-insert NULL-override when a batch mixed
+    `completed` and `cancelled`/`failed` row shapes, root-caused via real
+    Supabase query logs and fixed 2026-08-29
+    (`docs/change-log/2026-08-29-legacy-booking-import-cancelled-failed-not-null-fix-and-scope-toggle.md`).
+    That fix's own "What was NOT verified" says the fix itself had not yet
+    been re-exercised against a live commit as of 2026-08-29 — so whether
+    the 08-22 export has since landed successfully is **not known from
+    this session** either; check the live status panel below.
+  - **There is now a canonical, current source of truth this entry should
+    defer to instead of the 2026-08-20 snapshot below:**
+    `docs/runbooks/migration-tool-order.md` (2026-08-31) documents all 18
+    migration/import/backfill tools in dependency order (this audit only
+    ever knew about 4), and a live admin-dashboard panel — Bulk Operations
+    page, backed by `GET /api/admin/migration-status`
+    (`backend/services/migration_status_service.py`) — computes each
+    tool's real current state (`not_started`/`partial`/`done`/
+    `manual_check_required`) from live production counts on demand. **This
+    session could not check that panel's actual current numbers** — same
+    Supabase-access gap as B42 below: this session's Supabase MCP
+    connection only reaches two projects (`Spinr-Prod`, which has no
+    rides/payments schema at all, and an empty `MobileAppStaging`),
+    neither of which is the real production project. `docs/audit/
+    breach-record.md` names the real one directly: **`soavhtdhefowwvforzwb`**
+    (`ca-central-1`) — a 2026-08-31 session confirmed live read-only access
+    to exactly that project when building the status panel above. Whoever
+    picks up A41 next should use the live panel (with real prod access)
+    rather than re-deriving status from this entry's history.
+  - **One concrete, currently-unresolved, low-risk gap found along the
+    way, not previously tracked anywhere:** migration
+    `373_saved_addresses_legacy_import_metadata.sql` exists in
+    `backend/migrations/` but is **confirmed NOT applied to production**
+    (checked directly against `schema_migrations` on 2026-08-31 — migration
+    374, one day later, is applied; 373 and 375 are not). This means tool
+    #10, Legacy Saved-Address Backfill, **would fail if committed against
+    production today** — it writes to a column that doesn't exist yet. The
+    migration itself is a small, additive `ALTER TABLE ... ADD COLUMN ...
+    DEFAULT '{}'` with its own documented rollback — not a design decision,
+    just an unapplied migration. Not fixed here (this session has no
+    `DATABASE_URL`/migration-apply credentials, same constraint every
+    other session hit) — the operator needs to run
+    `python -m backend.scripts.run_migrations` (or confirm it's already
+    scheduled) before that one tool is usable. Not skip-listed in
+    `run_migrations.py`'s `NEVER_APPLY` — confirmed via grep, it is
+    genuinely just pending.
 - **Method:** 5 parallel agents — `spinr-migration-reviewer` (import-pipeline
   data integrity), `spinr-money-auditor` (legacy-ride/fare-calc risk),
   `spinr-regulatory-compliance-checker` (PIPEDA), and two `general-purpose`
@@ -21758,6 +21821,21 @@ how much they de-risk a public launch._
   organization's project list should confirm which project the live
   backend actually writes to, and why the MCP connection available here
   doesn't reach it.
+  - **Update, 2026-09-07, found while addressing A41 above:** the real
+    project ID is already on record elsewhere in this repo — `docs/audit/
+    breach-record.md` names it directly, **`soavhtdhefowwvforzwb`**
+    (`ca-central-1`), and a 2026-08-31 session (building A41's migration
+    status panel) confirmed live **read-only** access to exactly that
+    project, cross-checking real production counts against it. So this
+    isn't an unsolved mystery — a session with the right Supabase
+    connection *has* reached real prod as recently as 12 days before this
+    entry was written. This session's Supabase MCP connection simply isn't
+    scoped to `soavhtdhefowwvforzwb` (only `cfrazforbupizntxvvtp` and
+    `mvmyygoinicjdpqprizr` are visible to it via `list_projects`). The
+    Action below still stands, now with a concrete target: whoever grants
+    Supabase MCP access to a future session should point it at
+    `soavhtdhefowwvforzwb` specifically, not assume the first project
+    named "Spinr-Prod" is correct.
 - **What's wrong:** #5048 (merged 2026-09-06 02:58:46Z) added a CAS
   re-read to the `payment_failed` webhook handler with no `try`/`except`.
   If that re-read raised, the Stripe event was already

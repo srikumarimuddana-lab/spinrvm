@@ -142,6 +142,139 @@ class TestSearchFaqs:
         assert tools_support._match_tokens("surge") & tools_support._match_tokens("refund") == set()
 
 
+class TestSearchFaqsPublicWeb:
+    """The anonymous spinr.ca assistant (audience "web").
+
+    Pins the fix for the bug where a driver question asked on the website came
+    back as "I don't have that detail on hand" while the help centre had the
+    answer: the turn was scoped to the visitor_type the widget sent, so every
+    driver-tagged row was invisible. visitor_type now ranks, it does not gate.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _semantic_off(self):
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value={"ai_faq_semantic_enabled": False})),
+            patch.object(tools_support, "_current_area_scope", AsyncMock(return_value=set())),
+        ):
+            yield
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("visitor_type", ["rider", "driver", "nonsense", None])
+    async def test_web_turn_searches_every_public_audience(self, visitor_type):
+        """Whatever the "I am a" pill said — or if the widget sent nothing at
+        all — an anonymous turn sees the whole public corpus."""
+        get_rows = AsyncMock(return_value=[])
+        user = {"_web_visitor_type": visitor_type} if visitor_type is not None else {}
+        with patch.object(tools_support.db_supabase, "get_rows", get_rows):
+            await execute_tool("search_faqs", {"query": "requirements"}, user=user, audience="web")
+        faqs_call = next(c for c in get_rows.await_args_list if c.args[0] == "faqs")
+        assert faqs_call.args[1]["audience"] == {"$in": ["both", "rider", "driver"]}
+
+    @pytest.mark.anyio
+    async def test_driver_answer_reachable_from_a_rider_typed_visitor(self):
+        """The exact regression: asked as a rider, answered from driver rows."""
+        rows = [
+            {
+                "question": "What are the requirements to drive with Spinr in Saskatchewan?",
+                "answer": "A valid Class 5 licence with at least 3 years of experience.",
+                "category": "onboarding",
+                "audience": "driver",
+                "is_active": True,
+            },
+            {
+                "question": "What payment methods can I use?",
+                "answer": "Card or Spinr wallet.",
+                "category": "payments",
+                "audience": "rider",
+                "is_active": True,
+            },
+        ]
+        with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result, ok = await execute_tool(
+                "search_faqs",
+                {"query": "what are the requirements to drive with spinr"},
+                user={"_web_visitor_type": "rider"},
+                audience="web",
+            )
+        assert ok
+        top = result["results"][0]
+        assert top["question"].startswith("What are the requirements to drive")
+        # The row's own audience rides along so the model can frame it as
+        # driver-side information rather than a rule about the reader's trips.
+        assert top["audience"] == "driver"
+
+    @pytest.mark.anyio
+    async def test_visitor_type_breaks_ties_without_hiding_the_other_side(self):
+        rows = [
+            {
+                "question": "How do I cancel a ride?",
+                "answer": "Open the ride and choose cancel.",
+                "category": "rides",
+                "audience": "rider",
+                "is_active": True,
+            },
+            {
+                "question": "How do I cancel a ride?",
+                "answer": "Open the ride and choose cancel.",
+                "category": "rides",
+                "audience": "driver",
+                "is_active": True,
+            },
+        ]
+        with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result, _ = await execute_tool(
+                "search_faqs",
+                {"query": "how do I cancel a ride"},
+                user={"_web_visitor_type": "driver"},
+                audience="web",
+            )
+        # Declared side first, other side still present — ranked, not filtered.
+        assert [r["audience"] for r in result["results"]] == ["driver", "rider"]
+
+    @pytest.mark.anyio
+    async def test_tie_break_never_outranks_a_materially_better_match(self):
+        rows = [
+            {
+                "question": "Where can I find the airport pickup zone?",
+                "answer": "Follow the signs to the rideshare lane.",
+                "category": "rides",
+                "audience": "driver",
+                "is_active": True,
+            },
+            {
+                "question": "Where can I find help?",
+                "answer": "Support is in the app.",
+                "category": "support",
+                "audience": "rider",
+                "is_active": True,
+            },
+        ]
+        with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)):
+            result, _ = await execute_tool(
+                "search_faqs",
+                {"query": "where can I find the airport pickup zone"},
+                user={"_web_visitor_type": "rider"},
+                audience="web",
+            )
+        assert result["results"][0]["audience"] == "driver"
+
+    @pytest.mark.anyio
+    async def test_in_app_audiences_are_untouched(self):
+        """The widening is web-only: a signed-in rider must never be handed a
+        driver-side answer, and vice versa."""
+        get_rows = AsyncMock(return_value=[])
+        with patch.object(tools_support.db_supabase, "get_rows", get_rows):
+            await execute_tool("search_faqs", {"query": "payout"}, user=RIDER, audience="rider")
+            rider_call = next(c for c in get_rows.await_args_list if c.args[0] == "faqs")
+            assert rider_call.args[1]["audience"] == {"$in": ["both", "rider"]}
+
+            get_rows.reset_mock()
+            await execute_tool("search_faqs", {"query": "payout"}, user=RIDER, audience="driver")
+            driver_call = next(c for c in get_rows.await_args_list if c.args[0] == "faqs")
+            assert driver_call.args[1]["audience"] == {"$in": ["both", "driver"]}
+
+
 class TestSearchFaqsSemantic:
     SETTINGS = {
         "ai_faq_semantic_enabled": True,

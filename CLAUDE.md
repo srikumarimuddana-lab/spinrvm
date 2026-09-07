@@ -106,6 +106,7 @@ Sprint-scoped and domain-deep context is loaded on demand, not baked into this f
 - `@.claude/context/domain-safety.md` — SOS, insurance periods, emergency flows
 - `@.claude/context/regulatory-sk.md` — Saskatchewan Transportation Act obligations
 - `@.claude/context/brand-spinr.md` — brand colors, typography, and logo assets; load for any customer-facing marketing/creative work
+- `@.claude/context/memory.md` — cross-session decisions and resolved ambiguities that aren't ADR-worthy; check before re-litigating something that may already have a standing answer
 
 ## Project Overview
 

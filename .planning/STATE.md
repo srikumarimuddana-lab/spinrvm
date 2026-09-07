@@ -8,6 +8,10 @@ last_updated: "2026-05-10T17:00:00.000Z"
 
 # Spinr — GSD Project State
 
+> **Stale (flagged 2026-09-07):** this file was last updated 2026-05-10 and does not reflect
+> current project status. **For current priorities, use `ACTION_ITEMS.md`'s open `[ ]` items
+> instead.** Left as historical record rather than rewritten.
+
 *Last updated: 2026-05-10 | Branch: main*
 
 ---

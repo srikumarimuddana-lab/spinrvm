@@ -142,6 +142,8 @@ vi.mock("lucide-react", () => {
     // analytics panel refactor (marketplace/supply/efficiency/financial tabs)
     LayoutDashboard: Icon, CarFront: Icon, Gauge: Icon, Repeat: Icon, Route: Icon, Sun: Icon,
     Timer: Icon,
+    // bulk-operations legacy ID crosswalk backfill
+    Link2: Icon,
   };
 });
 

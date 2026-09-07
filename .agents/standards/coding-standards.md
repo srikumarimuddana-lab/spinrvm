@@ -5,6 +5,10 @@ description: Code style and formatting standards for Python and TypeScript in th
 
 # Coding Standards
 
+> **Note:** This file is part of an older, legacy multi-agent scaffold (`.agents/`) and is not
+> actively maintained. The root `CLAUDE.md` is the current, authoritative source of engineering
+> rules for this repo. Where this file and `CLAUDE.md` conflict, treat `CLAUDE.md` as correct.
+
 ## Python (Backend)
 
 ### Style

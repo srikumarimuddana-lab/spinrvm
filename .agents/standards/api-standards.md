@@ -5,6 +5,10 @@ description: API design rules for the Spinr backend
 
 # API Standards
 
+> **Note:** This file is part of an older, legacy multi-agent scaffold (`.agents/`) and is not
+> actively maintained. The root `CLAUDE.md` is the current, authoritative source of engineering
+> rules for this repo. Where this file and `CLAUDE.md` conflict, treat `CLAUDE.md` as correct.
+
 ## URL Structure
 ```
 /api/v1/{resource}          # Collection

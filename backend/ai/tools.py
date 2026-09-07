@@ -116,6 +116,17 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {}
 def register(spec: ToolSpec) -> ToolSpec:
     if spec.name in TOOL_REGISTRY:
         raise ValueError(f"duplicate tool name: {spec.name}")
+    # A "web" (anonymous) tool never has a user_id (see _execute_tool_inner's
+    # identity guard), so it cannot own an ownership-verified id arg — that
+    # verifier would always be called with user_id=None. Caught here, at
+    # registration time, rather than left to fail unpredictably the first
+    # time such a tool is actually called.
+    if "web" in spec.audiences and spec.owned_id_args:
+        raise ValueError(
+            f"tool {spec.name!r} is web-audience but declares owned_id_args "
+            f"{sorted(spec.owned_id_args)} — ownership verification needs a real user_id, "
+            "which the anonymous web audience never has"
+        )
     # Enforce the data-scope contract at import time so a mis-scoped tool can
     # never reach production: identity args are banned outright, and every other
     # id-style arg must be declared owned (ownership-verified) or public.
@@ -378,9 +389,20 @@ async def _execute_tool_inner(
 
     call_args = args if isinstance(args, dict) else {}
 
-    # Fail closed: no tool runs without an authenticated identity to scope to.
+    # Fail closed: no tool runs without an authenticated identity to scope
+    # to — except the public "web" audience (spinr.ca's anonymous assistant,
+    # see ai/public_assistant.py), which deliberately never carries a user
+    # id at all. A tool is only reachable here with audience == "web" if its
+    # own registration opted into that (the `audience not in spec.audiences`
+    # check above), so this is respecting a registration-time decision, not
+    # loosening the guard generally — rider/driver calls still fail closed
+    # exactly as before. Literal "web" duplicated rather than imported from
+    # tools_support.py/public_assistant.py to avoid a circular import back
+    # into this module (same small-constant convention those two already
+    # use for the same string). No web-audience tool may declare
+    # owned_id_args (ownership verification below needs a real user_id).
     user_id = (user or {}).get("id")
-    if not user_id:
+    if not user_id and audience != "web":
         logger.error("ai tool blocked: no authenticated user id", extra={"tool": name})
         return {"error": "not authorized"}, False
 

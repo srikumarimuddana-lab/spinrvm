@@ -3,7 +3,7 @@ redis[asyncio]>=5.0.0
 # Server and framework
 fastapi>=0.141.1
 uvicorn[standard]>=0.52.3
-slowapi>=0.1.9
+slowapi>=0.1.10
 
 # Configuration
 python-dotenv>=1.2.3

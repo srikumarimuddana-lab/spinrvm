@@ -120,6 +120,29 @@ async def test_get_redis_connects_and_caches_client(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_get_redis_connect_log_never_includes_credentials(monkeypatch, caplog):
+    """F5: the connected-log line used to log url[:30] directly — a
+    redis://user:password@host URL carries its credentials before the host,
+    so truncation is not redaction. Only parsed, credential-free endpoint
+    metadata may appear."""
+    import logging
+
+    from backend.utils import redis_client as rc
+
+    _fake_redis_env(monkeypatch, url="rediss://default:SECRETTOKEN123@example.upstash.io:6379")
+    fake_aioredis = MagicMock()
+    fake_aioredis.from_url = MagicMock(return_value=MagicMock())
+    _patch_redis_asyncio_module(monkeypatch, fake_aioredis)
+
+    with caplog.at_level(logging.INFO):
+        await rc._get_redis()
+
+    log_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "SECRETTOKEN123" not in log_text
+    assert "example.upstash.io:6379" in log_text
+
+
+@pytest.mark.anyio
 async def test_get_redis_reconnects_when_url_changes(monkeypatch):
     from backend.utils import redis_client as rc
 

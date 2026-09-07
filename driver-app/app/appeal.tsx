@@ -211,7 +211,7 @@ function createStyles(colors: ThemeColors) {
             minHeight: 130,
             marginBottom: 8,
         },
-        errorText: { fontSize: 13, color: colors.error || '#DC2626', marginBottom: 8 },
+        errorText: { fontSize: 13, color: colors.error, marginBottom: 8 },
         submitButton: {
             borderRadius: 12,
             paddingVertical: 14,

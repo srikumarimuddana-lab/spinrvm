@@ -10,6 +10,12 @@ description: Test coverage requirements and testing patterns for the Spinr proje
 > rules for this repo. Where this file and `CLAUDE.md` conflict, treat `CLAUDE.md` as correct.
 
 ## Coverage Requirements
+
+_(This table doesn't cover every module CLAUDE.md now sets a minimum for — e.g.
+`routes/corporate_*.py`/`services/corporate_*.py` at ≥80% — and wasn't reconciled against it. Root
+`CLAUDE.md`'s "Testing Conventions" coverage table is authoritative; treat any gap here as missing,
+not as "no requirement.")_
+
 | Component | Minimum | Target |
 |-----------|---------|--------|
 | Backend Auth (`backend/routes/auth.py`) | 90% | 95% |
@@ -127,4 +133,6 @@ cd admin-dashboard && npm test
 If a PR lacks tests for a critical area:
 1. **Block the merge** — tests are mandatory
 2. Write the missing tests
-3. Add the gap to `.agents/docs/architecture.md` under technical debt
+3. Add the gap to `ACTION_ITEMS.md` (corrected 2026-09-07 — this previously pointed to
+   `.agents/docs/architecture.md`, itself a stale duplicate of the real architecture doc; the
+   repo's actual live backlog is `ACTION_ITEMS.md`)

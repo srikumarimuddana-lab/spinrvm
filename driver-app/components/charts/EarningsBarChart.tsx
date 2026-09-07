@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Rect, Defs, LinearGradient as SvgGradient, Stop, Text as SvgText, Line } from 'react-native-svg';
+import { useTheme } from '@shared/theme/ThemeContext';
 
 interface DataPoint {
   label: string;
@@ -22,9 +23,11 @@ export default function EarningsBarChart({
   data,
   height = 180,
   primaryColor = '#EF4444',
-  secondaryColor = '#FFD700',
+  secondaryColor,
   formatValue = (v) => `$${v.toFixed(0)}`,
 }: EarningsBarChartProps) {
+  const { colors } = useTheme();
+  const resolvedSecondaryColor = secondaryColor ?? colors.gold;
   if (!data || data.length === 0) {
     return (
       <View style={[styles.emptyContainer, { height }]}>
@@ -61,8 +64,8 @@ export default function EarningsBarChart({
             <Stop offset="100%" stopColor={primaryColor} stopOpacity="0.7" />
           </SvgGradient>
           <SvgGradient id="tipGrad" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%" stopColor={secondaryColor} stopOpacity="0.9" />
-            <Stop offset="100%" stopColor={secondaryColor} stopOpacity="0.6" />
+            <Stop offset="0%" stopColor={resolvedSecondaryColor} stopOpacity="0.9" />
+            <Stop offset="100%" stopColor={resolvedSecondaryColor} stopOpacity="0.6" />
           </SvgGradient>
         </Defs>
 
@@ -74,7 +77,7 @@ export default function EarningsBarChart({
             y1={getY(tick)}
             x2={paddingLeft + plotWidth}
             y2={getY(tick)}
-            stroke="#E5E7EB"
+            stroke={colors.border}
             strokeWidth={1}
             strokeDasharray="4,4"
           />
@@ -135,7 +138,7 @@ export default function EarningsBarChart({
                   textAnchor="middle"
                   fontSize={9}
                   fontWeight="600"
-                  fill="#6B7280"
+                  fill={colors.textSecondary}
                 >
                   {formatValue(d.value + (d.secondary || 0))}
                 </SvgText>

@@ -267,7 +267,7 @@ export default function WorkProfileScreen() {
               <Ionicons
                 name={workModeEnabled ? 'briefcase' : 'person'}
                 size={20}
-                color={workModeEnabled ? '#3B82F6' : colors.primary}
+                color={workModeEnabled ? colors.info : colors.primary}
               />
               <View style={{ marginLeft: 12 }}>
                 <Text style={styles.modeTitle}>
@@ -283,7 +283,7 @@ export default function WorkProfileScreen() {
             <CustomToggle
               value={workModeEnabled}
               onValueChange={v => setWorkMode(v)}
-              trackColor={{ false: colors.border, true: '#3B82F6' }}
+              trackColor={{ false: colors.border, true: colors.info }}
               thumbColor="#FFF"
             />
           </View>
@@ -421,7 +421,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 12, borderRadius: 12, marginBottom: 8,
       borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surfaceLight,
     },
-    companyOptionActive: { borderColor: '#93C5FD', backgroundColor: '#EFF6FF' },
+    companyOptionActive: { borderColor: '#93C5FD', backgroundColor: colors.infoBg },
     companyIcon: {
       width: 36, height: 36, borderRadius: 10, backgroundColor: colors.surfaceLight,
       alignItems: 'center', justifyContent: 'center', marginRight: 12,
@@ -467,7 +467,7 @@ function createStyles(colors: ThemeColors) {
     rideAddress: { fontSize: 14, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     rideDate: { fontSize: 12, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2 },
     rideFare: { fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-    rideAllowance: { fontSize: 11, fontFamily: 'PlusJakartaSans_400Regular', color: '#3B82F6', marginTop: 2 },
+    rideAllowance: { fontSize: 11, fontFamily: 'PlusJakartaSans_400Regular', color: colors.info, marginTop: 2 },
 
     emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40, paddingTop: 80 },
     emptyIcon: {

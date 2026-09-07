@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 interface FreeCancelTimerProps {
   /** ISO timestamp when driver accepted the ride (null if not yet accepted). */
   driverAcceptedAt: string | null | undefined;
@@ -34,6 +36,8 @@ export function FreeCancelTimer({
   compact = false,
   onExpire,
 }: FreeCancelTimerProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const driverArrived = rideStatus === 'driver_arrived';
 
   const [secondsLeft, setSecondsLeft] = useState<number>(() => {
@@ -101,7 +105,7 @@ export function FreeCancelTimer({
       <Ionicons
         name={isWindowOpen ? 'checkmark-circle-outline' : 'alert-circle-outline'}
         size={16}
-        color={isWindowOpen ? '#059669' : '#DC2626'}
+        color={isWindowOpen ? '#059669' : colors.error}
       />
       <View style={styles.textBlock}>
         {isWindowOpen ? (
@@ -126,33 +130,35 @@ export function FreeCancelTimer({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  containerFree: {
-    backgroundColor: '#F0FFF4',
-    borderColor: '#D1FAE5',
-  },
-  containerFee: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FECACA',
-  },
-  textBlock: { flex: 1 },
-  freeLabel: { fontSize: 13, fontWeight: '600', color: '#059669' },
-  freeTimer: { fontSize: 18, fontWeight: '800', color: '#059669', letterSpacing: -0.5 },
-  feeLabel: { fontSize: 13, fontWeight: '600', color: '#DC2626' },
-  feeAmount: { fontSize: 18, fontWeight: '800', color: '#DC2626', letterSpacing: -0.5 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 12,
+      borderWidth: 1,
+    },
+    containerFree: {
+      backgroundColor: '#F0FFF4',
+      borderColor: '#D1FAE5',
+    },
+    containerFee: {
+      backgroundColor: colors.dangerBg,
+      borderColor: '#FECACA',
+    },
+    textBlock: { flex: 1 },
+    freeLabel: { fontSize: 13, fontWeight: '600', color: '#059669' },
+    freeTimer: { fontSize: 18, fontWeight: '800', color: '#059669', letterSpacing: -0.5 },
+    feeLabel: { fontSize: 13, fontWeight: '600', color: colors.error },
+    feeAmount: { fontSize: 18, fontWeight: '800', color: colors.error, letterSpacing: -0.5 },
 
-  // Compact variants (for use inside alert dialogs)
-  compactFree: { fontSize: 13, fontWeight: '600', color: '#059669' },
-  compactFee:  { fontSize: 13, fontWeight: '600', color: '#DC2626' },
-});
+    // Compact variants (for use inside alert dialogs)
+    compactFree: { fontSize: 13, fontWeight: '600', color: '#059669' },
+    compactFee:  { fontSize: 13, fontWeight: '600', color: colors.error },
+  });
+}
 
 export default FreeCancelTimer;

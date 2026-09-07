@@ -1232,15 +1232,15 @@ function DriverDashboard() {
       {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}
       {rideState === 'idle' && activeAirportZone && (
         <View style={{ position: 'absolute', bottom: 210, right: 16, zIndex: 55, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0ea5e9', borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5, gap: 4 }}>
-          <Ionicons name="airplane" size={13} color="#FFFFFF" />
-          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>{activeAirportZone.name || t('heatmap.airport.zone')}</Text>
+          <Ionicons name="airplane" size={13} color={colors.surface} />
+          <Text style={{ color: colors.surface, fontSize: 12, fontWeight: '700' }}>{activeAirportZone.name || t('heatmap.airport.zone')}</Text>
         </View>
       )}
 
       {/* Surge multiplier chip — on map when active (HM-11) */}
       {rideState === 'idle' && surgeMultiplier > 1.0 && (
         <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
-          <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
+          <Text style={{ color: colors.surface, fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
         </View>
       )}
 
@@ -1775,7 +1775,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: '#FEF2F2',
+      backgroundColor: colors.dangerBg,
       borderRadius: 16,
       paddingVertical: 16,
       gap: 8,

@@ -201,14 +201,14 @@ export default function PrivacySettingsScreen() {
             colors={colors}
           />
           <SettingRow
-            icon="download-outline" iconColor="#6B7280" iconBg="#F3F4F6"
+            icon="download-outline" iconColor={colors.textSecondary} iconBg="#F3F4F6"
             title={t('privacy.download_data')}
             subtitle={t('privacy.download_data_subtitle')}
             onPress={handleDownloadData}
             colors={colors}
           />
           <SettingRow
-            icon="trash-outline" iconColor="#DC2626" iconBg="#FEE2E2"
+            icon="trash-outline" iconColor={colors.error} iconBg="#FEE2E2"
             title={t('privacy.delete_account')}
             subtitle={t('privacy.delete_account_subtitle')}
             onPress={handleDeleteAccount}
@@ -244,7 +244,7 @@ function SettingRow({ icon, iconColor, iconBg, title, subtitle, toggle, value, o
         <Ionicons name={icon as any} size={20} color={iconColor} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={[{ fontSize: 15, fontWeight: '600', color: colors.text }, danger && { color: '#DC2626' }]}>{title}</Text>
+        <Text style={[{ fontSize: 15, fontWeight: '600', color: colors.text }, danger && { color: colors.error }]}>{title}</Text>
         <Text style={{ fontSize: 12, color: colors.textDim, marginTop: 1 }}>{subtitle}</Text>
       </View>
       {toggle && onToggle ? (

@@ -346,7 +346,7 @@ export default function RideDetailsScreen() {
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Status Badge */}
-        <View style={[styles.statusBadge, { backgroundColor: isCompleted ? '#ECFDF5' : isCancelled ? '#FEF2F2' : '#FEF3C7' }]}>
+        <View style={[styles.statusBadge, { backgroundColor: isCompleted ? colors.successBg : isCancelled ? colors.dangerBg : '#FEF3C7' }]}>
           <Ionicons
             name={isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time'}
             size={18}
@@ -497,16 +497,16 @@ export default function RideDetailsScreen() {
                     ) : line.type === 'discount' ? (
                       <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>{line.label}</Text>
                     ) : line.type === 'tip' ? (
-                      <Text style={[styles.fareBreakdownLabel, { color: '#3B82F6' }]}>{line.label}</Text>
+                      <Text style={[styles.fareBreakdownLabel, { color: colors.info }]}>{line.label}</Text>
                     ) : line.type === 'tax' ? (
-                      <Text style={[styles.fareBreakdownLabel, { color: '#6B7280' }]}>{line.label}</Text>
+                      <Text style={[styles.fareBreakdownLabel, { color: colors.textSecondary }]}>{line.label}</Text>
                     ) : (
                       <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
                     )}
                     <Text style={[
                       styles.fareBreakdownValue,
                       line.type === 'discount' && { color: '#10B981' },
-                      line.type === 'tip' && { color: '#3B82F6' },
+                      line.type === 'tip' && { color: colors.info },
                     ]}>
                       {line.type === 'discount'
                         ? `-$${Math.abs(parseFloat(String(line.amount))).toFixed(2)}`

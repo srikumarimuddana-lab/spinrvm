@@ -21672,7 +21672,9 @@ how much they de-risk a public launch._
 - [ ] **Status:** open — found 2026-09-07 while compiling a PR/backlog
   status review of 2026-09-06 activity (PR #5048, #5050). Not a code
   finding — a process/governance gap in how a live-tested-surface PR got
-  merged.
+  merged. **Root cause confirmed 2026-09-07 via `get_check_runs` on
+  #5048's head commit** (see C73 below for the full check-run evidence):
+  this was a real branch-protection gap, not process error alone.
 - **What's wrong:** PR #5048 ("Fix critical audit findings: OTP lockout,
   payment guards, health split") touched 34 files (+4303/-70) across
   rides, payments, auth, and infra — the exact surface list CLAUDE.md's
@@ -21680,37 +21682,82 @@ how much they de-risk a public launch._
   silently ship, when in doubt", rule 9: *"the change touches
   rides/payments/auth/corporate/safety and you're not confident of the
   full impact, use `AskUserQuestion` before merging"*). It was created and
-  merged 47 seconds apart — before any CI job could report — and its own
-  Change Impact Log discloses the suite was never run locally (PyPI
-  blocked in-session). No `AskUserQuestion` escalation is on record for
+  merged 47 seconds apart. Confirmed: the `backend-test` check was still
+  **in progress** at merge time (started 02:58:21Z, merge at 02:58:46Z,
+  `backend-test` didn't report `failure` until 03:14:59Z — 16 minutes
+  *after* the merge) and the `Required PR fields filled` check had already
+  reported `failure` at 02:58:08Z, 38 seconds *before* the merge, and did
+  not block it either. No `AskUserQuestion` escalation is on record for
   this merge.
 - **Why it matters:** this isn't hypothetical risk — it materialized same
   day. The untested merge shipped a Unicode-digit OTP-regex gap and the
   webhook defect tracked as B42 below (payment_failed events silently
   dropped), both requiring an emergency same-day follow-up (#5050) that
   itself never ran the full suite either. A rule written specifically to
-  prevent this class of outcome existed and wasn't applied.
-- **Action:** treat this as a process near-miss, not just a one-off: (1)
-  confirm with the user whether an `AskUserQuestion` escalation happened
-  out-of-band and just isn't reflected in the PR; (2) if not, decide
-  whether merges to `main` touching rides/payments/auth should be
-  technically blocked pending CI completion (branch protection: require
-  status checks before merge) rather than relying on the agent to wait —
-  CLAUDE.md documents the gate but nothing in `.github/` enforces it
-  mechanically today.
+  prevent this class of outcome existed and wasn't applied — and the
+  check-run evidence shows even an already-*failed* check (`Required PR
+  fields filled`) didn't stop the merge, which means this isn't just an
+  agent-judgment gap, it's that `main`'s branch protection either does not
+  list `backend-test`/`Required PR fields filled` as required status
+  checks, or the merge used an admin/bypass path.
+- **Action:** (1) confirm with the user whether an `AskUserQuestion`
+  escalation happened out-of-band and just isn't reflected in the PR; (2)
+  a human with repo-admin access needs to open **Settings → Branches** for
+  `main` and check/report back whether "Require status checks to pass
+  before merging" is enabled and which checks are in that list — no tool
+  in this session's GitHub MCP toolset can read or write branch-protection
+  rules, so this step cannot be completed by an agent; (3) once confirmed,
+  decide whether to add `backend-test` (and ideally the whole CI Guard
+  Rails summary) to the required list, and whether admin-merge bypass
+  should be restricted for rides/payments/auth-surface PRs.
 - **Files:** none changed by this finding — process gap, not code. Relevant
   policy source: `CLAUDE.md` § "Pre-merge release gates", rule 9.
-- **What was NOT verified:** whether branch protection on `main` currently
-  requires status checks to pass before merge at all (if it already does,
-  #5048's 47-second merge implies either checks were bypassed by an admin
-  override or the required-check list doesn't cover the jobs #5050 later
-  found red — worth confirming which, since it changes the fix).
+- **What was NOT verified:** the actual branch-protection configuration
+  itself (no read tool available this session — see Action item 2). The
+  check-run timing evidence above is strong circumstantial proof merge
+  wasn't gated on `backend-test`/`Required PR fields filled` passing, but
+  it doesn't distinguish "not in the required list" from "admin bypass
+  used" — that needs a human looking at the Branches settings page (or,
+  for the bypass question, the merge event's actor/method in the repo's
+  audit log, which this session also cannot read).
 
-### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet
+### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
 
-- [ ] **Status:** open — found 2026-09-07 while reviewing PR #5050's own
-  body, which disclosed the defect and fixed the code path but did not
-  include a production data remediation step.
+- [ ] **Status:** open, blocked on data access — found 2026-09-07 while
+  reviewing PR #5050's own body, which disclosed the defect and fixed the
+  code path but did not include a production data remediation step.
+  **2026-09-07 follow-up:** attempted the read-only query below with user
+  sign-off and this session's Supabase MCP access; discovered neither
+  reachable project is the real production database — see "Blocker" below.
+  This is itself worth a human's attention independent of B42's original
+  finding.
+- **Blocker (found while attempting the Action below):** `mcp__Supabase__
+  list_projects` in this session shows exactly two projects: `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`, `ca-central-1`) and `MobileAppStaging`
+  (`mvmyygoinicjdpqprizr`, `ca-central-1`, created 2026-08-28). Despite its
+  name, **`Spinr-Prod` has no `rides`/`stripe_events`/`financial_events`
+  tables at all** — `information_schema.tables` shows only marketing/CMS/
+  AI-assistant content tables (`faqs`, `legal_docs`, `seo_pages`,
+  `help_articles`, `knowledge_base`, `agent_conversations`,
+  `promotion_coupons`, `promotion_signups`, `promotions`, …) — this looks
+  like the public-website/marketing Supabase project, not the rides/
+  payments backend. `MobileAppStaging` **does** have the right schema
+  (`stripe_events`, `rides`, `financial_events`, `public.users`,
+  `auth.users`) but `stripe_events` has **0 rows** (`select count(*) ...`
+  confirmed empty, no `payment_failed` or any other event type present) —
+  it is a genuinely empty staging project, not a mirror of the incident
+  window's real traffic. Neither project this session can reach contains
+  the data B42 needs. Which Supabase project backend/.env's
+  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` actually points to in the
+  live-running backend was not independently confirmed here (no shell
+  access to the deployed Fly/Railway environment's env vars from this
+  session) — it may be a third project this session's Supabase MCP
+  connection simply isn't wired to, or the naming may be misleading
+  (`Spinr-Prod` not actually being prod). Either way this is a **new**,
+  separate finding worth a human's attention: whoever has the Supabase
+  organization's project list should confirm which project the live
+  backend actually writes to, and why the MCP connection available here
+  doesn't reach it.
 - **What's wrong:** #5048 (merged 2026-09-06 02:58:46Z) added a CAS
   re-read to the `payment_failed` webhook handler with no `try`/`except`.
   If that re-read raised, the Stripe event was already
@@ -21727,57 +21774,98 @@ how much they de-risk a public launch._
   failed fare settlement never flagged for retry) are exactly the kind of
   payment-path regression CLAUDE.md's Change Impact Log rules require
   tracking to closure, not just patching the code.
-- **Action:** query `stripe_events` (and any linked `rides`/payment
-  records) for `payment_failed` events with `claimed_at` between
-  2026-09-06T02:58:46Z and 2026-09-06T03:34:42Z where no corresponding
-  processed/settled outcome exists; cross-check against Stripe Dashboard's
-  own webhook delivery log for that window (Stripe retains failed/retried
-  deliveries and can be manually resent) rather than relying on
-  `stripe_events` alone, since the whole failure mode is that our own
-  table under-records these. Manually replay any affected events via the
-  admin endpoint noted in #5050's PR body.
+- **Action:** (1) a human needs to identify the actual production Supabase
+  project (Settings → Project Settings on the correct project, or read
+  `SUPABASE_URL` from the live Fly/Railway backend's environment) and
+  either grant this session's Supabase MCP connection access to it, or run
+  the query below directly. (2) Once pointed at the real project: query
+  `stripe_events` (and any linked `rides`/payment records) for
+  `payment_failed` events with `received_at`/claim-timestamp between
+  2026-09-06T02:58:46Z and 2026-09-06T03:34:42Z where `processed_at IS
+  NULL` (schema confirmed via `MobileAppStaging`: `event_id, event_type,
+  payload, received_at, processed_at` — the real prod table likely matches
+  this shape but confirm columns on the actual project before relying on
+  them, since even this schema assumption is only verified against
+  staging). (3) Cross-check against Stripe Dashboard's own webhook
+  delivery log for that window (Stripe retains failed/retried deliveries
+  and can be manually resent) rather than relying on `stripe_events`
+  alone, since the whole failure mode is that our own table under-records
+  these — this session also has no authorized Stripe MCP access (listed as
+  requiring OAuth this session) so this step needs a human regardless. (4)
+  Manually replay any affected events via the admin endpoint noted in
+  #5050's PR body.
 - **Files:** the webhook handler touched by #5048/#5050 (payments route —
   confirm exact path via `git show` on those two PRs; not independently
-  re-verified here). `stripe_events` table.
+  re-verified here). `stripe_events` table (real production project, not
+  yet identified — see Blocker).
 - **What was NOT verified:** whether any real Stripe traffic actually hit
   this handler during the window (i.e., whether the risk is theoretical or
-  realized) — that requires the query above, not yet run.
+  realized) — the query needed to answer that could not be run this
+  session against real data (see Blocker above); it was run successfully
+  against `MobileAppStaging` only, which returned 0 rows because that
+  project has never processed any Stripe traffic at all, staging or
+  otherwise — that result says nothing about the actual incident and must
+  not be read as "no events were affected."
 
-### C73. CI reported green on #5048 despite tests #5050 found failing — release gate is decayed, not just this one PR's problem
+### C73. `main`'s merge path doesn't wait for `backend-test` (or block on an already-failed check) — #5048 merged while both were still failing/in-flight
 
-- [ ] **Status:** open — found 2026-09-07, flagged in PR #5050's own body
-  but never filed as a tracked item or a `[CR]` per CLAUDE.md's own rule
-  ("A CI check that's red for a reason unrelated to your diff is a signal
-  the gate itself has decayed... File a `[CR]`").
-- **What's wrong:** #5050 states it found 8 failing tests against #5048's
-  merged state, yet #5048 merged with a passing/green status — the same
-  symptom previously seen and resolved as a one-off measurement error in
-  C8 (`driver-app-test` reported success while its test failed locally),
-  but this is a **new, backend-focused recurrence** on the `payments`/
-  `rides` surface, not the same incident.
-- **Why it matters:** a required-status-check list that can show green
-  while real test failures exist underneath is the mechanism that let
-  A43's 47-second merge look safe. Until this is root-caused, every
-  "CI passed" signal on a rides/payments/auth PR is unreliable, which
-  undermines the entire pre-merge gate CLAUDE.md relies on.
-- **Action:** root-cause why the check(s) covering #5050's 8 failing tests
-  reported success on #5048's head commit — likely candidates: a step
-  swallowing pytest's exit code (`|| true`, `continue-on-error: true`), a
-  matrix leg not included in the branch protection required-checks list
-  (see C21, same class of gap), or a stale/cached check run. Cross-check
-  against C13's "required `pull_request` workflows silently never fire on
-  some PRs" and C24's Codecov-gate-can't-fail finding — this may be the
-  same underlying decay surfacing a third way, or a fourth distinct cause.
-  If accepted-risk rather than fixable now, file the `[CR]` per
-  `.github/ISSUE_TEMPLATE/ci_change_request.yml` as CLAUDE.md requires
-  rather than leaving it as PR-body prose.
-- **Files:** `.github/workflows/ci.yml` (or whichever workflow runs the
-  `payments`/`rides` test job — not independently re-verified here), the
-  branch-protection required-status-checks configuration for `main`.
-- **What was NOT verified:** the actual failing-check name(s) and their
-  exact swallow mechanism — #5050's body names the 8 test failures but
-  this entry has not independently re-run or inspected the workflow YAML
-  to confirm the root cause; that inspection is the action item itself.
+- [x] **Status:** root cause CONFIRMED 2026-09-07 via `mcp__github__
+  pull_request_read(method="get_check_runs")` against PR #5048's actual
+  head commit — corrects this entry's original framing (filed same day
+  from #5050's PR-body prose, before the check-run history was pulled).
+  **Original title/premise was inaccurate and is struck below; corrected
+  finding follows.** Remediation (branch-protection config change) is
+  still open — see Action.
+- ~~**What's wrong (original, inaccurate):** CI reported green on #5048
+  despite tests #5050 found failing.~~ **Corrected, evidence-based
+  version:** CI did **not** report green — `backend-test` genuinely
+  reported `conclusion: "failure"`, just 16 minutes *after* the merge had
+  already happened (started `2026-09-06T02:58:21Z`, PR closed/merged
+  `2026-09-06T02:58:46Z` — 25 seconds after the check even started —
+  `backend-test` itself didn't complete until `2026-09-06T03:14:59Z`).
+  Separately, the `Required PR fields filled` check had already completed
+  with `conclusion: "failure"` at `2026-09-06T02:58:08Z`, **before** the
+  merge, and still didn't block it. So the real defect isn't a false-green
+  masking bug in a check's own logic (ruled out: C8/C24/C13 are a
+  different class of gap, not this one) — it's that `main`'s merge control
+  doesn't require these checks to reach a passing conclusion before
+  allowing merge, whether by branch-protection configuration or an
+  admin-bypass merge.
+- **Why it matters:** this is the mechanical explanation for A43 (see
+  above, now cross-linked) — not "the agent should have waited" but "the
+  platform didn't require waiting." Until `main`'s required-status-checks
+  list is confirmed and corrected, every merge to a rides/payments/auth
+  PR can land regardless of `backend-test`'s outcome, exactly as #5048
+  did.
+- **Action:** same as A43's action item 2 — a human with repo-admin access
+  needs to open `main`'s branch protection settings and confirm/report:
+  (a) is "Require status checks to pass before merging" enabled at all;
+  (b) if enabled, is `backend-test` (and ideally `Required PR fields
+  filled`, the `CI Guard Rails Summary` roll-up) in the required list; (c)
+  is "Do not allow bypassing the above settings" (admin-bypass) enabled.
+  No tool in this session's GitHub MCP toolset can read or change branch
+  protection — this is a settings-page action for a human, not something
+  resolvable by a follow-up agent PR. Once confirmed, if the gap is (a) or
+  (b), add the missing checks to the required list; if the merge instead
+  used an admin bypass, that's a process question (does this repo want
+  bypass available at all on `main`) rather than a config gap — flag it to
+  whoever has that access. Only if, after this, the team decides current
+  behavior is accepted risk should a `[CR]` be filed per
+  `.github/ISSUE_TEMPLATE/ci_change_request.yml` — the evidence here
+  argues against that outcome, since the failure is exactly the live-data
+  loss B42 describes, not cosmetic noise.
+- **Files:** none changed by this finding — this is a GitHub repo-settings
+  gap, not a workflow YAML bug (ruled out `.github/workflows/ci.yml`
+  itself: `backend-test`'s "Run backend tests" step has no
+  `continue-on-error`/`|| true`/swallowed exit code — the job's `failure`
+  conclusion at 03:14:59Z is the workflow correctly reporting a real test
+  failure, just too late to matter).
+- **What was NOT verified:** the actual branch-protection required-checks
+  list and bypass settings (see Action) — this entry establishes *that*
+  the merge wasn't gated on these checks passing, via primary-source
+  check-run timestamps, but not *why* the platform allowed it (config gap
+  vs. bypass), which needs human settings-page access this session
+  doesn't have.
 
 ## Recently completed (do not redo)
 

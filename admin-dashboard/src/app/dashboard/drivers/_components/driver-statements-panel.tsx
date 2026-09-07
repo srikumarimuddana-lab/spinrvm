@@ -49,7 +49,7 @@ const STATUS_STYLE: Record<string, { label: string; cls: string }> = {
     sent: { label: "Emailed", cls: "bg-success/15 text-success" },
     // eslint-disable-next-line no-restricted-syntax -- "claimed" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from sent/failed/skipped (#2816)
     claimed: { label: "In progress", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
-    failed: { label: "Failed", cls: "bg-destructive/15 text-destructive" },
+    failed: { label: "Failed", cls: "bg-destructive/15 text-destructive dark:text-[#ff453a]" },
     skipped_no_email: { label: "No email on file", cls: "bg-warning/15 text-warning" },
     skipped_inactive: { label: "No activity", cls: "bg-muted text-muted-foreground" },
 };

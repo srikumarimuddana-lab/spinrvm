@@ -331,8 +331,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             )}
                             {incomingRide.requires_wav && (
                                 <View style={[styles.badge, { backgroundColor: '#3B82F620' }]}>
-                                    <Ionicons name="accessibility" size={13} color="#3B82F6" />
-                                    <Text style={[styles.badgeText, { color: '#3B82F6' }]}>WAV</Text>
+                                    <Ionicons name="accessibility" size={13} color={colors.info} />
+                                    <Text style={[styles.badgeText, { color: colors.info }]}>WAV</Text>
                                 </View>
                             )}
                             {incomingRide.quiet_mode && (
@@ -448,7 +448,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 };
 
 function createStyles(colors: ThemeColors, isDark: boolean) {
-    const bg = isDark ? '#1C1C1E' : '#FFFFFF';
+    const bg = isDark ? '#1C1C1E' : colors.surface;
     const surfaceBg = isDark ? '#2C2C2E' : '#F5F5F7';
     const borderClr = isDark ? '#3A3A3C' : '#E5E5EA';
 

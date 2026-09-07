@@ -257,9 +257,9 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
                                                             <span className="text-[10px] text-muted-foreground">&rarr;</span>
                                                             <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
                                                                 meta.new_status === "active" ? "bg-success/15 text-success" :
-                                                                meta.new_status === "banned" ? "bg-destructive/15 text-destructive" :
+                                                                meta.new_status === "banned" ? "bg-destructive/15 text-destructive dark:text-[#ff453a]" :
                                                                 meta.new_status === "suspended" ? "bg-warning/15 text-warning" :
-                                                                meta.new_status === "rejected" ? "bg-destructive/15 text-destructive" :
+                                                                meta.new_status === "rejected" ? "bg-destructive/15 text-destructive dark:text-[#ff453a]" :
                                                                 "bg-warning/15 text-warning"
                                                             }`}>{meta.new_status}</span>
                                                         </div>

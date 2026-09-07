@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, AppStateStatus, View, Text, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
 import { useRouter, useNavigationContainerRef } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { createLogger } from '@shared/utils/logger';
 import api from '@shared/api/client';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const log = createLogger('Index');
 
@@ -20,6 +22,8 @@ export default function Index() {
   const router = useRouter();
   const navigationRef = useNavigationContainerRef();
   const { isInitialized, token, user, logout, sessionRecoverable, initialize } = useAuthStore();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const hasNavigated = useRef(false);
   const retryingRef = useRef(false);
   const [attempts, setAttempts] = useState(0);
@@ -154,36 +158,38 @@ export default function Index() {
 
   // Transparent pass-through — BrandSplash (in _layout.tsx) is the only
   // branded loading screen. This screen just routes; it has no visual chrome.
-  return <View style={{ flex: 1, backgroundColor: '#FFFFFF' }} />;
+  return <View style={{ flex: 1, backgroundColor: colors.background }} />;
 }
 
-const styles = StyleSheet.create({
-  reconnecting: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
-  reconnectingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: '#666',
-  },
-  hintText: {
-    marginTop: 24,
-    fontSize: 14,
-    color: '#888',
-    textAlign: 'center',
-  },
-  escapeButton: {
-    marginTop: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-  },
-  escapeButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#6C63FF',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    reconnecting: {
+      flex: 1,
+      backgroundColor: colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 32,
+    },
+    reconnectingText: {
+      marginTop: 12,
+      fontSize: 16,
+      color: '#666',
+    },
+    hintText: {
+      marginTop: 24,
+      fontSize: 14,
+      color: '#888',
+      textAlign: 'center',
+    },
+    escapeButton: {
+      marginTop: 12,
+      paddingVertical: 10,
+      paddingHorizontal: 20,
+    },
+    escapeButtonText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: '#6C63FF',
+    },
+  });
+}

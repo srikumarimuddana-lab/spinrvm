@@ -556,12 +556,12 @@ function createStyles(colors: ThemeColors) {
         platePill: {
             alignSelf: 'flex-start',
             marginTop: 6,
-            backgroundColor: '#1A1A1A',
+            backgroundColor: colors.text,
             paddingHorizontal: 10,
             paddingVertical: 4,
             borderRadius: 6,
         },
-        plateText: { color: '#FFD700', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+        plateText: { color: colors.gold, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
 
         warningBox: {
             flexDirection: 'row',

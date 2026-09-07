@@ -303,7 +303,7 @@ function createStyles(colors: ThemeColors) {
         warningText: {
             flex: 1,
             fontSize: 14,
-            color: '#D97706',
+            color: colors.warning,
             lineHeight: 20,
         },
         label: {

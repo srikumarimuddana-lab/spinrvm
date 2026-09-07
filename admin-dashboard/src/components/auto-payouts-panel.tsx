@@ -41,7 +41,7 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
     partial: { label: "Partial", cls: "bg-warning/15 text-warning" },
     // eslint-disable-next-line no-restricted-syntax -- "running" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from the other three (#2816)
     running: { label: "Running", cls: "bg-blue-500/15 text-blue-700" },
-    failed: { label: "Failed", cls: "bg-destructive/15 text-destructive" },
+    failed: { label: "Failed", cls: "bg-destructive/15 text-destructive dark:text-[#ff453a]" },
 };
 
 /** Backend skip reasons → what an operator should read. */

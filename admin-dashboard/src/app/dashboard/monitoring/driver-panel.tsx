@@ -224,7 +224,7 @@ export function DriverPanel({ driver, onRideClick, onClose }: DriverPanelProps) 
                                                 {r.status}
                                             </Badge>
                                         ) : (
-                                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${r.status === 'completed' ? 'bg-success/15 text-success' : r.status === 'cancelled' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{r.status}</span>
+                                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${r.status === 'completed' ? 'bg-success/15 text-success' : r.status === 'cancelled' ? 'bg-destructive/15 text-destructive dark:text-[#ff453a]' : 'bg-warning/15 text-warning'}`}>{r.status}</span>
                                         )}
                                     </div>
                                     <div className="mt-0.5 flex items-center justify-between text-muted-foreground">
@@ -261,7 +261,7 @@ export function DriverPanel({ driver, onRideClick, onClose }: DriverPanelProps) 
                                             {doc.status ?? 'pending'}
                                         </Badge>
                                     ) : (
-                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${doc.status === 'verified' ? 'bg-success/15 text-success' : doc.status === 'expired' ? 'bg-destructive/15 text-destructive' : 'bg-warning/15 text-warning'}`}>{doc.status ?? 'pending'}</span>
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${doc.status === 'verified' ? 'bg-success/15 text-success' : doc.status === 'expired' ? 'bg-destructive/15 text-destructive dark:text-[#ff453a]' : 'bg-warning/15 text-warning'}`}>{doc.status ?? 'pending'}</span>
                                     )}
                                 </div>
                             ))}

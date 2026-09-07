@@ -629,11 +629,11 @@ export default function BecomeDriverScreen() {
         <View style={styles.header}>
           {currentStep > 0 ? (
             <TouchableOpacity onPress={prevStep} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+              <Ionicons name="arrow-back" size={24} color={colors.text} />
             </TouchableOpacity>
           ) : (
             <TouchableOpacity onPress={() => useAuthStore.getState().logout().then(() => router.replace('/login'))} style={styles.backButton}>
-              <Ionicons name="log-out-outline" size={24} color="#1A1A1A" />
+              <Ionicons name="log-out-outline" size={24} color={colors.text} />
             </TouchableOpacity>
           )}
           <View>
@@ -905,7 +905,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
   stepIndicator: { color: colors.textDim, fontSize: 14 },
   scrollContent: { padding: 20, paddingBottom: 50 },
-  sectionTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: '#1A1A1A' },
+  sectionTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: colors.text },
   subtitle: { fontSize: 16, color: colors.textDim, marginBottom: 20, lineHeight: 22 },
 
   inputGroup: { marginBottom: 15 },

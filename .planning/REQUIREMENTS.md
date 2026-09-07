@@ -1,5 +1,7 @@
 # Spinr — Requirements
 
+> **Superseded (2026-09-07):** See `docs/PRD.md` — the current, canonical PRD.
+
 *Generated: 2026-05-02 | Mode: YOLO | Granularity: Standard*
 
 ---

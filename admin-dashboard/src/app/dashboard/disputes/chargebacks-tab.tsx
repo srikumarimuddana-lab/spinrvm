@@ -39,8 +39,8 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  needs_response: "bg-destructive/15 text-destructive",
-  warning_needs_response: "bg-destructive/15 text-destructive",
+  needs_response: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
+  warning_needs_response: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
   under_review: "bg-warning/15 text-warning",
   warning_under_review: "bg-warning/15 text-warning",
   won: "bg-success/15 text-success",

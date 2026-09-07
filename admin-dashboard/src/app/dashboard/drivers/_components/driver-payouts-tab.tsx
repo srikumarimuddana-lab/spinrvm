@@ -223,7 +223,7 @@ export function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacy
                     {pm.has_bank_account ? (
                         <Badge className="bg-success/15 text-success text-[10px]">Linked</Badge>
                     ) : (
-                        <Badge className="bg-destructive/15 text-destructive text-[10px]">No method linked</Badge>
+                        <Badge className="bg-destructive/15 text-destructive dark:text-[#ff453a] text-[10px]">No method linked</Badge>
                     )}
                 </div>
                 <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -295,7 +295,7 @@ export function DriverPayoutsTab({ data, loading, driverId, driverName, isLegacy
                         ) : data.kyc.details_submitted ? (
                             <Badge className="bg-warning/15 text-warning text-[10px]">Pending Stripe review</Badge>
                         ) : data.kyc.requirements_due.length > 0 || data.kyc.requirements_past_due.length > 0 ? (
-                            <Badge className="bg-destructive/15 text-destructive text-[10px]">Action required</Badge>
+                            <Badge className="bg-destructive/15 text-destructive dark:text-[#ff453a] text-[10px]">Action required</Badge>
                         ) : (
                             <Badge variant="outline" className="text-[10px]">Not started</Badge>
                         )}

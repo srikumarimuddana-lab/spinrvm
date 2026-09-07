@@ -32,7 +32,7 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 type Window = 7 | 14 | 30;
 
 const daysTone = (days: number) => {
-    if (days < 7) return "bg-destructive/15 text-destructive border-destructive/30";
+    if (days < 7) return "bg-destructive/15 text-destructive dark:text-[#ff453a] border-destructive/30";
     if (days < 14) return "bg-warning/15 text-warning border-warning/30";
     return "bg-success/15 text-success border-success/30";
 };

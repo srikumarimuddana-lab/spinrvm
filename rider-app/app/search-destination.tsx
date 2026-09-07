@@ -697,7 +697,7 @@ export default function SearchDestinationScreen() {
                           accessibilityLabel={workAddr ? `Work — ${workAddr.address}` : 'Work — not set'}
                           accessibilityHint={workAddr ? 'Double-tap to use your work address' : 'Set your work address in Account, Saved Places'}
                         >
-                          <Ionicons name="briefcase" size={18} color={workAddr ? '#3B82F6' : '#BBB'} />
+                          <Ionicons name="briefcase" size={18} color={workAddr ? colors.info : '#BBB'} />
                           <Text style={[styles.quickChipText, !workAddr && { color: '#BBB' }]}>Work</Text>
                           {workAddr && <Ionicons name="chevron-forward" size={14} color="#CCC" />}
                         </TouchableOpacity>
@@ -763,7 +763,7 @@ export default function SearchDestinationScreen() {
                             <Ionicons
                               name={addr.name?.toLowerCase() === 'home' ? 'home' : 'briefcase'}
                               size={20}
-                              color={addr.name?.toLowerCase() === 'home' ? colors.primary : '#3B82F6'}
+                              color={addr.name?.toLowerCase() === 'home' ? colors.primary : colors.info}
                             />
                           </View>
                           <View style={styles.predictionContent}>

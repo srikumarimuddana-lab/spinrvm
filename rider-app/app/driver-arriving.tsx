@@ -912,7 +912,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     vehicleText: { fontSize: sf(14), fontFamily: 'PlusJakartaSans_500Medium', color: colors.text },
     plateBox: {
       backgroundColor: '#F3F4F6', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
-      borderWidth: 1, borderColor: '#E5E7EB',
+      borderWidth: 1, borderColor: colors.border,
     },
     plateText: { fontSize: sf(15), fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, letterSpacing: 1.5 },
 

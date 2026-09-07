@@ -91,7 +91,7 @@ export default function LostAndFoundScreen() {
   }, [load]);
 
   const renderCase = ({ item }: { item: LostFoundCase }) => {
-    const statusColor = STATUS_COLORS[item.status] ?? '#6B7280';
+    const statusColor = STATUS_COLORS[item.status] ?? colors.textSecondary;
     const statusLabel = STATUS_LABELS[item.status] ?? item.status;
     const icon = (CATEGORY_ICONS[item.item_category ?? ''] ?? 'help-circle') as any;
     const date = new Date(item.created_at).toLocaleDateString('en-CA', {

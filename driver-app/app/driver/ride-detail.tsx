@@ -357,7 +357,7 @@ export default function RideDetailScreen() {
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.stat}>
-                            <Ionicons name="time" size={20} color="#FF9500" />
+                            <Ionicons name="time" size={20} color={colors.orange} />
                             <Text style={styles.statValue}>
                                 {ride.ride_started_at && ride.ride_completed_at
                                     ? (() => {
@@ -370,7 +370,7 @@ export default function RideDetailScreen() {
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.stat}>
-                            <Ionicons name="star" size={20} color="#FFD700" />
+                            <Ionicons name="star" size={20} color={colors.gold} />
                             <Text style={styles.statValue}>
                                 {ride.rider_rating !== null && ride.rider_rating !== undefined
                                     ? ride.rider_rating
@@ -529,11 +529,11 @@ export default function RideDetailScreen() {
                             };
                             type TLStep = { label: string; sub: string; time: string; dot: string; isCancelled?: boolean };
                             const steps: TLStep[] = [
-                                ride.created_at && { label: 'Ride Requested', sub: fmtTS(ride.created_at), time: ride.created_at, dot: '#6B7280' },
+                                ride.created_at && { label: 'Ride Requested', sub: fmtTS(ride.created_at), time: ride.created_at, dot: colors.textSecondary },
                                 ride.driver_accepted_at && {
                                     label: 'You Accepted',
                                     sub: [fmtTS(ride.driver_accepted_at), ride.created_at && elapsed(ride.created_at, ride.driver_accepted_at) && `${elapsed(ride.created_at, ride.driver_accepted_at)} after request`].filter(Boolean).join('  ·  '),
-                                    time: ride.driver_accepted_at, dot: '#3B82F6',
+                                    time: ride.driver_accepted_at, dot: colors.info,
                                 },
                                 ride.driver_arrived_at && {
                                     label: 'Arrived at Pickup',

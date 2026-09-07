@@ -851,7 +851,7 @@ function RideOptionsScreenContent() {
         accessibilityRole="button"
         accessibilityLabel="Go back"
       >
-        <Ionicons name="arrow-back" size={22} color="#1A1A1A" />
+        <Ionicons name="arrow-back" size={22} color={colors.text} />
       </TouchableOpacity>
 
       {/* ═══ Destination chip ═══ */}
@@ -998,7 +998,7 @@ function RideOptionsScreenContent() {
             const wavDisabled = wavCount === 0;
             return (
               <View style={[styles.optionRow, wavDisabled && { opacity: 0.45 }]}>
-                <Ionicons name="accessibility-outline" size={20} color="#1A1A1A" />
+                <Ionicons name="accessibility-outline" size={20} color={colors.text} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.optionRowLabel}>Wheelchair accessible</Text>
                   <Text style={styles.optionRowHint}>
@@ -1017,7 +1017,7 @@ function RideOptionsScreenContent() {
 
           {/* Quiet mode */}
           <View style={styles.optionRow}>
-            <Ionicons name="volume-mute" size={20} color="#1A1A1A" />
+            <Ionicons name="volume-mute" size={20} color={colors.text} />
             <View style={{ flex: 1 }}>
               <Text style={styles.optionRowLabel}>Quiet ride</Text>
               <Text style={styles.optionRowHint}>Prefer minimal conversation</Text>
@@ -1057,7 +1057,7 @@ function RideOptionsScreenContent() {
                             <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
                           </View>
                         ) : (
-                          <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: '#6B7280' }]}>{line.label}</Text>
+                          <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: colors.textSecondary }]}>{line.label}</Text>
                         )}
                         <Text style={styles.fareBreakdownValue}>${parseFloat(String(line.amount)).toFixed(2)}</Text>
                       </View>
@@ -1630,7 +1630,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       width: 44,
       height: 44,
       borderRadius: 22,
-      backgroundColor: '#FFFFFF',
+      backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',
       shadowColor: '#000',
@@ -1644,7 +1644,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       position: 'absolute',
       left: 68,
       right: 16,
-      backgroundColor: '#FFFFFF',
+      backgroundColor: colors.surface,
       borderRadius: 22,
       paddingHorizontal: 16,
       paddingVertical: 10,
@@ -1704,7 +1704,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     busyBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: '#FEF2F2',
+      backgroundColor: colors.dangerBg,
       padding: 12,
       marginHorizontal: 16,
       marginBottom: 8,
@@ -1931,7 +1931,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       marginHorizontal: 16,
       marginTop: 6,
       marginBottom: 4,
-      backgroundColor: '#EFF6FF',
+      backgroundColor: colors.infoBg,
       borderRadius: 12,
       paddingVertical: 10,
       paddingHorizontal: 14,

@@ -1,5 +1,9 @@
 # Spinr — Roadmap
 
+> **Stale (flagged 2026-09-07):** this roadmap was generated 2026-05-02 and has not been
+> refreshed since. **For current priorities, use `ACTION_ITEMS.md`'s open `[ ]` items instead.**
+> Left as historical record rather than rewritten.
+
 *Generated: 2026-05-02 | Mode: YOLO | Granularity: Standard | Research-first: Yes*
 
 ---

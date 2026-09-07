@@ -55,7 +55,7 @@ export function QueueStats({ stats }: QueueStatsProps) {
                     blue: "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300",
                     emerald: "bg-success/15 text-success",
                     amber: "bg-warning/15 text-warning",
-                    red: "bg-destructive/15 text-destructive",
+                    red: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
                 }[c.tone];
                 return (
                     <div key={c.label} className="rounded-xl border border-border bg-card p-4">

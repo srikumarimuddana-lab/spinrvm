@@ -361,7 +361,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     </div>
                                                 </div>
                                                 {ride.rider_flag_count > 0 && (
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${ride.rider_flag_count >= 2 ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"}`}>
+                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${ride.rider_flag_count >= 2 ? "bg-destructive/15 text-destructive dark:text-[#ff453a]" : "bg-warning/15 text-warning"}`}>
                                                         {ride.rider_flag_count} flag{ride.rider_flag_count > 1 ? "s" : ""}
                                                     </span>
                                                 )}
@@ -406,7 +406,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         </div>
                                                         <div className="flex items-center gap-1.5 shrink-0">
                                                             {ride.driver_flag_count > 0 && (
-                                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-destructive/15 text-destructive" : "bg-warning/15 text-warning"}`}>
+                                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-destructive/15 text-destructive dark:text-[#ff453a]" : "bg-warning/15 text-warning"}`}>
                                                                     {ride.driver_flag_count} flag{ride.driver_flag_count > 1 ? "s" : ""}
                                                                 </span>
                                                             )}
@@ -637,7 +637,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 ride.payment_status === "paid" || ride.payment_status === "waived_admin"
                                                     ? "bg-success/15 text-success"
                                                     : ride.payment_status === "failed"
-                                                        ? "bg-destructive/15 text-destructive"
+                                                        ? "bg-destructive/15 text-destructive dark:text-[#ff453a]"
                                                         // held_for_review is a GPS-spoof pre-charge hold (see the
                                                         // Rides -> Held for Review queue), not a normal in-flight
                                                         // charge — give it its own color so it doesn't read as
@@ -893,7 +893,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             ) : (() => {
                                                 const OFFER_META: Record<string, { label: string; cls: string; quietVariant: "outline-success" | "outline-destructive" | "outline-warning" | "outline"; Icon: React.ElementType }> = {
                                                     accepted:  { label: "Accepted",  cls: "bg-success/15 text-success", quietVariant: "outline-success", Icon: CheckCircle2 },
-                                                    declined:  { label: "Declined",  cls: "bg-destructive/15 text-destructive", quietVariant: "outline-destructive", Icon: XCircle },
+                                                    declined:  { label: "Declined",  cls: "bg-destructive/15 text-destructive dark:text-[#ff453a]", quietVariant: "outline-destructive", Icon: XCircle },
                                                     expired:   { label: "Ignored",   cls: "bg-warning/15 text-warning", quietVariant: "outline-warning", Icon: Clock },
                                                     // eslint-disable-next-line no-restricted-syntax -- "preempted" is a neutral dispatch outcome, not success/warning/destructive; no dedicated token exists (#2816)
                                                     preempted: { label: "Preempted", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400", quietVariant: "outline", Icon: Radio },
@@ -988,7 +988,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         {/* eslint-disable-next-line no-restricted-syntax -- decorative rider/driver role-differentiator color, not a status signal (#2816) */}
                                                         <Flag className={`h-3.5 w-3.5 shrink-0 ${f._party === "rider" ? "text-blue-500" : "text-emerald-500"}`} />
                                                         <span className="text-xs font-semibold">{f._party === "rider" ? "Rider" : "Driver"}</span>
-                                                        <span className="text-xs bg-destructive/15 text-destructive px-1.5 py-0.5 rounded font-medium">{f.reason?.replace(/_/g, " ")}</span>
+                                                        <span className="text-xs bg-destructive/15 text-destructive dark:text-[#ff453a] px-1.5 py-0.5 rounded font-medium">{f.reason?.replace(/_/g, " ")}</span>
                                                         {f.description && <span className="text-xs text-muted-foreground truncate flex-1">{f.description}</span>}
                                                         <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTime(f.created_at)}</span>
                                                     </div>

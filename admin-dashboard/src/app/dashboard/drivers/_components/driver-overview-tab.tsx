@@ -295,7 +295,7 @@ export default function DriverOverviewTab({
                                                             <p className="text-sm font-semibold text-destructive">{plan || "Spinr Pass"}</p>
                                                             <p className="text-xs text-destructive/80 mt-0.5">{expLabel ? `Expired ${expLabel}` : "Subscription expired"}</p>
                                                         </div>
-                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-destructive/15 text-destructive text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-destructive/15 text-destructive dark:text-[#ff453a] text-[10px] font-bold uppercase tracking-wide shrink-0">
                                                             Expired
                                                         </span>
                                                     </div>

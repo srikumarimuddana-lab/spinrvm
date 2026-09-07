@@ -53,7 +53,7 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string; Icon: React.El
     paid:      { label: "Paid",      cls: "bg-success/15 text-success", Icon: CircleCheck },
     pending:   { label: "Pending",   cls: "bg-warning/15 text-warning", Icon: Clock },
     processing:{ label: "Processing",cls: "bg-warning/15 text-warning", Icon: Clock },
-    failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive", Icon: CircleAlert },
+    failed:    { label: "Failed",    cls: "bg-destructive/15 text-destructive dark:text-[#ff453a]", Icon: CircleAlert },
     cancelled: { label: "Cancelled", cls: "bg-muted text-muted-foreground", Icon: Ban },
 };
 

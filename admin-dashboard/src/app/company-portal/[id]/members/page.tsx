@@ -38,7 +38,7 @@ import { Copy, Mail, PauseCircle, PlayCircle, RefreshCw, UserPlus } from "lucide
 const STATUS_COLORS: Record<CorporateMemberStatus, string> = {
     invited: "bg-warning/15 text-warning",
     active: "bg-success/15 text-success",
-    suspended: "bg-destructive/15 text-destructive",
+    suspended: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
     removed: "bg-muted text-muted-foreground",
 };
 

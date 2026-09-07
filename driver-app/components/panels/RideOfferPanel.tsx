@@ -191,7 +191,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     };
 
     const timerPct = countdownSeconds / maxCountdown;
-    const timerColor = timerPct > 0.6 ? ACCENT : timerPct > 0.3 ? '#F59E0B' : '#EF4444';
+    const timerColor = timerPct > 0.6 ? ACCENT : timerPct > 0.3 ? colors.warning : colors.error;
 
     const pickupStr = pickupDistanceKm != null
         ? (pickupDistanceKm < 1
@@ -394,7 +394,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                         <View style={styles.routeLine} />
                         <View style={styles.routeStop}>
-                            <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
+                            <View style={[styles.routeDot, { backgroundColor: colors.error }]} />
                             <View style={styles.routeContent}>
                                 <Text style={styles.routeLabel}>DROP-OFF</Text>
                                 <Text style={styles.routeAddress} numberOfLines={1}>

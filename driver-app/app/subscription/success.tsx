@@ -87,7 +87,7 @@ export default function SubscriptionSuccessScreen() {
         </>
       ) : (
         <>
-          <Ionicons name="checkmark-circle" size={64} color="#10B981" />
+          <Ionicons name="checkmark-circle" size={64} color={colors.success} />
           <Text style={styles.title}>All set</Text>
           <Text style={styles.subtitle}>Taking you back to your Spinr Pass…</Text>
         </>

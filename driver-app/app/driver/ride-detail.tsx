@@ -422,8 +422,8 @@ export default function RideDetailScreen() {
 
                                 {parseFloat(ride.tip_amount || '0') > 0 && (
                                     <View style={styles.fareRow}>
-                                        <Text style={[styles.fareLabel, { color: '#f59e0b' }]}>Tip</Text>
-                                        <Text style={[styles.fareValue, { color: '#f59e0b' }]}>
+                                        <Text style={[styles.fareLabel, { color: colors.warning }]}>Tip</Text>
+                                        <Text style={[styles.fareValue, { color: colors.warning }]}>
                                             +${parseFloat(ride.tip_amount || '0').toFixed(2)}
                                         </Text>
                                     </View>
@@ -498,7 +498,7 @@ export default function RideDetailScreen() {
                                         ? 'Rider did not show up'
                                         : 'Rider cancelled after acceptance'}
                                 </Text>
-                                <Text style={[styles.fareValue, { color: '#f59e0b' }]}>
+                                <Text style={[styles.fareValue, { color: colors.warning }]}>
                                     +${parseFloat(ride.cancel_fee_earned || '0').toFixed(2)}
                                 </Text>
                             </View>
@@ -543,17 +543,17 @@ export default function RideDetailScreen() {
                                 ride.ride_started_at && {
                                     label: 'Trip Started',
                                     sub: [fmtTS(ride.ride_started_at), ride.driver_arrived_at && elapsed(ride.driver_arrived_at, ride.ride_started_at) && `${elapsed(ride.driver_arrived_at, ride.ride_started_at)} wait`].filter(Boolean).join('  ·  '),
-                                    time: ride.ride_started_at, dot: '#F59E0B',
+                                    time: ride.ride_started_at, dot: colors.warning,
                                 },
                                 ride.ride_completed_at && {
                                     label: 'Trip Completed',
                                     sub: [fmtTS(ride.ride_completed_at), ride.ride_started_at && elapsed(ride.ride_started_at, ride.ride_completed_at) && `${elapsed(ride.ride_started_at, ride.ride_completed_at)} trip`].filter(Boolean).join('  ·  '),
-                                    time: ride.ride_completed_at, dot: '#10B981',
+                                    time: ride.ride_completed_at, dot: colors.success,
                                 },
                                 ride.cancelled_at && {
                                     label: 'Cancelled',
                                     sub: fmtTS(ride.cancelled_at),
-                                    time: ride.cancelled_at, dot: '#EF4444', isCancelled: true,
+                                    time: ride.cancelled_at, dot: colors.error, isCancelled: true,
                                 },
                             ].filter(Boolean) as TLStep[];
 
@@ -568,7 +568,7 @@ export default function RideDetailScreen() {
                                     </View>
                                     {/* Content */}
                                     <View style={[styles.tlContent, isLast ? {} : { paddingBottom: 20 }]}>
-                                        <Text style={[styles.tlLabel, step.isCancelled && { color: '#EF4444' }, isLast && !step.isCancelled && { color: '#10B981', fontWeight: '700' }]}>
+                                        <Text style={[styles.tlLabel, step.isCancelled && { color: colors.error }, isLast && !step.isCancelled && { color: colors.success, fontWeight: '700' }]}>
                                             {step.label}
                                         </Text>
                                         <Text style={styles.tlSub}>{step.sub}</Text>

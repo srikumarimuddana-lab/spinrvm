@@ -216,7 +216,7 @@ function createStyles(colors: ThemeColors) {
       minWidth: 16,
       height: 16,
       borderRadius: 8,
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.error,
       justifyContent: 'center',
       alignItems: 'center',
       paddingHorizontal: 3,

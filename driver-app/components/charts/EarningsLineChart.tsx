@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Path, Defs, LinearGradient as SvgGradient, Stop, Circle, Line, Text as SvgText } from 'react-native-svg';
+import { useTheme } from '@shared/theme/ThemeContext';
 
 interface DataPoint {
   label: string;
@@ -24,6 +25,7 @@ export default function EarningsLineChart({
   showArea = true,
   formatValue = (v) => `$${v.toFixed(0)}`,
 }: EarningsLineChartProps) {
+  const { colors } = useTheme();
   if (!data || data.length === 0) {
     return (
       <View style={[styles.emptyContainer, { height }]}>
@@ -83,7 +85,7 @@ export default function EarningsLineChart({
             y1={getY(tick)}
             x2={paddingLeft + plotWidth}
             y2={getY(tick)}
-            stroke="#E5E7EB"
+            stroke={colors.border}
             strokeWidth={1}
             strokeDasharray="4,4"
           />

@@ -295,7 +295,7 @@ const createStyles = (colors: ThemeColors) =>
       color: colors.textDim,
     },
     segmentTextActive: {
-      color: '#FFFFFF',
+      color: colors.surface,
       fontWeight: '600',
     },
     overlay: {
@@ -331,7 +331,7 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: 8,
     },
     sheetCloseText: {
-      color: '#FFFFFF',
+      color: colors.surface,
       fontWeight: '600',
       fontSize: 15,
     },

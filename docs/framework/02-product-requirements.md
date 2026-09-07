@@ -1,5 +1,7 @@
 # Pillar 2 — Product & Requirements
 
+> **Superseded (2026-09-07):** See `docs/PRD.md` — the current, canonical PRD.
+
 > What Spinr is building, why it can beat incumbents, and how a product idea
 > becomes a checkable requirement. Competitive claims here are strategy, not
 > measured fact; the measurable side lives in the KPI table and Pillar 7's

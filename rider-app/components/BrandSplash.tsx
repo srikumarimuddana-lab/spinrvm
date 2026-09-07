@@ -430,7 +430,13 @@ export default function BrandSplash({
 
 const styles = StyleSheet.create({
   root: {
-    ...StyleSheet.absoluteFillObject,
+    // Spelled out rather than spread from StyleSheet.absoluteFillObject, which
+    // this RN version's types don't expose.
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: SPLASH_BACKGROUND,
   },
   glow: {

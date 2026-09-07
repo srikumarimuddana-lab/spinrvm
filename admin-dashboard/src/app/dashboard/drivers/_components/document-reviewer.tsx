@@ -88,7 +88,7 @@ const isPdf = (url?: string) => !!url && /\.pdf(\?|#|$)/i.test(url);
 const statusTone = (status?: string) => {
     switch (status) {
         case "approved": return "bg-success/15 text-success";
-        case "rejected": return "bg-destructive/15 text-destructive";
+        case "rejected": return "bg-destructive/15 text-destructive dark:text-[#ff453a]";
         case "pending": return "bg-warning/15 text-warning";
         default: return "bg-muted text-muted-foreground";
     }

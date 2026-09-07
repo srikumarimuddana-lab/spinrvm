@@ -24,7 +24,7 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-warning/15 text-warning",
   approved: "bg-success/15 text-success",
-  denied: "bg-destructive/15 text-destructive",
+  denied: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
 };
 
 const APPEAL_TYPE_LABELS: Record<string, string> = {

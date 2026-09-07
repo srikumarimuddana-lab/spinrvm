@@ -65,7 +65,7 @@ import {
 const STATUS_COLORS: Record<CorporateMember["status"], string> = {
     invited: "bg-warning/15 text-warning",
     active: "bg-success/15 text-success",
-    suspended: "bg-destructive/15 text-destructive",
+    suspended: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
     removed: "bg-muted text-muted-foreground",
 };
 
@@ -73,7 +73,7 @@ const REQUEST_STATUS_COLORS: Record<AllowanceRequestRow["status"], string> = {
     pending: "bg-warning/15 text-warning",
     approved: "bg-success/15 text-success",
     auto_approved: "bg-success/15 text-success",
-    denied: "bg-destructive/15 text-destructive",
+    denied: "bg-destructive/15 text-destructive dark:text-[#ff453a]",
 };
 
 type StatusFilter = "all" | CorporateMemberStatus;

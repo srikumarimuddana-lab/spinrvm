@@ -73,7 +73,7 @@ function eventTypeBadge(eventType: string | null): string {
     if (eventType.includes("succeeded") || eventType.includes("paid"))
         return "bg-success/15 text-success";
     if (eventType.includes("failed") || eventType.includes("dispute"))
-        return "bg-destructive/15 text-destructive";
+        return "bg-destructive/15 text-destructive dark:text-[#ff453a]";
     if (eventType.includes("refund"))
         return "bg-warning/15 text-warning";
     return "bg-info/15 text-info";

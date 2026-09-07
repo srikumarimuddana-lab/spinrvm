@@ -29,7 +29,7 @@ const S_CFG: Record<string, { l: string; c: string }> = {
     // eslint-disable-next-line no-restricted-syntax -- "driver_notified" (in progress, neither good nor bad) has no semantic-token equivalent; must stay distinct from reported/resolved/unresolved (#2816)
     driver_notified: { l: "Driver Notified", c: "bg-blue-500/15 text-blue-600" },
     resolved: { l: "Resolved", c: "bg-success/15 text-success" },
-    unresolved: { l: "Unresolved", c: "bg-destructive/15 text-destructive" },
+    unresolved: { l: "Unresolved", c: "bg-destructive/15 text-destructive dark:text-[#ff453a]" },
 };
 
 export default function LostAndFoundTab() {

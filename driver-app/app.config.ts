@@ -25,8 +25,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '2.7.0', // bump from 2.6.0 (@iternio/react-native-auto-play 0.4.7→0.5.13, 2026-08-26): a NATIVE library change — the voice API moved to new HybridVoice/AndroidWindowInformation Nitro hybrid objects and VirtualRenderer's display lifecycle was rewritten. 0.5.13 JS require()d on a 0.4.7 binary throws at hybrid-object creation; register.ts degrades that to "car support disabled" rather than a crash, but the driver silently loses Android Auto — so fence it. History: 2.6.0 (SDK 57 dependency alignment, 2026-08-11: react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12, datetimepicker 8→9, all native-module changes); 2.5.0 added expo-sqlite (durable trip-location outbox); 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds; 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
+    // Kept in sync with the expo-splash-screen plugin block below, which is
+    // what prebuild actually reads; this legacy key is still what Expo Go and
+    // Constants.expoConfig.splash report. imageWidth lives on the plugin only.
     splash: {
-        image: './assets/images/splash-blank.png',
+        image: './assets/images/splash/native-splash.png',
         resizeMode: 'contain',
         backgroundColor: '#FFFFFF',
     },
@@ -229,8 +232,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             isAndroidBackgroundLocationEnabled: true,
             isIosBackgroundLocationEnabled: true,
         }],
+        // The launch frame: the halo plus the bullseye mark rotated half a turn.
+        // BrandSplash paints exactly this as its first JS frame and then unwinds
+        // the rotation, so the native -> JS handoff has nothing to see. Was a
+        // deliberately blank white image until 2026-09-07; the first ~300-800ms
+        // of every cold start was unbranded. imageWidth 200 matches GLOW_DP in
+        // constants/splash.ts — change the two together.
         ['expo-splash-screen', {
-            image: './assets/images/splash-blank.png',
+            image: './assets/images/splash/native-splash.png',
+            imageWidth: 200,
             resizeMode: 'contain',
             backgroundColor: '#FFFFFF',
         }],

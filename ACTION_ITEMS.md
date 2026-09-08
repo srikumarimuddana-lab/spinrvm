@@ -22057,8 +22057,28 @@ how much they de-risk a public launch._
 - **Files:** `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_db_errors.py`,
   `backend/tests/test_dispatch_match_attempt_branches.py`.
 
-### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue
+### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue — CLOSED (2026-09-08)
 
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c72-fingerprint`.
+  Implemented fix option 1 from below: `compute_fingerprint()` now also
+  hashes a normalized `log_excerpt` per error, not just `job::category::
+  description`. Normalization (`_normalize_excerpt`, new helper) collapses
+  digit runs to `#` so trivial run-to-run noise (failure counts, line
+  numbers, durations) doesn't fragment the fingerprint for a genuinely
+  recurring failure, while the excerpt's actual test/assertion/error text
+  — the part that actually distinguishes two different bugs sharing the
+  same fixed description template, exactly what #4925 (see below) showed
+  missing — now flows into the hash. Added 3 new tests: distinct excerpts
+  in the same job/category/description bucket now diverge; digit-only
+  excerpt differences still dedupe onto one fingerprint; `_normalize_excerpt`
+  handles empty/missing input. All 7 tests in
+  `test_create_github_issue.py` pass (4 pre-existing, unaffected in
+  behavior; 3 new). Options 2 and 3 below were not implemented — option 1
+  alone directly closes the finding (a title/severity staying accurate
+  follows from failures no longer being merged in the first place), and
+  adding label-reconciliation on top would be a second, separable change
+  to the same file, not needed to close this specific gap.
+- **Original status (superseded by "closed" above):**
 - [ ] **Status:** open — found 2026-09-04 while root-causing what first
   looked like a gap in C21's 2026-09-04 follow-up (see that entry's
   same-day correction for the full investigation trail; this item is the

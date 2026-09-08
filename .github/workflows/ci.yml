@@ -133,10 +133,21 @@ jobs:
           # real-Postgres step immediately below provides. Keep those steps in
           # sync with these --ignore flags -- an --ignore added here without a
           # matching step silently drops that suite from CI.
+          #
+          # tests/test_schemathesis_fuzz.py is excluded for a different reason:
+          # not an invocation mismatch, but runtime cost. It's a pilot
+          # (docs/audit/2026-09-08-agentic-tooling-atlas.md) that fuzzes all
+          # 527 of the app's GET operations -- @pytest.mark.slow alone doesn't
+          # keep it out, since this step never passes `-m "not slow"`. Run it
+          # on demand locally (`pytest -m slow tests/test_schemathesis_fuzz.py`)
+          # until its stability/runtime is proven; wiring it into CI as its own
+          # step (blocking or scheduled) is a separate follow-up decision, not
+          # something to default into via this ignore staying here forever.
           CI_PG_DSN="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
           export DATABASE_URL="$CI_PG_DSN"
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
-            --ignore=tests/direct_pool --ignore=tests/rls -v
+            --ignore=tests/direct_pool --ignore=tests/rls \
+            --ignore=tests/test_schemathesis_fuzz.py -v
 
       # C50 Phase 1 (T11, docs/audit/2026-09-02-pgbouncer-direct-pool-
       # migration-plan.md): real-Postgres tests for the (currently unused --

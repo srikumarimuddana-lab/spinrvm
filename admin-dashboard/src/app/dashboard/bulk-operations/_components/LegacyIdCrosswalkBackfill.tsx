@@ -21,7 +21,7 @@
  */
 
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Link2, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Link2, Loader2 } from "lucide-react";
 import {
     adminCommitIdCrosswalkBackfill,
     adminPreviewIdCrosswalkBackfill,
@@ -58,6 +58,26 @@ function PopulationSummary({ title, counts }: { title: string; counts: Crosswalk
             </div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the population summaries below.
+function buildSummaryText(report: CrosswalkBackfillReport): string {
+    const rows: [string, number][] = [
+        ["Drivers — eligible", report.counts.driver.eligible_drivers_found ?? 0],
+        ["Drivers — new rows to write", report.counts.driver.new_rows_to_write],
+        ["Drivers — already recorded", report.counts.driver.already_recorded],
+        ["Riders — eligible", report.counts.rider.eligible_riders_found ?? 0],
+        ["Riders — new rows to write", report.counts.rider.new_rows_to_write],
+        ["Riders — already recorded", report.counts.rider.already_recorded],
+        ["Riders — ambiguous (skipped)", report.ambiguous_riders],
+    ];
+    const lines = [
+        `Legacy ID Crosswalk Backfill — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export function LegacyIdCrosswalkBackfill() {
@@ -176,6 +196,20 @@ export function LegacyIdCrosswalkBackfill() {
                                 </span>
                             </div>
                         ) : null}
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
+                        </div>
 
                         {committed?.committed ? (
                             <div className="flex items-center gap-2 rounded-md border border-success bg-success/10 p-3 text-sm">

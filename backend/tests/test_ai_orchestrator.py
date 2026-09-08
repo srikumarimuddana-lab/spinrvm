@@ -105,7 +105,14 @@ class TestHappyPaths:
         adapter = FakeAdapter([[_text("Your driver "), _text("is close."), _end()]])
         frames, mocks = await _run(adapter)
         names = [n for n, _ in frames]
-        assert names == ["meta", "token", "token", "done"]
+        # F08: the streaming output filter withholds a tail until it can no
+        # longer change, so short replies coalesce into a single token frame
+        # instead of one per provider event. The CONTENT is what matters and
+        # is asserted below; frame granularity is an implementation detail of
+        # the filter, so this no longer pins an exact count.
+        assert names[0] == "meta" and names[-1] == "done"
+        assert [n for n in names if n == "token"]
+        assert "".join(p["text"] for n, p in frames if n == "token") == "Your driver is close."
         assert frames[0][1]["conversation_id"] == "conv-1"
         done = frames[-1][1]
         assert done["usage"] == {"input_tokens": 100, "output_tokens": 10}
@@ -197,17 +204,25 @@ class TestHappyPaths:
         assert assistant_call.kwargs["provider"] == "fake"
 
     @pytest.mark.anyio
-    async def test_assistant_text_is_pii_scrubbed_before_persistence(self):
+    async def test_assistant_text_is_pii_scrubbed_before_delivery_and_persistence(self):
         # AI2 regression: the model can echo tool-result data verbatim (e.g.
         # a driver's phone number pulled from a dispatch tool result) — the
         # persisted assistant row must be scrubbed the same as the user row,
         # not treated as trusted first-party text.
-        adapter = FakeAdapter([[_text("Your driver's number is "), _text("306-555-1234, call anytime."), _end()]])
+        #
+        # F08 (2026-09-08 AI security assessment) INVERTED the streaming half
+        # of this test. It used to assert `"306-555-1234" in tokens` with the
+        # comment "the client still sees the raw text streamed this turn" —
+        # i.e. it pinned the defect as intended behaviour. A clean
+        # ai_messages row does not prove the rider saw a clean answer, so the
+        # emitted stream is now filtered too. The phone number is split across
+        # two provider events here specifically to exercise the
+        # cross-chunk-boundary case.
+        adapter = FakeAdapter([[_text("Your driver's number is 306-"), _text("555-1234, call anytime."), _end()]])
         frames, mocks = await _run(adapter)
-        # the client still sees the raw text streamed this turn — only the
-        # persisted copy changes.
         tokens = "".join(p["text"] for n, p in frames if n == "token")
-        assert "306-555-1234" in tokens
+        assert "306-555-1234" not in tokens
+        assert "[PHONE]" in tokens
         assistant_call = mocks["append"].await_args_list[1]
         assert assistant_call.args[1] == "assistant"
         assert "[PHONE]" in assistant_call.args[2]
@@ -220,10 +235,12 @@ class TestHappyPaths:
         # filtered, same convention as the AI2 PII scrub above.
         adapter = FakeAdapter([[_text("Let me run "), _text("find_place to check that address for you."), _end()]])
         frames, mocks = await _run(adapter)
-        # the client still sees the raw text streamed this turn — only the
-        # persisted copy changes.
+        # F08: same inversion as the PII test above — this used to assert
+        # "find_place" REACHED the client. Output rules now apply to the
+        # stream as well as the stored copy.
         tokens = "".join(p["text"] for n, p in frames if n == "token")
-        assert "find_place" in tokens
+        assert "find_place" not in tokens
+        assert "[internal]" in tokens
         assistant_call = mocks["append"].await_args_list[1]
         assert assistant_call.args[1] == "assistant"
         assert "[internal]" in assistant_call.args[2]
@@ -381,7 +398,9 @@ class TestGuards:
                 user=USER, conversation_id="conv-1", user_message="hi", admin_actor_id="admin-1"
             ):
                 frames.append(frame)
-        assert [n for n, _ in frames] == ["meta", "token", "done"]
+        names = [n for n, _ in frames]
+        assert names[0] == "meta" and names[-1] == "done"
+        assert all(n in ("meta", "token", "done") for n in names)  # no tool/error frames
         mocks["incr"].assert_not_awaited()
 
     @pytest.mark.anyio

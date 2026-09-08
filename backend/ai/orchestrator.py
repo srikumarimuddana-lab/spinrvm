@@ -19,6 +19,7 @@ routes/support.py).
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -46,11 +47,25 @@ except ImportError:
 try:
     from ..settings_loader import get_app_settings
     from ..utils.metrics import inc as _metric_inc
-    from ..utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
+    from ..utils.redis_client import (
+        redis_delete,
+        redis_eval,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set_nx,
+    )
 except ImportError:
     from settings_loader import get_app_settings
     from utils.metrics import inc as _metric_inc
-    from utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
+    from utils.redis_client import (
+        redis_delete,
+        redis_eval,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set_nx,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +178,56 @@ async def _over_daily_cap(user_id: str, cap: int) -> bool:
 
 _CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-calling turn
 
+# Release the conversation lock ONLY if we still own it (F09).
+#
+# The lock used to be released with an unconditional DELETE, which is unsafe
+# whenever a turn outlives the TTL: turn A's release then deletes turn B's
+# freshly-acquired lock, and turn C can start alongside B — the release makes
+# the concurrency it is meant to prevent MORE likely, not less. Storing a
+# per-turn token and deleting only on a match closes that.
+#
+# Compare-and-delete has to be atomic, hence Lua: a GET-then-DELETE can still
+# delete B's lock if B acquires in the gap between the two calls.
+_RELEASE_IF_OWNER_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+
+async def _release_conversation_lock(lock_key: str, token: str) -> None:
+    """Best-effort ownership-checked release. Never raises.
+
+    A failed release is not an error worth propagating: the lock carries a TTL,
+    so the worst case is that the conversation stays locked for the remainder
+    of it. Raising here would turn a Redis blip into a failed chat turn whose
+    reply the rider has already seen streamed.
+    """
+    try:
+        await redis_eval(_RELEASE_IF_OWNER_LUA, 1, lock_key, token)
+        return
+    except RuntimeError:
+        # REDIS_URL unset — redis_client is a single in-process dict and there
+        # is no Lua interpreter (see redis_eval's docstring). No other replica
+        # can hold this key, so a non-atomic compare-and-delete is exact here.
+        pass
+    except Exception:
+        logger.error(
+            "ai conversation-lock release failed — lock will expire on its TTL",
+            exc_info=True,
+            extra={"lock_key": lock_key},
+        )
+        return
+    try:
+        if await redis_get(lock_key) == token:
+            await redis_delete(lock_key)
+    except Exception:
+        logger.error(
+            "ai conversation-lock in-process release failed — lock will expire on its TTL",
+            exc_info=True,
+        )
+
 
 async def run_chat_turn(
     *,
@@ -198,8 +263,14 @@ async def run_chat_turn(
         return
 
     lock_key = f"ai:conv_lock:{conversation_id}"
+    # Unique per turn, so the release below can prove ownership (F09).
+    lock_token = uuid.uuid4().hex
+    # Distinct from `acquired`: on the fail-open path we proceed WITHOUT owning
+    # the lock, and must not then release one we never took.
+    lock_held = False
     try:
-        acquired = await redis_set_nx(lock_key, "1", _CONV_LOCK_TTL_SECONDS)
+        acquired = await redis_set_nx(lock_key, lock_token, _CONV_LOCK_TTL_SECONDS)
+        lock_held = acquired
     except Exception:
         # redis_set_nx now raises on a real (Redis-configured-but-
         # unavailable) error instead of silently falling back per-replica
@@ -232,7 +303,8 @@ async def run_chat_turn(
         ):
             yield frame
     finally:
-        await redis_delete(lock_key)
+        if lock_held:
+            await _release_conversation_lock(lock_key, lock_token)
 
 
 async def _run_chat_turn(

@@ -907,9 +907,14 @@ jobs:
           fetch-depth: 0  # full history required for trufflehog --since-commit
 
       - name: Install trufflehog v3
+        # C87: retry a transient CDN/network flake instead of failing the whole
+        # job on it, and verify the archive is actually gzip before extracting
+        # (a truncated/HTML-error-page download previously failed with a
+        # cryptic tar error instead of a clear one).
         run: |
-          curl -sLo trufflehog.tar.gz \
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o trufflehog.tar.gz \
             https://github.com/trufflesecurity/trufflehog/releases/download/v3.94.3/trufflehog_3.94.3_linux_amd64.tar.gz
+          tar -tzf trufflehog.tar.gz >/dev/null
           tar -xzf trufflehog.tar.gz trufflehog
           chmod +x trufflehog && sudo mv trufflehog /usr/local/bin/
 
@@ -934,7 +939,11 @@ jobs:
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
-        if: always()
+        # C87: only upload if Trivy actually produced the file -- `if: always()`
+        # alone meant a Trivy step failure (e.g. its own transient flake) hit a
+        # second, misleading "file not found" failure here instead of a clean
+        # single point of failure.
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -1046,7 +1055,10 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload image scan results to GitHub Security
-        if: always()
+        # C87: same hashFiles guard as the filesystem-scan upload above -- a
+        # failed "Upload SARIF report" step (its own transient flake) must not
+        # cascade into a second, misleading "file not found" failure here.
+        if: always() && hashFiles('trivy-image.sarif') != ''
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         with:
           sarif_file: 'trivy-image.sarif'

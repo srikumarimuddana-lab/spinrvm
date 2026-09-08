@@ -9,6 +9,7 @@ flow (banks.csv + drivers.csv) instead of one. The service layer
 to avoid a real audit write.
 """
 
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -136,7 +137,10 @@ class _Rpc:
         self.params = params
 
     def execute(self):
-        return _Result(f"enc::{self.params.get('plaintext')}")
+        # Real encrypt_driver_pii (migration 138) returns the vault.secrets
+        # row's UUID as text -- apply_legacy_sin_dob_import now validates
+        # this shape before trusting it as a successful encryption.
+        return _Result(str(uuid.uuid5(uuid.NAMESPACE_DNS, self.params.get("plaintext", ""))))
 
 
 class _FakeSupabase:
@@ -241,7 +245,7 @@ def test_commit_writes_encrypted_sin_and_dob(test_client, super_admin_override):
     assert VALID_SIN not in resp.text
     assert "1992-08-03" not in resp.text
     stored = store["drivers"][0]
-    assert stored["sin"] == f"enc::{VALID_SIN}"  # vault-encrypted, not plaintext
+    assert stored["sin"] == str(uuid.uuid5(uuid.NAMESPACE_DNS, VALID_SIN))  # vault-encrypted, not plaintext
     assert stored["sin_last4"] == VALID_SIN[-4:]
     assert stored["date_of_birth"] == "1992-08-03"
     assert stored["legacy_import_metadata"]["legacy_mongo_banks_sin_dob_import"]["sin_written"] is True

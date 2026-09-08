@@ -6896,6 +6896,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   add the two secrets) and #2 (run the workflow once to prove the Android
   lane completes) are the only two still needed to get real device
   coverage live; both still need a repo/org admin, same as before.
+- **2026-09-08, answered directly by the product owner — item #1 is now
+  resolved, and it's a deliberate cost decision, not an oversight.**
+  Checked the repo's Settings → Secrets page directly (screenshot):
+  `EXPO_TOKEN` **is** present. `MAESTRO_CLOUD_API_KEY` is **not** —
+  confirmed by the product owner as intentional: "I have not set it
+  because it might cost me." This is not "unconfirmed" any more; treat it
+  as a standing decision not to pay for Maestro Cloud's hosted device
+  farm, not a to-do to chase. Consequence: `maestro-e2e.yml` as currently
+  designed (EAS-builds an APK, then uploads it to Maestro Cloud to run
+  the flows there) cannot proceed past its Maestro Cloud login step and
+  should not be dispatched expecting a different outcome — action item #2
+  (run it once to prove the Android lane completes) is now moot for this
+  specific implementation, not just still-blocked.
+  **Real alternative worth scoping, not yet built:** Maestro itself can
+  run the same `.maestro/{driver,rider}` flows locally against a free
+  Android emulator inside the GitHub Actions runner (`maestro test`
+  targeting an emulator started via `reactivecircus/android-emulator-runner`
+  or equivalent) — this gets the same real-native-build E2E coverage
+  `maestro-e2e.yml`'s own header comment describes wanting (catching a
+  native-module-only bug like #3174) without any Maestro Cloud billing at
+  all, only ordinary GitHub-hosted-runner minutes. Still needs
+  `EXPO_TOKEN` (already present) to build the APK via EAS, but not
+  `MAESTRO_CLOUD_API_KEY`. Not scoped or built as of this update — a
+  candidate follow-up if zero real-device coverage remains unacceptable
+  long-term, but the product owner has not asked for it and it should not
+  be built speculatively.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —
@@ -22418,8 +22444,40 @@ how much they de-risk a public launch._
 
 ### C82. Per-worker metrics counters flap under >1 Uvicorn worker (F6)
 
-- [ ] **Status:** open, scheduled with WS-3 (worker-tier topology), NOT
-  fixed in the 2026-09-08 hardening tranche. Per-process metrics design is
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  for the metrics-labeling half; the `UVICORN_WORKERS` consistency half was
+  attempted and then **reverted** after review (see below) —
+  `should_spawn_on_api()` loop-spawning topology (WS-3's other half) remains
+  a separate, untouched concern. `render_prometheus()` now attaches a
+  `worker_pid` label (`os.getpid()`, read live at render time, not cached
+  at import, plus a guard that strips any caller-supplied `worker_pid` key
+  first so it can never render as a duplicate label) to every
+  counter/gauge/histogram line via a new `_with_worker_pid()` helper,
+  reusing the same label name/reasoning already established in
+  `routes/admin/monitoring.py`'s fan-out stats. Docstring states the
+  aggregation contract: counters/histograms are additive (`sum by (...)`
+  across workers is correct); gauges are not (`max by (...)`, never
+  `sum by (...)`) — confirmed via grep that no existing query in
+  `metrics-agent/grafana/alert-rules.yaml` or `dashboard-panel.json`
+  currently sums a gauge, so this is a preventive contract for future
+  dashboard authors, not a fix to an existing wrong query.
+  **`UVICORN_WORKERS` default was NOT changed** — an initial attempt pinned
+  `${UVICORN_WORKERS:-4}` → `${UVICORN_WORKERS:-2}` in `backend/Dockerfile`
+  and `railway.json` to match `fly.toml`'s explicit setting, but
+  `spinr-observability-reviewer` caught that this assumed Railway shares
+  Fly's memory budget with no evidence — `docs/adr/006-railway-deployment.md`
+  documents `--workers 4` as a *deliberate*, resource-sized decision specific
+  to Railway's own topology (4 workers × background loops across its 2
+  replicas), not an arbitrary default. Reverted both files rather than ship
+  an unverified capacity assumption; **still open**: someone with access to
+  Railway's dashboard should confirm its actual current instance
+  plan/memory before any future attempt to change this default (note
+  ADR-006 predates the Fly-primary switch, ADR-007, and the loop count
+  growing from 7 to 41, so its own "4 workers × 7 loops" math is itself
+  stale — the right number today isn't necessarily either 2 or 4, it's
+  whatever Railway's current instance size actually supports). See
+  `docs/change-log/2026-09-08-c82-metrics-worker-pid-label.md`.
+- **Original plan:** Per-process metrics design is
   documented and cross-replica scraping is solved (ADR-010); the untracked
   gap is `fly.toml`'s `UVICORN_WORKERS="2"` sharing one port so each scrape
   hits a random worker. Plan: add a `worker_pid` label in
@@ -22535,17 +22593,27 @@ how much they de-risk a public launch._
   `services/legacy_payout_correction_service.py:569`.
 - **Found during:** PR #5085's validation of PR #5079's F8 finding;
   re-triaged and closed 2026-09-08 on
-  `claude/pr-5085-5079-hardening-c86-stripe-loop`.
+  `claude/pr-5085-5079-hardening-c86-stripe-loop` (superseding an
+  intermediate "triaged, not yet fixed" note that briefly existed on
+  `main` via PR #5100 — that snapshot predates the fix in this section).
 
 ### C87. CI scanner-download flakiness (admin-bundle secret scan, trufflehog install)
 
-- [ ] **Status:** open, deliberately skipped in the 2026-09-08 hardening
-  tranche — explicitly marked optional in the validating plan. Observed:
-  `ci.yml`'s `security-scan` failed once at "Install trufflehog v3" (a
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Implemented the proposed fix below in both call sites plus, self-found
+  while fixing the first, the second Trivy→SARIF upload pair in
+  `docker-image-scan`: `curl -fsSL --retry 5 --retry-delay 3
+  --retry-all-errors` download-to-file, `tar -tzf` verify before extracting,
+  and `hashFiles(...) != ''` guards on both SARIF-upload steps so a failed
+  scan produces one clear failure instead of a second, misleading one.
+  `spinr-cicd-infra-reviewer`: SAFE TO MERGE, no blockers/warnings. See
+  `docs/change-log/2026-09-08-c87-ci-scanner-download-retry.md`.
+- **Original observation:** `ci.yml`'s
+  `security-scan` failed once at "Install trufflehog v3" (a
   non-gzip download) and `security-gates.yml`'s `bundle-secrets` (G5b)
   failed once on an HTTP 504 the same day; both passed on the next run
   without any code change, consistent with transient CDN/network flakes
-  rather than a real defect. Proposed fix if this recurs:
+  rather than a real defect. Proposed fix (now implemented):
   `curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors`, verify with
   `tar -tzf` before extraction, and guard the Trivy SARIF upload with
   `if: always() && hashFiles('trivy-results.sarif') != ''`.

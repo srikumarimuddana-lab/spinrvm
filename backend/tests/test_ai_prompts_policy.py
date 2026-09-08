@@ -68,9 +68,7 @@ class TestEmergencyRedirect:
     def test_customer_personas_disclaim_being_an_emergency_service(self, audience):
         lowered = _CORES[audience].lower()
         assert (
-            "not an emergency service" in lowered
-            or "not a replacement" in lowered
-            or "never a replacement" in lowered
+            "not an emergency service" in lowered or "not a replacement" in lowered or "never a replacement" in lowered
         ), f"{audience!r} prompt claims no emergency-service disclaimer"
 
 

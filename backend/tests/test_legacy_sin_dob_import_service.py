@@ -13,6 +13,8 @@ apply path's encrypt-RPC + legacy_import_metadata-merge behavior.
 
 from __future__ import annotations
 
+import uuid
+
 from backend.services import driver_import_service as svc
 
 IMPORT_SOURCE = svc.IMPORT_SOURCE
@@ -111,30 +113,40 @@ class _FakeQuery:
 
 
 class _FakeRpc:
-    def __init__(self, name, params, recorder):
+    def __init__(self, name, params, recorder, encrypt_response):
         self.name = name
         self.params = params
         self.recorder = recorder
+        self._encrypt_response = encrypt_response
 
     def execute(self):
         self.recorder.setdefault("rpc_calls", []).append((self.name, self.params))
-        return _FakeExecute(f"enc::{self.params.get('plaintext')}")
+        if self._encrypt_response is not _UNSET:
+            return _FakeExecute(self._encrypt_response)
+        # Real encrypt_driver_pii (migration 138) returns the vault.secrets
+        # row's UUID as text — a deterministic uuid5 keeps assertions stable
+        # without hardcoding an arbitrary constant.
+        return _FakeExecute(str(uuid.uuid5(uuid.NAMESPACE_DNS, self.params.get("plaintext", ""))))
+
+
+_UNSET = object()
 
 
 class _FakeSupabase:
-    def __init__(self, drivers=None):
+    def __init__(self, drivers=None, encrypt_response=_UNSET):
         self.store = {"drivers": drivers if drivers is not None else []}
         self.recorder: dict = {}
+        self._encrypt_response = encrypt_response
 
     def table(self, name):
         return _FakeQuery(name, self.store)
 
     def rpc(self, name, params):
-        return _FakeRpc(name, params, self.recorder)
+        return _FakeRpc(name, params, self.recorder, self._encrypt_response)
 
 
-def _install(monkeypatch, drivers=None):
-    fake = _FakeSupabase(drivers=drivers)
+def _install(monkeypatch, drivers=None, encrypt_response=_UNSET):
+    fake = _FakeSupabase(drivers=drivers, encrypt_response=encrypt_response)
     monkeypatch.setattr(svc, "supabase", fake)
     return fake
 
@@ -318,7 +330,7 @@ def test_apply_encrypts_sin_and_merges_metadata_without_clobbering(monkeypatch):
     assert fake.recorder["rpc_calls"][0][1] == {"plaintext": VALID_SIN}
 
     updated = fake.store["drivers"][0]
-    assert updated["sin"] == f"enc::{VALID_SIN}"
+    assert updated["sin"] == str(uuid.uuid5(uuid.NAMESPACE_DNS, VALID_SIN))
     assert updated["sin_last4"] == VALID_SIN[-4:]
     assert updated["date_of_birth"] == "1992-08-03"
     # original metadata key survives; new key is added alongside it
@@ -328,6 +340,30 @@ def test_apply_encrypts_sin_and_merges_metadata_without_clobbering(monkeypatch):
     assert marker["batch"] == "test-batch-1"
     assert marker["sin_written"] is True
     assert marker["dob_written"] is True
+
+
+def test_apply_refuses_to_record_success_when_encryption_returns_no_ciphertext(monkeypatch):
+    """Regression (spinr-security-auditor, pre-flight review of the first
+    production run): encrypt_driver_pii returning None/malformed text (e.g.
+    vault.create_secret() returning NULL without the RPC itself raising)
+    must never be written as the "encrypted" sin, and must never be recorded
+    as sin_written=True -- a failed encryption must be indistinguishable
+    from a crash, not from a success, on a non-repeatable write of real
+    government IDs."""
+    driver = _spinr_driver()
+    fake = _install(monkeypatch, drivers=[driver], encrypt_response=None)
+    plan = svc.plan_legacy_sin_dob_import([_bank_row()], [_mongo_driver_row()])
+
+    try:
+        svc.apply_legacy_sin_dob_import(plan, batch="test-batch-bad-encrypt")
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as e:
+        assert "old_driver_id" in str(e)
+
+    # nothing was written -- no NULL sin masquerading as a successful import
+    assert fake.store["drivers"][0]["sin"] is None
+    assert fake.store["drivers"][0]["date_of_birth"] is None
+    assert svc.LEGACY_BANK_SIN_DOB_SOURCE not in fake.store["drivers"][0]["legacy_import_metadata"]
 
 
 def test_apply_reports_conflict_and_does_not_clobber_a_concurrent_self_entry(monkeypatch):

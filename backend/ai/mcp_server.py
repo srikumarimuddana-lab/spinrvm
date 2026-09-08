@@ -45,13 +45,15 @@ except ImportError:
     from ai.tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 
 try:
-    from ..dependencies import ADMIN_STAFF_ROLES, get_current_user
+    from ..dependencies import ADMIN_STAFF_ROLES, get_current_user, get_token_session_id
     from ..settings_loader import get_app_settings
     from ..utils.redis_client import redis_expire, redis_incr
+    from ..utils.session_revocation import is_session_revoked
 except ImportError:
-    from dependencies import ADMIN_STAFF_ROLES, get_current_user
+    from dependencies import ADMIN_STAFF_ROLES, get_current_user, get_token_session_id
     from settings_loader import get_app_settings
     from utils.redis_client import redis_expire, redis_incr
+    from utils.session_revocation import is_session_revoked
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +189,19 @@ class MCPAuthMiddleware:
 
         if not _is_customer_principal(user):
             await _send_json(send, 403, {"detail": "Staff tokens are not accepted on /mcp"})
+            return
+
+        # F02: /mcp calls get_current_user directly rather than through a
+        # FastAPI dependency, so it cannot pick up get_current_user_active_session
+        # the way the AI routes do — the tombstone check is spelled out here
+        # instead. An unattended agent client holding a signed-out token is
+        # exactly the zombie-writer case session tombstones exist for.
+        # Fail-open on every ambiguous input, same as everywhere else.
+        # get_token_session_id is a plain async function (its Depends default is
+        # only for FastAPI); calling it with the credentials we already built
+        # reuses one decode path instead of duplicating JWT parsing here.
+        if await is_session_revoked(await get_token_session_id(credentials)):
+            await _send_json(send, 401, {"detail": "ERR_SESSION_REVOKED"})
             return
 
         token = current_ai_user.set(user)

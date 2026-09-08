@@ -72,6 +72,33 @@ class MigrationStatusReport:
     tools: list[ToolStatus] = field(default_factory=list)
 
 
+# PostgREST compiles `.in_(column, values)` into an `in.(v1,v2,...)` URL
+# query parameter, so the id list travels in the request line, not a body.
+# At fleet size (~900+ drivers x 36-char UUIDs) that is a ~35 KB URL, and the
+# edge proxy in front of PostgREST rejects it before PostgREST ever sees it
+# (opaque "JSON could not be generated" client error, nothing in PostgREST's
+# own logs) -- see backend/tests/test_oversized_in_batching.py for the
+# production incidents this exact failure caused elsewhere (2026-08-31,
+# 2026-09-03). This module talks to `supabase_client.supabase` directly
+# (sync postgrest-py client), not the async `repositories._base` layer that
+# already has `get_rows_batched_in` for that binding, so it needs its own
+# batching helper -- same conservative batch size as `_base.py`'s
+# `_IN_BATCH_SIZE` for consistency.
+_IN_BATCH_SIZE = 150
+
+
+def _select_in_batched(table: str, select_cols: str, column: str, values: list[str]) -> list[dict]:
+    """``select(select_cols).in_(column, values)``, split across requests of
+    at most ``_IN_BATCH_SIZE`` values each, concatenated in batch order."""
+    if not values:
+        return []
+    rows: list[dict] = []
+    for i in range(0, len(values), _IN_BATCH_SIZE):
+        chunk = values[i : i + _IN_BATCH_SIZE]
+        rows.extend(supabase.table(table).select(select_cols).in_(column, chunk).execute().data or [])
+    return rows
+
+
 def _count(table: str, filters: dict[str, Any]) -> int:
     """SELECT id with the given filters, return len(). Uses PostgREST's
     exact count header would be more efficient than fetching rows, but this
@@ -172,7 +199,7 @@ def _tool_4_sin_dob_backfill(eligible_ids: list[str]) -> ToolStatus:
             "No eligible drivers yet (run Bulk Driver Import or Legacy Driver Import first)",
             "/dashboard/drivers/legacy-sin-dob-backfill",
         )
-    rows = supabase.table("drivers").select("id,sin,date_of_birth").in_("id", eligible_ids).execute().data or []
+    rows = _select_in_batched("drivers", "id,sin,date_of_birth", "id", eligible_ids)
     with_sin = sum(1 for r in rows if r.get("sin"))
     with_dob = sum(1 for r in rows if r.get("date_of_birth"))
     total = len(eligible_ids)
@@ -201,9 +228,7 @@ def _tool_5_vehicle_history_backfill(eligible_ids: list[str]) -> ToolStatus:
             "No eligible drivers yet (run Bulk Driver Import or Legacy Driver Import first)",
             "/dashboard/drivers/legacy-vehicle-history-backfill",
         )
-    rows = (
-        supabase.table("driver_vehicle_history").select("driver_id").in_("driver_id", eligible_ids).execute().data or []
-    )
+    rows = _select_in_batched("driver_vehicle_history", "driver_id", "driver_id", eligible_ids)
     with_history = len({r["driver_id"] for r in rows if r.get("driver_id")})
     total = len(eligible_ids)
     state = "done" if with_history == total else ("not_started" if with_history == 0 else "partial")
@@ -235,9 +260,7 @@ def _tool_6_orphaned_accounts() -> ToolStatus:
             "/dashboard/drivers/legacy-import",
         )
     have_driver_row = {
-        r["user_id"]
-        for r in supabase.table("drivers").select("user_id").in_("user_id", ids).execute().data or []
-        if r.get("user_id")
+        r["user_id"] for r in _select_in_batched("drivers", "user_id", "user_id", ids) if r.get("user_id")
     }
     orphaned = len(ids) - len(have_driver_row)
     return ToolStatus(
@@ -286,7 +309,7 @@ def _tool_9_tax_id_import(eligible_ids: list[str]) -> ToolStatus:
             "No eligible drivers yet",
             "/dashboard/bulk-operations",
         )
-    rows = supabase.table("drivers").select("id,gst_bn").in_("id", eligible_ids).execute().data or []
+    rows = _select_in_batched("drivers", "id,gst_bn", "id", eligible_ids)
     with_gst = sum(1 for r in rows if r.get("gst_bn"))
     total = len(eligible_ids)
     state = "done" if with_gst == total else ("not_started" if with_gst == 0 else "partial")
@@ -518,15 +541,18 @@ def _tool_19_id_crosswalk_backfill(eligible_ids: list[str]) -> ToolStatus:
             "No eligible drivers yet (run Bulk Driver Import or Legacy Driver Import first)",
             "/dashboard/bulk-operations",
         )
-    rows = (
-        supabase.table("legacy_id_crosswalk")
-        .select("spinr_user_id")
-        .eq("entity_type", "driver")
-        .in_("spinr_user_id", eligible_ids)
-        .execute()
-        .data
-        or []
-    )
+    rows: list[dict] = []
+    for i in range(0, len(eligible_ids), _IN_BATCH_SIZE):
+        chunk = eligible_ids[i : i + _IN_BATCH_SIZE]
+        rows.extend(
+            supabase.table("legacy_id_crosswalk")
+            .select("spinr_user_id")
+            .eq("entity_type", "driver")
+            .in_("spinr_user_id", chunk)
+            .execute()
+            .data
+            or []
+        )
     with_crosswalk = len({r["spinr_user_id"] for r in rows if r.get("spinr_user_id")})
     total = len(eligible_ids)
     state = "done" if with_crosswalk == total else ("not_started" if with_crosswalk == 0 else "partial")

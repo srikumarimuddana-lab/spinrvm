@@ -23351,13 +23351,11 @@ how much they de-risk a public launch._
   `wait-for-processing`" reasoning above was based on incomplete
   information: the failure is on the SARIF upload's own precondition
   check, not on the `wait-for-processing` poll specifically, so dropping
-  that flag would not have helped either. This blocker was only directly
-  confirmed on `ci.yml`'s `security-scan` job (Trivy fs-scan upload) — the
-  other 3 sites (`docker-image-scan`, G3, G6) share the identical
-  `codeql-action/upload-sarif` call and near-certainly hit the same
-  repo-level check, but that has not been independently confirmed for
-  each; G3/G6's own `upload-sarif` steps were still in progress when this
-  was written.
+  that flag would not have helped either. **Confirmed on all 4 sites**
+  (2026-09-08, later same day): `security-scan`, `G6`/`container-scan`,
+  `G3`/`semgrep`, and `docker-image-scan` all show the identical
+  `Code scanning is not enabled for this repository` error — this is
+  conclusively repo-wide, not specific to any one job.
 - **Human/admin action needed:** a repo admin must enable Code scanning
   under Settings → Code security and analysis (and, if this is a private
   repo without GitHub Advanced Security, that may need enabling/purchasing
@@ -23376,14 +23374,12 @@ how much they de-risk a public launch._
   `codeql-action/upload-sarif` call site to confirm the full set of 4;
   after pushing the fix, pulled the actual job log from PR #5131's own
   first CI run to confirm the original error is gone and to find the new
-  blocker, rather than assuming the fix fully worked.
+  blocker; after that, pulled job logs for the other 3 sites too and
+  confirmed each independently — not assumed from the first one.
 - **What was NOT verified:** whether the SARIF results actually landed in
   GitHub's Code Scanning UI despite the reported failures, before this
   fix, at any of the 4 sites (moot now — Code Scanning being disabled
-  repo-wide means the answer is almost certainly "no" for all of them);
-  whether the new blocker reproduces identically on the other 3 call
-  sites (near-certain but not independently confirmed for each, per
-  above).
+  repo-wide means the answer is almost certainly "no" for all of them).
 
 ## Recently completed (do not redo)
 

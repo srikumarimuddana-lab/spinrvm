@@ -86,9 +86,28 @@ jobs:
 
       - name: Publish OTA update
         env:
-          CHANNEL: ${{ github.event.inputs.profile || 'preview' }}
+          INPUT_PROFILE: ${{ github.event.inputs.profile }}
+          EVENT_NAME: ${{ github.event_name }}
           MSG: ${{ github.event.head_commit.message }}
         run: |
+          # `github.event.inputs.*` is only populated for workflow_dispatch —
+          # on the ordinary `push` trigger it is always empty, so
+          # `github.event.inputs.profile || 'preview'` silently fell through to
+          # 'preview' on every push, even though this workflow's own header
+          # comment documents "publishes ... to the `production` channel" on
+          # push to main. Confirmed via a real run's log (CHANNEL: preview on
+          # a push-triggered run) — every push-triggered OTA update since this
+          # workflow existed went to `preview`, never `production`; no
+          # push-triggered update ever reached a production-channel (Play
+          # Store / App Store) install. workflow_dispatch runs were unaffected
+          # (the dropdown always supplies a value).
+          if [ -n "$INPUT_PROFILE" ]; then
+            CHANNEL="$INPUT_PROFILE"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            CHANNEL="production"
+          else
+            CHANNEL="preview"
+          fi
           MESSAGE="${MSG:-manual update}"
           # eas update truncates at 1024 chars; keep just the first line.
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
@@ -139,9 +158,18 @@ jobs:
 
       - name: Publish OTA update
         env:
-          CHANNEL: ${{ github.event.inputs.profile || 'preview' }}
+          INPUT_PROFILE: ${{ github.event.inputs.profile }}
+          EVENT_NAME: ${{ github.event_name }}
           MSG: ${{ github.event.head_commit.message }}
         run: |
+          # See rider job above for why this can't be `inputs.profile || 'preview'`.
+          if [ -n "$INPUT_PROFILE" ]; then
+            CHANNEL="$INPUT_PROFILE"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            CHANNEL="production"
+          else
+            CHANNEL="preview"
+          fi
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
           # See rider job above — publish by branch, and always with an

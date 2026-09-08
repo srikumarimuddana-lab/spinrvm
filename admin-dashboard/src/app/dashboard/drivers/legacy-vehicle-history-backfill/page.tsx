@@ -52,6 +52,7 @@ import {
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { exportToCsv } from "@/lib/export-csv";
 
 /** The two files, in the order an operator meets them in the export. */
@@ -158,6 +159,8 @@ export default function LegacyVehicleHistoryBackfillPage() {
     const [validating, setValidating] = useState(false);
     const [committing, setCommitting] = useState(false);
     const [committedSummary, setCommittedSummary] = useState<string | null>(null);
+
+    useUnsavedChangesWarning(!!report?.can_commit && !committedSummary);
 
     if (!allowed) return null;
 

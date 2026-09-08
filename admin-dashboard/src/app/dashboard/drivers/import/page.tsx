@@ -46,6 +46,7 @@ import {
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { exportToCsv } from "@/lib/export-csv";
 
 // Header for the downloadable template. The first nine columns are required by
@@ -165,6 +166,8 @@ export default function BulkImportPage() {
             .then((rows) => setServiceAreas(Array.isArray(rows) ? rows : []))
             .catch(() => setServiceAreas([]));
     }, []);
+
+    useUnsavedChangesWarning(!!report?.can_commit && !committedSummary);
 
     if (!allowed) return null;
 

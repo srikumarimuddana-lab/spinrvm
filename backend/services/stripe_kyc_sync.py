@@ -468,7 +468,12 @@ async def get_legal_name_and_address_from_stripe(driver: Dict[str, Any]) -> Opti
     import stripe
 
     try:
-        account = stripe.Account.retrieve(account_id, api_key=stripe_secret)
+        # Off the event loop (C86): routes/admin/compliance.py calls this once
+        # per driver inside a loop over the whole qualifying set for the
+        # annual T4A export -- a bare synchronous call here blocks every
+        # other concurrent request/loop on this worker for each driver's
+        # round-trip, not just the exporting admin's own request.
+        account = await asyncio.to_thread(stripe.Account.retrieve, account_id, api_key=stripe_secret)
     except Exception:
         logger.error(
             "[STRIPE-KYC] legal-name-address: Account.retrieve failed for %s",

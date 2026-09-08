@@ -22444,8 +22444,40 @@ how much they de-risk a public launch._
 
 ### C82. Per-worker metrics counters flap under >1 Uvicorn worker (F6)
 
-- [ ] **Status:** open, scheduled with WS-3 (worker-tier topology), NOT
-  fixed in the 2026-09-08 hardening tranche. Per-process metrics design is
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  for the metrics-labeling half; the `UVICORN_WORKERS` consistency half was
+  attempted and then **reverted** after review (see below) —
+  `should_spawn_on_api()` loop-spawning topology (WS-3's other half) remains
+  a separate, untouched concern. `render_prometheus()` now attaches a
+  `worker_pid` label (`os.getpid()`, read live at render time, not cached
+  at import, plus a guard that strips any caller-supplied `worker_pid` key
+  first so it can never render as a duplicate label) to every
+  counter/gauge/histogram line via a new `_with_worker_pid()` helper,
+  reusing the same label name/reasoning already established in
+  `routes/admin/monitoring.py`'s fan-out stats. Docstring states the
+  aggregation contract: counters/histograms are additive (`sum by (...)`
+  across workers is correct); gauges are not (`max by (...)`, never
+  `sum by (...)`) — confirmed via grep that no existing query in
+  `metrics-agent/grafana/alert-rules.yaml` or `dashboard-panel.json`
+  currently sums a gauge, so this is a preventive contract for future
+  dashboard authors, not a fix to an existing wrong query.
+  **`UVICORN_WORKERS` default was NOT changed** — an initial attempt pinned
+  `${UVICORN_WORKERS:-4}` → `${UVICORN_WORKERS:-2}` in `backend/Dockerfile`
+  and `railway.json` to match `fly.toml`'s explicit setting, but
+  `spinr-observability-reviewer` caught that this assumed Railway shares
+  Fly's memory budget with no evidence — `docs/adr/006-railway-deployment.md`
+  documents `--workers 4` as a *deliberate*, resource-sized decision specific
+  to Railway's own topology (4 workers × background loops across its 2
+  replicas), not an arbitrary default. Reverted both files rather than ship
+  an unverified capacity assumption; **still open**: someone with access to
+  Railway's dashboard should confirm its actual current instance
+  plan/memory before any future attempt to change this default (note
+  ADR-006 predates the Fly-primary switch, ADR-007, and the loop count
+  growing from 7 to 41, so its own "4 workers × 7 loops" math is itself
+  stale — the right number today isn't necessarily either 2 or 4, it's
+  whatever Railway's current instance size actually supports). See
+  `docs/change-log/2026-09-08-c82-metrics-worker-pid-label.md`.
+- **Original plan:** Per-process metrics design is
   documented and cross-replica scraping is solved (ADR-010); the untracked
   gap is `fly.toml`'s `UVICORN_WORKERS="2"` sharing one port so each scrape
   hits a random worker. Plan: add a `worker_pid` label in
@@ -22501,31 +22533,87 @@ how much they de-risk a public launch._
 
 ### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)
 
-- [ ] **Status:** open, deliberately NOT fixed in the 2026-09-08 hardening
-  tranche (only the two `routes/webhooks.py` sites were — see this file's
-  now-closed F8 entry, folded into the change-log rather than its own
-  numbered item since it shipped same-day). Remaining bare
-  `stripe.*.retrieve/create/...(` call sites, none touched:
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c86-stripe-loop`.
+  Re-triage of the original 9-site list (below) found it was partly stale —
+  2 sites were already correctly offloaded by their callers (the original
+  grep-based pass found the bare `stripe.X.Y(` text but never checked
+  whether the enclosing function was itself thread-wrapped from outside),
+  and 1 has no live caller anywhere in the codebase at all (dead code per
+  its own module docstring). The remaining 5 genuinely-blocking sites are
+  now fixed, each via `asyncio.to_thread` — single calls wrapped directly
+  (`await asyncio.to_thread(stripe.X.Y, args...)`), and the two
+  multi-call pagination loops (which can't be inlined as a lambda) extracted
+  into a named nested function run via `asyncio.to_thread(name)`, the same
+  idiom already used in `stripe_payout_sync_service.py`:
+  1. `utils/payment_retry.py` (`retry_failed_payments`, the
+     `payment_retry (5min)` loop) — 3 sites (`retrieve`/`confirm`/`capture`).
+  2. `utils/reconciliation.py`'s `_sum_stripe_intents` — pagination loop
+     extracted to `_list_and_sum`.
+  3. `utils/stripe_reconcile.py`'s `_run_reconciliation_tick` — pagination
+     loop extracted to `_list_stripe_pis`.
+  4. `services/stripe_kyc_sync.py`'s `get_legal_name_and_address_from_stripe`
+     — single call. Its caller, `routes/admin/compliance.py`'s annual T4A
+     export, invokes this once per driver inside a loop over the whole
+     qualifying set — the original "caller frequency not yet traced" note
+     undersold this: infrequent (once a year) but every call in that loop
+     blocks all other traffic on the worker while the export runs.
+  5. `routes/admin/dispute_evidence_submission.py`'s
+     `admin_submit_dispute_evidence` — single call, a request-path admin
+     route handler.
+
+  `backend/tests/test_stripe_event_loop_offload.py`'s AST-based static
+  checker (previously only recognizing the lambda-wrapped idiom) was
+  generalized to also recognize the named-nested-function idiom, with
+  coverage added for all 5 fixed files, a lock-in regression test for the
+  2 already-correctly-wrapped files found during re-triage
+  (`stripe_payout_sync_service.py`, `stripe_mapping_import_service.py`),
+  and 3 synthetic tests proving the checker's own logic isn't vacuously
+  true. `spinr-money-auditor`: **SAFE TO MERGE, no findings** — confirmed
+  every diff is a byte-for-byte argument-identical execution-model change,
+  exception propagation unchanged at both `try/except`-wrapped sites,
+  atomic-claim-before-Stripe-call ordering unchanged in `payment_retry.py`,
+  and both idempotency keys unchanged. 273+ tests pass with zero test
+  behavior changes needed for the 5 application fixes (existing tests
+  patch the Stripe SDK methods as module attributes, which `to_thread`
+  still resolves and calls correctly). See
+  `docs/change-log/2026-09-08-c86-stripe-event-loop-offload.md`.
+- **Not fixed here, and correctly so:**
+  `services/legacy_payout_correction_service.py:569`'s `fire_ready_transfers`
+  — its own module docstring states it "is not wired into any route, CLI
+  entry point, or background loop... every call is manual," confirmed via
+  a repo-wide grep for callers outside `tests/` (none exist). No shared
+  event loop for this to block; wrapping it would be busywork with no
+  effect, per this repo's simplicity-first convention.
+- **Original 9-site list (2026-09-08, superseded by the re-triage above):**
   `services/stripe_kyc_sync.py:471`, `utils/payment_retry.py:465/491/558`,
   `utils/reconciliation.py:303`, `utils/stripe_reconcile.py:157`,
   `services/stripe_payout_sync_service.py:234`,
   `services/stripe_mapping_import_service.py:967`,
   `routes/admin/dispute_evidence_submission.py:143`,
-  `services/legacy_payout_correction_service.py:569`. Most of these run in
-  background loops (lower urgency than a request-path webhook handler) —
-  triage each for actual event-loop-blocking impact before wrapping in
-  `asyncio.to_thread` wholesale.
-- **Found during:** PR #5085's validation of PR #5079's F8 finding.
+  `services/legacy_payout_correction_service.py:569`.
+- **Found during:** PR #5085's validation of PR #5079's F8 finding;
+  re-triaged and closed 2026-09-08 on
+  `claude/pr-5085-5079-hardening-c86-stripe-loop` (superseding an
+  intermediate "triaged, not yet fixed" note that briefly existed on
+  `main` via PR #5100 — that snapshot predates the fix in this section).
 
 ### C87. CI scanner-download flakiness (admin-bundle secret scan, trufflehog install)
 
-- [ ] **Status:** open, deliberately skipped in the 2026-09-08 hardening
-  tranche — explicitly marked optional in the validating plan. Observed:
-  `ci.yml`'s `security-scan` failed once at "Install trufflehog v3" (a
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Implemented the proposed fix below in both call sites plus, self-found
+  while fixing the first, the second Trivy→SARIF upload pair in
+  `docker-image-scan`: `curl -fsSL --retry 5 --retry-delay 3
+  --retry-all-errors` download-to-file, `tar -tzf` verify before extracting,
+  and `hashFiles(...) != ''` guards on both SARIF-upload steps so a failed
+  scan produces one clear failure instead of a second, misleading one.
+  `spinr-cicd-infra-reviewer`: SAFE TO MERGE, no blockers/warnings. See
+  `docs/change-log/2026-09-08-c87-ci-scanner-download-retry.md`.
+- **Original observation:** `ci.yml`'s
+  `security-scan` failed once at "Install trufflehog v3" (a
   non-gzip download) and `security-gates.yml`'s `bundle-secrets` (G5b)
   failed once on an HTTP 504 the same day; both passed on the next run
   without any code change, consistent with transient CDN/network flakes
-  rather than a real defect. Proposed fix if this recurs:
+  rather than a real defect. Proposed fix (now implemented):
   `curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors`, verify with
   `tar -tzf` before extraction, and guard the Trivy SARIF upload with
   `if: always() && hashFiles('trivy-results.sarif') != ''`.

@@ -596,9 +596,14 @@ jobs:
         # gitleaks-action@v2 does not support the `args` input.
         # Use a direct invocation via the gitleaks binary for non-git directory scans.
         run: |
+          # C87: download-then-verify instead of piping straight into tar --
+          # a truncated/HTTP-error download previously failed as a cryptic
+          # tar error mid-extract; --retry absorbs a transient CDN 5xx.
           GITLEAKS_VERSION="8.18.4"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin/ gitleaks
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -tzf gitleaks.tar.gz >/dev/null
+          tar -xzf gitleaks.tar.gz -C /usr/local/bin/ gitleaks
           gitleaks detect \
             --source admin-dashboard/.next/static \
             --no-git \

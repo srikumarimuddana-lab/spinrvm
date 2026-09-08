@@ -45,11 +45,11 @@ except ImportError:
     from ai.tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 
 try:
-    from ..dependencies import get_current_user
+    from ..dependencies import ADMIN_STAFF_ROLES, get_current_user
     from ..settings_loader import get_app_settings
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
-    from dependencies import get_current_user
+    from dependencies import ADMIN_STAFF_ROLES, get_current_user
     from settings_loader import get_app_settings
     from utils.redis_client import redis_expire, redis_incr
 
@@ -72,6 +72,37 @@ async def _send_json(send, status: int, payload: Dict[str, Any]) -> None:
 
 def _audience_for(user: Dict[str, Any]) -> str:
     return "driver" if user.get("is_driver") else "rider"
+
+
+def _is_customer_principal(user: Dict[str, Any]) -> bool:
+    """Whether this authenticated principal is a customer (rider/driver).
+
+    /mcp exposes rider/driver tools scoped to the supplied identity. A staff
+    principal is not such an identity and has no business on this surface.
+
+    F07 (2026-09-08 AI security assessment): this used to be
+    ``user.get("role") == "admin"``, which rejected exactly one of the six
+    roles the verified staff pipeline returns — ``super_admin``,
+    ``operations``, ``support``, ``finance`` and ``custom`` all reached the
+    MCP app. Offline middleware probes confirmed all five.
+
+    Gated primarily on ``_admin_verified``, the private marker that ONLY
+    dependencies._verify_admin_payload sets after the full admin pipeline —
+    the same authoritative signal ``get_admin_user`` uses, and for the same
+    reason it gives there: ``role`` is a users-table column that ordinary
+    tokens also carry, so it proves nothing on its own.
+
+    ``ADMIN_STAFF_ROLES`` is then checked as a fail-closed backstop. On the
+    ADMIT side that would be unsound (a rider row whose ``users.role`` column
+    says "support" is not staff), but this is a DENY rule, where
+    over-rejecting is the safe direction: it keeps the gate closed even if a
+    future path stops stripping the marker.
+    """
+    if user.get("_admin_verified"):
+        return False
+    if (user.get("role") or "") in ADMIN_STAFF_ROLES:
+        return False
+    return bool(user.get("id"))
 
 
 def _serialize_tool_payload(payload: Any) -> str:
@@ -154,10 +185,8 @@ class MCPAuthMiddleware:
             await _send_json(send, 401, {"detail": "Unauthorized"})
             return
 
-        if user.get("role") == "admin":
-            # Admin tokens carry trusted claims for the dashboard — they are
-            # not rider/driver identities and have no business on this surface.
-            await _send_json(send, 403, {"detail": "Admin tokens are not accepted on /mcp"})
+        if not _is_customer_principal(user):
+            await _send_json(send, 403, {"detail": "Staff tokens are not accepted on /mcp"})
             return
 
         token = current_ai_user.set(user)

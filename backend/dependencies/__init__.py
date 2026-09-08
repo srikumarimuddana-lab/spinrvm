@@ -243,6 +243,15 @@ def _firebase_session_revoked(payload: dict, invalid_before) -> bool:
         return True
 
 
+# Every role the verified staff token pipeline can return. Module-level so
+# consumers that must EXCLUDE staff principals (ai/mcp_server.py, F07) share one
+# list with the pipeline that admits them — a private copy in each is how /mcp
+# came to reject only "admin" while five other verified staff roles passed.
+# Deny-side consumers should still prefer the `_admin_verified` marker, which is
+# the authoritative signal; this set is the fail-closed backstop.
+ADMIN_STAFF_ROLES = frozenset({"admin", "super_admin", "operations", "support", "finance", "custom"})
+
+
 async def _verify_admin_payload(payload: dict) -> "dict | None":
     """Full admin verification: aud, JTI revocation, staff active, token_version, idle timeout.
 
@@ -251,7 +260,7 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
     Shared by the HTTP path (get_current_user) and the WebSocket auth path so the two
     can never diverge.
     """
-    _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+    _admin_roles = ADMIN_STAFF_ROLES
     _token_aud = payload.get("aud")
     # Admin token: aud MUST equal JWT_AUD_ADMIN. The former legacy branch that
     # accepted a no-aud token with role+email claims let a crafted admin-001

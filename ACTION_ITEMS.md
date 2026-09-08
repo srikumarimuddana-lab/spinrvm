@@ -22679,16 +22679,20 @@ how much they de-risk a public launch._
   refund_amount = <a real value read back> AND id = <that row's id>`,
   confirm it returns that exact row) against the real column — if it
   doesn't round-trip cleanly, the F1 CAS filter needs the `$lte`-based
-  fallback documented in the change-log referenced above. (2) Add the
-  missing `ALTER TABLE rides ADD COLUMN IF NOT EXISTS refund_amount
-  NUMERIC(8,2) DEFAULT 0` as a proper new-numbered migration (append-only;
-  never edit history) so `spinrmobileapp` and any future environment
-  bootstrapped from `backend/migrations/` alone actually has this column,
-  and so it's no longer solely dependent on undocumented manual DDL. (3)
+  fallback documented in the change-log referenced above. **Still open —
+  requires `Spinr-Prod` access this session doesn't have; see C89.**
+  (2) ~~Add the missing `ALTER TABLE rides ADD COLUMN IF NOT EXISTS
+  refund_amount NUMERIC(8,2) DEFAULT 0` as a proper new-numbered
+  migration~~ **Done 2026-09-08**:
+  `backend/migrations/408_rides_refund_amount.sql`, reviewed by
+  `spinr-migration-reviewer`. Safe no-op on production (already has the
+  column via undocumented DDL); actually creates it on `spinrmobileapp` and
+  any future environment bootstrapped from `backend/migrations/` alone. (3)
   Re-scope this session's Supabase connector (or add a second one) to
   reach `Spinr-Prod` if ongoing production verification access is wanted —
-  a decision `.claude/context/connector-scoping.md` already flags as "not
-  yet made."
+  **see C89 for the concrete recommendation**, still pending human
+  execution (needs an interactive Supabase dashboard/OAuth action no
+  session can perform).
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
 ### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
@@ -22737,6 +22741,55 @@ how much they de-risk a public launch._
   account/org memberships should pick one of the options above (or reject
   the need entirely, if C88-style live verification isn't considered worth
   the access it requires).
+- **Recommendation (2026-09-08): Option 2** — a second, separately-scoped
+  Supabase connector dedicated to `Spinr-Prod`/`MobileAppStaging`, kept
+  read-only, never the same connector used for routine `spinrmobileapp`
+  dev work. Reasoning: Option 1 (invite the current account into the other
+  org) directly contradicts the narrowest-scope principle
+  `.claude/context/connector-scoping.md` itself states — it would hand
+  *every* future session using the existing dev connector standing reach
+  into production, for the sake of an occasional verification need. Option
+  3 (do nothing) is the safest in isolation but means C88-style questions
+  keep stalling on a human every time; not worth foreclosing entirely when
+  Option 2 gets the same safety at a one-time setup cost. A second,
+  narrowly-scoped, read-only connector is the one path that gets
+  verification capability without ever widening what a routine dev session
+  can reach or mutate in production.
+  **Concrete steps for whoever owns the Supabase account (human action,
+  not executable from a session):**
+  1. In the Supabase dashboard, under the account that is a member of
+     `swarnkiran88@gmail.com's Org` (the org holding `Spinr-Prod` /
+     `cfrazforbupizntxvvtp` and `MobileAppStaging` / `mvmyygoinicjdpqprizr`),
+     open **Account → Access Tokens** and check whether a token can be
+     scoped to a specific project/org there (Supabase has been adding
+     scoped-PAT support in its dashboard; confirm current availability
+     rather than assuming — this doc can't verify a UI it can't reach).
+     If scoped tokens are available, generate one restricted to
+     `Spinr-Prod` only (add `MobileAppStaging` only if verification work
+     genuinely needs it too — don't grant both by default).
+  2. In claude.ai → **Settings → Connectors**, add a **second** Supabase
+     connector (do not edit/reuse the existing `spinrmobileapp` one) using
+     that scoped token. If the MCP integration exposes URL params, also
+     append `?project_ref=cfrazforbupizntxvvtp&read_only=true` so the
+     restriction holds even if the token itself turns out to be broader
+     than intended.
+  3. Label the two connectors distinguishably in the Connectors UI (e.g.
+     "Supabase — spinrmobileapp (dev)" vs. "Supabase — Spinr-Prod
+     (read-only verification)") so nobody attaches the wrong one to a
+     routine session by mistake.
+  4. **Verify live before trusting it**: from a session using only the new
+     connector, call `list_projects` and confirm it returns exactly
+     `Spinr-Prod` (and `MobileAppStaging` only if deliberately included) —
+     per this doc's own "verified live, not assumed" standard. If it
+     returns more than intended, the token/connector is broader than
+     configured and needs fixing before use.
+  5. Update `.claude/context/connector-scoping.md`'s Supabase row (or add a
+     second row for this new connector) recording the mechanism, scope,
+     and verification date, same as every other entry in that table.
+  This mirrors the user's own stated project-specific-access guardrail
+  (never grant account-/org-wide reach when a narrower scope will do), so
+  it should be the default answer for any future connector-scoping
+  decision in this repo, not just this one.
 - **Found during:** C88's investigation, PR #5088 F1's post-merge
   verification attempt.
 

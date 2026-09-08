@@ -23420,11 +23420,20 @@ how much they de-risk a public launch._
   just a `main`-branch nuisance. Same `continue-on-error: true` mitigation
   applied there too; confirmed the underlying gate (SR-03's own
   `sys.exit(1)` on a real finding) is independent of the upload step and
-  still enforces regardless. **Still not done:** `security-gates.yml`'s
-  G6/container-scan (`:682-685`) and `ci.yml`'s `docker-image-scan`
-  (`:1083-1084`) have the same latent issue but were `skipped` (path-
-  filtered, docs-only PR) rather than actively blocking anything here —
-  left as a follow-up rather than fixed pre-emptively.
+  still enforces regardless. **Third and fourth sites fixed same PR, same
+  day:** touching `.github/workflows/**` itself made path-filtering run
+  `security-gates.yml`'s G6/container-scan on this PR too (previously
+  observed `skipped`) — it hit the identical failure and, being in
+  "Security gates summary"'s `needs:` list, would have blocked the PR the
+  same way G3 did. Fixed identically (`:682-685`), confirmed the real
+  enforcing scan (`exit-code: '1'`) and the SARIF-generating trivy-action
+  run both already succeeded before this upload step's failure. Applied
+  the same fix pre-emptively to the 4th and last known site,
+  `ci.yml`'s `docker-image-scan` (`:1109-1122`), for the same reason
+  (workflow-file changes make it run too) rather than wait for a third
+  round-trip to discover it failing. **All 4 known
+  `codeql-action/upload-sarif` call sites in the repo now have this
+  mitigation.**
 - **Verification performed:** read the full `security-scan` and `G3 ·
   Semgrep` job logs for both original failures; re-read every enclosing
   `permissions:` block directly (not via a context-truncated grep this

@@ -692,6 +692,13 @@ jobs:
           skip-files: '**/pip/_vendor/bom.cdx.json'
       - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()
+        # C94: same repo-wide "Code scanning is not enabled" failure as G3's
+        # upload-sarif step above. Confirmed the actual enforcing scan (the
+        # earlier "Scan image with Trivy" step, exit-code: 1) and the SARIF-
+        # generating trivy-action run both succeeded on this job's real
+        # failure — only this final upload-to-disabled-feature step failed,
+        # so this mitigation doesn't weaken G6's real vulnerability gate.
+        continue-on-error: true
         with:
           sarif_file: trivy-container.sarif
 

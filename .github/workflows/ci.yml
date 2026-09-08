@@ -1112,6 +1112,12 @@ jobs:
         # cascade into a second, misleading "file not found" failure here.
         if: always() && hashFiles('trivy-image.sarif') != ''
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+        # C94: same repo-wide "Code scanning is not enabled" failure as the
+        # other 3 upload-sarif call sites. This job's real enforcement is the
+        # separate "Scan image with Trivy" step above (`exit-code: '1'`,
+        # format: table) -- independent of this SARIF upload, so this
+        # mitigation doesn't weaken it.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-image.sarif'
 

@@ -174,7 +174,7 @@ class TestFirebaseAuthDbFailureRaises503:
         return stub
 
     async def test_new_user_db_persist_failure_raises_503(self):
-        fake_payload = {"uid": "firebase_uid_1", "phone_number": "+13061234567", "aud": "driver-app"}
+        fake_payload = {"uid": "firebase_uid_1", "phone_number": "+13061234567", "aud": "driver-app", "firebase": {"sign_in_provider": "phone"}}
         fb_stub = self._make_firebase_stub(fake_payload)
 
         with patch.dict(sys.modules, {"firebase_admin.auth": fb_stub}):
@@ -221,7 +221,7 @@ class TestFirebaseAuthDbFailureRaises503:
             assert "persist" in exc_info.value.detail
 
     async def test_existing_user_session_update_failure_raises_503(self):
-        fake_payload = {"uid": "firebase_uid_2", "phone_number": "+13061234568", "aud": "driver-app"}
+        fake_payload = {"uid": "firebase_uid_2", "phone_number": "+13061234568", "aud": "driver-app", "firebase": {"sign_in_provider": "phone"}}
         existing_user = {"id": "firebase_uid_2", "phone": "+13061234568", "token_version": 0}
         fb_stub = self._make_firebase_stub(fake_payload)
 
@@ -277,6 +277,7 @@ class TestFirebaseAuthDbFailureRaises503:
             "phone_number": "+13061234599",
             "aud": "driver-app",
             "auth_time": 1000,
+            "firebase": {"sign_in_provider": "phone"},
         }
         existing_user = {
             "id": "firebase_uid_rev",

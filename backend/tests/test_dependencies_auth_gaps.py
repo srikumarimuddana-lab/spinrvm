@@ -25,6 +25,18 @@ def _creds(token: str = "firebase-or-jwt-token") -> HTTPAuthorizationCredentials
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
 
+def _eligible(payload: dict) -> dict:
+    """Stamp a Firebase payload with an eligible identity (F01).
+
+    Real Firebase ID tokens always carry `firebase.sign_in_provider`; these
+    fixtures predate the eligibility gate in utils/firebase_identity.py and
+    omit it. Tests whose subject is a LATER check (user lookup, revocation
+    watermark, driver flag, account status) stamp it here so they still reach
+    that check. The gate itself is covered in test_firebase_identity_policy.py.
+    """
+    return {"phone_number": "+15550000000", "firebase": {"sign_in_provider": "phone"}, **payload}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # get_current_user — Firebase success path
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +69,7 @@ async def test_firebase_wrong_audience_rejected():
 
 
 async def test_firebase_uid_lookup_hit_returns_user():
-    payload = {"uid": "fb-1", "aud": "rider-app"}
+    payload = _eligible({"uid": "fb-1", "aud": "rider-app"})
     user_row = {"id": "fb-1", "phone": "+1", "sessions_invalid_before": None}
     with (
         patch("dependencies.firebase_auth.verify_id_token", return_value=payload),
@@ -75,7 +87,7 @@ async def test_firebase_uid_lookup_hit_returns_user():
 
 
 async def test_firebase_uid_miss_falls_back_to_phone_lookup():
-    payload = {"uid": "fb-missing", "aud": "rider-app", "phone_number": "+15551234567"}
+    payload = _eligible({"uid": "fb-missing", "aud": "rider-app", "phone_number": "+15551234567"})
     user_row = {"id": "u-by-phone", "phone": "+15551234567", "sessions_invalid_before": None}
     with (
         patch("dependencies.firebase_auth.verify_id_token", return_value=payload),
@@ -95,7 +107,7 @@ async def test_firebase_uid_miss_falls_back_to_phone_lookup():
 async def test_firebase_both_lookups_miss_raises_service_unavailable():
     """CLAUDE.md: never auto-create on a None lookup — fail closed with 503
     so the client retries instead of forking a phantom account."""
-    payload = {"uid": "fb-missing", "aud": "rider-app", "phone_number": "+15551234567"}
+    payload = _eligible({"uid": "fb-missing", "aud": "rider-app", "phone_number": "+15551234567"})
     with (
         patch("dependencies.firebase_auth.verify_id_token", return_value=payload),
         patch("dependencies.settings.FIREBASE_RIDER_APP_ID", "rider-app"),
@@ -111,7 +123,7 @@ async def test_firebase_both_lookups_miss_raises_service_unavailable():
 
 async def test_firebase_session_revoked_by_logout_all_returns_401():
     future_auth_time = int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp())
-    payload = {"uid": "fb-1", "aud": "rider-app", "auth_time": future_auth_time}
+    payload = _eligible({"uid": "fb-1", "aud": "rider-app", "auth_time": future_auth_time})
     # sessions_invalid_before is AFTER auth_time → the sign-in predates the watermark.
     watermark = (datetime.now(timezone.utc)).isoformat()
     user_row = {"id": "fb-1", "phone": "+1", "sessions_invalid_before": watermark}
@@ -129,7 +141,7 @@ async def test_firebase_session_revoked_by_logout_all_returns_401():
 
 
 async def test_firebase_driver_flag_set_true_when_driver_row_exists():
-    payload = {"uid": "fb-1", "aud": "rider-app"}
+    payload = _eligible({"uid": "fb-1", "aud": "rider-app"})
     user_row = {"id": "fb-1", "phone": "+1", "sessions_invalid_before": None}
     with (
         patch("dependencies.firebase_auth.verify_id_token", return_value=payload),
@@ -145,7 +157,7 @@ async def test_firebase_driver_flag_set_true_when_driver_row_exists():
 
 
 async def test_firebase_deleted_account_rejected():
-    payload = {"uid": "fb-1", "aud": "rider-app"}
+    payload = _eligible({"uid": "fb-1", "aud": "rider-app"})
     user_row = {
         "id": "fb-1",
         "phone": "+1",

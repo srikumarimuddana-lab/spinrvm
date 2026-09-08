@@ -97,16 +97,32 @@ jobs:
           # comment documents "publishes ... to the `production` channel" on
           # push to main. Confirmed via a real run's log (CHANNEL: preview on
           # a push-triggered run) — every push-triggered OTA update since this
-          # workflow existed went to `preview`, never `production`; no
-          # push-triggered update ever reached a production-channel (Play
-          # Store / App Store) install. workflow_dispatch runs were unaffected
-          # (the dropdown always supplies a value).
+          # workflow existed went to `preview`, never `production`.
+          #
+          # That fix alone is still wrong for Android: the real Expo build
+          # history (checked against the dashboard, not assumed) shows every
+          # actual Android Play Store submission for both apps — rider-app's
+          # own production-track builds and driver-app's `android-auto`
+          # profile alike — was cut with a build profile whose `channel` is
+          # `preview` in eas.json, never `production`. Only iOS's real App
+          # Store submissions use the `production` profile/channel. So a
+          # single CHANNEL for both platforms would either strand Android on
+          # `preview` (fine) while wrongly assuming `production` (if uniform
+          # production), or fail to route iOS to where its real installs
+          # actually are (if uniform preview). Each platform now gets the
+          # channel its real store builds are actually on; workflow_dispatch
+          # keeps the operator's explicit choice uniform across platforms,
+          # since that's a deliberate manual override, not the push default
+          # this bug is about.
           if [ -n "$INPUT_PROFILE" ]; then
-            CHANNEL="$INPUT_PROFILE"
+            CHANNEL_IOS="$INPUT_PROFILE"
+            CHANNEL_ANDROID="$INPUT_PROFILE"
           elif [ "$EVENT_NAME" = "push" ]; then
-            CHANNEL="production"
+            CHANNEL_IOS="production"
+            CHANNEL_ANDROID="preview"
           else
-            CHANNEL="preview"
+            CHANNEL_IOS="preview"
+            CHANNEL_ANDROID="preview"
           fi
           MESSAGE="${MSG:-manual update}"
           # eas update truncates at 1024 chars; keep just the first line.
@@ -128,12 +144,20 @@ jobs:
           # EXPO_PUBLIC_BACKEND_URL went empty. `test` has no matching EAS
           # environment (they are development/preview/production), so it maps to
           # preview alongside the preview channel.
-          case "$CHANNEL" in
-            production) EAS_ENV=production ;;
-            *)          EAS_ENV=preview ;;
-          esac
-          eas update --branch "$CHANNEL" --environment "$EAS_ENV" \
-            --non-interactive --message "$MESSAGE"
+          #
+          # Two separate --platform-scoped publishes (not one unscoped call)
+          # because CHANNEL_IOS and CHANNEL_ANDROID can now legitimately
+          # differ (see above).
+          for pair in "ios:$CHANNEL_IOS" "android:$CHANNEL_ANDROID"; do
+            platform="${pair%%:*}"
+            channel="${pair#*:}"
+            case "$channel" in
+              production) env=production ;;
+              *)          env=preview ;;
+            esac
+            eas update --platform "$platform" --branch "$channel" \
+              --environment "$env" --non-interactive --message "$MESSAGE"
+          done
 
   driver:
     needs: detect
@@ -162,21 +186,33 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           MSG: ${{ github.event.head_commit.message }}
         run: |
-          # See rider job above for why this can't be `inputs.profile || 'preview'`.
+          # See rider job above for why this can't be `inputs.profile || 'preview'`,
+          # and why iOS and Android need different channels on push (real
+          # Android Play Store submissions — driver-app's own `android-auto`
+          # profile included — have so far always used channel `preview`,
+          # never `production`).
           if [ -n "$INPUT_PROFILE" ]; then
-            CHANNEL="$INPUT_PROFILE"
+            CHANNEL_IOS="$INPUT_PROFILE"
+            CHANNEL_ANDROID="$INPUT_PROFILE"
           elif [ "$EVENT_NAME" = "push" ]; then
-            CHANNEL="production"
+            CHANNEL_IOS="production"
+            CHANNEL_ANDROID="preview"
           else
-            CHANNEL="preview"
+            CHANNEL_IOS="preview"
+            CHANNEL_ANDROID="preview"
           fi
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
-          # See rider job above — publish by branch, and always with an
-          # explicit --environment.
-          case "$CHANNEL" in
-            production) EAS_ENV=production ;;
-            *)          EAS_ENV=preview ;;
-          esac
-          eas update --branch "$CHANNEL" --environment "$EAS_ENV" \
-            --non-interactive --message "$MESSAGE"
+          # See rider job above — publish by branch, always with an explicit
+          # --environment, and one --platform-scoped call per platform since
+          # the two channels can now differ.
+          for pair in "ios:$CHANNEL_IOS" "android:$CHANNEL_ANDROID"; do
+            platform="${pair%%:*}"
+            channel="${pair#*:}"
+            case "$channel" in
+              production) env=production ;;
+              *)          env=preview ;;
+            esac
+            eas update --platform "$platform" --branch "$channel" \
+              --environment "$env" --non-interactive --message "$MESSAGE"
+          done

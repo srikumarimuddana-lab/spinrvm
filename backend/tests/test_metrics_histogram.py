@@ -106,8 +106,8 @@ class TestExposition:
     def test_counters_and_gauges_unaffected(self):
         metrics.inc("test_plain_total")
         out = metrics.render_prometheus()
-        assert "test_plain_total{worker_pid=" in out
-        assert out.rstrip("\n").endswith("} 1")
+        line = next(line for line in out.splitlines() if line.startswith("test_plain_total{"))
+        assert line.endswith("} 1")
 
 
 class TestWorkerPidLabel:

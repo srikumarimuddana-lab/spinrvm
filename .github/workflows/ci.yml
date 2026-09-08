@@ -149,7 +149,7 @@ jobs:
           # tests/test_schemathesis_fuzz.py is excluded for a different reason:
           # not an invocation mismatch, but runtime cost. It's a pilot
           # (docs/audit/2026-09-08-agentic-tooling-atlas.md) that fuzzes all
-          # 527 of the app's GET operations -- @pytest.mark.slow alone doesn't
+          # 532 of the app's GET operations -- @pytest.mark.slow alone doesn't
           # keep it out, since this step never passes `-m "not slow"`. Run it
           # on demand locally (`pytest -m slow tests/test_schemathesis_fuzz.py`)
           # until its stability/runtime is proven; wiring it into CI as its own

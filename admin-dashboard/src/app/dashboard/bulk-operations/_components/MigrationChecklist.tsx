@@ -13,7 +13,7 @@
  * guessing at order.
  */
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { CheckCircle2, Circle, AlertTriangle, HelpCircle, RefreshCw, Loader2 } from "lucide-react";
 import { adminGetMigrationStatus, type MigrationToolStatus, type MigrationToolState } from "@/lib/api";
@@ -39,9 +39,51 @@ function StateBadge({ state }: { state: MigrationToolState }) {
     );
 }
 
-function ChecklistRow({ tool, isNext }: { tool: MigrationToolStatus; isNext: boolean }) {
+// Session-scoped (not persisted across browser sessions) so an operator who
+// runs a tool elsewhere and is redirected back here sees which row just
+// flipped to "done" — key is fixed and only ever read/written by this file.
+const LAST_TOOLS_KEY = "migration-checklist:last-tools";
+const JUST_COMPLETED_HIGHLIGHT_MS = 4000;
+
+type ToolSnapshot = Pick<MigrationToolStatus, "id" | "state">;
+
+function readLastToolsSnapshot(): ToolSnapshot[] | null {
+    try {
+        const raw = sessionStorage.getItem(LAST_TOOLS_KEY);
+        if (!raw) return null;
+        const parsed: unknown = JSON.parse(raw);
+        return Array.isArray(parsed) ? (parsed as ToolSnapshot[]) : null;
+    } catch {
+        // sessionStorage unavailable (private mode, etc.) — degrade to "no highlight"
+        return null;
+    }
+}
+
+function writeLastToolsSnapshot(tools: MigrationToolStatus[]): void {
+    try {
+        const snapshot: ToolSnapshot[] = tools.map((t) => ({ id: t.id, state: t.state }));
+        sessionStorage.setItem(LAST_TOOLS_KEY, JSON.stringify(snapshot));
+    } catch {
+        // best-effort only — losing the snapshot just means no highlight next load
+    }
+}
+
+function ChecklistRow({
+    tool,
+    isNext,
+    isJustCompleted,
+}: {
+    tool: MigrationToolStatus;
+    isNext: boolean;
+    isJustCompleted: boolean;
+}) {
     return (
-        <div className="flex items-start justify-between gap-4 border-b py-2.5 last:border-b-0">
+        <div
+            data-just-completed={isJustCompleted || undefined}
+            className={`flex items-start justify-between gap-4 border-b py-2.5 transition-colors last:border-b-0 ${
+                isJustCompleted ? "bg-success/10" : ""
+            }`}
+        >
             <div className="flex items-start gap-3">
                 <span className="mt-0.5 w-5 shrink-0 text-right text-xs text-muted-foreground">
                     {tool.order}.
@@ -70,12 +112,41 @@ export function MigrationChecklist() {
     const [tools, setTools] = useState<MigrationToolStatus[] | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [justCompletedIds, setJustCompletedIds] = useState<Set<string>>(new Set());
+    const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const load = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
             const res = await adminGetMigrationStatus();
+            const previous = readLastToolsSnapshot();
+
+            if (highlightTimerRef.current) {
+                clearTimeout(highlightTimerRef.current);
+                highlightTimerRef.current = null;
+            }
+
+            if (previous) {
+                const previouslyDoneIds = new Set(
+                    previous.filter((p) => p.state === "done").map((p) => p.id),
+                );
+                const newlyDone = new Set(
+                    res.tools.filter((t) => t.state === "done" && !previouslyDoneIds.has(t.id)).map((t) => t.id),
+                );
+                setJustCompletedIds(newlyDone);
+                if (newlyDone.size > 0) {
+                    highlightTimerRef.current = setTimeout(() => {
+                        setJustCompletedIds(new Set());
+                        highlightTimerRef.current = null;
+                    }, JUST_COMPLETED_HIGHLIGHT_MS);
+                }
+            } else {
+                // First-ever load this session — nothing to diff against.
+                setJustCompletedIds(new Set());
+            }
+
+            writeLastToolsSnapshot(res.tools);
             setTools(res.tools);
         } catch (e) {
             setError(e instanceof Error ? e.message : "Could not load migration status");
@@ -88,10 +159,21 @@ export function MigrationChecklist() {
         void load();
     }, [load]);
 
+    useEffect(() => {
+        return () => {
+            if (highlightTimerRef.current) {
+                clearTimeout(highlightTimerRef.current);
+            }
+        };
+    }, []);
+
     // "Next" is just the first tool (in dependency order — the array is
     // already sorted by `order`) that isn't done yet. partial/not_started/
     // manual_check_required all count as "needs your attention" for this
-    // purpose; the state badge on the row already says which.
+    // purpose; the state badge on the row already says which. By
+    // construction this is mutually exclusive with isJustCompleted: a row
+    // can only be "Next" while its state isn't "done", and can only be
+    // "just completed" once its state IS "done".
     const doneCount = useMemo(() => tools?.filter((t) => t.state === "done").length ?? 0, [tools]);
     const nextTool = useMemo(() => tools?.find((t) => t.state !== "done"), [tools]);
 
@@ -149,7 +231,12 @@ export function MigrationChecklist() {
                 {tools && (
                     <div className="divide-y-0">
                         {tools.map((t) => (
-                            <ChecklistRow key={t.id} tool={t} isNext={t.id === nextTool?.id} />
+                            <ChecklistRow
+                                key={t.id}
+                                tool={t}
+                                isNext={t.id === nextTool?.id}
+                                isJustCompleted={justCompletedIds.has(t.id)}
+                            />
                         ))}
                     </div>
                 )}

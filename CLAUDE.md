@@ -526,7 +526,19 @@ Agent Framework (`agents/`) — a separate Python SDK for multi-agent developmen
 
 ## Claude-Adjacent Directories
 
-These directories exist alongside `.claude/` but serve different tooling:
+These directories exist alongside `.claude/` but serve different tooling.
+**Scope note (2026-09-08):** this table inventories AI-assistant/agent config
+directories specifically — it does not attempt to catalog every top-level
+directory in the repo. Ops/infra/editor tooling with its own established
+home and (where relevant) its own README lives outside this table's scope:
+`deploy/` (OSRM config, required-env reference), `loadtest/` (Locust scripts
+— see `loadtest/README.md`), `metrics-agent/` (Grafana Alloy config), `monitoring/`
+(synthetic-check definitions), `reports/` (audit/compliance/decision/legal
+output), `test_reports/` (pytest output), `.vscode/` (editor settings), and
+`.semgrep/` (custom lint rules). None of these are AI-tool config in the sense this table
+tracks, so their absence here isn't drift — surfaced by the
+`spinr-tooling-hygiene-reviewer` audit on 2026-09-08 to close that ambiguity
+rather than leave it looking like an oversight.
 
 | Directory | Status | Purpose |
 |-----------|--------|---------|

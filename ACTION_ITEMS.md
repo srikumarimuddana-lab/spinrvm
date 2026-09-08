@@ -23536,6 +23536,109 @@ how much they de-risk a public launch._
   repo (asserted from general GitHub documentation, not confirmed against
   this repo's actual settings).
 
+### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session
+
+- [ ] **Status:** OPEN — escalated to the user; needs a human with GitHub
+  org/repo billing or Actions-admin access. Found while investigating a CI
+  failure wake on PR #5134 (a docs-only B11/R-G recording PR, whose only
+  code touch is `continue-on-error: true` additions to `ci.yml`/
+  `security-gates.yml` for C94). PR #5134's own CI showed **every single
+  job failing** — not just the 4 known C94 SARIF-upload sites, but
+  `detect-changes`, `security-scan`, `backend-test`, `rider-app-test`,
+  `admin-test`, `driver-app-test`, `python-dependency-audit`, every `G1`-
+  `G7b` job in `security-gates.yml`, `Rider/Driver app E2E tests
+  (Playwright)`, `Visual regression (Playwright)`, `E2E tests
+  (Playwright)` — 12+ distinct jobs across both required workflows, all
+  `conclusion: failure`, most completing in **2-40 seconds** (implausible
+  for real test suites that normally run minutes).
+- **Confirmed NOT this PR's diff, and NOT any single PR's diff** — checked
+  `main`'s own last 3 merge-commit CI runs via `list_workflow_runs`
+  (branch: main, event: push):
+  - PR #5132's merge (`03dfb9f`, ~20:44 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `failure`.
+  - PR #5131's merge (`4fcbecc`, ~20:19-20:40 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `cancelled`.
+  - PR #5128's merge (`1306f01`, ~18:12-18:16 UTC): `Security Gates` →
+    `failure`.
+  Three independent merges to `main` itself, by different sessions, all
+  red on both required workflows — this is base-branch-red at the widest
+  possible scope, not a single PR's regression.
+- **Escalating in scale from C94/C47, not the same root cause:**
+  - C94 (still valid, separately) is 4 specific `codeql-action/upload-
+    sarif` steps failing on a repo-setting gap ("Code scanning is not
+    enabled"). That's a narrow, understood, already-mitigated (`continue-
+    on-error: true`) failure mode — it does not explain `backend-test`,
+    `rider-app-test`, `admin-test`, `driver-app-test`, or E2E jobs failing,
+    none of which touch `codeql-action` at all.
+  - C47 (2026-08-27, closed) documented a *similar-shaped* but narrower
+    anomaly: `ci-guardrails.yml` coverage jobs externally cancelled
+    mid-suite (`exit 143`, "runner has received a shutdown signal"),
+    `get_workflow_run_usage` reporting `duration_ms: 0` for every job
+    despite real multi-minute wall-clock execution — flagged then as
+    "GitHub-side runner preemption and an Actions-minutes/spend-limit
+    cutoff are both plausible externally-caused candidates, neither
+    confirmed," with no billing-API access from that session to
+    investigate further. **This looks like the same class of problem,
+    now far more severe**: instead of one job being killed mid-suite
+    after several minutes, essentially *every* job across *every*
+    workflow is failing within seconds, with **zero log content
+    retrievable** (`mcp__github__get_job_logs` returns HTTP 404 for every
+    job ID tried, including `detect-changes`, `security-scan`, and all 4
+    `-test` jobs) — consistent with jobs failing before a runner ever
+    picked them up (queue rejection / spend-limit block), not mid-run.
+  - `mcp__github__pull_request_read` method `get_status` (combined commit
+    status) itself 403'd — `Resource not accessible by integration` —
+    a token-permission gap on this session's GitHub MCP integration
+    specifically, separate from (and not the cause of) the underlying
+    Actions failures themselves (confirmed via `get_check_runs`, which
+    does work and shows the same failures).
+- **What this session could not do:** confirm the root cause. No access
+  from this session to GitHub's own Actions-usage/billing dashboard
+  (`Settings → Billing → Actions` or the org's usage page), no access to
+  the GitHub Status page (`githubstatus.com` — blocked by this session's
+  own network egress proxy, `EGRESS_BLOCKED`), and no permission to
+  trigger a re-run (`actions_run_trigger` 403's the same way it did for
+  C95). Two leading hypotheses, same as C47's, now with much stronger
+  signal toward the first:
+  1. **GitHub Actions spend limit / included-minutes cap reached** for
+     this account — would explain near-instant failure with no logs
+     (jobs rejected at queue time, before a runner is assigned) far
+     better than C47's "cancelled mid-run" pattern did.
+  2. **A GitHub-side platform incident** (Actions infra outage) —
+     unverifiable from this session; a human should check
+     `githubstatus.com` directly, which this session cannot reach.
+- **Action needed (human, not code):** whoever owns this GitHub
+  organization's billing/admin settings should check
+  `https://github.com/organizations/<org>/settings/billing` (or the
+  personal-account equivalent) for an Actions spend-limit/usage-cap hit,
+  and check `githubstatus.com` for an active incident. Until one of those
+  is confirmed and resolved, **every open PR in this repo will show every
+  CI check failing, and this is not a signal about any individual PR's
+  code** — do not merge-block-triage individual PRs' "failures" as if
+  they were real defects until this is ruled out or fixed.
+- **Not fixed here, cannot be fixed from this session:** this is
+  infra/billing, not a workflow YAML defect — no `continue-on-error:`,
+  permissions grant, or code change addresses a spend-limit block or a
+  GitHub-side outage. Flagging per CLAUDE.md's pre-merge release gate #9
+  ("Escalate, don't silently ship, when in doubt") and #8 ("a CI check
+  that's red for a reason unrelated to your diff is a signal the gate
+  itself has decayed, not 'not my problem'").
+- **Verification performed:** `get_check_runs` on PR #5134 (45 check runs,
+  overwhelming majority `failure`); `list_workflow_runs` filtered to
+  `branch: main, event: push` showing 3 independent recent merge commits
+  all red; `list_workflow_jobs` on the specific run confirming job-level
+  timestamps (2-40s durations); `get_job_logs` with `failed_only: true`
+  attempted on all 12 failed jobs in the run — 100% HTTP 404.
+- **What was NOT verified:** the actual root cause (spend-limit vs.
+  platform incident vs. a third unconsidered cause); whether this started
+  exactly between PR #5131's own successful partial run (~20:23 UTC,
+  where `security-scan`'s `actions:read` fix was confirmed working with
+  real log output, before hitting the separate "Code scanning not
+  enabled" error) and this discovery (~21:09-21:11 UTC) — bounded to that
+  ~45-minute window by the available evidence, not narrowed further;
+  whether the same failure is hitting *every* repo under this account or
+  is scoped to this one.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

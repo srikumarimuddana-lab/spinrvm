@@ -22562,18 +22562,23 @@ how much they de-risk a public launch._
 - **Found during:** PR #5085's validation of PR #5079's maintainability
   finding (documentation drift).
 
-### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed
+### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed — CLOSED (2026-09-08)
 
-- [x] **Status:** partially closed 2026-09-08 on
+- [x] **Status:** CLOSED 2026-09-08. Originally partially closed on
   `claude/pr-5085-5079-hardening-5a2aj7` — 8 `docs/change-log/2026-09-05-*.md`
-  files cite this document by section number (§1.6–§1.11) and it does not
-  exist anywhere in `docs/audit/` or in git history. Added a one-line note
-  under each citation pointing here instead of recovering the document
-  (the finding text each log describes is reproduced in full in that log's
-  own §1, so nothing depends on the missing file to be understood).
-  **Still open:** recovering the actual document from its author's machine
-  (if it still exists) would let readers see the original's other
-  findings in context — human action, not something this session can do.
+  files cite this document by section number (§1.6–§1.11) and it did not
+  exist anywhere in `docs/audit/` or in git history at the time. A one-line
+  note was added under each citation pointing here instead of recovering the
+  document.
+  **Fully resolved:** the actual document was recovered and committed —
+  `docs/audit/2026-09-05-engineering-director-review-round3.md` landed via
+  PR #5033 ("Engineering Director Review Round 3 (2026-09-05)"), merged
+  2026-09-08 16:21:54 UTC, 945 lines. Confirmed present on `main` and
+  content-verified against a separately-read export used to build a
+  cross-reference report the same day — byte-identical. The 8 "missing
+  document" notes added by the original partial-close are now themselves
+  stale (they assert the file doesn't exist, which is no longer true) and
+  were corrected in the same commit that closes this entry.
 - **Found during:** PR #5085's validation of PR #5079's finding.
 
 ### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)

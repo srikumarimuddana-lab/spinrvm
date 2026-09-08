@@ -22577,6 +22577,55 @@ how much they de-risk a public launch._
   yet made."
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
+### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
+
+- [ ] **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
+  Supabase row already flags this as "a separate, still-open decision, not
+  yet made"; recorded here as its own tracked item so it doesn't stay
+  buried inside a connector-audit doc, and because C88 just hit its real
+  cost directly: a live-DB verification step (F1's refund CAS filter
+  round-trip check) could not be completed against the actual environment
+  that has the column in question, only against a pre-production stand-in
+  missing it entirely.
+- **Background:** this session's account-level Supabase connector was
+  reconnected 2026-09-07 under a different account, which put it into org
+  `Spinr_MobileApp` (`hjdwxavwnkmtizqjukoh`) with exactly one project,
+  `spinrmobileapp` (`soavhtdhefowwvforzwb`, pre-production). That account
+  switch had a side effect nobody decided on directly: `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`) and `MobileAppStaging` (`mvmyygoinicjdpqprizr`),
+  both under the original `swarnkiran88@gmail.com's Org`, became completely
+  unreachable from this connector. No session using this connector can
+  currently query, verify, or diagnose anything against the actual
+  production database — only against `spinrmobileapp`, whose schema has
+  already been shown (C88) to lag behind whatever created `Spinr-Prod`'s
+  live tables.
+- **The decision itself:** how (if at all) should a Claude session regain
+  read access to `Spinr-Prod`/`MobileAppStaging` for verification work like
+  C88's? Options, not mutually exclusive:
+  1. Invite the current connector's account into
+     `swarnkiran88@gmail.com's Org` as well, so one connector reaches both
+     orgs' projects (simplest, but widens this connector's blast radius
+     back to two orgs — re-run the same live `list_projects` check
+     afterward to confirm exactly what it can now reach, per this doc's
+     "verified live, not assumed" standard).
+  2. Add a **second**, separately-scoped Supabase connector dedicated to
+     `Spinr-Prod`/`MobileAppStaging`, ideally with `read_only=true` or a
+     read-only PAT from the start — keeps the two orgs' access separate
+     and auditable, costs an extra connector to manage.
+  3. Do neither, and accept that any future "verify against the real
+     database" step is a request routed to a human with direct
+     `Spinr-Prod` access, not something a session can do itself — cheapest
+     to set up, slowest per verification.
+- **Not this session's call to make unilaterally:** granting broader
+  database reach is exactly the kind of access-scope change
+  `.claude/context/connector-scoping.md`'s own checklist says to get right
+  "from day one" rather than widen reactively — whoever owns the Supabase
+  account/org memberships should pick one of the options above (or reject
+  the need entirely, if C88-style live verification isn't considered worth
+  the access it requires).
+- **Found during:** C88's investigation, PR #5088 F1's post-merge
+  verification attempt.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

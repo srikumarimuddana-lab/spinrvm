@@ -289,27 +289,34 @@ async def _sum_stripe_intents(date) -> int:  # noqa: ANN001
     day_start = int(datetime(date.year, date.month, date.day, tzinfo=timezone.utc).timestamp())
     day_end = day_start + 86400
 
-    total_cents = 0
-    last_id = None
-    while True:
-        kwargs: dict = dict(
-            created={"gte": day_start, "lt": day_end},
-            limit=100,
-            api_key=stripe_key,
-        )
-        if last_id:
-            kwargs["starting_after"] = last_id
+    def _list_and_sum() -> int:
+        # Off the event loop (C86): this can page through many days' worth of
+        # PaymentIntents, issuing one blocking Stripe HTTP call per page --
+        # run the whole loop in a thread rather than just one call, since
+        # every iteration blocks the process's event loop otherwise.
+        total = 0
+        last_id = None
+        while True:
+            kwargs: dict = dict(
+                created={"gte": day_start, "lt": day_end},
+                limit=100,
+                api_key=stripe_key,
+            )
+            if last_id:
+                kwargs["starting_after"] = last_id
 
-        intents = stripe.PaymentIntent.list(**kwargs)
-        for pi in intents.data:
-            if pi.status == "succeeded":
-                total_cents += pi.amount
+            intents = stripe.PaymentIntent.list(**kwargs)
+            for pi in intents.data:
+                if pi.status == "succeeded":
+                    total += pi.amount
 
-        if not intents.has_more:
-            break
-        last_id = intents.data[-1].id
+            if not intents.has_more:
+                break
+            last_id = intents.data[-1].id
 
-    return total_cents
+        return total
+
+    return await asyncio.to_thread(_list_and_sum)
 
 
 async def _sum_financial_events(date, event_type: str) -> int:  # noqa: ANN001

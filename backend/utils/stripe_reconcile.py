@@ -152,13 +152,20 @@ async def _run_reconciliation_tick() -> None:
     )
 
     # ── 1. Fetch Stripe PaymentIntents created yesterday ─────────────────
-    stripe_pis: Dict[str, Any] = {}  # pi_id → PI object
-    try:
+    def _list_stripe_pis() -> Dict[str, Any]:
+        # Off the event loop (C86): auto_paging_iter() can issue one blocking
+        # Stripe HTTP call per page of yesterday's PaymentIntents -- run the
+        # whole pagination loop in a thread, not just one call.
+        out: Dict[str, Any] = {}
         for pi in _stripe.PaymentIntent.list(
             created={"gte": window_start, "lte": window_end},
             limit=100,
         ).auto_paging_iter():
-            stripe_pis[pi["id"]] = pi
+            out[pi["id"]] = pi
+        return out
+
+    try:
+        stripe_pis: Dict[str, Any] = await asyncio.to_thread(_list_stripe_pis)
     except Exception:
         logger.error("stripe_reconcile: Stripe API list failed", exc_info=True)
         return

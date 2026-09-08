@@ -23395,6 +23395,19 @@ how much they de-risk a public launch._
   Verification of whether this actually resolves the failures needs a real
   PR run of this workflow (its own PR's checks, or the next `rider-app`/
   `driver-app`-touching PR) — not yet observed as of this fix.
+- **Verification attempt that didn't work, corrected rather than left
+  standing (2026-09-08):** tried marking PR #5133 (this fix's own PR) ready
+  for review, assuming that would re-trigger `label-run-maestro.yml`'s job
+  and let the `if: github.event.pull_request.draft == false` gate finally
+  pass. It didn't — checked the workflow's actual trigger afterward:
+  `on: pull_request: types: [opened, synchronize, reopened]`.
+  `ready_for_review` is not one of those three event types, so converting
+  a PR out of draft does not itself fire this workflow at all; only a
+  genuine `opened`/`synchronize` (a new commit)/`reopened` event does.
+  **Still not independently confirmed as of this note.** Real confirmation
+  needs either a new commit pushed to this PR while it's non-draft, or
+  observation on the next real PR touching `rider-app/**`/`driver-app/**`
+  after this fix merges to `main`.
 - **Original investigation (2026-09-08, before the fix), preserved below for
   the record:** Found
   2026-09-08 as a `check_run.completed` failure wake on PR #5131 — a PR

@@ -7,7 +7,8 @@ SDK-independent and fully tested:
 
 - ai_mcp_enabled=False → 503 before any auth work
 - missing/invalid bearer → 401 via the regular get_current_user path
-- admin tokens → 403 (trusted-claims tokens don't belong on this surface)
+- every verified staff role → 403 (trusted-claims tokens don't belong on
+  this surface; F07 — the gate used to catch only "admin")
 - valid token → inner app runs with current_ai_user set, reset afterwards
 - booking tools (mcp_exposed=False) are never exposed
 - every response body goes through _serialize_tool_payload, the STRICT
@@ -116,6 +117,60 @@ class TestMiddleware:
         inner, status, body = await _run_middleware(_scope(), auth_result={"id": "admin-1", "role": "admin"})
         assert status == 403
         assert inner.called is False
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("role", ["admin", "super_admin", "operations", "support", "finance", "custom"])
+    async def test_every_verified_staff_role_rejected(self, role):
+        """F07 (2026-09-08 AI security assessment).
+
+        The gate was ``user.get("role") == "admin"`` — one of the six roles
+        the verified staff pipeline returns. Offline middleware probes
+        confirmed super_admin, operations, support, finance and custom all
+        reached the downstream MCP app. Parametrised over the whole set so
+        adding a seventh role to ADMIN_STAFF_ROLES without revisiting this
+        surface fails here.
+        """
+        inner, status, _ = await _run_middleware(
+            _scope(), auth_result={"id": f"staff-{role}", "role": role, "_admin_verified": True}
+        )
+        assert status == 403
+        assert inner.called is False
+
+    @pytest.mark.anyio
+    async def test_admin_verified_marker_alone_rejects(self):
+        """The marker is the authoritative signal (same one get_admin_user
+        gates on), so it must reject even with no role claim at all."""
+        inner, status, _ = await _run_middleware(_scope(), auth_result={"id": "staff-x", "_admin_verified": True})
+        assert status == 403
+        assert inner.called is False
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("role", ["super_admin", "operations", "support", "finance", "custom"])
+    async def test_staff_role_without_marker_still_denied(self, role):
+        """Fail-closed backstop. On the ADMIT side a bare `role` string proves
+        nothing, but this is a DENY rule where over-rejecting is safe — the
+        gate stays shut even if some future path stops stripping the marker."""
+        inner, status, _ = await _run_middleware(_scope(), auth_result={"id": f"u-{role}", "role": role})
+        assert status == 403
+        assert inner.called is False
+
+    @pytest.mark.anyio
+    async def test_driver_token_still_accepted(self):
+        """The negative cases above are only half the evidence — the fix must
+        not close the surface to the customers it exists for."""
+        inner, status, _ = await _run_middleware(
+            _scope(), auth_result={"id": "driver-1", "is_driver": True, "role": "user"}
+        )
+        assert status == 200
+        assert inner.called is True
+
+    def test_mcp_shares_one_staff_role_list_with_the_auth_pipeline(self):
+        """The finding's root cause was a private copy of the role list. Pin
+        that /mcp reads the same constant _verify_admin_payload uses."""
+        from backend.dependencies import ADMIN_STAFF_ROLES
+
+        assert mcp_server.ADMIN_STAFF_ROLES is ADMIN_STAFF_ROLES
+        assert {"admin", "super_admin", "operations", "support", "finance", "custom"} <= set(ADMIN_STAFF_ROLES)
 
     @pytest.mark.anyio
     async def test_valid_token_scopes_context_and_resets(self):

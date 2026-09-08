@@ -12948,7 +12948,32 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B41. `ci.yml`'s `mobile-build` job never pins `--profile` on its `eas build` calls — decision held for discussion, not yet made
 
-- [ ] **Status:** open. Found 2026-09-02 while reviewing `ci.yml`'s
+- [x] **Status:** CLOSED (2026-09-08), PR #5104. `mobile-build` now pins
+  `--profile production` explicitly on all 4 `eas build` calls — the
+  `eas build:list`-history question below is now moot: confirmed via
+  EAS's own documented default (omitting `--profile` resolves to a
+  profile literally named `production`, if one exists), not by dashboard
+  access. Every prior run of this job was therefore already building
+  `production`; this just makes it explicit instead of implicit.
+  **The 2026-09-07 target design's `staging` → `preview` half turned out
+  to already be built and live**: `test-env.yml`'s `build-mobile-test`
+  job already triggers on `staging` + `[build]` with `--profile preview`
+  — a fact this item's prior updates never cross-referenced. A first
+  draft of the PR #5104 fix tried adding the same `staging` trigger to
+  `mobile-build` too, which `spinr-cicd-infra-reviewer` caught before
+  merge as a real duplicate-billing bug (8 real EAS builds instead of 4
+  per staging push) — reverted; `mobile-build` stays `main`-only, exactly
+  as before, `staging` stays solely `test-env.yml`'s. Also fixed a real
+  latent bug found along the way: both apps' `eas.json` `preview` profile
+  had no explicit `distribution` field (EAS defaults to `store`, not
+  `internal`, when omitted) — added `distribution: internal` explicitly,
+  which also corrects `test-env.yml`'s existing, already-running
+  `staging` builds (previously silently store-shaped). Full trace:
+  `docs/change-log/2026-09-08-b41-mobile-build-profile-pin.md`. Not
+  verified against a real EAS build (no EAS/Expo credentials in this
+  session) — verified via EAS's own documented defaults, YAML/JSON
+  parsing, and a dedicated CI/CD reviewer pass instead.
+- [ ] **Status (superseded by the above):** open. Found 2026-09-02 while reviewing `ci.yml`'s
   `mobile-build` job (rider+driver-app native builds gated on `[build]` in
   a `main`-branch commit message, per PR #4871). A related gap in the same
   job (driver-app missing entirely despite `needs: [rider-app-test,

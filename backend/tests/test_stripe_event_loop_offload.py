@@ -118,6 +118,16 @@ def test_stripe_reconcile_offloads_stripe() -> None:
     assert blocking_calls == [], f"utils/stripe_reconcile.py blocks on Stripe SDK calls at lines {blocking_calls}"
 
 
+def test_stripe_kyc_sync_offloads_stripe() -> None:
+    """C86: get_legal_name_and_address_from_stripe() made a bare, synchronous
+    Account.retrieve() call. routes/admin/compliance.py's annual T4A export
+    calls this once per driver inside a loop over the whole qualifying set --
+    infrequent (once a year) but each call still blocks every other
+    concurrent request/loop on this worker while the export runs."""
+    blocking_calls = _blocking_stripe_lines("stripe_kyc_sync.py", subdir="services")
+    assert blocking_calls == [], f"services/stripe_kyc_sync.py blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
 @pytest.mark.parametrize(
     "service_file",
     ["stripe_payout_sync_service.py", "stripe_mapping_import_service.py"],

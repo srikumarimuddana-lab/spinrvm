@@ -9,6 +9,7 @@ import {
     AlertTriangle,
     Loader2,
     Info,
+    Copy,
 } from "lucide-react";
 import {
     adminValidateDriverImport,
@@ -145,6 +146,26 @@ function IssueTable({ items }: { items: DriverImportReportItem[] }) {
             </Table>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below.
+function buildSummaryText(report: DriverImportReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Rows", c?.rows ?? 0],
+        ["To create", c?.drivers ?? 0],
+        ["To update", c?.updated ?? 0],
+        ["Skipped (already imported)", c?.skipped_resume ?? 0],
+        ["Warnings", report.warnings.length],
+        ["Errors", report.errors.length],
+    ];
+    const lines = [
+        `Bulk Driver Import — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export default function BulkImportPage() {
@@ -401,6 +422,20 @@ export default function BulkImportPage() {
                             <Stat label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
                             <Stat label="Warnings" value={report.warnings.length} tone="warn" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
+                        </div>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
                         </div>
 
                         {report.errors.length > 0 && (

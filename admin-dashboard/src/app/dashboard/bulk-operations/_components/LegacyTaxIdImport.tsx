@@ -7,11 +7,15 @@
  * tool on this page uses; no typed confirmation phrase, matching the
  * sibling SIN/DOB backfill page's own convention (the NULL-only fill
  * policy plus the backend's compare-and-set write already make an
- * accidental re-commit a no-op, not a silent overwrite).
+ * accidental re-commit a no-op, not a silent overwrite). It does, however,
+ * get that same sibling's AlertDialog gut-check before the first commit —
+ * this was the one bulk tool on this page with neither a typed-confirm
+ * phrase nor a dialog, and it writes vault-encrypted SIN plus a background
+ * push to Stripe, which a mis-click shouldn't trigger unconfirmed.
  */
 
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Info, Loader2, Upload } from "lucide-react";
 import {
     adminCommitTaxIdBackfill,
     adminValidateTaxIdBackfill,
@@ -37,6 +41,17 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import {
+    AlertDialog,
+    AlertDialogTrigger,
+    AlertDialogContent,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogCancel,
+    AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { exportToCsv } from "@/lib/export-csv";
 
@@ -78,6 +93,28 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "wa
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below —
+// counts only, never a raw SIN or GST BN.
+function buildSummaryText(report: TaxIdBackfillReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Rows", c.rows],
+        ["To write", c.to_write],
+        ["SIN to write", c.sin_to_write],
+        ["GST BN to write", c.gst_to_write],
+        ["Skipped", c.skipped],
+        ["Warnings", report.warnings.length],
+        ["Errors", report.errors.length],
+    ];
+    const lines = [
+        `Legacy Tax-ID Backfill — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export function LegacyTaxIdImport() {
@@ -236,6 +273,20 @@ export function LegacyTaxIdImport() {
                             Batch <span className="font-mono">{report.batch}</span>.
                         </p>
 
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
+                        </div>
+
                         {report.errors.length > 0 ? (
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between">
@@ -282,16 +333,43 @@ export function LegacyTaxIdImport() {
                                 </span>
                             </div>
                         ) : report.can_commit ? (
-                            <Button onClick={handleCommit} disabled={committing}>
-                                {committing ? (
-                                    <>
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                        Committing…
-                                    </>
-                                ) : (
-                                    "Commit backfill"
-                                )}
-                            </Button>
+                            <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                    <Button disabled={committing}>
+                                        {committing ? (
+                                            <>
+                                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                                Committing…
+                                            </>
+                                        ) : (
+                                            "Commit backfill"
+                                        )}
+                                    </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                        <AlertDialogTitle>
+                                            Write tax ID(s) for {c.to_write} driver(s)?
+                                        </AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            This writes {c.sin_to_write} vault-encrypted SIN and{" "}
+                                            {c.gst_to_write} GST/HST BN value(s) to driver records in
+                                            batch <span className="font-mono">{report.batch}</span>, and
+                                            pushes any freshly-written SINs to Stripe in the background.
+                                            A value already on file is never overwritten — only NULL
+                                            columns are filled. Once written, a SIN can only be changed
+                                            later through the driver&apos;s own update-SIN action
+                                            (audited, with a reason), not by re-running this tool.
+                                        </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                        <AlertDialogAction onClick={handleCommit}>
+                                            Commit backfill
+                                        </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                </AlertDialogContent>
+                            </AlertDialog>
                         ) : (
                             <p className="text-sm text-muted-foreground">
                                 Nothing to commit — fix the errors above, or every row in this CSV has

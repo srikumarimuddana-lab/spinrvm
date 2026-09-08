@@ -24,7 +24,7 @@
  */
 
 import { useState } from "react";
-import { CheckCircle2, Info, Loader2, Tag } from "lucide-react";
+import { CheckCircle2, Copy, Info, Loader2, Tag } from "lucide-react";
 import {
     adminCommitPreLaunchFlag,
     adminPreviewPreLaunchFlag,
@@ -46,6 +46,22 @@ function Stat({ label, value }: { label: string; value: number }) {
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below.
+function buildSummaryText(report: PreLaunchFlagReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Dormant pre-launch drivers", c.driver_candidates],
+        ["Pre-launch rides", c.ride_candidates],
+    ];
+    const lines = [
+        `Pre-Launch Legacy Data Flagging — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export function PreLaunchDataFlag() {
@@ -174,6 +190,20 @@ export function PreLaunchDataFlag() {
                         <p className="text-xs text-muted-foreground">
                             Batch <span className="font-mono">{report.batch}</span>.
                         </p>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
+                        </div>
 
                         {committed?.committed ? (
                             <div className="flex items-center gap-2 rounded-md border border-success bg-success/10 p-3 text-sm">

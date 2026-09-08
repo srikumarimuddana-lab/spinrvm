@@ -23241,6 +23241,63 @@ how much they de-risk a public launch._
   cause reachable only by a repo admin, not by reading files in this
   session.
 
+### C94. `ci.yml`'s `security-scan` job fails on every PR — `codeql-action/upload-sarif`'s `wait-for-processing` 403s the same way C93 does
+- [ ] **Status:** OPEN. Found immediately after C93, same PR (#5128), same
+  investigation session — the `security-scan` check itself came back
+  `failure` right after `detect-changes` did.
+- **Issue/gap:** `ci.yml`'s `security-scan` job (`:915-918`, `permissions:
+  contents: read` only) runs `github/codeql-action/upload-sarif@...` with
+  `wait-for-processing: true` (`:958`). Job log shows the SARIF file itself
+  gets built, validated and fingerprinted successfully, then:
+  `##[warning] Failed to gather information for telemetry: Resource not
+  accessible by integration - .../rest/actions/workflow-runs#get-a-workflow-run.
+  Will skip sending status report.` (non-fatal, x2), followed by
+  `##[error] Resource not accessible by integration -
+  .../rest/actions/workflow-runs#get-a-workflow-run` — the same call,
+  logged as a hard error rather than a warning, which is what turns the
+  job `failure`. Same root cause class as C93: the job's `permissions:`
+  block grants `contents: read` only, no `security-events: write` (needed
+  to actually record the SARIF as a code-scanning alert) and no
+  `actions: read` (needed for `wait-for-processing`'s own workflow-run
+  status poll).
+- **Separate incidental finding, same job, non-fatal:** the `trufflehog`
+  step (`:~940`) also logs `error trufflehog encountered errors during
+  scan {... "unable to resolve ref: no base refs succeeded for base:
+  \"origin/main\""}` — the shallow/multi-branch checkout this job uses
+  doesn't give trufflehog a resolvable `origin/main` ref for its
+  `--since-commit` diff scan. This one does **not** fail the job (trufflehog
+  reports `chunks: 0` and exits clean) — noted here only because it's in
+  the same job and looks alarming in the log; not itself C94's cause, and
+  not filed separately since it has zero observed effect on job outcome.
+- **Confirmed not this PR's:** same causal-impossibility argument as C93 —
+  a 2-file `AGENTS.md`/`ACTION_ITEMS.md` diff cannot alter a workflow
+  job's declared `permissions:` block or GitHub App installation scopes.
+- **Why it hasn't silently corrupted security posture:** the Trivy scan
+  itself ran and produced real results (`trivy-results.sarif` built,
+  validated, fingerprinted) — the failure is in *uploading/confirming* the
+  scan's own results to GitHub's code-scanning UI, not in running the
+  scan. Whether the SARIF actually reached Code Scanning despite the
+  `wait-for-processing` failure was **not verified** in this session (would
+  need to check the repo's Security → Code scanning alerts tab, which this
+  session has no browsing access to) — flagging this as the one part of
+  C94 that needs a human check, since a scan that silently never uploads
+  would be worse than one that fails loudly.
+- **Fix (not applied — same reasoning as C93, out of scope for a docs-only
+  PR):** add `security-events: write` and `actions: read` to
+  `security-scan`'s `permissions:` block in `ci.yml:917-918`; verify
+  whether `wait-for-processing: true` is even needed (dropping it removes
+  the failing poll entirely if nothing downstream depends on synchronous
+  confirmation). Bundle with C93's fix — same file family, same
+  `spinr-cicd-infra-reviewer` review, likely the same PR.
+- **Verification performed:** read the full `security-scan` job log for
+  this failure; confirmed the `permissions:` block via direct file read
+  (`ci.yml:915-918`); traced the failing API call to the exact
+  `codeql-action/upload-sarif` step via log line ordering.
+- **What was NOT verified:** whether the SARIF results actually landed in
+  GitHub's Code Scanning UI despite the reported failure (see above); did
+  not test whether removing `wait-for-processing` alone resolves it
+  without also adding `actions: read`.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

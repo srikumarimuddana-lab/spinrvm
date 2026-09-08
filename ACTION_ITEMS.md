@@ -22475,21 +22475,67 @@ how much they de-risk a public launch._
 
 ### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)
 
-- [ ] **Status:** open, deliberately NOT fixed in the 2026-09-08 hardening
-  tranche (only the two `routes/webhooks.py` sites were — see this file's
-  now-closed F8 entry, folded into the change-log rather than its own
-  numbered item since it shipped same-day). Remaining bare
-  `stripe.*.retrieve/create/...(` call sites, none touched:
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c86-stripe-loop`.
+  Re-triage of the original 9-site list (below) found it was partly stale —
+  2 sites were already correctly offloaded by their callers (the original
+  grep-based pass found the bare `stripe.X.Y(` text but never checked
+  whether the enclosing function was itself thread-wrapped from outside),
+  and 1 has no live caller anywhere in the codebase at all (dead code per
+  its own module docstring). The remaining 5 genuinely-blocking sites are
+  now fixed, each via `asyncio.to_thread` — single calls wrapped directly
+  (`await asyncio.to_thread(stripe.X.Y, args...)`), and the two
+  multi-call pagination loops (which can't be inlined as a lambda) extracted
+  into a named nested function run via `asyncio.to_thread(name)`, the same
+  idiom already used in `stripe_payout_sync_service.py`:
+  1. `utils/payment_retry.py` (`retry_failed_payments`, the
+     `payment_retry (5min)` loop) — 3 sites (`retrieve`/`confirm`/`capture`).
+  2. `utils/reconciliation.py`'s `_sum_stripe_intents` — pagination loop
+     extracted to `_list_and_sum`.
+  3. `utils/stripe_reconcile.py`'s `_run_reconciliation_tick` — pagination
+     loop extracted to `_list_stripe_pis`.
+  4. `services/stripe_kyc_sync.py`'s `get_legal_name_and_address_from_stripe`
+     — single call. Its caller, `routes/admin/compliance.py`'s annual T4A
+     export, invokes this once per driver inside a loop over the whole
+     qualifying set — the original "caller frequency not yet traced" note
+     undersold this: infrequent (once a year) but every call in that loop
+     blocks all other traffic on the worker while the export runs.
+  5. `routes/admin/dispute_evidence_submission.py`'s
+     `admin_submit_dispute_evidence` — single call, a request-path admin
+     route handler.
+
+  `backend/tests/test_stripe_event_loop_offload.py`'s AST-based static
+  checker (previously only recognizing the lambda-wrapped idiom) was
+  generalized to also recognize the named-nested-function idiom, with
+  coverage added for all 5 fixed files, a lock-in regression test for the
+  2 already-correctly-wrapped files found during re-triage
+  (`stripe_payout_sync_service.py`, `stripe_mapping_import_service.py`),
+  and 3 synthetic tests proving the checker's own logic isn't vacuously
+  true. `spinr-money-auditor`: **SAFE TO MERGE, no findings** — confirmed
+  every diff is a byte-for-byte argument-identical execution-model change,
+  exception propagation unchanged at both `try/except`-wrapped sites,
+  atomic-claim-before-Stripe-call ordering unchanged in `payment_retry.py`,
+  and both idempotency keys unchanged. 273+ tests pass with zero test
+  behavior changes needed for the 5 application fixes (existing tests
+  patch the Stripe SDK methods as module attributes, which `to_thread`
+  still resolves and calls correctly). See
+  `docs/change-log/2026-09-08-c86-stripe-event-loop-offload.md`.
+- **Not fixed here, and correctly so:**
+  `services/legacy_payout_correction_service.py:569`'s `fire_ready_transfers`
+  — its own module docstring states it "is not wired into any route, CLI
+  entry point, or background loop... every call is manual," confirmed via
+  a repo-wide grep for callers outside `tests/` (none exist). No shared
+  event loop for this to block; wrapping it would be busywork with no
+  effect, per this repo's simplicity-first convention.
+- **Original 9-site list (2026-09-08, superseded by the re-triage above):**
   `services/stripe_kyc_sync.py:471`, `utils/payment_retry.py:465/491/558`,
   `utils/reconciliation.py:303`, `utils/stripe_reconcile.py:157`,
   `services/stripe_payout_sync_service.py:234`,
   `services/stripe_mapping_import_service.py:967`,
   `routes/admin/dispute_evidence_submission.py:143`,
-  `services/legacy_payout_correction_service.py:569`. Most of these run in
-  background loops (lower urgency than a request-path webhook handler) —
-  triage each for actual event-loop-blocking impact before wrapping in
-  `asyncio.to_thread` wholesale.
-- **Found during:** PR #5085's validation of PR #5079's F8 finding.
+  `services/legacy_payout_correction_service.py:569`.
+- **Found during:** PR #5085's validation of PR #5079's F8 finding;
+  re-triaged and closed 2026-09-08 on
+  `claude/pr-5085-5079-hardening-c86-stripe-loop`.
 
 ### C87. CI scanner-download flakiness (admin-bundle secret scan, trufflehog install)
 

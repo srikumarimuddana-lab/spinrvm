@@ -23381,7 +23381,7 @@ how much they de-risk a public launch._
   fix, at any of the 4 sites (moot now — Code Scanning being disabled
   repo-wide means the answer is almost certainly "no" for all of them).
 
-### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — fixed on the favored hypothesis, not yet independently reconfirmed
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — fix merged to `main`, verification blocked on C96
 - [x] **Status:** FIX APPLIED 2026-09-08 on `claude/label-run-maestro-contents-perm`,
   at the user's explicit request to apply the same-shape fix already
   described below ("Not fixed here" section — since superseded). Added
@@ -23517,6 +23517,20 @@ how much they de-risk a public launch._
   behavior claimed in hypothesis 1 for this specific repo (asserted from
   general GitHub documentation, not confirmed against this repo's actual
   settings).
+- **Merged to `main` 2026-09-08 21:20 UTC as `64ebc7e` (PR #5133, merged by
+  the user directly) while still in this unconfirmed state.** The merge
+  itself was not blocked by a passing check — it landed during the C96
+  repo-wide GitHub Actions outage (see C96: every job across every
+  workflow rejected at queue time, `runner_id: 0`, no logs, ~20:23 UTC
+  onward), so there was no green run to wait for. Confirmed `main`'s own
+  post-merge run (`64ebc7e`, run `34280021844`) shows the identical C96
+  signature (`conclusion: failure`, 8s wall-clock) rather than either a
+  clean pass or a genuine repeat of the original `Repository not found`
+  error — so this merge adds no new evidence either way. **C95's fix is
+  on `main` and believed correct, but remains unverified by any real CI
+  run; that verification is now blocked entirely on C96 clearing, not on
+  anything specific to this file.** Re-check on the first `main` push or
+  `rider-app`/`driver-app`-touching PR after C96 is confirmed resolved.
 
 ## Recently completed (do not redo)
 

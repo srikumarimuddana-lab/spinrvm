@@ -35,6 +35,18 @@ jobs:
   # leak in any file type, including a workflow file itself. Same
   # reasoning as G3/G5a in security-gates.yml.
   detect-changes:
+    # C93: ci.yml has no top-level `permissions:` block, so without this
+    # override the job falls through to the repo's restrictive default
+    # token scope (contents/metadata/packages read only -- no
+    # pull-requests). dorny/paths-filter needs pull-requests: read to call
+    # the Files API on this shallow (fetch-depth: 1) checkout; without it
+    # every run of this job 403s and every caller in this file falls back
+    # to its fail-open "run everything" leg (see the comment above) --
+    # correct behavior, but it silently loses the fast-feedback
+    # path-filtering optimization on every single PR.
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/detect-changes.yml
 
   # Backend Tests

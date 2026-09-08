@@ -535,7 +535,15 @@ jobs:
     # All 6 baselines are seeded and this job is blocking (2026-09-04) --
     # a real visual regression on any admin-dashboard page is exactly the
     # kind of change path-filtering would risk skipping.
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    #
+    # always() is required here (ACTION_ITEMS.md C92) -- without it, a PR
+    # that doesn't touch backend/ (so backend-test is itself skipped by its
+    # own path-filtered `if:`) skips this job too via GitHub Actions'
+    # default "needs must succeed" propagation, silently defeating the
+    # "deliberately NOT gated" comment above for every admin-dashboard-only
+    # PR. e2e-test below already guards against the exact same failure mode
+    # with the same always() pattern -- this job was just missing it.
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     defaults:
       run:
         working-directory: admin-dashboard

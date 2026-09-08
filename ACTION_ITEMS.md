@@ -23013,6 +23013,69 @@ how much they de-risk a public launch._
   `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`,
   `admin-dashboard/src/app/dashboard/monitoring/page.tsx`.
 
+### C92. `ci.yml`'s `visual-regression-test` job silently never runs on any PR that doesn't also touch `backend/` — contradicts its own "deliberately NOT gated on detect-changes" comment
+- [x] **Status:** CLOSED 2026-09-08 on `claude/pr-5085-5079-hardening-c92-visual-regression-gate`.
+  Found while investigating why PR #5123 (the C91 fix)'s own CI run showed
+  `visual-regression-test` as `skipped`, not the expected real diff against
+  the old baseline documented in that PR's own risk log.
+- **Issue/gap:** `visual-regression-test` (`ci.yml` line ~528) has
+  `needs: [backend-test]` and its own `if:` is a plain
+  `github.ref == 'refs/heads/main' || github.event_name == 'pull_request'`
+  — no `always()`. `backend-test` itself is deliberately path-filtered
+  (skipped when a PR touches neither `backend/**` nor `.github/workflows/**`).
+  GitHub Actions' default dependency semantics apply an implicit
+  `success()` to any `needs` a job's own `if:` doesn't explicitly override
+  with `always()`/`failure()`/`cancelled()` — so whenever `backend-test` is
+  skipped, `visual-regression-test` is skipped too, **regardless of what
+  its own `if:` condition evaluates to.** Confirmed directly against PR
+  #5123's own `detect-changes` job log: `backend=false` (only
+  `admin-dashboard/e2e/visual-regression.spec.ts` and `ACTION_ITEMS.md`
+  changed) → `backend-test` skipped → `visual-regression-test` skipped,
+  even though its own condition (a plain `pull_request` check) was true.
+- **Root cause:** the job's own comment directly above the `if:` line says
+  "Phase 2 ... deliberately NOT gated on detect-changes, unlike e2e-test
+  above" — but `e2e-test` (the job right next to it) guards against this
+  *exact* failure mode with `always() && (...)` in its own `if:`, and
+  `visual-regression-test` was simply missing that same guard. Not a new
+  regression — this has silently been true since the job was made
+  blocking (2026-09-04, ACTION_ITEMS.md B38), meaning **this "fully active
+  and merge-blocking" gate CLAUDE.md's pre-merge release gates §6
+  documents has likely never actually run on any PR that changed
+  admin-dashboard without also touching backend/ or a workflow file** —
+  probably the large majority of real admin-dashboard-only PRs, including
+  PR #5123 itself.
+- **Why this is worse than a normal CI bug:** it fails silent-green, not
+  red — the check shows as `skipped`, which GitHub does not treat as a
+  failing required status the way a red check is, so it would not have
+  been noticed by normal "is CI green" triage. Same failure class as C74
+  (`security-gates.yml`/`ci-guardrails.yml` summary jobs never failing
+  regardless of gate results) — a gate that looks like it's enforcing
+  something but silently isn't for a subset of triggering conditions.
+- **Fix:** added `always() &&` to `visual-regression-test`'s `if:`
+  condition, exactly matching the pattern `e2e-test`'s own `if:` already
+  uses one job above it for the identical purpose. One-line change; no
+  other job in `ci.yml` has this gap — checked every job's `needs:` +
+  `if:` pair. `docker-image-scan`'s own cascade-from-`backend-test` skip
+  is explicitly documented as intentional-and-correct in its own comment
+  (it only ever needs to run when backend changed, since it builds and
+  scans the backend Docker image) — not the same bug, left unchanged.
+  `python-dependency-audit`/`driver-app-test`/`rider-app-test`/`admin-test`
+  all correctly use `always()` already, gated on `detect-changes` directly
+  rather than transitively through `backend-test`.
+- **Verification performed:** `actionlint` clean before and after the
+  change (`/tmp/actionlint .github/workflows/ci.yml`, exit 0 both times).
+  Could not re-run the actual GitHub Actions job in this session (would
+  require pushing and waiting on a real workflow run) — the fix mirrors an
+  already-proven-working pattern (`e2e-test`'s identical `always()` guard)
+  rather than introducing new untested logic, but this specific
+  `if:`-evaluates-correctly-now claim is reasoned from GitHub Actions'
+  documented `needs`/`if` semantics, not observed directly in this session.
+  **Not yet observed**: whether PR #5123 (or this PR) actually shows
+  `visual-regression-test` running (not skipped) in its next CI run —
+  worth a human spot-check once either PR's CI completes.
+- **Files:** `.github/workflows/ci.yml` (`visual-regression-test`'s `if:`
+  condition only — one line changed, comment expanded).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

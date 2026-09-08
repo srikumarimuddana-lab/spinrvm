@@ -153,7 +153,12 @@ class TestFirebaseAuthLoginHappyPaths:
     async def test_new_user_created_and_logged_in(self):
         from backend.routes.auth import FirebaseAuthRequest, firebase_auth_login
 
-        payload = {"uid": "fb-new-1", "phone_number": "+13065550001", "aud": "driver-app", "firebase": {"sign_in_provider": "phone"}}
+        payload = {
+            "uid": "fb-new-1",
+            "phone_number": "+13065550001",
+            "aud": "driver-app",
+            "firebase": {"sign_in_provider": "phone"},
+        }
         fb_stub = MagicMock()
         fb_stub.verify_id_token.return_value = payload
         create_user_mock = AsyncMock(return_value=True)
@@ -196,7 +201,12 @@ class TestFirebaseAuthLoginHappyPaths:
     async def test_existing_user_logged_in(self):
         from backend.routes.auth import FirebaseAuthRequest, firebase_auth_login
 
-        payload = {"uid": "fb-existing-1", "phone_number": "+13065550002", "aud": "driver-app", "firebase": {"sign_in_provider": "phone"}}
+        payload = {
+            "uid": "fb-existing-1",
+            "phone_number": "+13065550002",
+            "aud": "driver-app",
+            "firebase": {"sign_in_provider": "phone"},
+        }
         existing = {
             "id": "fb-existing-1",
             "phone": "+13065550002",
@@ -234,7 +244,12 @@ class TestFirebaseAuthLoginHappyPaths:
     async def test_pending_deletion_returns_reactivation_handoff(self):
         from backend.routes.auth import FirebaseAuthRequest, firebase_auth_login
 
-        payload = {"uid": "fb-pending-1", "phone_number": "+13065550003", "aud": "driver-app", "firebase": {"sign_in_provider": "phone"}}
+        payload = {
+            "uid": "fb-pending-1",
+            "phone_number": "+13065550003",
+            "aud": "driver-app",
+            "firebase": {"sign_in_provider": "phone"},
+        }
         existing = {
             "id": "fb-pending-1",
             "phone": "+13065550003",
@@ -264,7 +279,12 @@ class TestFirebaseAuthLoginHappyPaths:
     async def test_deleted_account_raises_410(self):
         from backend.routes.auth import FirebaseAuthRequest, firebase_auth_login
 
-        payload = {"uid": "fb-deleted-1", "phone_number": "+13065550004", "aud": "driver-app", "firebase": {"sign_in_provider": "phone"}}
+        payload = {
+            "uid": "fb-deleted-1",
+            "phone_number": "+13065550004",
+            "aud": "driver-app",
+            "firebase": {"sign_in_provider": "phone"},
+        }
         existing = {"id": "fb-deleted-1", "phone": "+13065550004", "status": "deleted"}
         fb_stub = MagicMock()
         fb_stub.verify_id_token.return_value = payload
@@ -305,7 +325,12 @@ class TestFirebaseAuthLoginHappyPaths:
         from backend.routes.auth import FirebaseAuthRequest, firebase_auth_login
         from backend.utils.error_handling import SpinrException
 
-        payload = {"uid": "fb-x", "phone_number": "+13065550005", "aud": "driver-app", "firebase": {"sign_in_provider": "phone"}}
+        payload = {
+            "uid": "fb-x",
+            "phone_number": "+13065550005",
+            "aud": "driver-app",
+            "firebase": {"sign_in_provider": "phone"},
+        }
         fb_stub = MagicMock()
         fb_stub.verify_id_token.return_value = payload
 

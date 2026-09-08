@@ -23181,7 +23181,8 @@ how much they de-risk a public launch._
   condition only — one line changed, comment expanded).
 
 ### C93. `ci.yml`'s `detect-changes` job fails on every PR — `pulls.listFiles` 403s for lack of `pull-requests: read`
-- [ ] **Status:** OPEN. Found 2026-09-08 investigating a `check_run.completed`
+- [x] **Status:** CLOSED 2026-09-08 on `claude/ci-token-permissions-c93-c94`.
+  Found 2026-09-08 investigating a `check_run.completed`
   failure wake on PR #5128 (a 2-file docs-only PR — no plausible causal link
   to a CI token-permissions error, so the root cause was traced instead of
   assumed innocent).
@@ -23247,9 +23248,17 @@ how much they de-risk a public launch._
   failure event for it in this session (no direct job-run pull for that
   workflow, unlike the one done for `security-gates.yml`).
 
-### C94. Every `codeql-action/upload-sarif` call site in the repo fails on every PR — `wait-for-processing` 403s for lack of `actions: read`
-- [ ] **Status:** OPEN. Found immediately after C93, same PR (#5128), same
-  investigation session — the `security-scan` check itself came back
+### C94. Every `codeql-action/upload-sarif` call site in the repo fails on every PR — `wait-for-processing` 403s for lack of `actions: read`, PLUS a deeper repo-setting blocker underneath
+- [ ] **Status:** PARTIALLY FIXED 2026-09-08 on `claude/ci-token-permissions-c93-c94`
+  (same PR as C93's fix) — reopened, not closed. The `actions: read` fix is real,
+  necessary, and verified working on PR #5131's own first CI run: the original
+  `##[error]Resource not accessible by integration - .../workflow-runs#get-a-workflow-run`
+  is confirmed **gone** from the `security-scan` job log after the fix. But the
+  job still fails end-to-end — a **separate, deeper blocker** surfaced right
+  behind it (see "New blocker" below), so the user-visible symptom (these jobs
+  going green) is **not yet achieved**. Do not re-close this without confirming
+  that blocker is also resolved. Found immediately after C93, same PR (#5128),
+  same investigation session — the `security-scan` check itself came back
   `failure` right after `detect-changes` did. **Widened same day**: `G3 ·
   Semgrep (Spinr rules + public)` in `security-gates.yml` failed on this
   same PR with the identical `##[error]Resource not accessible by
@@ -23325,17 +23334,137 @@ how much they de-risk a public launch._
   and fixed together — see
   `docs/change-log/2026-09-08-c93-c94-ci-token-permissions.md` for the
   applied diff.
+- **New blocker found 2026-09-08, confirmed on PR #5131's own first CI run
+  after the `actions: read` fix landed:** the `actions: read` fix works —
+  the original `Resource not accessible by integration -
+  .../workflow-runs#get-a-workflow-run` error is confirmed gone from
+  `security-scan`'s job log. But the job still fails, now on a different,
+  deeper error: `##[warning]Code scanning is not enabled for this
+  repository. Please enable code scanning in the repository settings.`
+  immediately followed by `##[error]Please verify that the necessary
+  features are enabled: Code scanning is not enabled for this repository.`
+  This is **not** a GITHUB_TOKEN permission scope — it's a repository-level
+  GitHub feature toggle (Settings → Code security and analysis → Code
+  scanning), and for a private repo it may require GitHub Advanced
+  Security (a paid add-on) to even be enableable. No workflow YAML change
+  can fix this. It also means the earlier "considered dropping
+  `wait-for-processing`" reasoning above was based on incomplete
+  information: the failure is on the SARIF upload's own precondition
+  check, not on the `wait-for-processing` poll specifically, so dropping
+  that flag would not have helped either. **Confirmed on all 4 sites**
+  (2026-09-08, later same day): `security-scan`, `G6`/`container-scan`,
+  `G3`/`semgrep`, and `docker-image-scan` all show the identical
+  `Code scanning is not enabled for this repository` error — this is
+  conclusively repo-wide, not specific to any one job.
+- **Human/admin action needed:** a repo admin must enable Code scanning
+  under Settings → Code security and analysis (and, if this is a private
+  repo without GitHub Advanced Security, that may need enabling/purchasing
+  first) before any of these 4 `codeql-action/upload-sarif` steps can
+  succeed. Until then, C94 stays open — the `actions: read` fix is real,
+  correct, and should still merge (it fixes a genuine defect and is a
+  prerequisite for these jobs ever going green), but it does not alone
+  close this item.
 - **Verification performed:** read the full `security-scan` and `G3 ·
-  Semgrep` job logs for both failures; re-read every enclosing
+  Semgrep` job logs for both original failures; re-read every enclosing
   `permissions:` block directly (not via a context-truncated grep this
   time) for all 4 sites, catching the `security-events: write`
   misdiagnosis above before shipping a fix based on it; traced the failing
   API call to the exact `codeql-action/upload-sarif` step via log line
   ordering in both cases; grepped `.github/workflows/` for every
-  `codeql-action/upload-sarif` call site to confirm the full set of 4.
+  `codeql-action/upload-sarif` call site to confirm the full set of 4;
+  after pushing the fix, pulled the actual job log from PR #5131's own
+  first CI run to confirm the original error is gone and to find the new
+  blocker; after that, pulled job logs for the other 3 sites too and
+  confirmed each independently — not assumed from the first one.
 - **What was NOT verified:** whether the SARIF results actually landed in
-  GitHub's Code Scanning UI despite the reported failures (see above) —
-  for any of the 4 sites, before this fix.
+  GitHub's Code Scanning UI despite the reported failures, before this
+  fix, at any of the 4 sites (moot now — Code Scanning being disabled
+  repo-wide means the answer is almost certainly "no" for all of them).
+
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — reproduced twice, real-gap hypothesis now favored
+- [ ] **Status:** OPEN, leaning toward "real gap" but not confirmed. Found
+  2026-09-08 as a `check_run.completed` failure wake on PR #5131 — a PR
+  that does not touch `label-run-maestro.yml` at all, so not this PR's
+  regardless of cause. **Reproduced a second time** ~4 minutes later on a
+  different commit (`f9754b3`'s merge ref `09225e8`, vs. the first
+  occurrence on `6980eb3`'s merge ref) — same 3-retry `Repository not
+  found` pattern, same `Metadata: read` / `PullRequests: write`-only token
+  banner. Two independent occurrences on two different underlying commits,
+  each with 3 retries spanning ~30s, makes a one-off GitHub-side ref-
+  propagation race (hypothesis 2 below) less likely as the *sole*
+  explanation — a real, reproducible `contents: none` permissions gap
+  (hypothesis 1) is now the better-supported read, though still not
+  confirmed by a source outside this session's own observations.
+- **Issue/gap:** `actions/checkout`'s 3 retries of
+  `git fetch ... origin +<merge-sha>:refs/remotes/pull/5131/merge` all
+  returned `remote: Repository not found.` /
+  `fatal: repository 'https://github.com/srikumarimuddana-lab/spinrvm/' not
+  found` — a 404-class failure, not the 403-class `Resource not accessible
+  by integration` failures C93/C94 are about. The job's own token banner
+  showed only `Metadata: read`, `PullRequests: write` — no `contents` at
+  all, consistent with `label-run-maestro.yml:59-60`'s workflow-level
+  `permissions: pull-requests: write` (only key present, so every other
+  scope including `contents` implicitly becomes `none`, not the org
+  default).
+- **Context — this contradicts an earlier same-day finding, not
+  independently new:** a `spinr-cicd-infra-reviewer` pass on the C93/C94
+  diff flagged this exact file as a *theoretical* risk for exactly this
+  reason. At the time, pulled `label-run-maestro.yml`'s own recent run
+  history and found multiple real `conclusion: "success"` runs, and
+  concluded (reported to the user as) a "false alarm" — checkout evidently
+  worked in practice despite the theory. This C95 failure is the first
+  *direct, current* contradiction of that conclusion: same workflow, same
+  permissions block, now actually failing — on the exact PR whose own
+  merge commit triggered it.
+- **Two live hypotheses, not disambiguated:**
+  1. **Real, intermittent permissions gap** — `actions/checkout` on a
+     private repo with `contents: none` can produce `Repository not
+     found` (GitHub's documented behavior: a token with no read access to
+     a private repo gets a 404-shaped "not found" rather than a 403, to
+     avoid leaking the repo's existence) rather than always failing
+     outright — would explain both the historical successes and this
+     failure without contradiction if success depends on some other
+     factor (fork vs. same-repo PR, event type, timing) not yet isolated.
+  2. **Transient GitHub-side ref-propagation race** — fetching
+     `refs/pull/5131/merge` immediately after a push that created a new
+     merge commit (`6980eb3`, itself a `git merge origin/main` this
+     session pushed seconds earlier) is a known class of flake: GitHub
+     recomputes the PR's merge ref asynchronously after a push, and a
+     workflow triggered too soon can 404 on a ref that hasn't finished
+     recomputing yet. 3 retries over ~34 seconds could still be inside
+     that window on a slow recompute.
+- **Attempted to disambiguate, blocked:** tried one re-run
+  (`rerun_failed_jobs` via `mcp__github__actions_run_trigger`) to rule out
+  hypothesis 2 per the flake-triage allowance for a job that died at
+  checkout before any real step ran. **This session's own GitHub
+  integration lacks permission to trigger it**: `403 Resource not
+  accessible by integration` — a different token/permission surface than
+  the workflow's own `GITHUB_TOKEN`, so this is not itself evidence for or
+  against either hypothesis above. No further disambiguation possible from
+  this session.
+- **Not fixed here:** `label-run-maestro.yml` is unrelated to PR #5131's
+  actual diff (`ci.yml`, `security-gates.yml`, `ACTION_ITEMS.md`, one
+  change-log doc) — widening that PR to touch a third, unrelated workflow
+  file over one unconfirmed failure would violate the "don't widen the PR"
+  rule. If hypothesis 1 is confirmed by a future occurrence, the fix is
+  the same shape as C93/C94: add `contents: read` to
+  `label-run-maestro.yml:59-60`'s `permissions:` block. A human with
+  Actions-dispatch access re-running this specific job (or watching the
+  next few real PR runs of this workflow) would settle which hypothesis is
+  correct.
+- **Verification performed:** pulled the full job log directly (not
+  inferred from the check-run summary alone); compared the token
+  permissions banner against the file's own `permissions:` block; searched
+  for a rerun mechanism and attempted it before concluding no
+  disambiguation was possible from this session.
+- **What was NOT verified:** which of the two hypotheses is correct;
+  whether this reproduces on the next real (non-merge-commit) push to any
+  PR touching `rider-app/**`/`driver-app/**` (the only condition under
+  which this job's labeling step — as opposed to just checkout — actually
+  matters); whether GitHub Advanced Security or private-repo status
+  affects the 404-vs-403 behavior claimed in hypothesis 1 for this specific
+  repo (asserted from general GitHub documentation, not confirmed against
+  this repo's actual settings).
 
 ## Recently completed (do not redo)
 

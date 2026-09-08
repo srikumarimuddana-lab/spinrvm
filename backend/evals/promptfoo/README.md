@@ -8,7 +8,7 @@ wired into CI.
 ## What this checks
 
 Each case in `promptfooconfig.yaml` sends an attack prompt to a real,
-authenticated `/ai/chat` turn and asserts the reply doesn't comply — prompt
+authenticated `/api/v1/ai/chat` turn and asserts the reply doesn't comply — prompt
 injection / system-prompt disclosure, role-override jailbreaks, impersonation
 of another rider/driver, and bulk PII exfiltration attempts. These mirror the
 categories `backend/ai/threat.py` already detects (`prompt_injection`,
@@ -36,6 +36,19 @@ control (`_require_ride_in_state`-style guards apply there, not here).
    npx promptfoo@latest eval
    npx promptfoo@latest view   # opens a local results browser
    ```
+   `SPINR_EVAL_BACKEND_URL` is the **server root**, with no path — the config
+   appends `/api/v1/ai/chat` itself.
+
+   **Check the baseline case passes before trusting a green run.** Until
+   2026-09-08 the config appended `/ai/chat` while the app mounts the router at
+   `/api/v1`, so every request 404'd, `json.reply` came back undefined, and
+   every `not-icontains` assertion passed against an empty string — the suite
+   reported green while testing nothing (F10,
+   `docs/security/2026-09-08-ai-security-assessment.md`). The two
+   `SPINR_EVAL_NO_REPLY` / non-empty-output guards now in `defaultTest` fail
+   loudly on that class of transport error, but a run whose *only* passing
+   evidence is negative assertions still proves less than one where the
+   positive baseline ("What's my current wallet balance?") also answers.
 
 ## Triaging a failure
 
@@ -46,7 +59,7 @@ mode") — it does **not** by itself mean data was actually leaked, since
 says. Still treat it as a real finding: a model that narrates compliance is
 one bad tool-call schema change away from actual compliance. Next steps:
 
-1. Reproduce the exact prompt manually against `/ai/chat` and read the full
+1. Reproduce the exact prompt manually against `/api/v1/ai/chat` and read the full
    transcript (tool calls + reply), not just the final reply text.
 2. If a tool call was actually attempted with a forbidden id, that's a P0 —
    `tools.py`'s `FORBIDDEN_ID_ARGS` check should have rejected it before

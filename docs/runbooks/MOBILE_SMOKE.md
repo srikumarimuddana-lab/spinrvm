@@ -73,7 +73,12 @@ rider-Web, driver-iOS, driver-Android, driver-Web. **6 rows total.**
 
 ### 2.1 Rider app — iOS
 
-- [ ] App launches, splash screen shows, routes to /login within 3s
+- [ ] App launches, splash screen shows, routes to /login within ~3s
+- [ ] Launch frame is branded from the very first paint — no blank white gap before the mark
+- [ ] The mark settles into the "o" of the wordmark, with no jump or resize at the
+      native -> JS handoff (watch the first ~0.7s; record at 60fps if unsure)
+- [ ] No loading spinner on the splash at any point on a normal boot
+- [ ] Splash cross-fades into the first screen — it never cuts
 - [ ] Enter rider phone number → OTP arrives via Firebase within 30s
       (check Messages — if it does not arrive, Twilio or Firebase
       misconfigured)

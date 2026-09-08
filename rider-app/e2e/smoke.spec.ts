@@ -29,7 +29,8 @@ test.describe('rider-app web: smoke', () => {
   test('unauthenticated visitor is routed toward /login', async ({ page }) => {
     await mockBackend(page);
     await page.goto('/');
-    // Index screen schedules a router.replace('/login') after ~1.5s splash
+    // The splash holds for SPLASH_MIN_DISPLAY_MS (1.8s) then fades over the routed
+    // screen (~0.6s more), so /login is reached well inside this timeout.
     await page.waitForURL(/login|\/$|index/, { timeout: 8_000 }).catch(() => {});
     await expect(page).toHaveURL(/login|\/$|index/);
   });

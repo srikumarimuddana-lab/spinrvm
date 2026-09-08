@@ -128,6 +128,15 @@ def test_stripe_kyc_sync_offloads_stripe() -> None:
     assert blocking_calls == [], f"services/stripe_kyc_sync.py blocks on Stripe SDK calls at lines {blocking_calls}"
 
 
+def test_dispute_evidence_submission_offloads_stripe() -> None:
+    """C86: admin_submit_dispute_evidence() made a bare, synchronous
+    Dispute.modify() call directly in a request-path admin route handler."""
+    blocking_calls = _blocking_stripe_lines("dispute_evidence_submission.py", subdir="routes/admin")
+    assert blocking_calls == [], (
+        f"routes/admin/dispute_evidence_submission.py blocks on Stripe SDK calls at lines {blocking_calls}"
+    )
+
+
 @pytest.mark.parametrize(
     "service_file",
     ["stripe_payout_sync_service.py", "stripe_mapping_import_service.py"],

@@ -92,13 +92,127 @@ def test_dispute_refund_offloads_stripe() -> None:
     assert blocking_calls == [], f"disputes.py blocks on Stripe SDK calls at lines {blocking_calls}"
 
 
-def _blocking_stripe_lines(route_file: str, stripe_name: str = "stripe") -> list[int]:
-    source_path = Path(__file__).parents[1] / "routes" / route_file
-    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+def test_payment_retry_loop_offloads_stripe() -> None:
+    """C86: retry_failed_payments() (the payment_retry (5min) background loop)
+    used to call PaymentIntent.retrieve/confirm/capture directly -- up to 3
+    bare, synchronous Stripe HTTP round-trips per retried ride, per tick,
+    each blocking the whole process's event loop, not just this loop."""
+    blocking_calls = _blocking_stripe_lines("payment_retry.py", subdir="utils")
+    assert blocking_calls == [], f"utils/payment_retry.py blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
+def test_reconciliation_offloads_stripe() -> None:
+    """C86: _sum_stripe_intents() paginated stripe.PaymentIntent.list() with a
+    bare, synchronous call per page -- now runs the whole pagination loop in
+    a thread (see _list_and_sum in utils/reconciliation.py)."""
+    blocking_calls = _blocking_stripe_lines("reconciliation.py", subdir="utils")
+    assert blocking_calls == [], f"utils/reconciliation.py blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
+def test_stripe_reconcile_offloads_stripe() -> None:
+    """C86: _run_reconciliation_tick()'s auto_paging_iter() over yesterday's
+    PaymentIntents used a bare, synchronous call per page -- now runs the
+    whole pagination loop in a thread (see _list_stripe_pis in
+    utils/stripe_reconcile.py)."""
+    blocking_calls = _blocking_stripe_lines("stripe_reconcile.py", stripe_name="_stripe", subdir="utils")
+    assert blocking_calls == [], f"utils/stripe_reconcile.py blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
+def test_stripe_kyc_sync_offloads_stripe() -> None:
+    """C86: get_legal_name_and_address_from_stripe() made a bare, synchronous
+    Account.retrieve() call. routes/admin/compliance.py's annual T4A export
+    calls this once per driver inside a loop over the whole qualifying set --
+    infrequent (once a year) but each call still blocks every other
+    concurrent request/loop on this worker while the export runs."""
+    blocking_calls = _blocking_stripe_lines("stripe_kyc_sync.py", subdir="services")
+    assert blocking_calls == [], f"services/stripe_kyc_sync.py blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
+def test_dispute_evidence_submission_offloads_stripe() -> None:
+    """C86: admin_submit_dispute_evidence() made a bare, synchronous
+    Dispute.modify() call directly in a request-path admin route handler."""
+    blocking_calls = _blocking_stripe_lines("dispute_evidence_submission.py", subdir="routes/admin")
+    assert blocking_calls == [], (
+        f"routes/admin/dispute_evidence_submission.py blocks on Stripe SDK calls at lines {blocking_calls}"
+    )
+
+
+@pytest.mark.parametrize(
+    "service_file",
+    ["stripe_payout_sync_service.py", "stripe_mapping_import_service.py"],
+)
+def test_already_offloaded_services_stay_offloaded(service_file: str) -> None:
+    """C86 re-triage found these two already correctly ran their Stripe list
+    calls via a named nested function + asyncio.to_thread(name) -- the
+    original F8-validation pass missed this because it only grepped for a
+    bare `stripe.*.retrieve/create/...(` call, not whether the enclosing
+    function was itself thread-wrapped from its own caller. Locks that
+    finding in as a regression test."""
+    blocking_calls = _blocking_stripe_lines(service_file, subdir="services")
+    assert blocking_calls == [], f"services/{service_file} blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
+def test_checker_flags_a_genuinely_unwrapped_lambda_call() -> None:
+    """Proves idiom 1's detection isn't vacuously true: a bare stripe call
+    inside a lambda that is NOT passed to asyncio.to_thread must still be
+    flagged."""
+    lines = _blocking_stripe_lines_from_source("run(lambda: stripe.PaymentIntent.retrieve('pi_1'))")
+    assert lines == [1]
+
+
+def test_checker_flags_a_genuinely_unwrapped_nested_function() -> None:
+    """Proves idiom 2's detection isn't vacuously true: a nested function
+    containing a bare stripe call, never passed to asyncio.to_thread
+    anywhere, must still be flagged."""
+    lines = _blocking_stripe_lines_from_source("def _list():\n    return stripe.PaymentIntent.list()\n_list()\n")
+    assert lines == [2]
+
+
+def test_checker_clears_a_correctly_wrapped_nested_function() -> None:
+    """The positive counterpart to the two tests above -- confirms idiom 2
+    actually clears the call when asyncio.to_thread(name) is present."""
+    lines = _blocking_stripe_lines_from_source(
+        "def _list():\n    return stripe.PaymentIntent.list()\nasyncio.to_thread(_list)\n"
+    )
+    assert lines == []
+
+
+def _blocking_stripe_lines_from_source(source: str, stripe_name: str = "stripe") -> list[int]:
+    """Same logic as _blocking_stripe_lines, against an in-memory source
+    string instead of a file on disk -- for testing the checker itself."""
+    return _blocking_stripe_lines_from_tree(ast.parse(source), stripe_name)
+
+
+def _blocking_stripe_lines(route_file: str, stripe_name: str = "stripe", subdir: str = "routes") -> list[int]:
+    source_path = Path(__file__).parents[1] / subdir / route_file
+    return _blocking_stripe_lines_from_tree(ast.parse(source_path.read_text(encoding="utf-8")), stripe_name)
+
+
+def _blocking_stripe_lines_from_tree(tree: ast.Module, stripe_name: str = "stripe") -> list[int]:
     parents: dict[ast.AST, ast.AST] = {}
     for parent in ast.walk(tree):
         for child in ast.iter_child_nodes(parent):
             parents[child] = parent
+
+    # Idiom 2 (C86): a multi-statement body (e.g. a pagination loop over
+    # auto_paging_iter()) can't be inlined as a lambda -- this repo's other
+    # safe idiom for that shape is a named nested function whose only caller
+    # is `asyncio.to_thread(name, ...)` (see
+    # services/stripe_payout_sync_service.py's `_list()`). Collect every name
+    # passed as the first positional arg to an `asyncio.to_thread(...)` call
+    # anywhere in the file.
+    to_thread_wrapped_names: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "asyncio"
+            and node.func.attr == "to_thread"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+        ):
+            to_thread_wrapped_names.add(node.args[0].id)
 
     blocking_calls: list[int] = []
     for node in ast.walk(tree):
@@ -114,20 +228,26 @@ def _blocking_stripe_lines(route_file: str, stripe_name: str = "stripe") -> list
             continue
 
         ancestor = parents.get(node)
-        while ancestor is not None and not isinstance(ancestor, ast.Lambda):
+        while ancestor is not None and not isinstance(ancestor, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
             ancestor = parents.get(ancestor)
-        if ancestor is None:
+
+        if isinstance(ancestor, ast.Lambda):
+            # Idiom 1: asyncio.to_thread(lambda: stripe.X.Y(...))
+            wrapper = parents.get(ancestor)
+            if (
+                isinstance(wrapper, ast.Call)
+                and isinstance(wrapper.func, ast.Attribute)
+                and isinstance(wrapper.func.value, ast.Name)
+                and wrapper.func.value.id == "asyncio"
+                and wrapper.func.attr == "to_thread"
+            ):
+                continue
             blocking_calls.append(node.lineno)
             continue
 
-        wrapper = parents.get(ancestor)
-        if not (
-            isinstance(wrapper, ast.Call)
-            and isinstance(wrapper.func, ast.Attribute)
-            and isinstance(wrapper.func.value, ast.Name)
-            and wrapper.func.value.id == "asyncio"
-            and wrapper.func.attr == "to_thread"
-        ):
-            blocking_calls.append(node.lineno)
+        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)) and ancestor.name in to_thread_wrapped_names:
+            continue  # Idiom 2 -- the whole enclosing function runs in a thread
+
+        blocking_calls.append(node.lineno)
 
     return blocking_calls

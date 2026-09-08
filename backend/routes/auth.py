@@ -44,6 +44,7 @@ try:
         TokenExpiredException,
     )
     from ..utils.error_keys import ErrorKeys
+    from ..utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from ..utils.metrics import inc as _metric_inc
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import (
@@ -97,6 +98,7 @@ except ImportError:
         TokenExpiredException,
     )
     from utils.error_keys import ErrorKeys
+    from utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from utils.metrics import inc as _metric_inc
     from utils.rate_limiter import default_limiter as limiter
     from utils.redis_client import (
@@ -1425,6 +1427,24 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             status_code=401,
             message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
         )
+
+    # F01 (2026-09-08 AI security assessment): a signed, correctly-audienced
+    # Firebase token is not by itself a verified phone/email customer —
+    # Firebase issues exactly such a token for anonymous sign-in. Gate BEFORE
+    # provisioning and before minting any Spinr token, so an ineligible
+    # identity never gets a user row (the old path created one with an empty
+    # phone) and never gets a JWT the shared AI dependency would accept.
+    # See utils/firebase_identity.py for why provider and contact are two
+    # separate checks.
+    try:
+        enforce_customer_eligibility(payload, surface="auth_exchange")
+    except FirebaseIdentityRejected as e:
+        raise SpinrException(
+            message=e.message,
+            error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+            status_code=401,
+            message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+        ) from e
 
     uid: str = payload.get("uid") or payload.get("user_id") or ""
     phone: str = payload.get("phone_number") or ""

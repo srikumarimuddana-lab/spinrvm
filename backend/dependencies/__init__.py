@@ -21,12 +21,14 @@ try:
     from . import db_supabase
     from .core.config import settings
     from .utils.error_handling import DatabaseError, ServiceUnavailableException
+    from .utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from .utils.pii import redact_error_detail
     from .utils.redis_client import redis_get
 except ImportError:
     import db_supabase
     from core.config import settings
     from utils.error_handling import DatabaseError, ServiceUnavailableException
+    from utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from utils.pii import redact_error_detail
     from utils.redis_client import redis_get
 
@@ -396,6 +398,18 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 raise HTTPException(status_code=503, detail="Rider Firebase audience not configured")
             if payload.get("aud") != rider_app_id:
                 raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
+
+            # F01: same customer-eligibility policy as the /auth/firebase
+            # exchange. Applied here too because this path authenticates a
+            # RAW Firebase ID token on every request — it does not go through
+            # that exchange, so a gate that lived only there would leave the
+            # rider app's primary auth path ungated for any UID that already
+            # has a row. Runs before the user lookup so an ineligible token
+            # costs no DB read.
+            try:
+                enforce_customer_eligibility(payload, surface="get_current_user")
+            except FirebaseIdentityRejected as e:
+                raise HTTPException(status_code=401, detail="ERR_IDENTITY_INELIGIBLE") from e
 
             uid = payload.get("uid") or payload.get("user_id")
             # Try to find user by Firebase UID

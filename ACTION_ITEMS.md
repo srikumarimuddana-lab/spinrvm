@@ -22970,7 +22970,59 @@ how much they de-risk a public launch._
   `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
 
 ### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI
-- [ ] **Status:** open — found 2026-09-08 while auditing admin-dashboard for any
+- [x] **Status:** code fix done 2026-09-08 on
+  `claude/pr-5085-5079-hardening-c91-monitoring-baseline`; one step remains
+  and needs a human (see below) — not fully closed until that runs.
+  **Correction to the original root-cause below: driver markers are NOT
+  WebSocket-only.** `page.tsx`'s `loadData()` also fetches
+  `GET /api/admin/monitoring/drivers` (`getMonitoringDrivers()`) on mount
+  and every poll interval, independent of WS health, and feeds the exact
+  same `applyDriver()` path the WS `drivers_snapshot` event does. The real
+  gap was simpler than first diagnosed: `admin-mocks.ts`'s generic `/api/**`
+  fallback returns an **object** shape (`{items:[], data:[], ...}`), but
+  `getMonitoringDrivers()`/`getMonitoringRides()` both expect a **bare
+  array** — `loadData()`'s `Array.isArray(rawDriversResult) ? ... : []`
+  guard silently turned that mismatch into "zero drivers," on every poll,
+  which is why no marker ever appeared. Fixed by adding one `extra` mock
+  case to `visual-regression.spec.ts`'s existing `setupAdminMocks()` call
+  (mirroring `monitoring.spec.ts`'s already-working `mockMonitoring()`
+  pattern for the same two endpoints) returning one fixture driver — no
+  WebSocket mocking needed at all; verified locally that the WS still fails
+  to connect exactly as before (same "Live data paused" banner already in
+  the committed baseline) and the REST mock alone is sufficient. An initial
+  attempt at this fix used `page.routeWebSocket()` to fake the WS handshake
+  end-to-end — it worked for the handshake itself but the driver_snapshot
+  it seeded was then swept away by this same REST-poll gap moments later;
+  diagnosed by tracing actual message delivery with a scratch Playwright
+  script rather than guessing, found the REST path was both the real gap
+  *and* a strictly simpler fix, and the WS-mock code was removed entirely
+  rather than kept alongside a redundant fix.
+  **Verified locally** (this environment's preinstalled Chromium via
+  `LOCAL_CHROMIUM_PATH`, temporary — not committed): built the app with
+  CI's exact env (`NEXT_PUBLIC_API_URL=http://localhost:8000`), ran the
+  real `visual-regression` Playwright project against the committed
+  baseline (not just a scratch script) — `dashboard-monitoring` fails
+  against the *old* baseline exactly as expected, with a diff showing
+  **only** a new green driver marker at the map's center plus the
+  online-count changing from 0 to 1; visually confirmed via the actual
+  diff/actual PNGs. `tsc --noEmit` and `eslint` both clean on the changed
+  file. The dashboard-home/dashboard-rides/dashboard-settings baselines
+  *also* failed in this same local run, on an unrelated ~32px page-height
+  mismatch (font-metric difference between this sandbox's Chromium build
+  and whatever produced the committed baselines) — confirmed pre-existing
+  and unrelated by checking those pages' mocks are untouched by this diff;
+  not something this fix caused or can fix, and not new information beyond
+  what CLAUDE.md §6 already says about baseline recapture needing a real
+  CI runner.
+  **Remaining step (needs a human):** re-capture the `dashboard-monitoring`
+  baseline via `update-visual-baselines.yml` (Actions-dispatch access this
+  session doesn't have) so the committed PNG reflects the fixture marker —
+  `visual-regression-test` in `ci.yml` **will show a real, expected diff on
+  this PR** for that one page until that runs; this is not a spurious CI
+  failure to chase, per CLAUDE.md §6's own guidance for this exact
+  scenario.
+- **Status (original, superseded by "code fix done" above):** open — found
+  2026-09-08 while auditing admin-dashboard for any
   vehicle-icon-related settings/rendering, as a follow-up to the rider-app/
   driver-app marker fixes in C90 above.
 - **Issue/gap:** `admin-dashboard/e2e/visual-regression.spec.ts`'s

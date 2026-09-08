@@ -798,3 +798,16 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Branch-protection rule requiring this workflow on PRs must be" >> $GITHUB_STEP_SUMMARY
           echo "configured in GitHub repo settings to enforce these gates." >> $GITHUB_STEP_SUMMARY
+      # C74: this job used `if: always()` with no result check, so it always
+      # reported success regardless of whether a blocking gate above failed —
+      # exactly the check branch protection would otherwise rely on being
+      # real. gitleaks (G5a) is deliberately `continue-on-error: true`
+      # (advisory, no clean baseline yet — see that job's own comment), so
+      # its result is masked to 'success' here and cannot trip this check;
+      # path-filtered `skipped` results also still pass. Only a genuine
+      # `failure`/`cancelled` from a blocking gate now fails this job.
+      - name: Fail if any blocking security gate failed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::one or more blocking security gates failed — see the summary above"
+          exit 1

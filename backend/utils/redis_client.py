@@ -12,6 +12,7 @@ import logging
 import os
 import time
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,12 @@ async def _get_redis():
 
         _redis = aioredis.from_url(url, encoding="utf-8", decode_responses=True)
         _redis_url = url
-        logger.info(f"Redis connected: {url[:30]}...")
+        # F5: url[:30] used to be logged directly — a redis:// URL carries its
+        # password before the host, and 30 chars of a real Upstash URL is
+        # enough to leak most of a token. Log only parsed, credential-free
+        # endpoint metadata, matching utils/redis_diag.py's masking helper.
+        parsed = urlparse(url)
+        logger.info("Redis connected: %s://%s:%s", parsed.scheme, parsed.hostname or "?", parsed.port or "?")
         return _redis
     except Exception as e:
         logger.warning(f"Redis connection failed ({e}); using in-process fallback")

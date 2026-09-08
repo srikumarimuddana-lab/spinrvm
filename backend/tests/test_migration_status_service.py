@@ -121,6 +121,7 @@ def _fresh_store(**tables):
         "driver_vehicle_history": [],
         "saved_addresses": [],
         "wallet_transactions": [],
+        "legacy_id_crosswalk": [],
     }
     base.update(tables)
     return base
@@ -298,9 +299,75 @@ def test_saved_address_backfill_reports_missing_column_without_crashing_other_to
     assert t10.warning == "Migration 373 not applied"
 
     # Every other tool still rendered -- the exception was contained to #10.
-    assert len(report.tools) == 18
+    assert len(report.tools) == 19
     t1 = next(t for t in report.tools if t.id == "bulk_driver_import")
     assert t1.state == "done"
+
+
+# --------------------------------------------------------------------------
+# Generalized isolation: a query failure in ANY tool (not just #10) must
+# never take down the other tools' statuses -- the bug that made the whole
+# Migration Checklist panel render "An unexpected error occurred" instead of
+# a partial report.
+# --------------------------------------------------------------------------
+
+
+def test_a_query_failure_in_a_normally_unguarded_tool_does_not_crash_the_whole_report(monkeypatch):
+    """The `drivers` table is read by many tools (1, 2, 4, 5, 6, 8, 9, 16,
+    18) either directly or via the shared eligible_ids/driver-repair
+    lookups. Simulating a failure there must degrade every one of them
+    individually, not raise out of get_migration_status()."""
+    store = _fresh_store(
+        rides=[{"id": "r1", "status": "completed", "driver_id": "d1", "rider_id": "u1"}],
+        # is_driver=True gives orphaned_accounts a candidate to check, so it
+        # actually reaches its own `drivers` lookup instead of early-returning
+        # "done" on an empty candidate list.
+        users=[{"id": "u1", "is_driver": True}],
+    )
+    store["__raise_on__"] = {"drivers"}
+    _use(monkeypatch, store)
+
+    report = svc.get_migration_status()  # must not raise
+    assert len(report.tools) == 19
+
+    for tool_id in ("bulk_driver_import", "orphaned_accounts", "stripe_mapping_import"):
+        t = next(t for t in report.tools if t.id == tool_id)
+        assert t.state == "manual_check_required"
+        assert t.warning == "Status check error"
+
+    # Tools that don't touch `drivers` at all still compute normally.
+    t11 = next(t for t in report.tools if t.id == "legacy_booking_import")
+    assert t11.state == "not_started"
+
+
+def test_eligible_driver_lookup_failure_reports_unknown_not_zero(monkeypatch):
+    """A failed eligible_ids lookup must not be silently treated as an empty
+    population -- tools 2/4/5/9 have their own honest "no eligible drivers
+    yet" message for the genuine-zero case, so a query failure needs a
+    distinct message rather than reusing it and implying a false zero."""
+    store = _fresh_store()
+    store["__raise_on__"] = {"drivers"}
+    _use(monkeypatch, store)
+
+    report = svc.get_migration_status()
+    for tool_id in ("sin_dob_backfill", "vehicle_history_backfill", "tax_id_import"):
+        t = next(t for t in report.tools if t.id == tool_id)
+        assert t.state == "manual_check_required"
+        assert "Could not determine the eligible-driver population" in t.detail
+        assert "eligible drivers yet" not in t.detail
+
+
+def test_imported_ride_lookup_failure_degrades_route_tools_without_crashing(monkeypatch):
+    store = _fresh_store()
+    store["__raise_on__"] = {"rides"}
+    _use(monkeypatch, store)
+
+    report = svc.get_migration_status()  # must not raise
+    assert len(report.tools) == 19
+    for tool_id in ("route_snapshots", "route_backfill"):
+        t = next(t for t in report.tools if t.id == tool_id)
+        assert t.state == "manual_check_required"
+        assert "imported-ride population" in t.detail
 
 
 # --------------------------------------------------------------------------
@@ -367,8 +434,8 @@ def test_pre_launch_flag_counts_drivers_and_rides(monkeypatch):
 def test_report_contains_all_18_tools_in_order(monkeypatch):
     _use(monkeypatch, _fresh_store())
     report = svc.get_migration_status()
-    assert len(report.tools) == 18
-    assert [t.order for t in report.tools] == list(range(1, 19))
+    assert len(report.tools) == 19
+    assert [t.order for t in report.tools] == list(range(1, 20))
 
 
 # --------------------------------------------------------------------------
@@ -531,3 +598,55 @@ def test_driver_repair_no_match_is_manual_check_required(monkeypatch):
     t18 = next(t for t in report.tools if t.id == "driver_repair")
     assert t18.state == "manual_check_required"
     assert "1 still unmatched" in t18.detail
+
+
+# --------------------------------------------------------------------------
+# Tool 19: legacy ID crosswalk backfill (driver-side coverage ratio)
+# --------------------------------------------------------------------------
+
+
+def test_id_crosswalk_backfill_not_started_with_no_eligible_drivers(monkeypatch):
+    _use(monkeypatch, _fresh_store())
+    report = svc.get_migration_status()
+    t19 = next(t for t in report.tools if t.id == "id_crosswalk_backfill")
+    assert t19.state == "not_started"
+    assert "eligible drivers yet" in t19.detail
+
+
+def test_id_crosswalk_backfill_partial_and_done_states(monkeypatch):
+    store = _fresh_store(
+        drivers=[
+            _driver("d1", source="legacy_mongo_driver_import"),
+            _driver("d2", source="legacy_mongo_driver_import"),
+        ],
+        legacy_id_crosswalk=[{"spinr_user_id": "d1", "entity_type": "driver"}],
+    )
+    _use(monkeypatch, store)
+    report = svc.get_migration_status()
+    t19 = next(t for t in report.tools if t.id == "id_crosswalk_backfill")
+    assert t19.state == "partial"
+    assert "1/2" in t19.detail
+
+
+def test_id_crosswalk_backfill_done_when_every_eligible_driver_covered(monkeypatch):
+    store = _fresh_store(
+        drivers=[_driver("d1", source="legacy_saskatoon_driver_import")],
+        legacy_id_crosswalk=[{"spinr_user_id": "d1", "entity_type": "driver"}],
+    )
+    _use(monkeypatch, store)
+    report = svc.get_migration_status()
+    t19 = next(t for t in report.tools if t.id == "id_crosswalk_backfill")
+    assert t19.state == "done"
+
+
+def test_id_crosswalk_backfill_ignores_rider_rows_in_the_driver_ratio(monkeypatch):
+    """A rider-entity crosswalk row must never count toward the driver
+    coverage ratio (wrong entity_type)."""
+    store = _fresh_store(
+        drivers=[_driver("d1", source="legacy_saskatoon_driver_import")],
+        legacy_id_crosswalk=[{"spinr_user_id": "d1", "entity_type": "rider"}],
+    )
+    _use(monkeypatch, store)
+    report = svc.get_migration_status()
+    t19 = next(t for t in report.tools if t.id == "id_crosswalk_backfill")
+    assert t19.state == "not_started"

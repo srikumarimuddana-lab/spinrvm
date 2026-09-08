@@ -462,6 +462,12 @@ data_quality_scan_commit_limit = default_limiter.limit("10/hour")
 driver_repair_preview_limit = default_limiter.limit("30/hour")
 driver_repair_commit_limit = default_limiter.limit("10/hour")
 
+# Legacy ID crosswalk backfill (migration 328, 2026-09-08) -- same
+# generous-headroom reasoning as the two tools above: a small, bounded
+# driver/rider population, not a hot path.
+legacy_id_crosswalk_backfill_preview_limit = default_limiter.limit("30/hour")
+legacy_id_crosswalk_backfill_commit_limit = default_limiter.limit("10/hour")
+
 # Admin driver-import (CSV) — /validate is a read-only dry-run (parse +
 # report, no writes); /commit creates user + driver rows. Same shape as
 # data_transfer_import/booking_import above: commit is the write path and

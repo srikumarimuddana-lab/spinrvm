@@ -11,6 +11,8 @@
 | PR / commit link | branch `claude/pickup-otp-payment-fixes-5a8dnk` |
 | Related issue or gap ID | `docs/audit/2026-09-05-engineering-director-review-round3.md` §1.10 finding **N4** (Major, reporting) |
 
+> **Note (2026-09-08):** `docs/audit/2026-09-05-engineering-director-review-round3.md`, cited above, was never committed to this repo (confirmed missing from `docs/audit/` and from git history) — see `ACTION_ITEMS.md` C85. The finding text this entry describes is reproduced in full in section 1 below; nothing in this log depends on the missing document to be understood.
+
 ## 1. Issue / gap identified
 
 `record_dispute_close_events` looped Stripe's `dispute.balance_transactions` and

@@ -26,8 +26,9 @@ explaining why SIN isn't double-counted there.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 try:
     from ..supabase_client import supabase
@@ -40,6 +41,8 @@ except ImportError:
     )
     from services.migration_driver_repair_service import build_driver_repair_plan  # type: ignore
     from supabase_client import supabase  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 # Mirrors the constants in each importer's own service module -- duplicated
 # here rather than imported, matching this codebase's existing per-module
@@ -500,32 +503,267 @@ def _tool_18_driver_repair() -> ToolStatus:
     return ToolStatus(18, "driver_repair", "Driver-Repair Pass", state, detail, "/dashboard/bulk-operations")
 
 
+def _tool_19_id_crosswalk_backfill(eligible_ids: list[str]) -> ToolStatus:
+    """Driver-side coverage only, same shape as #4/#5 -- rider coverage has
+    no equivalent fixed "eligible" population computed elsewhere in this
+    module, so it isn't folded into this ratio; the tool's own preview
+    report breaks out rider stats separately (see legacy_id_crosswalk_
+    service.build_rider_crosswalk_plan)."""
+    if not eligible_ids:
+        return ToolStatus(
+            19,
+            "id_crosswalk_backfill",
+            "Legacy ID Crosswalk Backfill",
+            "not_started",
+            "No eligible drivers yet (run Bulk Driver Import or Legacy Driver Import first)",
+            "/dashboard/bulk-operations",
+        )
+    rows = (
+        supabase.table("legacy_id_crosswalk")
+        .select("spinr_user_id")
+        .eq("entity_type", "driver")
+        .in_("spinr_user_id", eligible_ids)
+        .execute()
+        .data
+        or []
+    )
+    with_crosswalk = len({r["spinr_user_id"] for r in rows if r.get("spinr_user_id")})
+    total = len(eligible_ids)
+    state = "done" if with_crosswalk == total else ("not_started" if with_crosswalk == 0 else "partial")
+    return ToolStatus(
+        19,
+        "id_crosswalk_backfill",
+        "Legacy ID Crosswalk Backfill",
+        state,
+        f"{with_crosswalk}/{total} eligible drivers have a crosswalk row (rider coverage tracked separately)",
+        "/dashboard/bulk-operations",
+    )
+
+
+def _safe_status(order: int, tool_id: str, name: str, admin_path: str, compute: Callable[[], ToolStatus]) -> ToolStatus:
+    """Run one tool's status computation in isolation.
+
+    A query against a column/table that isn't applied to production yet (or
+    any other unexpected failure) must not take down the other 17 tools'
+    statuses -- generalizes the defensive pattern
+    _tool_10_saved_address_backfill already uses for the known migration-373
+    gap to every tool, since #10 was never the only one capable of hitting
+    an un-applied migration or an unexpected data shape. Logged loudly via
+    logger.error(exc_info=True), never silently swallowed -- the UI only
+    ever shows "check manually" with a pointer to the logs, never a
+    fabricated count.
+    """
+    try:
+        return compute()
+    except Exception as exc:  # noqa: BLE001 - isolate one tool's failure, see docstring
+        logger.error(
+            "[MIGRATION-STATUS] Tool #%d (%s) status check raised %s: %s",
+            order,
+            tool_id,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return ToolStatus(
+            order,
+            tool_id,
+            name,
+            "manual_check_required",
+            "Status check failed — see backend logs for this tool's error.",
+            admin_path,
+            warning="Status check error",
+        )
+
+
 def get_migration_status() -> MigrationStatusReport:
-    """Read-only. Runs every count query above and returns all 18 tool
-    statuses in the verified dependency order. No writes, no side effects."""
-    eligible_ids = _eligible_driver_ids()
-    imported_rides = _imported_ride_ids()
-    route_snapshots, route_backfill = _tool_14_and_15_route_tools(imported_rides)
+    """Read-only. Runs every count query above and returns all 19 tool
+    statuses in the verified dependency order. No writes, no side effects.
+
+    Every tool status goes through _safe_status so one tool's query failure
+    degrades that one row to "check manually" instead of 500ing the whole
+    panel -- see that helper's docstring. eligible_ids/imported_rides feed
+    several tools each; a failure fetching either is handled once, here,
+    rather than silently defaulting to an empty list and letting every
+    dependent tool misreport "zero" when the truth is "unknown."
+    """
+    try:
+        eligible_ids: list[str] | None = _eligible_driver_ids()
+    except Exception as exc:
+        logger.error(
+            "[MIGRATION-STATUS] eligible_driver_ids lookup raised %s: %s", type(exc).__name__, exc, exc_info=True
+        )
+        eligible_ids = None
+
+    try:
+        imported_rides: list[dict] | None = _imported_ride_ids()
+    except Exception as exc:
+        logger.error(
+            "[MIGRATION-STATUS] imported_ride_ids lookup raised %s: %s", type(exc).__name__, exc, exc_info=True
+        )
+        imported_rides = None
+
+    def _needs_eligible(
+        order: int, tool_id: str, name: str, admin_path: str, compute: Callable[[list[str]], ToolStatus]
+    ) -> ToolStatus:
+        if eligible_ids is None:
+            return ToolStatus(
+                order,
+                tool_id,
+                name,
+                "manual_check_required",
+                "Could not determine the eligible-driver population — see backend logs.",
+                admin_path,
+                warning="Status check error",
+            )
+        return _safe_status(order, tool_id, name, admin_path, lambda: compute(eligible_ids))
+
+    if imported_rides is None:
+        route_snapshots = ToolStatus(
+            14,
+            "route_snapshots",
+            "Route Map Snapshots",
+            "manual_check_required",
+            "Could not determine the imported-ride population — see backend logs.",
+            "/dashboard/bulk-operations",
+            warning="Status check error",
+        )
+        route_backfill = ToolStatus(
+            15,
+            "route_backfill",
+            "Route Backfill",
+            "manual_check_required",
+            "Could not determine the imported-ride population — see backend logs.",
+            "/dashboard/bulk-operations",
+            warning="Status check error",
+        )
+    else:
+        try:
+            route_snapshots, route_backfill = _tool_14_and_15_route_tools(imported_rides)
+        except Exception as exc:
+            logger.error(
+                "[MIGRATION-STATUS] Tools #14/#15 status check raised %s: %s", type(exc).__name__, exc, exc_info=True
+            )
+            route_snapshots = ToolStatus(
+                14,
+                "route_snapshots",
+                "Route Map Snapshots",
+                "manual_check_required",
+                "Status check failed — see backend logs for this tool's error.",
+                "/dashboard/bulk-operations",
+                warning="Status check error",
+            )
+            route_backfill = ToolStatus(
+                15,
+                "route_backfill",
+                "Route Backfill",
+                "manual_check_required",
+                "Status check failed — see backend logs for this tool's error.",
+                "/dashboard/bulk-operations",
+                warning="Status check error",
+            )
 
     return MigrationStatusReport(
         tools=[
-            _tool_1_bulk_driver_import(),
-            _tool_2_legacy_driver_import(eligible_ids),
-            _tool_3_bulk_rider_import(),
-            _tool_4_sin_dob_backfill(eligible_ids),
-            _tool_5_vehicle_history_backfill(eligible_ids),
-            _tool_6_orphaned_accounts(),
-            _tool_7_manual(),
-            _tool_8_stripe_mapping(),
-            _tool_9_tax_id_import(eligible_ids),
-            _tool_10_saved_address_backfill(),
-            _tool_11_status(),
-            _tool_12_manual(),
-            _tool_13_wallet_import(),
+            _safe_status(
+                1,
+                "bulk_driver_import",
+                "Bulk Driver Import (Saskatoon CSV)",
+                "/dashboard/drivers/import",
+                _tool_1_bulk_driver_import,
+            ),
+            _needs_eligible(
+                2,
+                "legacy_driver_import",
+                "Legacy Driver Import (Mongo drivers.csv)",
+                "/dashboard/drivers/legacy-import",
+                _tool_2_legacy_driver_import,
+            ),
+            _safe_status(
+                3, "bulk_rider_import", "Bulk Rider Import", "/dashboard/bulk-operations", _tool_3_bulk_rider_import
+            ),
+            _needs_eligible(
+                4,
+                "sin_dob_backfill",
+                "Legacy SIN/DOB Backfill",
+                "/dashboard/drivers/legacy-sin-dob-backfill",
+                _tool_4_sin_dob_backfill,
+            ),
+            _needs_eligible(
+                5,
+                "vehicle_history_backfill",
+                "Legacy Vehicle-History Backfill",
+                "/dashboard/drivers/legacy-vehicle-history-backfill",
+                _tool_5_vehicle_history_backfill,
+            ),
+            _safe_status(
+                6,
+                "orphaned_accounts",
+                "Fix Orphaned Legacy-Linked Accounts",
+                "/dashboard/drivers/legacy-import",
+                _tool_6_orphaned_accounts,
+            ),
+            _safe_status(
+                7,
+                "driver_join_date_fix",
+                "Fix Backfilled Driver Join Dates",
+                "/dashboard/drivers/legacy-import",
+                _tool_7_manual,
+            ),
+            _safe_status(
+                8,
+                "stripe_mapping_import",
+                "Stripe Mapping Import",
+                "/dashboard/bulk-operations",
+                _tool_8_stripe_mapping,
+            ),
+            _needs_eligible(
+                9, "tax_id_import", "Bulk Driver Tax-ID Import", "/dashboard/bulk-operations", _tool_9_tax_id_import
+            ),
+            _safe_status(
+                10,
+                "saved_address_backfill",
+                "Legacy Saved-Address Backfill",
+                "/dashboard/riders/legacy-saved-address-backfill",
+                _tool_10_saved_address_backfill,
+            ),
+            _safe_status(
+                11, "legacy_booking_import", "Legacy Booking Import", "/dashboard/bulk-operations", _tool_11_status
+            ),
+            _safe_status(
+                12, "rider_join_date_fix", "Fix Rider Join Dates", "/dashboard/bulk-operations", _tool_12_manual
+            ),
+            _safe_status(
+                13,
+                "wallet_import",
+                "Legacy Wallet-Balance Import",
+                "/dashboard/bulk-operations",
+                _tool_13_wallet_import,
+            ),
             route_snapshots,
             route_backfill,
-            _tool_16_pre_launch_flag(),
-            _tool_17_data_quality_scan(),
-            _tool_18_driver_repair(),
+            _safe_status(
+                16,
+                "pre_launch_flag",
+                "Pre-Launch Legacy Data Flagging",
+                "/dashboard/bulk-operations",
+                _tool_16_pre_launch_flag,
+            ),
+            _safe_status(
+                17,
+                "data_quality_scan",
+                "Migration Data Quality Scan",
+                "/dashboard/bulk-operations",
+                _tool_17_data_quality_scan,
+            ),
+            _safe_status(
+                18, "driver_repair", "Driver-Repair Pass", "/dashboard/bulk-operations", _tool_18_driver_repair
+            ),
+            _needs_eligible(
+                19,
+                "id_crosswalk_backfill",
+                "Legacy ID Crosswalk Backfill",
+                "/dashboard/bulk-operations",
+                _tool_19_id_crosswalk_backfill,
+            ),
         ]
     )

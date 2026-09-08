@@ -21,9 +21,13 @@ from typing import Any, Dict, List, Optional
 
 try:
     from .. import db_supabase
+    from ..utils.background import log_task_exception as _log_task_exception
+    from ..utils.background import spawn as _spawn
     from ..utils.metrics import inc as _metric_inc
 except ImportError:  # pragma: no cover — top-level run
     import db_supabase
+    from utils.background import log_task_exception as _log_task_exception  # type: ignore
+    from utils.background import spawn as _spawn  # type: ignore
     from utils.metrics import inc as _metric_inc
 
 logger = logging.getLogger(__name__)
@@ -96,8 +100,6 @@ def record_security_event(
 ) -> None:
     """Fire-and-forget append to ai_security_events + metric + warning log.
     PII-safe (tags/ids only). Never raises."""
-    import asyncio
-
     _metric_inc("spinr_ai_security_events_total", {"type": event_type, "severity": severity})
     logger.warning(
         "ai security event: %s (%s) via %s signals=%s",
@@ -124,7 +126,11 @@ def record_security_event(
             logger.error("ai security-event write failed", exc_info=True)
 
     try:
-        task = asyncio.create_task(_run())
-        task.add_done_callback(lambda t: t.exception())
+        # F7: spawn() also keeps a strong reference until the task completes
+        # and clears the request deadline, appropriate for a security-event
+        # write that must land even after the response is sent.
+        task = _spawn(_run())
+        if task is not None:
+            task.add_done_callback(_log_task_exception)
     except RuntimeError:  # no running loop (sync context) — best-effort
         pass

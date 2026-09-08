@@ -94,6 +94,7 @@ from .export_approvals import router as export_approvals_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
 from .legacy_driver_import import router as legacy_driver_import_router
+from .legacy_id_crosswalk import router as legacy_id_crosswalk_router
 from .legacy_saved_address_backfill import router as legacy_saved_address_backfill_router
 from .legacy_sin_dob_backfill import router as legacy_sin_dob_backfill_router
 from .legacy_vehicle_history_backfill import router as legacy_vehicle_history_backfill_router
@@ -257,6 +258,12 @@ admin_router.include_router(migration_data_quality_router, dependencies=[Depends
 # module docstring for why this one touches real money/audit tables, not
 # just metadata.
 admin_router.include_router(migration_driver_repair_router, dependencies=[Depends(require_super_admin)])
+# Legacy ID crosswalk backfill (2026-09-08, migration 328) -- populates the
+# durable old-app-ID -> Spinr-UUID record from linkage Supabase already has
+# (drivers/rides legacy_import_metadata). Additive-only inserts into a
+# brand-new, previously-empty table. Same require_super_admin boundary as
+# the importers above.
+admin_router.include_router(legacy_id_crosswalk_router, dependencies=[Depends(require_super_admin)])
 # Migration checklist status panel (2026-08-31) -- read-only, no writes.
 # Same require_super_admin boundary as every other Bulk Operations tool it
 # summarizes, even though it can't itself change any of the tables it reads.

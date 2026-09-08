@@ -19,7 +19,7 @@
  */
 
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Loader2 } from "lucide-react";
 import {
     adminCommitDataQualityScan,
     adminPreviewDataQualityScan,
@@ -37,6 +37,25 @@ function Stat({ label, value }: { label: string; value: number }) {
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below.
+function buildSummaryText(report: DataQualityScanReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Missing driver", c.missing_driver],
+        ["Missing rider", c.missing_rider],
+        ["Placeholder address", c.placeholder_address],
+        ["$0.00 fare", c.zero_fare],
+        ["Rides affected (total)", c.rides_affected],
+    ];
+    const lines = [
+        `Migration Data Quality Scan — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export function DataQualityScan() {
@@ -153,6 +172,20 @@ export function DataQualityScan() {
                             {c.rides_affected} ride(s) affected in total (a ride can have more than
                             one issue). Batch <span className="font-mono">{report.batch}</span>.
                         </p>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
+                        </div>
 
                         {committed?.committed ? (
                             <div className="flex items-center gap-2 rounded-md border border-success bg-success/10 p-3 text-sm">

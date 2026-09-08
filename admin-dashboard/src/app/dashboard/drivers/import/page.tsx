@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
     Upload,
     FileDown,
@@ -8,6 +9,7 @@ import {
     AlertTriangle,
     Loader2,
     Info,
+    Copy,
 } from "lucide-react";
 import {
     adminValidateDriverImport,
@@ -17,6 +19,7 @@ import {
     type DriverImportReportItem,
 } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
+import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -41,8 +44,10 @@ import {
     TableRow,
     TableCell,
 } from "@/components/ui/table";
+import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { exportToCsv } from "@/lib/export-csv";
 
 // Header for the downloadable template. The first nine columns are required by
@@ -143,9 +148,30 @@ function IssueTable({ items }: { items: DriverImportReportItem[] }) {
     );
 }
 
+// Compact, copy-pasteable markdown table mirroring the stat tiles below.
+function buildSummaryText(report: DriverImportReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Rows", c?.rows ?? 0],
+        ["To create", c?.drivers ?? 0],
+        ["To update", c?.updated ?? 0],
+        ["Skipped (already imported)", c?.skipped_resume ?? 0],
+        ["Warnings", report.warnings.length],
+        ["Errors", report.errors.length],
+    ];
+    const lines = [
+        `Bulk Driver Import — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
+}
+
 export default function BulkImportPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const router = useRouter();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [file, setFile] = useState<File | null>(null);
@@ -161,6 +187,8 @@ export default function BulkImportPage() {
             .then((rows) => setServiceAreas(Array.isArray(rows) ? rows : []))
             .catch(() => setServiceAreas([]));
     }, []);
+
+    useUnsavedChangesWarning(!!report?.can_commit && !committedSummary);
 
     if (!allowed) return null;
 
@@ -216,7 +244,18 @@ export default function BulkImportPage() {
                 setReport(null);
                 setFile(null);
                 if (fileInputRef.current) fileInputRef.current.value = "";
-                toast({ title: "Import complete", description: `${res.imported_drivers ?? 0} drivers imported.` });
+                toast({
+                    title: "Import complete",
+                    description: `${res.imported_drivers ?? 0} drivers imported.`,
+                    action: (
+                        <ToastAction
+                            altText="Go to Migration Checklist"
+                            onClick={() => router.push(BULK_OPERATIONS_HREF)}
+                        >
+                            Go to Checklist
+                        </ToastAction>
+                    ),
+                });
             } else {
                 // The CSV no longer validates (data changed since validate).
                 setReport({
@@ -247,6 +286,8 @@ export default function BulkImportPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
+            <BackToMigrationChecklistLink className="-ml-3" />
+
             <PageHeader
                 title="Bulk Driver Import"
                 description={
@@ -353,9 +394,12 @@ export default function BulkImportPage() {
 
             {committedSummary && (
                 <Card className="border-success">
-                    <CardContent className="flex items-center gap-3 py-4">
-                        <CheckCircle2 className="h-5 w-5 text-success" />
-                        <span className="text-sm">{committedSummary}</span>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+                        <div className="flex items-center gap-3">
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
+                            <span className="text-sm">{committedSummary}</span>
+                        </div>
+                        <BackToMigrationChecklistLink />
                     </CardContent>
                 </Card>
             )}
@@ -378,6 +422,20 @@ export default function BulkImportPage() {
                             <Stat label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
                             <Stat label="Warnings" value={report.warnings.length} tone="warn" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />
+                        </div>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
                         </div>
 
                         {report.errors.length > 0 && (

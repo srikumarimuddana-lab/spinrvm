@@ -564,6 +564,63 @@ export const adminCommitDriverRepair = (opts?: DriverRepairOptions) =>
         body: driverRepairFormData(opts),
     });
 
+/* ── Legacy ID Crosswalk Backfill (Step 19) ───── */
+// Super-admin-only endpoints (backend/routes/admin/legacy_id_crosswalk.py).
+// Populates legacy_id_crosswalk (migration 328) from linkage Supabase
+// already has -- drivers/rides legacy_import_metadata -- so a future
+// support/audit lookup can go straight from an old-app ID to a Spinr UUID
+// instead of re-deriving the phone-match by hand. No CSV needed; additive
+// inserts only, safe to re-run (an old id already recorded is never
+// re-proposed). See backend/services/legacy_id_crosswalk_service.py's
+// module docstring for what this pass can and can't resolve.
+export interface CrosswalkPopulationCounts {
+    new_rows_to_write: number;
+    already_recorded: number;
+    // Driver-side only.
+    eligible_drivers_found?: number;
+    // Rider-side only.
+    eligible_riders_found?: number;
+    ambiguous_skipped?: number;
+}
+export interface CrosswalkBackfillReport {
+    batch: string;
+    counts: { driver: CrosswalkPopulationCounts; rider: CrosswalkPopulationCounts };
+    ambiguous_riders: number;
+    can_commit: boolean;
+}
+export interface CrosswalkBackfillCommitResult extends CrosswalkBackfillReport {
+    committed: boolean;
+    written?: number;
+    failed?: number;
+}
+export interface CrosswalkBackfillOptions {
+    batch?: string;
+}
+
+function crosswalkBackfillFormData(opts?: CrosswalkBackfillOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build both the driver and rider plans and return counts. No writes. */
+export const adminPreviewIdCrosswalkBackfill = (opts?: CrosswalkBackfillOptions) =>
+    request<CrosswalkBackfillReport>("/api/admin/legacy/id-crosswalk-backfill/preview", {
+        method: "POST",
+        body: crosswalkBackfillFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if there's anything new to record,
+ * inserts it. Safe to re-send: an old id already recorded is never
+ * re-proposed by the plan, so a re-run only ever adds what's missing.
+ */
+export const adminCommitIdCrosswalkBackfill = (opts?: CrosswalkBackfillOptions) =>
+    request<CrosswalkBackfillCommitResult>("/api/admin/legacy/id-crosswalk-backfill/commit", {
+        method: "POST",
+        body: crosswalkBackfillFormData(opts),
+    });
+
 /* ── Legacy Stripe Mapping Import (CSV) ───── */
 // Super-admin-only endpoints (backend/routes/admin/stripe_import.py). Maps
 // old-app Stripe IDs onto imported rows: drivers.stripe_account_id (payout
@@ -780,6 +837,71 @@ export const adminBackfillRiderCreatedAt = (file: File, apply: boolean) => {
         body: fd,
     });
 };
+
+/* ── Legacy Tax-ID (SIN + GST/HST BN) Backfill ───── */
+// Admin-dashboard wrapper for backend/routes/admin/tax_id_import.py — a
+// one-time migration path for drivers whose SIN/GST BN were collected on
+// the previous app. Single CSV, header exactly "phone,sin,gst_bn"; phone is
+// the match key, sin/gst_bn each optional per row but at least one
+// required. Fill policy is NULL-only for both columns (immutability rule
+// for SIN, anti-revert rule for GST) — a re-run of the same CSV converges
+// rather than clobbering a value a driver has since corrected in the app.
+// Reports carry only row_ref (CSV line + phone last-4) / field / message —
+// never a SIN, BN, or full phone number.
+export interface TaxIdBackfillReportItem {
+    row_ref: string;
+    field: string;
+    message: string;
+}
+export interface TaxIdBackfillCounts {
+    rows: number;
+    to_write: number;
+    sin_to_write: number;
+    gst_to_write: number;
+    skipped: number;
+}
+export interface TaxIdBackfillReport {
+    batch: string;
+    can_commit: boolean;
+    counts: TaxIdBackfillCounts;
+    warnings: TaxIdBackfillReportItem[];
+    errors: TaxIdBackfillReportItem[];
+}
+export interface TaxIdBackfillCommitResult {
+    batch: string;
+    committed: boolean;
+    written_sin?: number;
+    written_gst?: number;
+    // "started" | "not_applicable" — whether freshly-imported SINs were
+    // handed to Stripe in the background for drivers with a Connect account.
+    stripe_push?: string;
+    warnings?: TaxIdBackfillReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    counts?: TaxIdBackfillCounts;
+    errors?: TaxIdBackfillReportItem[];
+}
+
+function taxIdBackfillFormData(file: File, batch?: string): FormData {
+    const fd = new FormData();
+    fd.append("tax_csv", file);
+    if (batch) fd.append("batch", batch);
+    return fd;
+}
+
+/** Dry-run: parse + validate the tax-ID CSV and return the report (no writes). */
+export const adminValidateTaxIdBackfill = (file: File, batch?: string) =>
+    request<TaxIdBackfillReport>("/api/admin/tax-ids/import/validate", {
+        method: "POST",
+        body: taxIdBackfillFormData(file, batch),
+    });
+
+/** Commit the tax-ID backfill. Returns committed=false + errors if the CSV no longer validates. */
+export const adminCommitTaxIdBackfill = (file: File, batch?: string) =>
+    request<TaxIdBackfillCommitResult>("/api/admin/tax-ids/import/commit", {
+        method: "POST",
+        body: taxIdBackfillFormData(file, batch),
+    });
 
 /* ── Legacy SIN/DOB Backfill (2 CSVs) ─────── */
 // Admin-dashboard wrapper for the CLI-only

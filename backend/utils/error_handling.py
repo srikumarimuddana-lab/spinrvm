@@ -644,6 +644,24 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     content = exc.to_dict()
     if isinstance(content.get("error"), dict):
         content["error"]["request_id"] = request_id
+        # F2: SpinrException.details is a live client contract (3DS
+        # client_secret, unpaid_ride_id, next_action, code — see
+        # shared/api/client.ts) so it is never stripped wholesale. Only
+        # `exception_type` (an internal diagnostic — repositories/_base.py's
+        # DatabaseError is the sole setter; confirmed no client reads the
+        # nested details.exception_type shape, unlike the unrelated
+        # top-level error.exception_type general_exception_handler emits)
+        # and `original` (a raw exception message that can carry PII, e.g.
+        # a Postgres constraint violation echoing a phone/email) are
+        # touched. Applies to every status code — a 5xx SpinrException gets
+        # the same treatment a 4xx one does.
+        details = content["error"].get("details")
+        if isinstance(details, dict):
+            redacted_details = {k: v for k, v in details.items() if k != "exception_type"}
+            original = redacted_details.get("original")
+            if isinstance(original, str):
+                redacted_details["original"] = _redact_error_detail(original)
+            content["error"]["details"] = redacted_details or None
     # Top-level `detail` mirrors the shape of http_exception_handler — the
     # mobile fetch wrapper, several backend tests, and ad-hoc clients read
     # `errorData.detail` directly. Without this, migrating an HTTPException

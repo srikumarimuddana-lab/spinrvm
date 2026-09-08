@@ -80,3 +80,16 @@ dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions
 # 2026-09-04 when this still-open finding failed PR #4936's Gitleaks
 # check even though #4936 never touched billing-usage-monitor.yml.
 1fac36162033dabdce221445bdab64ca8e15a3fc:.github/workflows/billing-usage-monitor.yml:curl-auth-user:78
+
+# Confirmed false positive: "pi_123_secret_abc" is a synthetic, obviously-fake
+# Stripe PaymentIntent client_secret used as test fixture data in
+# TestSpinrExceptionDetailsRedaction (PR #5088, F2 hardening) -- it asserts
+# that a *structured* details field (client_secret, unpaid_ride_id) passes
+# through the SpinrException.details redaction unchanged, which requires a
+# client_secret-shaped literal in the test. A real Stripe client_secret has
+# the form pi_<~24 random alphanumeric>_secret_<~24 random alphanumeric>;
+# this literal is neither long enough nor random, and no live Stripe key is
+# reachable from this string. Flagged twice (once per test asserting on the
+# same literal) under the introducing commit.
+72ad7aa35add3b5d7e8b211f3c47d83c565415ab:backend/tests/test_error_response_sanitisation.py:generic-api-key:492
+72ad7aa35add3b5d7e8b211f3c47d83c565415ab:backend/tests/test_error_response_sanitisation.py:generic-api-key:500

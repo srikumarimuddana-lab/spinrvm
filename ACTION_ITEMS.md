@@ -727,8 +727,39 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     1 bucket ($22.43) likely already paid via Stripe, correctly excluded;
     buckets 16–20 ($26.08) unaffected, still blocked on driver re-link.
     Structural finding: the Stripe mirror schema can never definitively link a
-    ledger row to a specific ride — "likely" is the ceiling. Still open: which
-    Stripe account the mirror covers (old app's/new app's/both) — unconfirmed.
+    ledger row to a specific ride — "likely" is the ceiling.
+    - **2026-09-07, product-owner interview — Stripe-account scope
+      answered, with a flagged discrepancy against prior dated evidence.**
+      Asked which Stripe account `driver_stripe_ledger`/
+      `driver_stripe_payouts` covers. **Product owner: both, blended
+      together** (confirmed a second time after the discrepancy below was
+      raised — stands as the authoritative answer). Flagging, not
+      overriding: this 08-16 doc's own "What was NOT verified" section
+      says *"all observed transaction dates are May–August 2026
+      (post-migration), so this mirror structurally cannot contain
+      old-app-era evidence either way"* — i.e. the dated evidence on file
+      pointed toward new-Spinr-only, not blended, and was never
+      independently confirmed against Stripe directly. Both facts are now
+      on record; whoever next has live Stripe access should reconcile
+      them rather than assume either is settled — a blended mirror with
+      no ride-link field (per the structural finding above) is a
+      materially harder reconciliation problem than a single-account one,
+      so this matters for how much confidence the $185.31–$228.08 range
+      above actually deserves.
+    - **2026-09-07, same interview — the 2 ambiguous buckets ($42.77):
+      product owner wants this investigated now, but it can't be done
+      from this session.** Resolving `350b5267…` ($33.32, a payment row
+      with no matching payout) and `93a899d5…` ($9.45, two equally-clean
+      payment→payout pairs 3 weeks apart) both need live queries against
+      `driver_stripe_ledger`/`driver_stripe_payouts` in the real
+      production Supabase project — this session's Supabase MCP access
+      only reaches a marketing-content project and an empty staging
+      project (same blocker as B42). Left for whoever has real prod
+      access, or the product owner directly; the exact queries needed are
+      already described in `docs/change-log/
+      2026-08-16-gst-backfill-and-stripe-crosscheck.md` §1a's own
+      per-bucket findings — re-run the same lookup, not a new
+      methodology.
   - **RESOLVED**: rider legacy-import provenance — 918/1,137 users backfilled
     2026-08-17 (`docs/change-log/2026-08-17-rider-provenance-backfill-executed.md`).
     **Correction (2026-08-17, later same day):** that change-log's claim that
@@ -760,6 +791,47 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     open**: what `tax_amount` itself should read for those 186 rows is a
     business/legal decision, not resolved by the backfill — needs an owner
     + due date.
+    - **2026-09-07, product-owner interview — decision made, execution
+      still pending.** Interviewed the product owner directly on D1 (owner
+      + due date were the missing pieces). Three answers, taken together:
+      1. **Fix it, not accept-as-is.** Product owner: investigate root
+         cause and correct `tax_amount` for the 186 rows "when we run the
+         new migration today" — i.e. scoped into today's active migration
+         work (see A41's 2026-09-07 addendum re: `Mongo_20260904`), not
+         deferred indefinitely.
+      2. **Use the preserved `old_payout_gst_amount` figure ($102.09
+         total), but validate it as part of today's run** — not a blind
+         copy. Product owner picked "trust old_payout_gst_amount" but
+         qualified it with "let's validate that this time in the
+         migration" — read this as: cross-check the figure (e.g. against
+         `bookings.csv`'s source rows again, or a 5%-of-fare sanity check)
+         before writing it into `tax_amount`, not skip verification.
+      3. **No rider-facing receipt-correction question exists.** Product
+         owner: "all receipts had the gst populated and we have validated
+         right from the day that it is the right amount for the ride
+         complete" — the dollar amount riders were actually charged and
+         shown was correct at the time; the bug is that the backend's
+         `tax_amount` column captured commission-side GST instead of the
+         rider-facing fare-side GST (see
+         `docs/change-log/2026-08-15-legacy-import-gst-preservation.md`'s
+         root-cause finding) — a backend categorization/bookkeeping fix,
+         not a pricing error ever exposed to a rider. No refund, receipt
+         reissue, or disclosure question follows from this.
+      - **Execution note, not yet done by this session:** this session
+        has no `DATABASE_URL`/production write access (same constraint as
+        every other write in this file), so the actual `UPDATE` is left
+        for whoever runs today's migration. Before it runs: (a) remember
+        `old_payout_gst_amount` is stored as a JSONB number and
+        deserializes via `supabase-py` as a Python `float` — per the
+        preservation change-log's own explicit warning, wrap it as
+        `to_decimal(str(value))` before any money arithmetic, never use
+        the raw float; (b) this is a write to `tax_amount` on 186 live
+        `rides` rows — a Change Impact Log is required per CLAUDE.md's
+        live-testing rules, and a `spinr-money-auditor` review before the
+        write executes is strongly recommended given this repo's own
+        precedent of catching real bugs in exactly this kind of
+        legacy-money backfill (see A41's B32/B33 findings, same class of
+        near-miss).
   - **RESOLVED (2026-08-18)**: insurance-period audit-trail gap for the 186
     legacy-imported rides — **CR #4081**, decision: reconstruct-and-flag,
     approved by this session's user (confirmed to hold the SGI-facing
@@ -810,7 +882,18 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     driver/customer crosswalk is now buildable (`bookings.driver_id`↔
     `drivers._id` 96/96, `bookings.customer_id`↔`customers._id` 172/173) —
     the numeric-ID Saskatoon CSV side still isn't in this zip, so the full
-    three-way crosswalk remains open. New, previously-unscoped finding:
+    three-way crosswalk remains open.
+    - **2026-09-07, product-owner interview — not resolved, tied to a
+      staged extract instead.** Asked whether tool #1's existing Saskatoon
+      CSV (already used for Bulk Driver Import) might already be the
+      numeric-ID source this crosswalk needs. Product owner's answer
+      didn't confirm or rule that out — instead: **a new Mongo DB extract
+      is staged and will be used once "confirmed ready."** Read this as:
+      the crosswalk question stays open until that extract (which may or
+      may not be `Mongo_20260904` — not explicitly confirmed as the same
+      one) is actually processed; do not assume tool #1's CSV alone
+      settles the numeric-ID side without checking directly first.
+    New, previously-unscoped finding:
     `driverlocationlogs.csv` has real Period-boundary phase timestamps
     (`idle`/`going_to_pickup`/`on_ride`, keyed to `ride_id` = `bookings._id`
     100% of the time) that could tighten migration 332's insurance-period
@@ -824,6 +907,16 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     current pending-money figure, anything post-2026-07-26, Stripe-side
     everything, and the numeric-ID crosswalk half — all need the Oct-30
     fresh export the user says is coming.
+  - **2026-09-07 — confirmed still genuinely open, not resolved by
+    `Mongo_20260904`.** A41's product-owner interview surfaced a new export
+    batch, `Mongo_20260904`. Asked directly whether that's the Oct-30
+    export arriving early: **product owner confirmed it's a separate,
+    earlier interim batch** — the real fresh export this item's still-open
+    items (pending-money figure, crosswalk, Stripe-side reconciliation)
+    are waiting on has not landed yet. Do not treat `Mongo_20260904`'s
+    processing (tracked under A41) as closing any of these. The Oct 31,
+    2026 decommission target itself was not challenged when asked — treat
+    it as still standing, tentative as always.
   - **VERIFIED LIVE (2026-08-24)**: the 3 monitoring signals from PR #3954
     (`dual_run_monitoring_enabled`) confirmed still wired — `record_go_online_flip`
     called from `backend/routes/drivers/status.py`, payout counter emitted from
@@ -842,7 +935,68 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     §3 monitoring signals; also unowned/unapproved. Neither runbook is in
     effect until the owner slots in each are filled and the policy/plan is
     approved — do not treat either as closing this item.
-  - **STILL OPEN, unchanged**: open $16.63 Stripe dispute needs a response;
+    - **2026-09-07, product-owner interview — `old-app-decommission.md`'s §0
+      gate is now fully cleared; the runbook itself was updated in place
+      (not just this tracker).** All four §0 prerequisites resolved: (1)
+      overall runbook owner — the product owner; (2) step 10 (irreversible
+      teardown) owner — same person, deliberately, not a default; (3) the
+      T-14 stop-new-bookings date — tied automatically to the Oct 31, 2026
+      tentative target, computed as **October 17, 2026** (every other
+      step's date in the runbook's table is now similarly computable and
+      was filled in); (4) `dual-run-driver-roster-policy.md` — confirmed
+      already approved and in effect.
+    - **2026-09-07, later same day — per-step owners named too, every
+      marker in the runbook now resolved.** Follow-up interview covering
+      steps 2–9 and 11's `Owner` column: steps 2–6 (drain, freeze, export,
+      export verification, zero-pending verification — everything needing
+      old-app dashboard/Stripe-platform access) go to the **product
+      owner**, who confirmed having that access. Step 7 (historical
+      migration into Supabase) goes to **engineering — Claude Code
+      sessions on this repo**, matching how the SIN/DOB, vehicle-history,
+      and duration-estimated backfills were already built. Steps 8
+      (reconciliation sign-off), 9 (DNS/app-store sunset), and 11
+      (7-year retention archive ownership) all go to the **product
+      owner** as well — step 8 explicitly stays with the same accountable
+      person rather than routing to a separate legal reviewer, and step
+      11 is flagged in the runbook itself as a long-horizon (7-year)
+      commitment that outlives any one session, not a one-time task.
+      `docs/runbooks/old-app-decommission.md`'s own table was updated in
+      place with every owner cell filled — zero `?` markers remain
+      anywhere in that file, confirmed by grep. `dual-run-driver-roster-policy.md` itself was *not*
+      independently re-verified line-by-line this session (took the
+      product owner's "approved and running" answer as given, per how this
+      interview was scoped) — if anyone doubts that, re-check the policy
+      doc directly rather than assume this note settles it forever.
+    - **2026-09-07, later same day — step 8's reconciliation sign-off gets
+      a provisional structure, reasoned through with the product owner
+      rather than left as a flat "blocked until Oct 30."** Recorded
+      directly in `docs/runbooks/old-app-decommission.md`'s step 8 row
+      (see that file for the full text) — summary here: three named,
+      dated risk-acceptances, each swappable for a real answer once the
+      Oct-30 export lands, instead of treating the whole gate as binary
+      open/closed:
+      - **Financial**: $185.31 confirmed owed; $42.77 unresolved pending
+        the Stripe-mirror-scope clarification and the two ambiguous-bucket
+        queries above; $22.43 provisionally excluded as likely-paid.
+      - **Identity**: full three-way crosswalk not yet built — Mongo-
+        ObjectID half done, numeric-ID half waits on the staged Mongo
+        extract noted above.
+      - **Regulatory**: CR #4081's reconstruct-and-flag call already made
+        once for the first 186 rows — needs an explicit confirmation it
+        still applies to whatever the final export adds, not an assumed
+        carryover.
+      This doesn't close step 8 — it makes the gap explicit and named
+      instead of silent, so the sequence isn't blocked on all-or-nothing
+      certainty. Whoever finalizes step 8 for real should replace each
+      provisional line with the actual resolved figure/finding, not just
+      delete the risk-acceptance note.
+  - **STILL OPEN, deliberately not touched — 2026-09-07 product-owner
+    instruction**: the $16.63 Stripe dispute needs a response, but the
+    product owner explicitly asked not to check or act on it right now —
+    they will identify root cause and validate it themselves first, then
+    decide what has to be done. Do not investigate, respond to, or close
+    this out on an engineering session's own initiative until that
+    happens; wait for the product owner to bring a decision back.
     **rider-referral legacy-signup gap FIXED 2026-08-31** (was: "rider-referral
     velocity/identity-cross-check gap unchanged (checked `utils/referral_payout.py`
     2026-08-24 — confirmed zero legacy/signup-recency awareness, same as the
@@ -5348,6 +5502,27 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   not specific to this item). The module's P0 gaps (access-control, missing
   PIA) were fixed 2026-07-28 (PRs #2685, #2687); this item tracks the PIA's
   own follow-up recommendations.
+  - **2026-09-07:** the product owner directed that A41's legacy-migration
+    consent-legal-sufficiency question (whether the old app's consent basis
+    was sufficient for the 2026-07-29 migration — fact sheet already
+    prepared at `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-
+    factsheet.md`) be tied to this item rather than tracked separately,
+    since it shares the exact same blocker: no named Privacy Officer/legal
+    reviewer exists in this repo. Whoever gets assigned to close R-G should
+    review both request packages in the same pass. See A41's 2026-09-07
+    interview addendum for the full context.
+  - **2026-09-07, later same day — reviewer named.** Interviewed the
+    product owner directly on who should take this: **the product owner
+    themselves** will do the review (both R-G here and the tied-in A41
+    consent-sufficiency question). This closes the "no named
+    reviewer" blocker as a role-assignment gap — the actual determination
+    itself is still pending, now that a real reviewer is attached. Next
+    step is on the product owner: read
+    `reports/legal/data-transfer-implied-consent-review.md` and
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`,
+    record the determination in the PIA's Section 8/9 sign-off table per
+    the request package's own "what a closed-out review looks like"
+    instructions, and update this item's Status line when done.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -6707,6 +6882,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
      limitation as the original build) — worth a human spot-check on the
      next few real PRs that this labels correctly (native-touching PRs get
      labeled, doc/test-only PRs on those same paths don't).
+- **2026-09-07, product-owner interview — scope narrowed, one blocker
+  still unconfirmed.** Asked about both blockers together (secrets
+  existence, and Apple Developer credentials for iOS). Product owner's
+  answer addressed scope, not secrets: **"Android-only is fine for now,
+  skip iOS."** This is a real, deliberate scope decision — action item #4
+  (provision Apple Developer credentials, add an iOS `eas.json` profile +
+  workflow job) is now explicitly deprioritized, not just blocked; treat
+  it as intentionally deferred rather than an open gap to chase. **Item #1
+  (whether `EXPO_TOKEN`/`MAESTRO_CLOUD_API_KEY` are actually set in repo
+  secrets) was not answered by this and remains genuinely unconfirmed** —
+  don't infer either way from the scope answer. Action items #1 (confirm/
+  add the two secrets) and #2 (run the workflow once to prove the Android
+  lane completes) are the only two still needed to get real device
+  coverage live; both still need a repo/org admin, same as before.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —
@@ -12769,6 +12958,35 @@ record of what was assumed vs. what was actually true</summary>
 - **What was NOT verified:** pre-change default profile resolution under
   `--non-interactive` with no `--profile` flag — this needs EAS
   dashboard/build-history access no session here has had yet.
+- **2026-09-07, product-owner interview — direction set, item stays open
+  (not closed by this).** Asked whether to pin `--profile production` now
+  or check `eas build:list` history first. Product owner's answer changes
+  the shape of the fix rather than picking one of the two offered options:
+  - **Immediate mitigation, already in effect operationally, not in code:**
+    the product owner is triggering builds manually from git for now
+    specifically to avoid an unintended profile shipping via the
+    `[build]`-commit-message CI trigger. This doesn't fix `ci.yml` itself —
+    the job still omits `--profile` — but it means the live risk this item
+    describes (wrong profile shipping unnoticed) is currently
+    human-mitigated, not a change to the workflow.
+  - **Target design, not yet built:** branch-aware profile selection —
+    **`main` → `production`, `staging` → `preview`** — rather than a single
+    pinned profile regardless of branch. This is a bigger change than the
+    original "just pin production" fix that was held back: it needs the
+    `mobile-build` job to read `github.ref`/the triggering branch and
+    select `--profile` conditionally, plus confirming `eas.json` has a
+    `preview` profile shaped correctly for staging distribution (not just
+    named that way).
+  - **Action, updated:** do not implement the original single-profile pin.
+    Scope a new fix instead: conditional `--profile` selection keyed to
+    branch (`main`→`production`, `staging`→`preview`), verified against
+    `eas.json`'s actual profile definitions for both apps before merging —
+    this is exactly the kind of live-tested-deploy-path change CLAUDE.md's
+    release gates want dry-run-verified, not shipped on a guess. The
+    original `eas build:list` history question is now moot for the
+    `production` guess specifically (the target state no longer treats
+    `main` as ambiguous) but may still matter for confirming `staging`'s
+    current/intended behavior before the conditional logic ships.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -17715,22 +17933,26 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `ai:quote:{conversation_id}` on "new conversation" or
   `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
 
-- [ ] **AI18. Anonymous web assistant's tool path is dead in production** —
+- [x] **AI18. Anonymous web assistant's tool path is dead in production** —
   found during AI16's review round, pre-existing and unrelated to that fix.
-  `backend/ai/public_assistant.py` deliberately builds its synthetic
-  `tool_user` with NO `id` key ("so any handler that reached for one would
-  raise loudly"), but `backend/ai/tools.py::_execute_tool_inner` fails
-  closed on a missing `user["id"]` *before* any handler runs
-  (`logger.error("ai tool blocked: no authenticated user id")` →
-  `{"error": "not authorized"}`). Every anonymous `search_faqs` /
-  `get_company_info` call therefore returns "not authorized" and emits an
-  error log; the model answers from the prompt alone. Not caught by
-  `tests/test_ai_public_assistant.py`, which mocks `execute_tool`. Fix
-  needs its own design — an explicit anonymous-scope allow-list on the
-  `ToolSpec` (e.g. `allow_anonymous=True` for the two web tools, honoured
-  only for audience `web`), never a blanket relaxation of the fail-closed
-  identity check — plus an integration test through the real
-  `execute_tool`. Until then the public site's assistant is prompt-only.
+  Fixed 2026-09-07 in PR #5082 (commit `e5bce05`): `_execute_tool_inner`'s
+  identity guard now exempts `audience == "web"` specifically (rider/driver
+  calls still fail closed unchanged), and `register()` gained a
+  registration-time check rejecting a web-audience tool that also declares
+  `owned_id_args`. Fixed the 7 `TestSearchFaqsPublicWeb` failures that had
+  been red on `main` since this finding was written. See
+  `docs/change-log/2026-09-07-web-audience-tool-identity-guard.md`.
+  **Follow-up (same day, `claude/pr-5085-5079-hardening-5a2aj7`):** the
+  landed fix let anonymous tool calls run but still fed `_schedule_tool_audit`
+  a `None` `user_id` for them — `ai_tool_audit.user_id` is `TEXT NOT NULL`
+  (migration 217), so every newly-unblocked web call was silently failing
+  its own audit-row insert. Patched to substitute a `"web:anonymous"`
+  sentinel when `audience == "web"`; see the change-log addendum above.
+  Independently validated during PR #5079's three-lens review (PR #5085,
+  `docs/audit/2026-09-07-pr-5079-validation-and-hardening-plan.md`), which
+  had flagged both the original bug and, in its not-yet-implemented PR-1
+  design, this exact audit-sentinel gap — confirmed still present in what
+  actually landed and fixed here.
 
 - [x] **D1. PostGIS surge query** — stale, already substantially done by
   another session before this pass. `utils/surge_engine.py` already: (1)
@@ -20198,6 +20420,82 @@ how much they de-risk a public launch._
     simulator/device available across all five passes) and the underlying
     legal sufficiency-of-old-consent judgment itself (business/counsel
     decision).
+- **2026-09-07, product-owner interview — status confirmed and a new
+  export is now in scope:**
+  - **08-22 booking-import batch (980 rows): CONFIRMED COMPLETE.** Product
+    owner confirms the batch was committed and verified after the 08-29
+    NOT-NULL/batch-mixing fix — resolves the "not yet re-run" gap the fix's
+    own Change Impact Log left open.
+  - **The other three capabilities (SIN/DOB backfill, vehicle-history
+    backfill, duration-estimated marker backfill) have NOT been run against
+    production since** — product owner: "nothing was done" after the 08-22
+    batch. The 2026-08-20 "run all four now" sign-off is therefore only
+    half-exercised; the remaining three still need their own commit runs
+    whenever the product owner is ready, via the admin routes built 08-28
+    (SIN/DOB, vehicle-history) or the CLI script (duration-estimated,
+    still unwired to an admin route — see the 2026-09-07 status refresh
+    above).
+  - **A new export exists: `Mongo_20260904`, not yet processed.** Per
+    product owner, this needs to go through the full migration chain again
+    — use `docs/runbooks/migration-tool-order.md`'s 18-tool dependency
+    order (§ above) rather than re-deriving sequencing from scratch, and
+    check the live Bulk Operations status panel (`GET
+    /api/admin/migration-status`) before starting, since some tools (e.g.
+    Stripe Mapping Import, Bulk Driver Tax-ID Import) match by phone/old ID
+    against whatever accounts already exist and could behave differently
+    against a second batch than they did against the first.
+  - **Migration 373 — product owner wants it applied now.** This session
+    has no `DATABASE_URL` (confirmed: unset, no `backend/.env` in this
+    checkout), so it cannot run the migration itself — same constraint as
+    every session that touched this backfill chain. Whoever has
+    migrate-apply access should run:
+    ```
+    cd backend && python -m backend.scripts.run_migrations
+    ```
+    (or target the single file directly per that script's own
+    `--status`/`--dry-run` flags) to pick up
+    `373_saved_addresses_legacy_import_metadata.sql`. Confirm success via
+    `--status` afterward — it should move from `pending` to `applied`, and
+    the Bulk Operations status panel's Legacy Saved-Address Backfill entry
+    should stop reporting `manual_check_required` with the missing-column
+    warning.
+  - **Consent legal-sufficiency judgment — tied to B11, not tracked
+    separately.** Product owner's call: don't treat "was the old app's
+    consent legally sufficient for this migration" as its own open
+    question — it shares B11's exact blocker (no named Privacy Officer/
+    legal reviewer exists in this repo at all, per B11's own entry and
+    `reports/legal/data-transfer-implied-consent-review.md`'s Status
+    table). Whoever gets assigned to close B11's R-G should pick up this
+    question in the same pass — the fact sheet at
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`
+    is already prepared and waiting, same as B11's request package.
+  - **7 anomalous rows — re-validation requested, blocked on data this
+    session doesn't have.** Product owner: no balance was left pending on
+    the (currently still live) old app's backend or Stripe at migration
+    time, which is reason enough to double-check whether the 7 rows are
+    genuinely anomalous rather than trust the 08-20 conclusion as final —
+    and wants trip dates plus driver/rider names identified as part of
+    processing `Mongo_20260904`. **This session cannot do that
+    re-validation**: neither the original cached export the 08-20
+    investigation used (`payments.csv`/`customers.csv`, session-scratchpad
+    only, not persisted to the repo) nor `Mongo_20260904` itself is
+    present anywhere in this environment (checked: no matching files
+    anywhere on disk, empty scratchpad). Whoever runs `Mongo_20260904`
+    through the tool chain should re-run the same cross-check the 08-20
+    investigation did (`docs/change-log/
+    2026-08-20-anomalous-legacy-rows-payment-verification.md`'s method:
+    match against `payments.csv`, check `customers.csv`'s `block_reason`,
+    check for `you_earn > total_amount`) against the fresh export, and
+    extend it to the 7 original rows too, now that "nothing was pending in
+    the old app" is a confirmed fact rather than an assumption. **Handle
+    the driver/rider-name identification outside this file**: CLAUDE.md's
+    logging/PII rules ("Full names — use user_id") apply to durable
+    written records generally, and `ACTION_ITEMS.md` is exactly that — the
+    actual name-level findings belong in a scoped, access-appropriate doc
+    (matching the existing pattern:
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`-
+    style, or a new dated `docs/audit/` entry), not written into this
+    backlog file. This entry tracks the *task*, not the result.
 - **Files:** full original findings in
   `docs/audit/2026-08-19-legacy-migration-data-quality-audit.md` and
   `docs/runbooks/legacy-migration-playbook.md` (the repeatable
@@ -21977,6 +22275,447 @@ how much they de-risk a public launch._
   check-run timestamps, but not *why* the platform allowed it (config gap
   vs. bypass), which needs human settings-page access this session
   doesn't have.
+
+### C74. `security-gates.yml`/`ci-guardrails.yml` summary jobs never failed regardless of gate results
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Both jobs used `if: always()` with no check of constituent job results, so
+  the "Security gates summary"/"Post guard rail summary" required checks
+  always reported success. Fixed: each now has a final step,
+  `if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')`
+  → `exit 1`. `skipped` (path-filtered) and job-level `continue-on-error`
+  gates (gitleaks, coverage-regression-gate, etc.) are unaffected —
+  confirmed via `actionlint` and by reasoning through GitHub's documented
+  `needs.*.result`/`continue-on-error` semantics (`spinr-cicd-infra-reviewer`
+  pass). Once this lands, add these two check names to A43/C73's
+  required-checks list.
+- **Found during:** PR #5085's validation of PR #5079's F4b finding.
+
+### C75. Nightly duplicate-migration-prefix sweep red every night since 2026-09-02
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  `backend/migrations/.known_duplicate_prefixes.json` didn't list the "376"
+  pair (`376_corporate_wallet_adjust_idempotency.sql`,
+  `376_service_area_tax_history.sql`) even though both are already applied
+  in production and accepted as a historical duplicate. Added the entry;
+  verified locally by re-running the workflow's own embedded Python script
+  against the current migrations directory (`PASS: no new duplicate
+  migration prefixes`). A human with Actions-dispatch access should
+  `workflow_dispatch` the nightly sweep once this merges rather than
+  waiting for the next 09:17 UTC run.
+- **Found during:** PR #5085's validation of PR #5079's maintainability finding.
+
+### C76. `maestro-e2e.yml` fails every run before any job starts — invalid `matrix` reference in a job-level `if`
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  `maestro-android`'s job-level `if:` referenced `matrix.app.dir` — the
+  `matrix` context is only available in `jobs.<id>.strategy`/`jobs.<id>.steps`,
+  never `jobs.<id>.if` (confirmed with `actionlint`, which errors on the
+  original file and passes clean after the fix). Every push produced a
+  zero-duration failed run — 3,206 to date, not the missing-secrets issue
+  B25 tracks. Fixed by splitting into a `plan` job (computes the app matrix
+  as JSON from the `apps` input, job-level `if:` uses only `github`
+  context) and `maestro-android` consuming it via
+  `strategy.matrix.app: ${{ fromJSON(needs.plan.outputs.matrix) }}`.
+  Cross-ref B25: its "wired but never fires" premise hid this second,
+  in-repo cause — B25 (missing `EXPO_TOKEN`/Maestro Cloud secrets) is now
+  the only remaining blocker; a manual dispatch should reach "Setup EAS"
+  and fail there, which is the expected next state, not a regression.
+- **Found during:** PR #5085's validation of PR #5079's testing finding.
+
+### C77. `charge.refunded` refund accounting: no compare-and-swap, no ledger dedupe, no replay recovery
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F1). Added a compare-and-swap on `rides.refund_amount`, a `dedupe_key`
+  on the ledger write (same mechanism the dispute path already used), and
+  a replay-recovery branch that re-books a lost ledger row after a
+  crash/failure between the two writes — keyed off the ride's own current
+  recorded cumulative rather than the triggering event's own asserted
+  amount (an earlier design gated on exact equality with the triggering
+  event's own value, which could permanently lose a superseded event's
+  row once later events advanced the ride past it). A related gap this
+  fix surfaced — `ledger_service`'s duplicate-key handling treated any
+  unique-violation as unconditional success, so the recovery path's
+  dedupe key colliding with a still-in-flight event's own key could
+  silently over/under-book — was closed in the same commit by making
+  duplicate-key writes verify `delta_cents` content before declaring
+  success. Developed over three `spinr-money-auditor` review rounds; see
+  `docs/change-log/2026-09-08-charge-refunded-cas-ledger-dedupe.md` for
+  the full trace.
+- **Residual, deferred to WS-6/WS-9:** the two-write (ride update + ledger
+  insert) design stays in the application layer; a single-statement RPC
+  (matching the pattern of `288_settle_ride_card_payment.sql`) would
+  remove the CAS/race surface entirely but is a larger change, out of
+  scope for this fix.
+- **Mandatory before deploy, not performable from a sandboxed session:** a
+  live read-only round-trip confirming the CAS filter's exact-value match
+  works against the real stored representation of `rides.refund_amount`
+  — see the Change Impact Log's "What was NOT verified" section for the
+  `$lte` fallback if it doesn't round-trip cleanly.
+- **Found during:** PR #5085's validation of PR #5079's F1 finding.
+
+### C78. `SpinrException.details` leaked internal diagnostics (exception class name, unredacted DB error text) to API responses
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F2). `spinr_exception_handler` now drops `exception_type` and redacts
+  `original` (via the existing `redact_error_detail`) for every status
+  code; every other `details` key (`client_secret`, `unpaid_ride_id`,
+  `code`, `next_action`) passes through unchanged — confirmed as a live
+  client contract via `shared/api/client.ts` before deciding what to keep.
+  `dependencies/__init__.py`'s two raw `DatabaseError(details={"original":
+  str(e)})` raise sites now redact before the exception object is even
+  built (defense in depth for the loguru→Sentry bridge).
+- **Confirmed-not-fixed, out of this entry's scope:** `redact_error_detail`
+  has no name or lat/lng pattern (a Postgres error embedding a full name or
+  coordinate pair would survive), and the actual PII source at
+  `repositories/_base.py:561` is itself still unredacted for server-side
+  logging — several `logger.error` call sites elsewhere still log
+  `e.details["original"]` verbatim. Deliberate per CLAUDE.md's
+  "server-side logs keep raw text" design for on-call diagnostics, but it
+  undercuts full Sentry-safety — worth a follow-up to redact at the
+  `_base.py:561` source itself rather than only at response-serialization
+  time. One dead-code bypass also found: `routes/main.py` spreads raw
+  `.details` into its own response, but that router is never mounted.
+- **Found during:** PR #5085's validation of PR #5079's F2 finding;
+  `spinr-security-auditor` review pass.
+
+### C79. Redis connection log line could leak credentials
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F5). `redis_client.py`'s connected-log logged `url[:30]` directly — a
+  `redis://user:pass@host` URL carries credentials before the host, so
+  truncation isn't redaction. Now logs only parsed, credential-free
+  endpoint metadata (scheme/host/port), matching `utils/redis_diag.py`'s
+  existing masking helper.
+- **Found during:** PR #5085's validation of PR #5079's F5 finding.
+
+### C80. Fire-and-forget task done-callbacks called `.exception()` on cancelled tasks
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F7). Three sites (`ai/tools.py`'s tool-audit write, `ai/threat.py`'s
+  security-event write, `ai/tools_support.py`'s embedding persist) used
+  `task.add_done_callback(lambda t: t.exception())` — calling `.exception()`
+  on a cancelled task raises `CancelledError` from inside the callback
+  itself, logged by asyncio's default handler as a noisy, context-free
+  "Exception in callback". Added
+  `utils/background.log_task_exception(task)` (checks `cancelled()` first)
+  and switched all three sites to `utils.background.spawn()` (also fixes
+  the GC hazard of a bare `asyncio.create_task()` whose return value goes
+  out of scope unreferenced).
+- **Found during:** PR #5085's validation of PR #5079's F7 finding.
+
+### C81. Admin auth wrote `last_activity_at` on every single request
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F12). `_verify_admin_payload` ran an unconditional `update_one` write on
+  every authenticated admin request purely to serve a 30-minute idle
+  check. Throttled to skip the write when the existing timestamp is under
+  60s old; NULL/malformed timestamps still always write (unchanged). Idle
+  detection can now lag reality by up to 60s (disclosed, not
+  attacker-exploitable per `spinr-security-auditor` review — 3.3% of the
+  30-minute window).
+- **Found during:** PR #5085's validation of PR #5079's F12 finding.
+
+### C82. Per-worker metrics counters flap under >1 Uvicorn worker (F6)
+
+- [ ] **Status:** open, scheduled with WS-3 (worker-tier topology), NOT
+  fixed in the 2026-09-08 hardening tranche. Per-process metrics design is
+  documented and cross-replica scraping is solved (ADR-010); the untracked
+  gap is `fly.toml`'s `UVICORN_WORKERS="2"` sharing one port so each scrape
+  hits a random worker. Plan: add a `worker_pid` label in
+  `utils/metrics.render_prometheus`; counters/histograms already use
+  `sum()` in ADR-010 §3 and the Grafana alert rules, but **gauges**
+  (`set_gauge`, e.g. `spinr_redis_used_memory_bytes`) must move to
+  `max by()` first. Also pin `UVICORN_WORKERS` consistently across
+  `railway.json`/`Dockerfile` (currently default 4, ≠ Fly's 2).
+- **Found during:** PR #5085's validation of PR #5079's F6 finding.
+
+### C83. `fly.toml` comments cited stale background-loop counts ("16"/"18")
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F13). Actual count is 41 (`_WATCHDOG_LOOP_NAMES` in
+  `backend/core/lifespan.py` is the live registry). No per-worker gating
+  needed — every loop already holds its own Redis leader lock; comment-only
+  fix, `should_spawn_on_api()` topology work stays with WS-3.
+- **Found during:** PR #5085's validation of PR #5079's F13 finding.
+
+### C84. `AGENTS.md` drift from `CLAUDE.md`/reality (5 contradictions)
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Fixed: deploy topology (said Railway-only; is Fly.io primary/Railway
+  standby), background-loop count (said 16; is 41), `routes/rides.py`
+  (is now the `routes/rides/` package), hard-coded migration number
+  ("101/102"; real highest is past 400 and drifts — replaced with the
+  `ls | sort -V | tail -1` lookup command), missing loguru logging-
+  convention rule, `.Codex/` → `.codex/` casing (the referenced
+  `.Codex/context/*.md` paths never existed under either casing — repointed
+  at the real, shared `.claude/context/*.md` files `CLAUDE.md` itself
+  uses), and a stale "## graphify" section describing a `graphify-out/`
+  knowledge graph that has never existed in this repo (removed). Added a
+  two-line header: "Codex-facing view; `CLAUDE.md` is canonical — where
+  they disagree, `CLAUDE.md` wins." The PR #5079 review's `migrate.py`
+  sub-claim was checked and found wrong — `AGENTS.md`'s existing line
+  about it was already correct.
+- **Found during:** PR #5085's validation of PR #5079's maintainability
+  finding (documentation drift).
+
+### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed
+
+- [x] **Status:** partially closed 2026-09-08 on
+  `claude/pr-5085-5079-hardening-5a2aj7` — 8 `docs/change-log/2026-09-05-*.md`
+  files cite this document by section number (§1.6–§1.11) and it does not
+  exist anywhere in `docs/audit/` or in git history. Added a one-line note
+  under each citation pointing here instead of recovering the document
+  (the finding text each log describes is reproduced in full in that log's
+  own §1, so nothing depends on the missing file to be understood).
+  **Still open:** recovering the actual document from its author's machine
+  (if it still exists) would let readers see the original's other
+  findings in context — human action, not something this session can do.
+- **Found during:** PR #5085's validation of PR #5079's finding.
+
+### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)
+
+- [ ] **Status:** open, deliberately NOT fixed in the 2026-09-08 hardening
+  tranche (only the two `routes/webhooks.py` sites were — see this file's
+  now-closed F8 entry, folded into the change-log rather than its own
+  numbered item since it shipped same-day). Remaining bare
+  `stripe.*.retrieve/create/...(` call sites, none touched:
+  `services/stripe_kyc_sync.py:471`, `utils/payment_retry.py:465/491/558`,
+  `utils/reconciliation.py:303`, `utils/stripe_reconcile.py:157`,
+  `services/stripe_payout_sync_service.py:234`,
+  `services/stripe_mapping_import_service.py:967`,
+  `routes/admin/dispute_evidence_submission.py:143`,
+  `services/legacy_payout_correction_service.py:569`. Most of these run in
+  background loops (lower urgency than a request-path webhook handler) —
+  triage each for actual event-loop-blocking impact before wrapping in
+  `asyncio.to_thread` wholesale.
+- **Found during:** PR #5085's validation of PR #5079's F8 finding.
+
+### C87. CI scanner-download flakiness (admin-bundle secret scan, trufflehog install)
+
+- [ ] **Status:** open, deliberately skipped in the 2026-09-08 hardening
+  tranche — explicitly marked optional in the validating plan. Observed:
+  `ci.yml`'s `security-scan` failed once at "Install trufflehog v3" (a
+  non-gzip download) and `security-gates.yml`'s `bundle-secrets` (G5b)
+  failed once on an HTTP 504 the same day; both passed on the next run
+  without any code change, consistent with transient CDN/network flakes
+  rather than a real defect. Proposed fix if this recurs:
+  `curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors`, verify with
+  `tar -tzf` before extraction, and guard the Trivy SARIF upload with
+  `if: always() && hashFiles('trivy-results.sarif') != ''`.
+- **Found during:** PR #5085's validation of PR #5079's testing finding.
+
+### C88. `rides.refund_amount` has no committed schema definition anywhere in this repo, and is missing entirely on `spinrmobileapp`
+
+- [ ] **Status:** open — found 2026-09-08 while attempting the mandatory
+  post-merge verification step for PR #5088's F1 fix (the `charge.refunded`
+  compare-and-swap on `rides.refund_amount`, `docs/change-log/
+  2026-09-08-charge-refunded-cas-ledger-dedupe.md`). Two distinct findings:
+  1. **No migration file defines this column.** Grepped every `*.sql` under
+     `backend/migrations/` (and the whole repo) for `refund_amount` — the
+     only hits are `10_disputes_table.sql` (a column on `disputes`, a
+     different table entirely despite the identical name),
+     `163_earnings_overview_aggregates_fn.sql`, and
+     `380_admin_dispute_stats_rollup_fn.sql` (both also querying
+     `disputes.refund_amount`, confirmed via their `FROM disputes` clause).
+     Nothing anywhere adds a `refund_amount` column to `rides`, yet
+     `backend/routes/webhooks.py`'s refund handling has read and written
+     `rides.refund_amount` since before this session (not something F1
+     introduced — F1 only added a CAS filter on top of an already-existing
+     column reference). Wherever this column actually lives, it was added
+     by an untracked, ad-hoc DDL statement outside the migration system —
+     the exact class of drift `backend/migrations/CLAUDE.md`'s append-only
+     convention exists to prevent, just from before that convention had
+     full coverage.
+  2. **The column doesn't exist at all on `spinrmobileapp`** (project
+     `soavhtdhefowwvforzwb`, org `Spinr_MobileApp`), the one Supabase
+     project this session's connector could reach per
+     `.claude/context/connector-scoping.md`'s tracking table.
+     `information_schema.columns` confirms zero results for `rides` +
+     `refund_amount` (or any `%refund%`-named column) on that project. This
+     means `spinrmobileapp` cannot currently run the `charge.refunded`
+     webhook path at all — every read/write of `rides.refund_amount` there
+     would fail or silently no-op depending on the exact Supabase-py error
+     path, independent of anything F1 changed. Practical effect: no
+     verification of F1 was possible against this project's actual
+     `refund_amount` column (it doesn't have one); a **proxy** verification
+     used `area_fees_total` (same `NUMERIC(8,2)` shape) on the same `rides`
+     table instead, confirming the general Postgres-level round-trip
+     (read a stored value back, re-filter on the exact same value, get the
+     same row) — DB-level round-trip: **verified working**. The
+     client-side leg (Supabase-py's JSON decode of a PostgREST `numeric`
+     response → Python `float`/`str` → `_apply_filters`' bare-value
+     `q.eq()` → PostgREST query string) was reasoned through by reading
+     `repositories/_base.py` (no custom JSON decoder; `_serialize_for_api`
+     only special-cases `Decimal`/`datetime`, so a plain `float` passes
+     through unchanged to `postgrest-py`'s `.eq()`) rather than observed
+     live — Python's `float.__repr__` is a documented shortest-round-trip
+     representation, so this should be safe for ordinary 2-decimal money
+     values, but "should be safe by code reading" is not the same as
+     watching the real `rides.refund_amount` column round-trip on the
+     project that actually has it. **`Spinr-Prod`
+     (`cfrazforbupizntxvvtp`), the project that presumably does have this
+     column, is not reachable from this session's Supabase connector at
+     all** (see the connector-scoping table's Supabase row) — the
+     mandatory pre-merge verification step from PR #5088's Tier 7 was
+     never actually performed against a database that has the column in
+     question, on either side of the merge.
+- **Action:** (1) a human with `Spinr-Prod` access should run the actual
+  round-trip check (`SELECT id, refund_amount FROM rides WHERE
+  refund_amount = <a real value read back> AND id = <that row's id>`,
+  confirm it returns that exact row) against the real column — if it
+  doesn't round-trip cleanly, the F1 CAS filter needs the `$lte`-based
+  fallback documented in the change-log referenced above. (2) Add the
+  missing `ALTER TABLE rides ADD COLUMN IF NOT EXISTS refund_amount
+  NUMERIC(8,2) DEFAULT 0` as a proper new-numbered migration (append-only;
+  never edit history) so `spinrmobileapp` and any future environment
+  bootstrapped from `backend/migrations/` alone actually has this column,
+  and so it's no longer solely dependent on undocumented manual DDL. (3)
+  Re-scope this session's Supabase connector (or add a second one) to
+  reach `Spinr-Prod` if ongoing production verification access is wanted —
+  a decision `.claude/context/connector-scoping.md` already flags as "not
+  yet made."
+- **Found during:** post-merge verification attempt for PR #5088 (F1).
+
+### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
+
+- [ ] **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
+  Supabase row already flags this as "a separate, still-open decision, not
+  yet made"; recorded here as its own tracked item so it doesn't stay
+  buried inside a connector-audit doc, and because C88 just hit its real
+  cost directly: a live-DB verification step (F1's refund CAS filter
+  round-trip check) could not be completed against the actual environment
+  that has the column in question, only against a pre-production stand-in
+  missing it entirely.
+- **Background:** this session's account-level Supabase connector was
+  reconnected 2026-09-07 under a different account, which put it into org
+  `Spinr_MobileApp` (`hjdwxavwnkmtizqjukoh`) with exactly one project,
+  `spinrmobileapp` (`soavhtdhefowwvforzwb`, pre-production). That account
+  switch had a side effect nobody decided on directly: `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`) and `MobileAppStaging` (`mvmyygoinicjdpqprizr`),
+  both under the original `swarnkiran88@gmail.com's Org`, became completely
+  unreachable from this connector. No session using this connector can
+  currently query, verify, or diagnose anything against the actual
+  production database — only against `spinrmobileapp`, whose schema has
+  already been shown (C88) to lag behind whatever created `Spinr-Prod`'s
+  live tables.
+- **The decision itself:** how (if at all) should a Claude session regain
+  read access to `Spinr-Prod`/`MobileAppStaging` for verification work like
+  C88's? Options, not mutually exclusive:
+  1. Invite the current connector's account into
+     `swarnkiran88@gmail.com's Org` as well, so one connector reaches both
+     orgs' projects (simplest, but widens this connector's blast radius
+     back to two orgs — re-run the same live `list_projects` check
+     afterward to confirm exactly what it can now reach, per this doc's
+     "verified live, not assumed" standard).
+  2. Add a **second**, separately-scoped Supabase connector dedicated to
+     `Spinr-Prod`/`MobileAppStaging`, ideally with `read_only=true` or a
+     read-only PAT from the start — keeps the two orgs' access separate
+     and auditable, costs an extra connector to manage.
+  3. Do neither, and accept that any future "verify against the real
+     database" step is a request routed to a human with direct
+     `Spinr-Prod` access, not something a session can do itself — cheapest
+     to set up, slowest per verification.
+- **Not this session's call to make unilaterally:** granting broader
+  database reach is exactly the kind of access-scope change
+  `.claude/context/connector-scoping.md`'s own checklist says to get right
+  "from day one" rather than widen reactively — whoever owns the Supabase
+  account/org memberships should pick one of the options above (or reject
+  the need entirely, if C88-style live verification isn't considered worth
+  the access it requires).
+- **Found during:** C88's investigation, PR #5088 F1's post-merge
+  verification attempt.
+
+### C90. Phone-screen (rider-app + driver-app) vehicle-icon fixes unverified on a real device — distinct from C70 (Android Auto head-unit surface, separate item)
+- [ ] **Status:** open — found 2026-09-07 during a vehicle-icon movement/animation
+  audit and the two follow-up fixes it produced. All three PRs on branch
+  `claude/vehicle-icon-movement-animation-8tys8o` (#5086, merged, and #5089, open
+  as of filing) were verified only via unit/component tests, `tsc --noEmit`, and
+  `expo export --platform web` — no device or simulator was available in the
+  agent session that made these changes.
+- **Issue/gap:** three behavior-changing fixes to `shared/components/CarMarker.tsx`
+  (rider-app's on-map driver icon) have never been watched actually render on a
+  phone: (1) the route-segment continuity hint (`preferredFromIndex`) meant to stop
+  a one-tick bearing flip at intersections, (2) GPS pre-smoothing + implausible-jump
+  rejection, and (3) the ring-change re-arm effect meant to stop the Android marker
+  snapshot freezing on just a colored ring with no car icon. All three are direct
+  ports of logic already proven live in `driver-app`'s own copy since 2026-09-05 —
+  but "the driver-app original worked" and "the rider-app port renders correctly on
+  a real phone" are different claims, and only the first has device evidence behind
+  it. rider-app also has zero automated visual-regression tooling (per `CLAUDE.md`),
+  so nothing catches a visually-wrong-but-non-crashing regression here except a
+  human actually looking at a device.
+- **Root cause:** no device/simulator access in this session (same class of gap as
+  C70, different surface — C70 is the Android Auto head-unit projection,
+  specifically called out there as a distinct concern from the phone screen).
+- **Risk if left open:** any of the three fixes could look correct in code and in a
+  headless test yet still be visually wrong on-device (e.g. the ring re-arm timing
+  feeling like a visible flicker instead of invisible, or the route-snap continuity
+  hint picking the wrong segment on an actual GPS trace with real noise) — exactly
+  the class of bug this whole audit was started to catch in the first place.
+- **Action:** once someone has a physical Android device (the ring-freeze bug is
+  Android-snapshot-specific; iOS is unaffected by design) or an Android
+  simulator/emulator free, drive both apps through: (a) rider-app — book/simulate a
+  ride and watch the driver icon through `ride-options` → `driver-arriving` →
+  `driver-arrived` → `ride-in-progress`, specifically at an intersection/divided
+  road and immediately on each screen transition (ring-freeze repro window); (b)
+  driver-app — confirm no regression from a driver's own perspective (unchanged by
+  this work, but shares the same underlying utilities). Record the pass/fail result
+  as a dated `docs/change-log/` entry, same pattern as `2026-08-16-android-auto-
+  hardware-validation.md`.
+- **Owner / follow-up:** needs a person with a device or Android emulator — no
+  session in this repo's agent integration has that. Flag for the next mobile/
+  device-testing cycle; not gating merge of #5089 given the ported-and-proven-in-
+  driver-app risk mitigation already in its Change Impact Log, but should be closed
+  out before this is considered fully done.
+- **Files (reference only, no code changed by this entry):**
+  `shared/components/CarMarker.tsx`, `rider-app/__tests__/carMarkerPositionChange.
+  test.tsx`, `docs/change-log/2026-09-07-rider-app-marker-parity-fix.md`,
+  `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
+
+### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI
+- [ ] **Status:** open — found 2026-09-08 while auditing admin-dashboard for any
+  vehicle-icon-related settings/rendering, as a follow-up to the rider-app/
+  driver-app marker fixes in C90 above.
+- **Issue/gap:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
+  `dashboard-monitoring` baseline stubs `tiles.openfreemap.org` with a
+  **sourceless** `STUB_MAP_STYLE` (`sources: {}`, a single `background` layer)
+  so the map style/tile load is deterministic — but `setupAdminMocks`
+  (`admin-dashboard/e2e/admin-mocks.ts`) mocks generic `/api/**` REST calls
+  without ever mocking `monitoring-map.tsx`'s WebSocket feed (`page.tsx` line
+  ~103+), so no live driver data arrives during the test run. The snapshot
+  this baseline compares against every PR is only the empty map chrome
+  (background + controls + sidebar) — no driver/vehicle marker
+  (`maplibregl.Marker`, built in `updateDriverMarker`,
+  `monitoring-map.tsx:238-285`) is ever seeded or rendered in it.
+- **Root cause:** the visual-regression setup treats "make the map
+  deterministic" (stubbing tile fetches) and "seed realistic page state"
+  (mocking the WS feed) as the same problem; only the first was done for this
+  page. CLAUDE.md's pre-merge release gates (§6) documents this baseline as
+  "fully active" and CI-blocking, which is true for the map's static chrome
+  but creates a false sense of coverage for anything driver-marker-related.
+- **Risk if left open:** a future change that breaks `updateDriverMarker`,
+  `driverColor()`, or the marker-creation path in `monitoring-map.tsx` would
+  not fail this CI gate — the admin ops team would only discover it by
+  actually looking at the live monitoring page, the exact failure mode this
+  gate exists to prevent for the rest of that screen.
+- **Action:** extend `setupAdminMocks`/the `dashboard-monitoring` spec to also
+  seed a deterministic WebSocket driver-location payload (or a small fixed
+  set of driver fixtures) before capturing the baseline, so the snapshot
+  actually includes rendered driver markers; then re-capture the baseline via
+  `update-visual-baselines.yml` (needs Actions-dispatch access this repo's
+  agent integration doesn't have — flag for a human, same constraint noted
+  elsewhere in `CLAUDE.md` for baseline re-seeding).
+- **Note:** this is a testing-infrastructure gap, not a vehicle-icon animation
+  bug — admin-dashboard's own marker rendering (plain `maplibregl.Marker`,
+  instant `setLngLat()`, no interpolation/smoothing) is a simpler,
+  intentionally non-animated ops-tool design and does not need any of the
+  `CarMarker.tsx` smoothing/route-snapping/ring-freeze fixes ported to it.
+- **Files (reference only, no code changed by this entry):**
+  `admin-dashboard/e2e/visual-regression.spec.ts`,
+  `admin-dashboard/e2e/admin-mocks.ts`,
+  `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`,
+  `admin-dashboard/src/app/dashboard/monitoring/page.tsx`.
 
 ## Recently completed (do not redo)
 

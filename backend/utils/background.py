@@ -24,6 +24,7 @@ willing to wait for an HTTP response.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Coroutine
 
 try:
@@ -31,7 +32,26 @@ try:
 except ImportError:  # pragma: no cover - exercised by the non-package entrypoint
     from utils.deadline import set_request_deadline  # type: ignore
 
+logger = logging.getLogger(__name__)
+
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def log_task_exception(task: "asyncio.Task") -> None:
+    """Done-callback for a fire-and-forget task: log a real failure loudly.
+
+    F7: `task.add_done_callback(lambda t: t.exception())` is a common but
+    broken pattern — calling `.exception()` on a CANCELLED task raises
+    `CancelledError` from inside the callback itself, which asyncio's default
+    exception handler then logs as a noisy, unhelpful "Exception in callback"
+    with no indication of what work was cancelled or why. Check `cancelled()`
+    first and return; only a genuine failure gets logged, with its traceback.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("background task failed", exc_info=exc)
 
 
 def spawn(coro: Coroutine[Any, Any, Any]) -> "asyncio.Task | None":

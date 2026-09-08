@@ -19,6 +19,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Upload, CheckCircle2, AlertTriangle, Loader2, Info, Copy } from "lucide-react";
 import {
     adminValidateSinDobBackfill,
@@ -28,6 +29,7 @@ import {
     type SinDobBackfillFiles,
 } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
+import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,8 +48,21 @@ import {
     TableRow,
     TableCell,
 } from "@/components/ui/table";
+import {
+    AlertDialog,
+    AlertDialogTrigger,
+    AlertDialogContent,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogCancel,
+    AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { exportToCsv } from "@/lib/export-csv";
 import Link from "next/link";
 
@@ -147,6 +162,7 @@ function buildSummaryText(report: SinDobBackfillReport): string {
 export default function LegacySinDobBackfillPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const router = useRouter();
 
     const [files, setFiles] = useState<FileState>({});
     const [report, setReport] = useState<SinDobBackfillReport | null>(null);
@@ -159,6 +175,8 @@ export default function LegacySinDobBackfillPage() {
         if (!banks || !drivers) return null;
         return { banks, drivers };
     }, [files]);
+
+    useUnsavedChangesWarning(!!report?.can_commit && !committedSummary);
 
     if (!allowed) return null;
 
@@ -216,6 +234,14 @@ export default function LegacySinDobBackfillPage() {
                 toast({
                     title: "Backfill complete",
                     description: `${res.updated ?? 0} driver(s) updated.`,
+                    action: (
+                        <ToastAction
+                            altText="Go to Migration Checklist"
+                            onClick={() => router.push(BULK_OPERATIONS_HREF)}
+                        >
+                            Go to Checklist
+                        </ToastAction>
+                    ),
                 });
             } else {
                 // The CSVs no longer validate (data changed since validate).
@@ -255,6 +281,8 @@ export default function LegacySinDobBackfillPage() {
 
     return (
         <div className="mx-auto max-w-4xl space-y-6 p-4">
+            <BackToMigrationChecklistLink className="-ml-3" />
+
             <PageHeader
                 title="Legacy SIN/DOB Backfill"
                 description={
@@ -346,9 +374,12 @@ export default function LegacySinDobBackfillPage() {
 
             {committedSummary && (
                 <Card className="border-success">
-                    <CardContent className="flex items-center gap-3 py-4">
-                        <CheckCircle2 className="h-5 w-5 text-success" />
-                        <span className="text-sm">{committedSummary}</span>
+                    <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+                        <div className="flex items-center gap-3">
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />
+                            <span className="text-sm">{committedSummary}</span>
+                        </div>
+                        <BackToMigrationChecklistLink />
                     </CardContent>
                 </Card>
             )}
@@ -430,14 +461,36 @@ export default function LegacySinDobBackfillPage() {
                         )}
 
                         <div className="flex items-center gap-3 pt-2">
-                            <Button onClick={handleCommit} disabled={!report.can_commit || committing}>
-                                {committing ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                    <CheckCircle2 className="mr-2 h-4 w-4" />
-                                )}
-                                Commit backfill
-                            </Button>
+                            <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                    <Button disabled={!report.can_commit || committing}>
+                                        {committing ? (
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <CheckCircle2 className="mr-2 h-4 w-4" />
+                                        )}
+                                        Commit backfill
+                                    </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                        <AlertDialogTitle>Write SIN/DOB for {counts?.to_update ?? 0} driver(s)?</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            This writes a vault-encrypted SIN and/or date of birth to{" "}
+                                            {counts?.to_update ?? 0} driver(s) matched by phone in batch{" "}
+                                            <span className="font-mono">{report.batch}</span>. A value already on
+                                            file is never overwritten — only NULL columns are filled. Once
+                                            written, a SIN can only be changed later through the driver&apos;s own
+                                            update-SIN action (audited, with a reason), not by re-running this
+                                            tool.
+                                        </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                        <AlertDialogAction onClick={handleCommit}>Commit backfill</AlertDialogAction>
+                                    </AlertDialogFooter>
+                                </AlertDialogContent>
+                            </AlertDialog>
                             {!report.can_commit && (
                                 <span className="text-sm text-muted-foreground">
                                     Resolve all errors to enable commit.

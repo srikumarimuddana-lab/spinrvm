@@ -26,10 +26,14 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 try:
     from .. import db_supabase
+    from ..utils.background import log_task_exception as _log_task_exception
+    from ..utils.background import spawn as _spawn
     from .pii import ScrubPolicy, scrub_pii_deep
 except ImportError:  # pragma: no cover — top-level run
     import db_supabase
     from ai.pii import ScrubPolicy, scrub_pii_deep  # type: ignore
+    from utils.background import log_task_exception as _log_task_exception  # type: ignore
+    from utils.background import spawn as _spawn  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +120,17 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {}
 def register(spec: ToolSpec) -> ToolSpec:
     if spec.name in TOOL_REGISTRY:
         raise ValueError(f"duplicate tool name: {spec.name}")
+    # A "web" (anonymous) tool never has a user_id (see _execute_tool_inner's
+    # identity guard), so it cannot own an ownership-verified id arg — that
+    # verifier would always be called with user_id=None. Caught here, at
+    # registration time, rather than left to fail unpredictably the first
+    # time such a tool is actually called.
+    if "web" in spec.audiences and spec.owned_id_args:
+        raise ValueError(
+            f"tool {spec.name!r} is web-audience but declares owned_id_args "
+            f"{sorted(spec.owned_id_args)} — ownership verification needs a real user_id, "
+            "which the anonymous web audience never has"
+        )
     # Enforce the data-scope contract at import time so a mis-scoped tool can
     # never reach production: identity args are banned outright, and every other
     # id-style arg must be declared owned (ownership-verified) or public.
@@ -305,8 +320,12 @@ def _schedule_tool_audit(record: Dict[str, Any]) -> None:
             logger.error("ai tool-audit write failed", exc_info=True, extra={"tool": record.get("tool_name")})
 
     try:
-        task = asyncio.create_task(_run())
-        task.add_done_callback(lambda t: t.exception())
+        # F7: spawn() also keeps a strong reference until the task completes
+        # and clears the request deadline, appropriate for an audit write
+        # that must land even after the response is sent.
+        task = _spawn(_run())
+        if task is not None:
+            task.add_done_callback(_log_task_exception)
     except RuntimeError:
         # No running loop (e.g. sync test context) — skip; auditing is best-effort.
         pass
@@ -336,7 +355,13 @@ async def execute_tool(
     arg_keys = sorted(args.keys()) if isinstance(args, dict) else []
     _schedule_tool_audit(
         {
-            "user_id": (user or {}).get("id"),
+            # ai_tool_audit.user_id is TEXT NOT NULL (migration 217); the "web"
+            # audience deliberately never carries a real user_id (see the
+            # identity guard above), so every anonymous call would otherwise
+            # fail this insert silently (caught by _schedule_tool_audit's own
+            # try/except) and leave no Layer-7 governance record at all for
+            # the one surface that most needs one.
+            "user_id": (user or {}).get("id") or ("web:anonymous" if audience == "web" else None),
             "audience": audience,
             "tool_name": name,
             "ok": ok,
@@ -378,9 +403,20 @@ async def _execute_tool_inner(
 
     call_args = args if isinstance(args, dict) else {}
 
-    # Fail closed: no tool runs without an authenticated identity to scope to.
+    # Fail closed: no tool runs without an authenticated identity to scope
+    # to — except the public "web" audience (spinr.ca's anonymous assistant,
+    # see ai/public_assistant.py), which deliberately never carries a user
+    # id at all. A tool is only reachable here with audience == "web" if its
+    # own registration opted into that (the `audience not in spec.audiences`
+    # check above), so this is respecting a registration-time decision, not
+    # loosening the guard generally — rider/driver calls still fail closed
+    # exactly as before. Literal "web" duplicated rather than imported from
+    # tools_support.py/public_assistant.py to avoid a circular import back
+    # into this module (same small-constant convention those two already
+    # use for the same string). No web-audience tool may declare
+    # owned_id_args (ownership verification below needs a real user_id).
     user_id = (user or {}).get("id")
-    if not user_id:
+    if not user_id and audience != "web":
         logger.error("ai tool blocked: no authenticated user id", extra={"tool": name})
         return {"error": "not authorized"}, False
 

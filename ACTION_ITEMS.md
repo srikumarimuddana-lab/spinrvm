@@ -23381,10 +23381,20 @@ how much they de-risk a public launch._
   fix, at any of the 4 sites (moot now — Code Scanning being disabled
   repo-wide means the answer is almost certainly "no" for all of them).
 
-### C95. `label-run-maestro.yml`'s `Detect native changes and label` job failed with `Repository not found` on PR #5131's merge commit — status unresolved
-- [ ] **Status:** OPEN, inconclusive. Found 2026-09-08 as a `check_run.completed`
-  failure wake on PR #5131 — a PR that does not touch `label-run-maestro.yml`
-  at all, so not this PR's regardless of cause.
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — reproduced twice, real-gap hypothesis now favored
+- [ ] **Status:** OPEN, leaning toward "real gap" but not confirmed. Found
+  2026-09-08 as a `check_run.completed` failure wake on PR #5131 — a PR
+  that does not touch `label-run-maestro.yml` at all, so not this PR's
+  regardless of cause. **Reproduced a second time** ~4 minutes later on a
+  different commit (`f9754b3`'s merge ref `09225e8`, vs. the first
+  occurrence on `6980eb3`'s merge ref) — same 3-retry `Repository not
+  found` pattern, same `Metadata: read` / `PullRequests: write`-only token
+  banner. Two independent occurrences on two different underlying commits,
+  each with 3 retries spanning ~30s, makes a one-off GitHub-side ref-
+  propagation race (hypothesis 2 below) less likely as the *sole*
+  explanation — a real, reproducible `contents: none` permissions gap
+  (hypothesis 1) is now the better-supported read, though still not
+  confirmed by a source outside this session's own observations.
 - **Issue/gap:** `actions/checkout`'s 3 retries of
   `git fetch ... origin +<merge-sha>:refs/remotes/pull/5131/merge` all
   returned `remote: Repository not found.` /

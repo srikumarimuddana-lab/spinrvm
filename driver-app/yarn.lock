@@ -3440,22 +3440,10 @@
     "@tanstack/query-core" "5.102.8"
     "@tanstack/query-persist-client-core" "5.102.8"
 
-"@tanstack/query-core@5.102.6":
-  version "5.102.6"
-  resolved "https://registry.yarnpkg.com/@tanstack/query-core/-/query-core-5.102.6.tgz#874ef53e9f5f4cb56dd2fa62341a0fd7dd880d85"
-  integrity sha512-jp+GucyQ+fel2ILb8ZLQeqMaAqZL/Bzaj+dKOQiPk4vPdf2rQPEV7heUyEVIhatpY42j4AFHav4DzBa1oTIp/A==
-
 "@tanstack/query-core@5.102.8":
   version "5.102.8"
   resolved "https://registry.yarnpkg.com/@tanstack/query-core/-/query-core-5.102.8.tgz#c55c31b4f99124054805ce8ec8137c84108f3252"
   integrity sha512-ZNjkJ33CqvPNec/6lZBnHqLc3EVGPZ9ySLhYahU9TcuRFdmwXewuj0c4hwSWcGHqEUwcSrKeZ+oGcvPBqXcQcg==
-
-"@tanstack/query-persist-client-core@5.102.6":
-  version "5.102.6"
-  resolved "https://registry.yarnpkg.com/@tanstack/query-persist-client-core/-/query-persist-client-core-5.102.6.tgz#99bfb8bce8d60deae4f25d0e181390bd16ccc377"
-  integrity sha512-F9YKO76vFSBZfUVZxZjr/4xIUjnnYKO+pHfbhkrsIp1je5A1/L/UhIUb4A3VmLGnLJYxJWJmADSx2TAVZVRYsA==
-  dependencies:
-    "@tanstack/query-core" "5.102.6"
 
 "@tanstack/query-persist-client-core@5.102.8":
   version "5.102.8"
@@ -3464,12 +3452,12 @@
   dependencies:
     "@tanstack/query-core" "5.102.8"
 
-"@tanstack/react-query-persist-client@^5.102.6":
-  version "5.102.6"
-  resolved "https://registry.yarnpkg.com/@tanstack/react-query-persist-client/-/react-query-persist-client-5.102.6.tgz#33e7253da786f386e90d07ebfdb4d96acc6fee4d"
-  integrity sha512-l1prWH9kMq8cprv9qvrEPKxKHBvKG4XAM8lknoaBA1tqOx3H2BTPn1jIQNSDr0sfFbkFaYqDl/G1GxPUYxQtAQ==
+"@tanstack/react-query-persist-client@^5.102.8":
+  version "5.102.8"
+  resolved "https://registry.yarnpkg.com/@tanstack/react-query-persist-client/-/react-query-persist-client-5.102.8.tgz#4e77712da521879ecbefc5c3e05e0474dfe43efa"
+  integrity sha512-WOZReC+m9klekPtG7eeZ3txJeMA9lg2R0RytSG3yXcZgJItQAVIyoobJdbdIQtlpgcU2tSzsOEBtJacs2vlCOA==
   dependencies:
-    "@tanstack/query-persist-client-core" "5.102.6"
+    "@tanstack/query-persist-client-core" "5.102.8"
 
 "@tanstack/react-query@^5.102.8":
   version "5.102.8"

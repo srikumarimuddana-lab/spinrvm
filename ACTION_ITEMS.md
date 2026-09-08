@@ -23381,8 +23381,59 @@ how much they de-risk a public launch._
   fix, at any of the 4 sites (moot now — Code Scanning being disabled
   repo-wide means the answer is almost certainly "no" for all of them).
 
-### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — reproduced twice, real-gap hypothesis now favored
-- [ ] **Status:** OPEN, leaning toward "real gap" but not confirmed. Found
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — fixed on the favored hypothesis, not yet independently reconfirmed
+- [x] **Status:** FIX APPLIED 2026-09-08 on `claude/label-run-maestro-contents-perm`,
+  at the user's explicit request to apply the same-shape fix already
+  described below ("Not fixed here" section — since superseded). Added
+  `contents: read` to `label-run-maestro.yml:59-60`'s `permissions:` block,
+  identical in kind to the C93/C94 fix. **This closes the item on
+  hypothesis 1 (real gap) without independently ruling out hypothesis 2**
+  (see below) — the fix is correct either way it turns out (a real gap: it
+  directly fixes it; a pure race: it's a harmless no-op, since `contents:
+  read` was always the correct minimum scope for `actions/checkout`
+  regardless of which hypothesis explained the specific failures observed).
+  Verification of whether this actually resolves the failures needs a real
+  PR run of this workflow (its own PR's checks, or the next `rider-app`/
+  `driver-app`-touching PR) — not yet observed as of this fix.
+- **Verification attempt that didn't work, corrected rather than left
+  standing (2026-09-08):** tried marking PR #5133 (this fix's own PR) ready
+  for review, assuming that would re-trigger `label-run-maestro.yml`'s job
+  and let the `if: github.event.pull_request.draft == false` gate finally
+  pass. It didn't — checked the workflow's actual trigger afterward:
+  `on: pull_request: types: [opened, synchronize, reopened]`.
+  `ready_for_review` is not one of those three event types, so converting
+  a PR out of draft does not itself fire this workflow at all; only a
+  genuine `opened`/`synchronize` (a new commit)/`reopened` event does.
+  **Still not independently confirmed as of this note.** Real confirmation
+  needs either a new commit pushed to this PR while it's non-draft, or
+  observation on the next real PR touching `rider-app/**`/`driver-app/**`
+  after this fix merges to `main`.
+- **First real synchronize-triggered test, inconclusive (2026-09-08):** the
+  correction commit above (`671fb00`) landed as a genuine `synchronize`
+  event on the now-non-draft PR — `label-run-maestro.yml`'s job ran for
+  real and failed, but **not diagnostically**: `status: completed`,
+  `conclusion: failure`, empty `output.title`/`summary`/`text`, no `steps`
+  array in the job listing, and `get_job_logs` 404'd on every attempt
+  (log content never became available). Before concluding the fix failed,
+  checked whether this was isolated to this one job: **all 6 jobs of the
+  wholly unrelated `pr-checks.yml` workflow failed identically, at the
+  same push, with the same empty-output/404-logs signature** —
+  `pr-checks.yml` already declares `contents: read` explicitly
+  (`pr-checks.yml:18-20`), so a permissions gap cannot explain its
+  failure. A correctly-permissioned workflow failing in the identical
+  shape at the identical moment is strong evidence this specific failure
+  wave is a transient, repo-wide GitHub Actions platform hiccup at that
+  push (job logs never materializing is consistent with runs that never
+  really executed), not a defect in the C95 fix itself. Could not spend
+  another re-run to confirm (this session's own GitHub integration lacks
+  rerun permission, established earlier on this same item). **Still not
+  cleanly confirmed either way** — the next real `synchronize`/`opened`
+  event on this branch, or the next real PR touching
+  `rider-app/**`/`driver-app/**` after merge, is the next opportunity to
+  observe a clean pass or a genuine repeat of the original
+  `Repository not found` error.
+- **Original investigation (2026-09-08, before the fix), preserved below for
+  the record:** Found
   2026-09-08 as a `check_run.completed` failure wake on PR #5131 — a PR
   that does not touch `label-run-maestro.yml` at all, so not this PR's
   regardless of cause. **Reproduced a second time** ~4 minutes later on a
@@ -23442,29 +23493,30 @@ how much they de-risk a public launch._
   the workflow's own `GITHUB_TOKEN`, so this is not itself evidence for or
   against either hypothesis above. No further disambiguation possible from
   this session.
-- **Not fixed here:** `label-run-maestro.yml` is unrelated to PR #5131's
-  actual diff (`ci.yml`, `security-gates.yml`, `ACTION_ITEMS.md`, one
-  change-log doc) — widening that PR to touch a third, unrelated workflow
-  file over one unconfirmed failure would violate the "don't widen the PR"
-  rule. If hypothesis 1 is confirmed by a future occurrence, the fix is
-  the same shape as C93/C94: add `contents: read` to
-  `label-run-maestro.yml:59-60`'s `permissions:` block. A human with
-  Actions-dispatch access re-running this specific job (or watching the
-  next few real PR runs of this workflow) would settle which hypothesis is
-  correct.
-- **Verification performed:** pulled the full job log directly (not
-  inferred from the check-run summary alone); compared the token
-  permissions banner against the file's own `permissions:` block; searched
-  for a rerun mechanism and attempted it before concluding no
-  disambiguation was possible from this session.
-- **What was NOT verified:** which of the two hypotheses is correct;
-  whether this reproduces on the next real (non-merge-commit) push to any
-  PR touching `rider-app/**`/`driver-app/**` (the only condition under
-  which this job's labeling step — as opposed to just checkout — actually
-  matters); whether GitHub Advanced Security or private-repo status
-  affects the 404-vs-403 behavior claimed in hypothesis 1 for this specific
-  repo (asserted from general GitHub documentation, not confirmed against
-  this repo's actual settings).
+- **Originally not fixed in #5131** (superseded): `label-run-maestro.yml`
+  was unrelated to that PR's actual diff — widening it to touch a third,
+  unrelated workflow file over one then-unconfirmed failure would have
+  violated the "don't widen the PR" rule. Fixed separately, in its own PR,
+  once the user explicitly asked for it.
+- **Verification performed (original investigation):** pulled the full job
+  log directly (not inferred from the check-run summary alone); compared
+  the token permissions banner against the file's own `permissions:`
+  block; searched for a rerun mechanism and attempted it before concluding
+  no disambiguation was possible from that session.
+- **Verification performed (fix):** re-read the file after editing to
+  confirm no other job in it declares its own `permissions:` override that
+  would also need the addition (only one `permissions:` block exists,
+  workflow-level, covering the file's single job); `yaml.safe_load`
+  validated. No `actionlint` available in this sandboxed session (no
+  Docker daemon), same disclosed gap as C93/C94's fix.
+- **What was NOT verified:** which of the two original hypotheses was
+  actually correct (moot for correctness — the fix is right either way —
+  but left unresolved as a fact about what was actually happening); a real
+  post-fix PR run of this exact job confirming it now succeeds; whether
+  GitHub Advanced Security or private-repo status affects the 404-vs-403
+  behavior claimed in hypothesis 1 for this specific repo (asserted from
+  general GitHub documentation, not confirmed against this repo's actual
+  settings).
 
 ## Recently completed (do not redo)
 

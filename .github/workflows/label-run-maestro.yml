@@ -57,6 +57,15 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
+  # C95: this block previously listed only `pull-requests: write`. Once any
+  # `permissions:` key is present, every unlisted scope becomes `none` (not
+  # the org/repo default) -- so `contents` was implicitly `none`, which can
+  # make actions/checkout fail (observed as `Repository not found`, a
+  # 404-shaped failure GitHub uses for a token with no read access to a
+  # private repo, rather than a 403). Reproduced 3 times on PR #5131 before
+  # this fix. `contents: read` is the minimum checkout needs; `pull-requests:
+  # write` stays for the label-apply step (`issues.addLabels`/`createLabel`).
+  contents: read
   pull-requests: write
 
 concurrency:

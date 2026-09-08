@@ -17,6 +17,12 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   default: { getItem: jest.fn(), setItem: jest.fn(), removeItem: jest.fn() },
 }));
 jest.mock('@shared/api/client', () => ({ __esModule: true, default: { get: jest.fn(), post: jest.fn() } }));
+// aiChatStore registers a logout callback and reads the signed-in user id at
+// import time (F03); deviceLocation itself uses neither.
+jest.mock('@shared/store/authStore', () => ({
+  useAuthStore: { getState: () => ({ user: { id: 'rider-1' } }) },
+  registerLogoutCallback: () => () => undefined,
+}));
 jest.mock('../utils/aiChat', () => ({ __esModule: true, streamChat: jest.fn() }));
 jest.mock('expo-location', () => ({
   __esModule: true,

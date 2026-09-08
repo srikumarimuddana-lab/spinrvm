@@ -33,14 +33,17 @@ from pydantic import BaseModel, Field
 
 try:
     from ai.orchestrator import run_chat_turn
-    from dependencies import get_current_user
+    from dependencies import get_current_user, get_current_user_active_session
     from services.zoho_desk_integration import create_support_ticket
     from services.zoho_desk_service import ZohoDeskError
     from utils.rate_limiter import ai_chat_limit
 except ImportError:
     from ..ai.orchestrator import run_chat_turn  # type: ignore
     from ..utils.rate_limiter import ai_chat_limit  # type: ignore
-    from .dependencies import get_current_user  # type: ignore
+    from .dependencies import (  # type: ignore
+        get_current_user,
+        get_current_user_active_session,
+    )
     from .services.zoho_desk_integration import create_support_ticket  # type: ignore
     from .services.zoho_desk_service import ZohoDeskError  # type: ignore
 
@@ -76,7 +79,9 @@ class ChatRequest(BaseModel):
 async def support_chat(
     req: ChatRequest,
     request: Request,
-    current_user: dict = Depends(get_current_user),
+    # F02: same session-revocation gate as /api/v1/ai/chat. This is an AI turn
+    # now, so it must not outlive a signed-out session either.
+    current_user: dict = Depends(get_current_user_active_session),
 ):
     """Legacy support-chat endpoint. Delegates to the central AI engine.
 

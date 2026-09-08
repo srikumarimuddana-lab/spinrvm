@@ -32,6 +32,33 @@ jest.mock('expo-location', () => ({
   getForegroundPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false })),
   getLastKnownPositionAsync: jest.fn(() => Promise.resolve(null)),
 }));
+// aiChatStore registers a logout callback and reads the signed-in user id to
+// namespace its conversation pointer (F03). State lives inside the factory so
+// it is initialised before aiChatStore's module-level registerLogoutCallback
+// call runs during import — a module-scope `const` would still be in its TDZ
+// at that point.
+jest.mock('@shared/store/authStore', () => {
+  const authState: { user: { id: string } | null } = { user: { id: 'rider-1' } };
+  const callbacks: Array<() => void | Promise<void>> = [];
+  return {
+    useAuthStore: { getState: () => authState },
+    registerLogoutCallback: (cb: () => void | Promise<void>) => {
+      callbacks.push(cb);
+      return () => undefined;
+    },
+    __authState: authState,
+    __logoutCallbacks: callbacks,
+  };
+});
+
+const authMock = jest.requireMock('@shared/store/authStore') as {
+  __authState: { user: { id: string } | null };
+  __logoutCallbacks: Array<() => void | Promise<void>>;
+};
+const KEY_RIDER_1 = 'spinr_ai_conversation_id:rider-1';
+const runLogoutCallbacks = async () => {
+  for (const cb of authMock.__logoutCallbacks) await cb();
+};
 
 const mockApi = api as jest.Mocked<typeof api>;
 const mockStream = streamChat as jest.MockedFunction<typeof streamChat>;
@@ -57,6 +84,7 @@ const scriptStream = (events: AiSseEvent[], fail?: string) =>
 beforeEach(() => {
   jest.clearAllMocks();
   reset();
+  authMock.__authState.user = { id: 'rider-1' };
   (AsyncStorage.clear as jest.Mock)();
 });
 
@@ -77,7 +105,7 @@ describe('sendMessage', () => {
     expect(messages[1]).toMatchObject({ role: 'assistant', content: 'Your driver is close.' });
     expect(conversationId).toBe('conv-9');
     expect(isStreaming).toBe(false);
-    expect(AsyncStorage.setItem).toHaveBeenCalledWith('spinr_ai_conversation_id', 'conv-9');
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith(KEY_RIDER_1, 'conv-9');
   });
 
   it('sends the stored conversation id for multi-turn context', async () => {
@@ -295,7 +323,7 @@ describe('config + history', () => {
   });
 
   it('loadHistory rehydrates the stored conversation', async () => {
-    await AsyncStorage.setItem('spinr_ai_conversation_id', 'conv-9');
+    await AsyncStorage.setItem(KEY_RIDER_1, 'conv-9');
     mockApi.get.mockResolvedValueOnce({
       data: {
         messages: [
@@ -313,11 +341,11 @@ describe('config + history', () => {
   });
 
   it('loadHistory starts fresh when the conversation is gone (404/purged)', async () => {
-    await AsyncStorage.setItem('spinr_ai_conversation_id', 'conv-old');
+    await AsyncStorage.setItem(KEY_RIDER_1, 'conv-old');
     mockApi.get.mockRejectedValueOnce(new Error('404'));
     await useAiChatStore.getState().loadHistory();
     expect(useAiChatStore.getState().conversationId).toBeNull();
-    expect(AsyncStorage.removeItem).toHaveBeenCalledWith('spinr_ai_conversation_id');
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith(KEY_RIDER_1);
   });
 });
 
@@ -338,6 +366,111 @@ describe('controls', () => {
     await useAiChatStore.getState().startNewConversation();
     expect(useAiChatStore.getState().messages).toEqual([]);
     expect(useAiChatStore.getState().conversationId).toBeNull();
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith(KEY_RIDER_1);
+  });
+});
+
+describe('session teardown (F03)', () => {
+  it('logout clears every per-session field', async () => {
+    useAiChatStore.setState({
+      conversationId: 'conv-9',
+      messages: [{ id: 'x', role: 'user', kind: 'text', content: 'my home address', createdAt: 1 }],
+      toolStatus: 'Checking your ride…',
+      pendingMapPin: { role: 'pickup', pin: { lat: 52.1, lng: -106.6 } },
+      isStreaming: true,
+    });
+
+    await runLogoutCallbacks();
+
+    const state = useAiChatStore.getState();
+    expect(state.messages).toEqual([]);
+    expect(state.conversationId).toBeNull();
+    expect(state.toolStatus).toBeNull();
+    expect(state.pendingMapPin).toBeNull();
+    expect(state.isStreaming).toBe(false);
+  });
+
+  it('logout aborts an in-flight stream', async () => {
+    const controller = new AbortController();
+    useAiChatStore.setState({ isStreaming: true, abortController: controller });
+    await runLogoutCallbacks();
+    expect(controller.signal.aborted).toBe(true);
+    expect(useAiChatStore.getState().abortController).toBeNull();
+  });
+
+  it('logout does NOT flush a queued map pin', async () => {
+    // The assessment called this out specifically: reusing stopStreaming for
+    // logout would fire submitMapPin AFTER sign-out, and during an account
+    // switch would send the previous rider's coordinates as the new
+    // account's message.
+    mockStream.mockClear();
+    useAiChatStore.setState({
+      pendingMapPin: { role: 'dropoff', pin: { lat: 52.1, lng: -106.6, address: '123 Main St' } },
+    });
+
+    await runLogoutCallbacks();
+    await Promise.resolve();
+
+    expect(useAiChatStore.getState().pendingMapPin).toBeNull();
+    expect(mockStream).not.toHaveBeenCalled();
+    expect(useAiChatStore.getState().messages).toEqual([]);
+  });
+
+  it('logout removes the legacy unscoped pointer left by a pre-F03 install', async () => {
+    await runLogoutCallbacks();
     expect(AsyncStorage.removeItem).toHaveBeenCalledWith('spinr_ai_conversation_id');
+  });
+
+  it('a stream frame arriving after logout cannot repopulate the store', async () => {
+    // abort() does not unschedule callbacks already queued; without the
+    // generation guard these set(...) calls would land in the next
+    // account's store.
+    let leak: ((e: AiSseEvent) => void) | undefined;
+    mockStream.mockImplementation(async ({ onEvent }) => {
+      leak = onEvent;
+    });
+
+    await useAiChatStore.getState().sendMessage('what was my last trip?');
+    await runLogoutCallbacks();
+
+    leak?.({ event: 'token', data: { text: "Your last trip was to 123 Main St" } });
+    leak?.({ event: 'meta', data: { conversation_id: 'conv-leak', user_message_id: 'u1' } });
+
+    expect(useAiChatStore.getState().messages).toEqual([]);
+    expect(useAiChatStore.getState().conversationId).toBeNull();
+  });
+
+  it('the conversation pointer is namespaced per user', async () => {
+    scriptStream([
+      { event: 'meta', data: { conversation_id: 'conv-a', user_message_id: 'u1' } },
+      { event: 'token', data: { text: 'hi' } },
+    ]);
+    await useAiChatStore.getState().sendMessage('hello');
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith('spinr_ai_conversation_id:rider-1', 'conv-a');
+
+    // A different account on the same device reads a different key, so it can
+    // never pick up the previous rider's conversation id.
+    authMock.__authState.user = { id: 'rider-2' };
+    (AsyncStorage.getItem as jest.Mock).mockClear();
+    await useAiChatStore.getState().loadHistory();
+    expect(AsyncStorage.getItem).toHaveBeenCalledWith('spinr_ai_conversation_id:rider-2');
+  });
+
+  it('history arriving after logout is discarded', async () => {
+    await AsyncStorage.setItem(KEY_RIDER_1, 'conv-9');
+    let resolveGet: (v: unknown) => void = () => undefined;
+    mockApi.get.mockImplementation(
+      () => new Promise((resolve) => { resolveGet = resolve; }) as never,
+    );
+
+    const pending = useAiChatStore.getState().loadHistory();
+    await runLogoutCallbacks();
+    resolveGet({
+      data: { messages: [{ id: 'm1', role: 'user', content: 'private', created_at: '2026-09-08T00:00:00Z' }] },
+    });
+    await pending;
+
+    expect(useAiChatStore.getState().messages).toEqual([]);
+    expect(useAiChatStore.getState().conversationId).toBeNull();
   });
 });

@@ -25,14 +25,17 @@ try:
     from ai import conversations
     from ai.orchestrator import run_chat_turn
     from ai.public_assistant import PublicAssistantError, run_public_turn
-    from dependencies import get_current_user
+    from dependencies import get_current_user, get_current_user_active_session
     from settings_loader import get_app_settings
     from utils.rate_limiter import ai_chat_limit, ai_public_chat_limit
 except ImportError:
     from ..ai import conversations  # type: ignore
     from ..ai.orchestrator import run_chat_turn  # type: ignore
     from ..ai.public_assistant import PublicAssistantError, run_public_turn  # type: ignore
-    from ..dependencies import get_current_user  # type: ignore
+    from ..dependencies import (  # type: ignore
+        get_current_user,
+        get_current_user_active_session,
+    )
     from ..settings_loader import get_app_settings  # type: ignore
     from ..utils.rate_limiter import ai_chat_limit, ai_public_chat_limit  # type: ignore
 
@@ -140,6 +143,11 @@ async def _sse_with_pings(frames):
 
 @api_router.get("/config")
 async def ai_config(current_user: dict = Depends(get_current_user)):
+    # Deliberately NOT get_current_user_active_session (F02): this returns
+    # global feature flags and disclaimer copy, no customer data and no
+    # provider egress, and the apps poll it on launch. There is nothing here
+    # for a signed-out token to exfiltrate or spend, so it does not earn the
+    # Redis round-trip the AI turn does.
     settings = await get_app_settings()
     enabled = bool(settings.get("ai_assistant_enabled"))
     return {
@@ -156,7 +164,7 @@ async def ai_config(current_user: dict = Depends(get_current_user)):
 async def ai_chat(
     body: AiChatRequest,
     request: Request,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user_active_session),
 ):
     frames = run_chat_turn(
         user=current_user,
@@ -233,12 +241,14 @@ async def ai_public_chat(body: PublicChatRequest, request: Request):
 
 
 @api_router.get("/conversations")
-async def list_ai_conversations(current_user: dict = Depends(get_current_user)):
+async def list_ai_conversations(current_user: dict = Depends(get_current_user_active_session)):
     return {"conversations": await conversations.list_conversations(current_user["id"])}
 
 
 @api_router.get("/conversations/{conversation_id}/messages")
-async def get_ai_conversation_messages(conversation_id: str, current_user: dict = Depends(get_current_user)):
+async def get_ai_conversation_messages(
+    conversation_id: str, current_user: dict = Depends(get_current_user_active_session)
+):
     messages = await conversations.get_messages(conversation_id, current_user["id"])
     if messages is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -246,7 +256,7 @@ async def get_ai_conversation_messages(conversation_id: str, current_user: dict 
 
 
 @api_router.delete("/conversations/{conversation_id}", status_code=204)
-async def delete_ai_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_ai_conversation(conversation_id: str, current_user: dict = Depends(get_current_user_active_session)):
     deleted = await conversations.delete_conversation(conversation_id, current_user["id"])
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")

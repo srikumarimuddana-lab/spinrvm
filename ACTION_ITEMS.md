@@ -22598,6 +22598,16 @@ how much they de-risk a public launch._
   about it was already correct.
 - **Found during:** PR #5085's validation of PR #5079's maintainability
   finding (documentation drift).
+- **Follow-up (2026-09-08):** the 2026-09-08 closure was incomplete — grep
+  found 2 more "16 startup loops" instances the original fix missed
+  (`AGENTS.md`'s "Background task safety" line and its "Background Loop
+  Recipe" section header line) plus one dead `graphify-out/GRAPH_REPORT.md`
+  reference in a "Graphify coverage" bullet under the `agents/` role table
+  — inconsistent with this same fix's own removal of the `## graphify`
+  section for citing a directory that never existed. All 3 corrected in
+  place; verified no remaining "16 loops"/"18 loops" or `graphify-out`
+  references anywhere in `AGENTS.md`. Status stays closed; this is a
+  same-item correction, not a reopen.
 
 ### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed — CLOSED (2026-09-08)
 
@@ -23169,6 +23179,163 @@ how much they de-risk a public launch._
   worth a human spot-check once either PR's CI completes.
 - **Files:** `.github/workflows/ci.yml` (`visual-regression-test`'s `if:`
   condition only — one line changed, comment expanded).
+
+### C93. `ci.yml`'s `detect-changes` job fails on every PR — `pulls.listFiles` 403s for lack of `pull-requests: read`
+- [ ] **Status:** OPEN. Found 2026-09-08 investigating a `check_run.completed`
+  failure wake on PR #5128 (a 2-file docs-only PR — no plausible causal link
+  to a CI token-permissions error, so the root cause was traced instead of
+  assumed innocent).
+- **Issue/gap:** the `detect-changes / Detect changed surfaces` job (shared
+  by `ci.yml`, `ci-guardrails.yml`, `security-gates.yml` via
+  `workflow_call`) fails on every PR run **of `ci.yml` specifically**. Job
+  log: `dorny/paths-filter`'s `listFiles(pull_number, per_page: 100)`
+  GitHub API call returns `Resource not accessible by integration`,
+  immediately after the job's own token-permissions banner shows only
+  `Contents: read`, `Metadata: read`, `Packages: read` — no
+  `pull-requests: read`.
+- **Root cause (corrected 2026-09-08 — the original write-up above
+  overclaimed the scope):** only `ci.yml`'s invocation is missing the
+  permission — it has no top-level `permissions:` block and no job-level
+  override on `detect-changes` (`ci.yml:37-38`), so the job falls through
+  to this repo's restrictive default token scope. **`ci-guardrails.yml`
+  and `security-gates.yml` do NOT need a fix** — both already grant
+  `pull-requests: write` at the workflow level (`ci-guardrails.yml:25-27`,
+  `security-gates.yml:37-39`), and `write` is a superset of `read` for the
+  same scope. Confirmed directly, not assumed: pulled the job list for
+  `security-gates.yml`'s own run on this PR's head commit
+  (`f998b7d`/run `34252912555`) — its `detect-changes / Detect changed
+  surfaces` job shows `conclusion: "success"`, proving it does not
+  reproduce there. Every actual failure event received in this session
+  traced back to `ci.yml` (`workflow_name: "CI/CD Pipeline"`) specifically
+  — never to the other two callers. `dorny/paths-filter` needs
+  `pull-requests: read` to call the Files API on a shallow
+  (`fetch-depth: 1`) checkout, since it can't do a local `git diff` for a
+  merge-commit ref.
+- **Confirmed not this PR's (or any single PR's) fault:** same job, same
+  step, same error on PR #5128 (docs-only) — a two-file `AGENTS.md`/
+  `ACTION_ITEMS.md` change cannot alter a GitHub Actions token's granted
+  permission scopes. This is a workflow-config defect, reproducible on any
+  PR in the repo (in `ci.yml` specifically).
+- **Why it hasn't blocked merges:** `detect-changes.yml`'s own header
+  comment (lines 14-27) documents this exact failure mode as an accepted,
+  designed fallback — every caller treats `result != 'success'` as
+  fail-open ("run everything") rather than as a blocking failure. So this
+  bug currently only costs the fast-feedback optimization (every job in
+  `ci.yml` runs unfiltered on every PR, i.e. no time/cost saved by
+  path-scoping there) — it has never caused a false-skip or a false
+  merge-block. Distinct from C74 (summary jobs that never fail) and C92
+  (a job that silently skips when it shouldn't) — this is the filter
+  itself failing, in the direction that costs CI minutes, not correctness.
+- **Fix:** add a job-level `permissions:` block (`contents: read`,
+  `pull-requests: read`) to `ci.yml`'s `detect-changes` job only — a
+  4-line addition, no other file needs to change for this item. Filed and
+  fixed together as `docs/change-log/2026-09-08-c93-c94-ci-token-permissions.md`;
+  see that PR for the applied diff.
+- **Verification performed:** read `detect-changes.yml` in full (fail-open
+  design confirmed from its own comments); grepped `ci.yml` /
+  `ci-guardrails.yml` / `security-gates.yml` for `permissions:` blocks;
+  pulled `security-gates.yml`'s own job-run data for this PR's head commit
+  to directly confirm its `detect-changes` job succeeds (not just reasoned
+  about); traced every failure event's originating workflow via
+  `actions_get`/`get_workflow_run` rather than assuming from the shared
+  job display name.
+- **What was NOT verified:** did not check whether org-level default
+  workflow permissions (Settings → Actions → General) were recently
+  tightened, which would be an alternate/additional root cause reachable
+  only by a repo admin, not by reading files in this session; did not
+  independently reproduce on `ci-guardrails.yml` beyond the absence of any
+  failure event for it in this session (no direct job-run pull for that
+  workflow, unlike the one done for `security-gates.yml`).
+
+### C94. Every `codeql-action/upload-sarif` call site in the repo fails on every PR — `wait-for-processing` 403s for lack of `actions: read`
+- [ ] **Status:** OPEN. Found immediately after C93, same PR (#5128), same
+  investigation session — the `security-scan` check itself came back
+  `failure` right after `detect-changes` did. **Widened same day**: `G3 ·
+  Semgrep (Spinr rules + public)` in `security-gates.yml` failed on this
+  same PR with the identical `##[error]Resource not accessible by
+  integration - .../rest/actions/workflow-runs#get-a-workflow-run` after
+  its own `codeql-action/upload-sarif` step (`security-gates.yml:380`,
+  uploading `semgrep.sarif`) — proving this isn't isolated to
+  `security-scan`. Grepped every `codeql-action/upload-sarif` call site in
+  `.github/workflows/`: **4 total** — `security-gates.yml:380` (G3
+  semgrep), `security-gates.yml:676` (G6 container-scan), `ci.yml:958`
+  (security-scan/Trivy fs scan), `ci.yml:1079` (docker-image-scan/Trivy
+  image scan). Renamed this entry from "`security-scan`'s..." to "every
+  call site..." to reflect the full scope found — same ID, not a new one,
+  since it's one root cause.
+- **Correction (2026-09-08, before filing the fix):** the original
+  write-up below said all 4 sites were missing `security-events: write`
+  too — **that was wrong.** Re-read every enclosing job/workflow block
+  directly: `ci.yml`'s `security-scan` job already has `security-events:
+  write` at `:919` (a `-A 3` grep context cut it off the first time,
+  producing the false "`contents: read` only" claim); `ci.yml`'s
+  `docker-image-scan` job (the real home of the `:1079` call — not
+  `security-scan`, another correction to the original site list above)
+  already has it at `:981`; `security-gates.yml`'s workflow-level block
+  already has it at `:40`. **`security-events: write` is present
+  everywhere it's used. The only permission actually missing at all 4
+  sites is `actions: read`**, needed for `wait-for-processing: true`'s own
+  workflow-run status poll — a different scope than the one that
+  authorizes the SARIF upload itself.
+- **Issue/gap:** `ci.yml`'s `security-scan` job (`:915-919`, `permissions:
+  contents: read` + `security-events: write`, no `actions: read`) runs
+  `github/codeql-action/upload-sarif@...` with `wait-for-processing: true`
+  (`:958`). Job log shows the SARIF file itself gets built, validated and
+  fingerprinted successfully, then:
+  `##[warning] Failed to gather information for telemetry: Resource not
+  accessible by integration - .../rest/actions/workflow-runs#get-a-workflow-run.
+  Will skip sending status report.` (non-fatal, x2), followed by
+  `##[error] Resource not accessible by integration -
+  .../rest/actions/workflow-runs#get-a-workflow-run` — the same call,
+  logged as a hard error rather than a warning, which is what turns the
+  job `failure`. Same root cause class as C93: `actions: read` is missing
+  everywhere `wait-for-processing: true` is used.
+- **Separate incidental finding, same job, non-fatal:** the `trufflehog`
+  step (`:~940`) also logs `error trufflehog encountered errors during
+  scan {... "unable to resolve ref: no base refs succeeded for base:
+  \"origin/main\""}` — the shallow/multi-branch checkout this job uses
+  doesn't give trufflehog a resolvable `origin/main` ref for its
+  `--since-commit` diff scan. This one does **not** fail the job (trufflehog
+  reports `chunks: 0` and exits clean) — noted here only because it's in
+  the same job and looks alarming in the log; not itself C94's cause, and
+  not filed separately since it has zero observed effect on job outcome.
+- **Confirmed not this PR's:** same causal-impossibility argument as C93 —
+  a 2-file `AGENTS.md`/`ACTION_ITEMS.md` diff cannot alter a workflow
+  job's declared `permissions:` block or GitHub App installation scopes.
+- **Why it hasn't silently corrupted security posture:** the Trivy scan
+  itself ran and produced real results (`trivy-results.sarif` built,
+  validated, fingerprinted) — the failure is in *uploading/confirming* the
+  scan's own results to GitHub's code-scanning UI, not in running the
+  scan. Whether the SARIF actually reached Code Scanning despite the
+  `wait-for-processing` failure was **not verified** in this session (would
+  need to check the repo's Security → Code scanning alerts tab, which this
+  session has no browsing access to) — flagging this as the one part of
+  C94 that needs a human check, since a scan that silently never uploads
+  would be worse than one that fails loudly.
+- **Fix:** add `actions: read` (only — `security-events: write` needs no
+  change) to the enclosing scope at all 4 sites: `ci.yml`'s `security-scan`
+  job (`:917-919`) and `docker-image-scan` job (`:979-983`); one addition
+  to `security-gates.yml`'s workflow-level `permissions:` block
+  (`:37-40`), which covers both `semgrep` (G3) and `container-scan` (G6)
+  since neither declares its own job-level override. Considered dropping
+  `wait-for-processing: true` instead (removes the failing poll entirely)
+  but rejected it — that would remove real verification that the SARIF
+  upload actually completed, trading a loud failure for a silent unknown;
+  granting the missing permission is the smaller, more correct fix. Filed
+  and fixed together — see
+  `docs/change-log/2026-09-08-c93-c94-ci-token-permissions.md` for the
+  applied diff.
+- **Verification performed:** read the full `security-scan` and `G3 ·
+  Semgrep` job logs for both failures; re-read every enclosing
+  `permissions:` block directly (not via a context-truncated grep this
+  time) for all 4 sites, catching the `security-events: write`
+  misdiagnosis above before shipping a fix based on it; traced the failing
+  API call to the exact `codeql-action/upload-sarif` step via log line
+  ordering in both cases; grepped `.github/workflows/` for every
+  `codeql-action/upload-sarif` call site to confirm the full set of 4.
+- **What was NOT verified:** whether the SARIF results actually landed in
+  GitHub's Code Scanning UI despite the reported failures (see above) —
+  for any of the 4 sites, before this fix.
 
 ## Recently completed (do not redo)
 

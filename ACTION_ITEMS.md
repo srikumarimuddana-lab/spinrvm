@@ -134,6 +134,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ## P0 — Launch gating (code)
 
+> **Filing note (2026-09-08):** four items that are P0-severity in substance
+> physically live under the `## P4` header at the end of this file, not here
+> — a backlog-manifest review flagged this. They landed there purely because
+> each was appended chronologically to whatever section header was current
+> when the finding was made, the same append-only convention this file uses
+> everywhere else (see A34's own note on its duplicate heading number for
+> the same "don't renumber/relocate, annotate instead" precedent). Rather
+> than physically move ~250 lines of already-cross-referenced entries this
+> late in the file's life, they're flagged here so a top-to-bottom P0 read
+> doesn't miss them:
+> - **A43** — PR #5048 merged a 34-file rides/payments/auth batch 47 seconds
+>   after opening, bypassing every CI check (governance/rides/payments/auth).
+> - **B42** — `payment_failed` Stripe webhook events silently dropped for
+>   ~36 minutes during #5048's live window; no data remediation done yet
+>   (payments/money).
+> - **C73** — `main`'s merge path doesn't wait for `backend-test` or block
+>   on an already-failed check — the mechanical cause of A43 (governance/infra).
+> - **C43** — RLS disabled on 4 production tables, including the one holding
+>   Stripe/Twilio/Google Maps keys (security/infra) — deliberately deferred
+>   by the product owner until A41 concludes, but still P0-severity, not
+>   P4, while it's true.
+>
+> Treat these four as P0 for prioritization purposes regardless of where
+> they physically sit in the file.
+
 ### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline — CLOSED (2026-09-04 status correction), 2 named residual follow-ups remain
 > **Regression note (2026-09-04):** the fix for this audit's ranked blocker
 > #5/#6 (`scrub_pii_deep` wired into `tools.py::_cap_result`) also scrubbed
@@ -19357,6 +19382,9 @@ how much they de-risk a public launch._
 
 ### C43. RLS disabled on 4 production tables — including `settings` (holds Stripe/Twilio/Google Maps keys)
 
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
+
 - [ ] **Status:** open, deliberately deferred by the user (2026-08-25) until
   the legacy-migration work (A41-family, this item's own §"related work"
   below) concludes — not fixed, not forgotten. Found via the Supabase MCP
@@ -22134,6 +22162,9 @@ how much they de-risk a public launch._
 
 ### A43. #5048 merged a 34-file security/money batch 47 seconds after opening, before CI finished, bypassing CLAUDE.md's own escalation gate — directly caused B42 and a live OTP-regex defect
 
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
+
 - [ ] **Status:** open — found 2026-09-07 while compiling a PR/backlog
   status review of 2026-09-06 activity (PR #5048, #5050). Not a code
   finding — a process/governance gap in how a live-tested-surface PR got
@@ -22187,6 +22218,9 @@ how much they de-risk a public launch._
   audit log, which this session also cannot read).
 
 ### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
+
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
 
 - [ ] **Status:** open, blocked on data access — found 2026-09-07 while
   reviewing PR #5050's own body, which disclosed the defect and fixed the
@@ -22288,6 +22322,9 @@ how much they de-risk a public launch._
   not be read as "no events were affected."
 
 ### C73. `main`'s merge path doesn't wait for `backend-test` (or block on an already-failed check) — #5048 merged while both were still failing/in-flight
+
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
 
 - [x] **Status:** root cause CONFIRMED 2026-09-07 via `mcp__github__
   pull_request_read(method="get_check_runs")` against PR #5048's actual

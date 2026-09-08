@@ -23180,6 +23180,67 @@ how much they de-risk a public launch._
 - **Files:** `.github/workflows/ci.yml` (`visual-regression-test`'s `if:`
   condition only — one line changed, comment expanded).
 
+### C93. `detect-changes.yml`'s `dorny/paths-filter` step fails on every PR — `pulls.listFiles` 403s for lack of `pull-requests: read`
+- [ ] **Status:** OPEN. Found 2026-09-08 investigating a `check_run.completed`
+  failure wake on PR #5128 (a 2-file docs-only PR — no plausible causal link
+  to a CI token-permissions error, so the root cause was traced instead of
+  assumed innocent).
+- **Issue/gap:** the `detect-changes / Detect changed surfaces` job (shared
+  by `ci.yml`, `ci-guardrails.yml`, `security-gates.yml` via
+  `workflow_call`) fails on every single PR run. Job log:
+  `dorny/paths-filter`'s `listFiles(pull_number, per_page: 100)` GitHub API
+  call returns `Resource not accessible by integration`, immediately after
+  the job's own token-permissions banner shows only `Contents: read`,
+  `Metadata: read`, `Packages: read` — no `pull-requests: read`.
+- **Root cause:** none of the three caller workflows grant
+  `pull-requests: read` on the `uses: ./.github/workflows/detect-changes.yml`
+  call (`ci.yml:38` has no `permissions:` block on that job at all;
+  `security-gates.yml`/`ci-guardrails.yml` grant `pull-requests: write` at
+  the workflow level but that is scoped to their own jobs, not proven here
+  to propagate through the `workflow_call`). `dorny/paths-filter` needs
+  `pull-requests: read` to call the Files API on a shallow (`fetch-depth: 1`)
+  checkout, since it can't do a local `git diff` for a merge-commit ref.
+- **Confirmed not this PR's (or any single PR's) fault:** same job, same
+  step, same error on PR #5128 (docs-only) — a two-file `AGENTS.md`/
+  `ACTION_ITEMS.md` change cannot alter a GitHub Actions token's granted
+  permission scopes. This is a workflow-config defect, reproducible on any
+  PR in the repo.
+- **Why it hasn't blocked merges:** `detect-changes.yml`'s own header
+  comment (lines 14-27) documents this exact failure mode as an accepted,
+  designed fallback — every caller treats `result != 'success'` as
+  fail-open ("run everything") rather than as a blocking failure. So this
+  bug currently only costs the fast-feedback optimization (every job in
+  all 3 heavy workflows runs unfiltered on every PR, i.e. no time/cost
+  saved by path-scoping) — it has never caused a false-skip or a false
+  merge-block. Distinct from C74 (summary jobs that never fail) and C92
+  (a job that silently skips when it shouldn't) — this is the filter
+  itself failing, in the direction that costs CI minutes, not correctness.
+- **Fix (not yet applied — out of scope for the docs-only PR that surfaced
+  it):** add `permissions: pull-requests: read` (plus `contents: read`) to
+  the `detect-changes` job invocation in whichever of the 3 caller
+  workflows actually needs it (verify per-workflow — `workflow_call` jobs
+  need explicit `permissions:` unless the caller's own job-level block
+  already covers it), or pass `base-sha`/use `git diff` mode in
+  `dorny/paths-filter` explicitly with a deeper `fetch-depth` instead of
+  relying on the Files API. Needs `spinr-cicd-infra-reviewer` sign-off
+  given it touches all 3 gate-heavy workflows; own PR.
+- **Verification performed:** read `detect-changes.yml` in full (fail-open
+  design confirmed from its own comments); grepped `ci.yml` /
+  `ci-guardrails.yml` / `security-gates.yml` for `permissions:` blocks and
+  confirmed none is scoped to the `detect-changes` job call; corroborated
+  via a second, unrelated open PR (#5126) also hitting a `403 Resource not
+  accessible by integration` on a different GitHub API call in this same
+  session, consistent with an installation/token-scope gap rather than a
+  per-PR fluke (noted as corroborating context only — the two 403s are
+  different tokens/call-paths, so this is not itself proof; the `ci.yml`
+  permissions grep is the primary evidence).
+- **What was NOT verified:** did not push a fix or confirm one resolves it
+  (no CI trigger for a change not yet made); did not check whether
+  org-level default workflow permissions (Settings → Actions → General)
+  were recently tightened, which would be an alternate/additional root
+  cause reachable only by a repo admin, not by reading files in this
+  session.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

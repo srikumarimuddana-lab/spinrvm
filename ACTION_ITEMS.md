@@ -23408,6 +23408,30 @@ how much they de-risk a public launch._
   needs either a new commit pushed to this PR while it's non-draft, or
   observation on the next real PR touching `rider-app/**`/`driver-app/**`
   after this fix merges to `main`.
+- **First real synchronize-triggered test, inconclusive (2026-09-08):** the
+  correction commit above (`671fb00`) landed as a genuine `synchronize`
+  event on the now-non-draft PR — `label-run-maestro.yml`'s job ran for
+  real and failed, but **not diagnostically**: `status: completed`,
+  `conclusion: failure`, empty `output.title`/`summary`/`text`, no `steps`
+  array in the job listing, and `get_job_logs` 404'd on every attempt
+  (log content never became available). Before concluding the fix failed,
+  checked whether this was isolated to this one job: **all 6 jobs of the
+  wholly unrelated `pr-checks.yml` workflow failed identically, at the
+  same push, with the same empty-output/404-logs signature** —
+  `pr-checks.yml` already declares `contents: read` explicitly
+  (`pr-checks.yml:18-20`), so a permissions gap cannot explain its
+  failure. A correctly-permissioned workflow failing in the identical
+  shape at the identical moment is strong evidence this specific failure
+  wave is a transient, repo-wide GitHub Actions platform hiccup at that
+  push (job logs never materializing is consistent with runs that never
+  really executed), not a defect in the C95 fix itself. Could not spend
+  another re-run to confirm (this session's own GitHub integration lacks
+  rerun permission, established earlier on this same item). **Still not
+  cleanly confirmed either way** — the next real `synchronize`/`opened`
+  event on this branch, or the next real PR touching
+  `rider-app/**`/`driver-app/**` after merge, is the next opportunity to
+  observe a clean pass or a genuine repeat of the original
+  `Repository not found` error.
 - **Original investigation (2026-09-08, before the fix), preserved below for
   the record:** Found
   2026-09-08 as a `check_run.completed` failure wake on PR #5131 — a PR

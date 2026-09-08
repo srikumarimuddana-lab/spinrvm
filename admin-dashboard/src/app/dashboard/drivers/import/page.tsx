@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
     Upload,
     FileDown,
@@ -17,7 +18,7 @@ import {
     type DriverImportReportItem,
 } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
-import { BackToMigrationChecklistLink } from "@/components/bulk-operations-nav";
+import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -42,6 +43,7 @@ import {
     TableRow,
     TableCell,
 } from "@/components/ui/table";
+import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { exportToCsv } from "@/lib/export-csv";
@@ -147,6 +149,7 @@ function IssueTable({ items }: { items: DriverImportReportItem[] }) {
 export default function BulkImportPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const router = useRouter();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [file, setFile] = useState<File | null>(null);
@@ -217,7 +220,18 @@ export default function BulkImportPage() {
                 setReport(null);
                 setFile(null);
                 if (fileInputRef.current) fileInputRef.current.value = "";
-                toast({ title: "Import complete", description: `${res.imported_drivers ?? 0} drivers imported.` });
+                toast({
+                    title: "Import complete",
+                    description: `${res.imported_drivers ?? 0} drivers imported.`,
+                    action: (
+                        <ToastAction
+                            altText="Go to Migration Checklist"
+                            onClick={() => router.push(BULK_OPERATIONS_HREF)}
+                        >
+                            Go to Checklist
+                        </ToastAction>
+                    ),
+                });
             } else {
                 // The CSV no longer validates (data changed since validate).
                 setReport({

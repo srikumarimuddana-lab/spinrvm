@@ -20,6 +20,7 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, AlertTriangle, Loader2, Info, Upload, Copy } from "lucide-react";
 import {
     adminValidateVehicleHistoryBackfill,
@@ -29,7 +30,7 @@ import {
     type VehicleHistoryBackfillReportItem,
 } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
-import { BackToMigrationChecklistLink } from "@/components/bulk-operations-nav";
+import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,6 +49,7 @@ import {
     TableRow,
     TableCell,
 } from "@/components/ui/table";
+import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { exportToCsv } from "@/lib/export-csv";
@@ -148,6 +150,7 @@ function buildSummaryText(report: VehicleHistoryBackfillReport): string {
 export default function LegacyVehicleHistoryBackfillPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const router = useRouter();
     const fileInputRefs = useRef<Partial<Record<keyof VehicleHistoryBackfillFiles, HTMLInputElement | null>>>({});
 
     const [files, setFiles] = useState<FileState>({});
@@ -217,6 +220,14 @@ export default function LegacyVehicleHistoryBackfillPage() {
                 toast({
                     title: "Backfill complete",
                     description: `${res.history_rows_inserted ?? 0} history row(s) inserted.`,
+                    action: (
+                        <ToastAction
+                            altText="Go to Migration Checklist"
+                            onClick={() => router.push(BULK_OPERATIONS_HREF)}
+                        >
+                            Go to Checklist
+                        </ToastAction>
+                    ),
                 });
             } else {
                 // The CSVs no longer validate (data changed since validate).

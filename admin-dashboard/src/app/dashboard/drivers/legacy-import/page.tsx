@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
     Upload,
     FileDown,
@@ -21,7 +22,7 @@ import {
     type DriverCreatedAtBackfillResult,
 } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
-import { BackToMigrationChecklistLink } from "@/components/bulk-operations-nav";
+import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -39,6 +40,7 @@ import {
     TableRow,
     TableCell,
 } from "@/components/ui/table";
+import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { exportToCsv } from "@/lib/export-csv";
@@ -168,6 +170,7 @@ function Stat({
 export default function LegacyDriverImportPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const router = useRouter();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [file, setFile] = useState<File | null>(null);
@@ -249,6 +252,14 @@ export default function LegacyDriverImportPage() {
                 toast({
                     title: "Import complete",
                     description: `${res.new_drivers ?? 0} new, ${res.linked_accounts ?? 0} linked, ${res.enriched_drivers ?? 0} enriched.`,
+                    action: (
+                        <ToastAction
+                            altText="Go to Migration Checklist"
+                            onClick={() => router.push(BULK_OPERATIONS_HREF)}
+                        >
+                            Go to Checklist
+                        </ToastAction>
+                    ),
                 });
             } else {
                 // The CSV no longer validates (data changed since validate).

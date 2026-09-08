@@ -23241,10 +23241,23 @@ how much they de-risk a public launch._
   cause reachable only by a repo admin, not by reading files in this
   session.
 
-### C94. `ci.yml`'s `security-scan` job fails on every PR — `codeql-action/upload-sarif`'s `wait-for-processing` 403s the same way C93 does
+### C94. Every `codeql-action/upload-sarif` call site in the repo fails on every PR — `wait-for-processing` 403s the same way C93 does
 - [ ] **Status:** OPEN. Found immediately after C93, same PR (#5128), same
   investigation session — the `security-scan` check itself came back
-  `failure` right after `detect-changes` did.
+  `failure` right after `detect-changes` did. **Widened same day**: `G3 ·
+  Semgrep (Spinr rules + public)` in `security-gates.yml` failed on this
+  same PR with the identical `##[error]Resource not accessible by
+  integration - .../rest/actions/workflow-runs#get-a-workflow-run` after
+  its own `codeql-action/upload-sarif` step (`security-gates.yml:380`,
+  uploading `semgrep.sarif`) — proving this isn't isolated to
+  `security-scan`. Grepped every `codeql-action/upload-sarif` call site in
+  `.github/workflows/`: **4 total**, all sharing the same defect —
+  `security-gates.yml:380` (G3 semgrep), `security-gates.yml:676` (G6
+  container-scan), `ci.yml:958` (security-scan/Trivy fs scan), `ci.yml:1079`
+  (security-scan/Trivy image scan). None of the 4 enclosing jobs grants
+  `security-events: write` or `actions: read`. Renamed this entry from
+  "`security-scan`'s..." to "every call site..." to reflect the full scope
+  found — same ID, not a new one, since it's one root cause.
 - **Issue/gap:** `ci.yml`'s `security-scan` job (`:915-918`, `permissions:
   contents: read` only) runs `github/codeql-action/upload-sarif@...` with
   `wait-for-processing: true` (`:958`). Job log shows the SARIF file itself
@@ -23283,20 +23296,29 @@ how much they de-risk a public launch._
   C94 that needs a human check, since a scan that silently never uploads
   would be worse than one that fails loudly.
 - **Fix (not applied — same reasoning as C93, out of scope for a docs-only
-  PR):** add `security-events: write` and `actions: read` to
-  `security-scan`'s `permissions:` block in `ci.yml:917-918`; verify
-  whether `wait-for-processing: true` is even needed (dropping it removes
-  the failing poll entirely if nothing downstream depends on synchronous
-  confirmation). Bundle with C93's fix — same file family, same
-  `spinr-cicd-infra-reviewer` review, likely the same PR.
-- **Verification performed:** read the full `security-scan` job log for
-  this failure; confirmed the `permissions:` block via direct file read
-  (`ci.yml:915-918`); traced the failing API call to the exact
-  `codeql-action/upload-sarif` step via log line ordering.
+  PR):** add `security-events: write` and `actions: read` to the enclosing
+  job's `permissions:` block at all 4 sites (`ci.yml:917-918` for
+  `security-scan`, both its Trivy fs-scan and image-scan uploads; the
+  `semgrep` job and `container-scan` job in `security-gates.yml`, neither
+  of which currently declares a job-level `permissions:` override — they
+  inherit the workflow-level `contents: read` / `pull-requests: write`
+  block at `security-gates.yml:37-39`, same gap); verify whether
+  `wait-for-processing: true` is even needed on any of the 4 (dropping it
+  removes the failing poll entirely if nothing downstream depends on
+  synchronous confirmation). One PR, one `spinr-cicd-infra-reviewer` pass,
+  bundled with C93's fix — same file family.
+- **Verification performed:** read the full `security-scan` and `G3 ·
+  Semgrep` job logs for both failures; confirmed the `permissions:` blocks
+  via direct file reads (`ci.yml:915-918`, `security-gates.yml:37-39` +
+  the `semgrep`/`container-scan` job definitions); traced the failing API
+  call to the exact `codeql-action/upload-sarif` step via log line
+  ordering in both cases; grepped `.github/workflows/` for every
+  `codeql-action/upload-sarif` call site to confirm the full set of 4.
 - **What was NOT verified:** whether the SARIF results actually landed in
-  GitHub's Code Scanning UI despite the reported failure (see above); did
-  not test whether removing `wait-for-processing` alone resolves it
-  without also adding `actions: read`.
+  GitHub's Code Scanning UI despite the reported failures (see above) —
+  for any of the 4 sites; did not test whether removing
+  `wait-for-processing` alone resolves it without also adding
+  `actions: read`.
 
 ## Recently completed (do not redo)
 

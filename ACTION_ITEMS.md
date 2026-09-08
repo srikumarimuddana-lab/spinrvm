@@ -22975,7 +22975,59 @@ how much they de-risk a public launch._
   `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
 
 ### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI
-- [ ] **Status:** open — found 2026-09-08 while auditing admin-dashboard for any
+- [x] **Status:** code fix done 2026-09-08 on
+  `claude/pr-5085-5079-hardening-c91-monitoring-baseline`; one step remains
+  and needs a human (see below) — not fully closed until that runs.
+  **Correction to the original root-cause below: driver markers are NOT
+  WebSocket-only.** `page.tsx`'s `loadData()` also fetches
+  `GET /api/admin/monitoring/drivers` (`getMonitoringDrivers()`) on mount
+  and every poll interval, independent of WS health, and feeds the exact
+  same `applyDriver()` path the WS `drivers_snapshot` event does. The real
+  gap was simpler than first diagnosed: `admin-mocks.ts`'s generic `/api/**`
+  fallback returns an **object** shape (`{items:[], data:[], ...}`), but
+  `getMonitoringDrivers()`/`getMonitoringRides()` both expect a **bare
+  array** — `loadData()`'s `Array.isArray(rawDriversResult) ? ... : []`
+  guard silently turned that mismatch into "zero drivers," on every poll,
+  which is why no marker ever appeared. Fixed by adding one `extra` mock
+  case to `visual-regression.spec.ts`'s existing `setupAdminMocks()` call
+  (mirroring `monitoring.spec.ts`'s already-working `mockMonitoring()`
+  pattern for the same two endpoints) returning one fixture driver — no
+  WebSocket mocking needed at all; verified locally that the WS still fails
+  to connect exactly as before (same "Live data paused" banner already in
+  the committed baseline) and the REST mock alone is sufficient. An initial
+  attempt at this fix used `page.routeWebSocket()` to fake the WS handshake
+  end-to-end — it worked for the handshake itself but the driver_snapshot
+  it seeded was then swept away by this same REST-poll gap moments later;
+  diagnosed by tracing actual message delivery with a scratch Playwright
+  script rather than guessing, found the REST path was both the real gap
+  *and* a strictly simpler fix, and the WS-mock code was removed entirely
+  rather than kept alongside a redundant fix.
+  **Verified locally** (this environment's preinstalled Chromium via
+  `LOCAL_CHROMIUM_PATH`, temporary — not committed): built the app with
+  CI's exact env (`NEXT_PUBLIC_API_URL=http://localhost:8000`), ran the
+  real `visual-regression` Playwright project against the committed
+  baseline (not just a scratch script) — `dashboard-monitoring` fails
+  against the *old* baseline exactly as expected, with a diff showing
+  **only** a new green driver marker at the map's center plus the
+  online-count changing from 0 to 1; visually confirmed via the actual
+  diff/actual PNGs. `tsc --noEmit` and `eslint` both clean on the changed
+  file. The dashboard-home/dashboard-rides/dashboard-settings baselines
+  *also* failed in this same local run, on an unrelated ~32px page-height
+  mismatch (font-metric difference between this sandbox's Chromium build
+  and whatever produced the committed baselines) — confirmed pre-existing
+  and unrelated by checking those pages' mocks are untouched by this diff;
+  not something this fix caused or can fix, and not new information beyond
+  what CLAUDE.md §6 already says about baseline recapture needing a real
+  CI runner.
+  **Remaining step (needs a human):** re-capture the `dashboard-monitoring`
+  baseline via `update-visual-baselines.yml` (Actions-dispatch access this
+  session doesn't have) so the committed PNG reflects the fixture marker —
+  `visual-regression-test` in `ci.yml` **will show a real, expected diff on
+  this PR** for that one page until that runs; this is not a spurious CI
+  failure to chase, per CLAUDE.md §6's own guidance for this exact
+  scenario.
+- **Status (original, superseded by "code fix done" above):** open — found
+  2026-09-08 while auditing admin-dashboard for any
   vehicle-icon-related settings/rendering, as a follow-up to the rider-app/
   driver-app marker fixes in C90 above.
 - **Issue/gap:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
@@ -23017,6 +23069,69 @@ how much they de-risk a public launch._
   `admin-dashboard/e2e/admin-mocks.ts`,
   `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`,
   `admin-dashboard/src/app/dashboard/monitoring/page.tsx`.
+
+### C92. `ci.yml`'s `visual-regression-test` job silently never runs on any PR that doesn't also touch `backend/` — contradicts its own "deliberately NOT gated on detect-changes" comment
+- [x] **Status:** CLOSED 2026-09-08 on `claude/pr-5085-5079-hardening-c92-visual-regression-gate`.
+  Found while investigating why PR #5123 (the C91 fix)'s own CI run showed
+  `visual-regression-test` as `skipped`, not the expected real diff against
+  the old baseline documented in that PR's own risk log.
+- **Issue/gap:** `visual-regression-test` (`ci.yml` line ~528) has
+  `needs: [backend-test]` and its own `if:` is a plain
+  `github.ref == 'refs/heads/main' || github.event_name == 'pull_request'`
+  — no `always()`. `backend-test` itself is deliberately path-filtered
+  (skipped when a PR touches neither `backend/**` nor `.github/workflows/**`).
+  GitHub Actions' default dependency semantics apply an implicit
+  `success()` to any `needs` a job's own `if:` doesn't explicitly override
+  with `always()`/`failure()`/`cancelled()` — so whenever `backend-test` is
+  skipped, `visual-regression-test` is skipped too, **regardless of what
+  its own `if:` condition evaluates to.** Confirmed directly against PR
+  #5123's own `detect-changes` job log: `backend=false` (only
+  `admin-dashboard/e2e/visual-regression.spec.ts` and `ACTION_ITEMS.md`
+  changed) → `backend-test` skipped → `visual-regression-test` skipped,
+  even though its own condition (a plain `pull_request` check) was true.
+- **Root cause:** the job's own comment directly above the `if:` line says
+  "Phase 2 ... deliberately NOT gated on detect-changes, unlike e2e-test
+  above" — but `e2e-test` (the job right next to it) guards against this
+  *exact* failure mode with `always() && (...)` in its own `if:`, and
+  `visual-regression-test` was simply missing that same guard. Not a new
+  regression — this has silently been true since the job was made
+  blocking (2026-09-04, ACTION_ITEMS.md B38), meaning **this "fully active
+  and merge-blocking" gate CLAUDE.md's pre-merge release gates §6
+  documents has likely never actually run on any PR that changed
+  admin-dashboard without also touching backend/ or a workflow file** —
+  probably the large majority of real admin-dashboard-only PRs, including
+  PR #5123 itself.
+- **Why this is worse than a normal CI bug:** it fails silent-green, not
+  red — the check shows as `skipped`, which GitHub does not treat as a
+  failing required status the way a red check is, so it would not have
+  been noticed by normal "is CI green" triage. Same failure class as C74
+  (`security-gates.yml`/`ci-guardrails.yml` summary jobs never failing
+  regardless of gate results) — a gate that looks like it's enforcing
+  something but silently isn't for a subset of triggering conditions.
+- **Fix:** added `always() &&` to `visual-regression-test`'s `if:`
+  condition, exactly matching the pattern `e2e-test`'s own `if:` already
+  uses one job above it for the identical purpose. One-line change; no
+  other job in `ci.yml` has this gap — checked every job's `needs:` +
+  `if:` pair. `docker-image-scan`'s own cascade-from-`backend-test` skip
+  is explicitly documented as intentional-and-correct in its own comment
+  (it only ever needs to run when backend changed, since it builds and
+  scans the backend Docker image) — not the same bug, left unchanged.
+  `python-dependency-audit`/`driver-app-test`/`rider-app-test`/`admin-test`
+  all correctly use `always()` already, gated on `detect-changes` directly
+  rather than transitively through `backend-test`.
+- **Verification performed:** `actionlint` clean before and after the
+  change (`/tmp/actionlint .github/workflows/ci.yml`, exit 0 both times).
+  Could not re-run the actual GitHub Actions job in this session (would
+  require pushing and waiting on a real workflow run) — the fix mirrors an
+  already-proven-working pattern (`e2e-test`'s identical `always()` guard)
+  rather than introducing new untested logic, but this specific
+  `if:`-evaluates-correctly-now claim is reasoned from GitHub Actions'
+  documented `needs`/`if` semantics, not observed directly in this session.
+  **Not yet observed**: whether PR #5123 (or this PR) actually shows
+  `visual-regression-test` running (not skipped) in its next CI run —
+  worth a human spot-check once either PR's CI completes.
+- **Files:** `.github/workflows/ci.yml` (`visual-regression-test`'s `if:`
+  condition only — one line changed, comment expanded).
 
 ## Recently completed (do not redo)
 

@@ -226,6 +226,61 @@ def _is_duplicate_key(exc: Exception) -> bool:
     return "23505" in text or "duplicate key" in text or "already exists" in text
 
 
+async def _verify_duplicate_matches(table: str, row: Dict[str, Any], *, what: str) -> bool:
+    """A duplicate-key hit on a deterministic (dedupe_key-derived) id is
+    normally just a lost-response retry of the SAME write — but F1 found a
+    real race where the refund-recovery path and an in-flight normal-path
+    write can derive the SAME id for two DIFFERENT money movements (a
+    still-in-flight event's own cumulative can equal what recovery computes
+    as "missing", if another event's write lands between the read and the
+    write). Blindly treating any duplicate key as success would let the
+    second write silently no-op even when its amount doesn't match what's
+    already there — a silent ledger under/over-count with zero signal.
+
+    Reads the existing row back and compares ``delta_cents`` (the field
+    money-correctness depends on) before declaring success. A genuine
+    lost-response retry always matches (same caller, same payload); a
+    dedupe-key collision between two different movements will not.
+    """
+    row_id = row.get("id")
+    if not row_id:
+        # No deterministic id (a plain uuid4 call site never collides on
+        # content) — nothing to verify against.
+        logger.info("[LEDGER] {} already present (duplicate key, no id to verify) — treating as written", what)
+        return True
+    try:
+        existing_rows = await db_supabase.get_rows(table, {"id": row_id}, limit=1)
+    except Exception as err:
+        logger.opt(exception=err).error(
+            "[LEDGER] {} duplicate-key conflict on id {} but could not read the row back to verify — "
+            "treating as UNVERIFIED failure, not success",
+            what,
+            row_id,
+        )
+        return False
+    existing = existing_rows[0] if existing_rows else None
+    if existing is None:
+        # Should be unreachable (a duplicate-key error implies the row
+        # exists) but never claim success on a state we can't confirm.
+        logger.error("[LEDGER] {} duplicate-key conflict on id {} but no row found on read-back", what, row_id)
+        return False
+    expected_delta = row.get("delta_cents")
+    actual_delta = existing.get("delta_cents")
+    if expected_delta is not None and actual_delta != expected_delta:
+        logger.error(
+            "[LEDGER] {} DEDUPE-KEY COLLISION on id {}: existing row has delta_cents={} but this write "
+            "wanted delta_cents={} — two different money movements derived the same id. NOT treating as "
+            "success; the caller's own escalation path will alert.",
+            what,
+            row_id,
+            actual_delta,
+            expected_delta,
+        )
+        return False
+    logger.info("[LEDGER] {} already present (duplicate key, value verified matching) — treating as written", what)
+    return True
+
+
 # Alert tags, most to least severe. Kept distinct so on-call can route them
 # differently: a lost header is a hole in the 7-year tax record, whereas lost or
 # unbalanced legs are a defect in the accounting overlay with the tax record
@@ -274,8 +329,13 @@ def escalate(message: str, context: Dict[str, Any], alert: str = ALERT_HEADER_LO
 
 
 async def _insert_with_retry(table: str, row: Dict[str, Any], *, what: str) -> bool:
-    """Insert one row with bounded retry. Returns True on success (or duplicate)."""
-    return await _attempt_insert(lambda: db_supabase.insert_one(table, row), what=what)
+    """Insert one row with bounded retry. Returns True on success (or a
+    value-verified duplicate — see ``_verify_duplicate_matches``)."""
+
+    async def _verify() -> bool:
+        return await _verify_duplicate_matches(table, row, what=what)
+
+    return await _attempt_insert(lambda: db_supabase.insert_one(table, row), what=what, verify_duplicate=_verify)
 
 
 async def _insert_many_with_retry(table: str, rows: List[Dict[str, Any]], *, what: str) -> bool:
@@ -322,8 +382,16 @@ def _client_unavailable() -> bool:
     return not getattr(_base, "supabase", None)
 
 
-async def _attempt_insert(do_insert, *, what: str) -> bool:
-    """Shared retry loop. Returns True on success (or duplicate)."""
+async def _attempt_insert(do_insert, *, what: str, verify_duplicate=None) -> bool:
+    """Shared retry loop. Returns True on success (or a verified duplicate).
+
+    ``verify_duplicate`` (F1): an optional async callback invoked instead of
+    blindly trusting a duplicate-key hit. Only ``_insert_with_retry`` (the
+    single-row header write, where a client-supplied dedupe-derived id can
+    collide between two *different* money movements — see
+    ``_verify_duplicate_matches``) passes one; ``_insert_many_with_retry``
+    (legs) does not, since a batch insert has no single id to compare.
+    """
     if _client_unavailable():
         # Not retried: no number of attempts fixes an absent client, and the
         # caller's escalation is the point — a lost ledger row must be loud.
@@ -341,6 +409,8 @@ async def _attempt_insert(do_insert, *, what: str) -> bool:
             return True
         except Exception as err:
             if _is_duplicate_key(err):
+                if verify_duplicate is not None:
+                    return await verify_duplicate()
                 # A previous attempt committed; the response was just lost.
                 logger.info("[LEDGER] {} already present (duplicate key) — treating as written", what)
                 return True

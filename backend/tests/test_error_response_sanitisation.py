@@ -435,6 +435,108 @@ class TestRequestIdAcrossHandlers:
         assert r.json()["error"]["request_id"] == "missing-trace-1"
 
 
+class TestSpinrExceptionDetailsRedaction:
+    """F2: SpinrException.details is a client contract (3DS client_secret,
+    unpaid_ride_id, ...) that must never be stripped wholesale, but
+    `exception_type` (an internal diagnostic set only by
+    repositories/_base.py's DatabaseError) and a raw `original` exception
+    string (which can carry PII from a DB error message) must never reach
+    the response as-is."""
+
+    def _client(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from core.middleware import RequestIDMiddleware
+        from utils.error_handling import register_exception_handlers
+
+        app = FastAPI()
+        app.add_middleware(RequestIDMiddleware)
+        register_exception_handlers(app)
+        self._app = app
+        return TestClient(app)
+
+    def test_exception_type_dropped_and_original_redacted(self):
+        from utils.error_handling import DatabaseError
+
+        client = self._client()
+
+        @self._app.get("/boom")
+        async def boom():
+            raise DatabaseError(
+                details={
+                    "original": "Key (phone)=(+13065551234) already exists, contact x@y.com",
+                    "exception_type": "APIError",
+                }
+            )
+
+        r = client.get("/boom")
+        details = r.json()["error"]["details"]
+        assert "exception_type" not in details
+        assert "+13065551234" not in details["original"]
+        assert "x@y.com" not in details["original"]
+        assert r.json()["error"]["request_id"]
+
+    def test_structured_details_pass_through_unchanged(self):
+        from utils.error_handling import SpinrException
+
+        client = self._client()
+
+        @self._app.get("/needs-action")
+        async def needs_action():
+            raise SpinrException(
+                "Payment requires authentication",
+                status_code=402,
+                details={
+                    "code": "action_required",
+                    "client_secret": "pi_123_secret_abc",
+                    "unpaid_ride_id": "ride-9",
+                },
+            )
+
+        r = client.get("/needs-action")
+        assert r.json()["error"]["details"] == {
+            "code": "action_required",
+            "client_secret": "pi_123_secret_abc",
+            "unpaid_ride_id": "ride-9",
+        }
+
+    def test_4xx_and_5xx_both_redacted(self):
+        from utils.error_handling import DatabaseError, SpinrException
+
+        client = self._client()
+
+        @self._app.get("/four")
+        async def four():
+            raise SpinrException(
+                "Bad request",
+                status_code=400,
+                details={"original": "user@example.com", "exception_type": "ValueError"},
+            )
+
+        @self._app.get("/five")
+        async def five():
+            raise DatabaseError(details={"original": "user@example.com", "exception_type": "APIError"})
+
+        for path in ("/four", "/five"):
+            r = client.get(path)
+            details = r.json()["error"]["details"]
+            assert "exception_type" not in details
+            assert "user@example.com" not in details["original"]
+
+    def test_details_none_unchanged(self):
+        from utils.error_handling import SpinrException
+
+        client = self._client()
+
+        @self._app.get("/no-details")
+        async def no_details():
+            raise SpinrException("Something failed", status_code=500)
+
+        r = client.get("/no-details")
+        assert r.json()["error"]["details"] is None
+
+
 @pytest.fixture(autouse=True)
 def _isolate_module_imports(monkeypatch):
     """The exception handlers cache the FastAPI app instance via

@@ -1565,3 +1565,13 @@ jobs:
                 body,
               });
             }
+      # C74: this job used `if: always()` with no result check, so it always
+      # reported success on the PR regardless of the gates above — the exact
+      # kind of never-failing roll-up branch protection would otherwise rely
+      # on. Path-filtered `skipped` results still pass; only an actual
+      # `failure`/`cancelled` result now fails the job.
+      - name: Fail if any required gate failed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::one or more required CI guardrails failed — see the summary comment above"
+          exit 1

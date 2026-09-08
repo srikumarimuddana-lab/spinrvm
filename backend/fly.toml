@@ -9,8 +9,10 @@
 # repointed without a redeploy. Only non-secret config lives in [env] below.
 #
 # UVICORN_WORKERS stays at 2: 4 workers on shared-cpu-1x/1gb is memory-tight, and
-# worker count is a capacity knob only — the 16 background loops are replay-safe
-# per process (atomic DB claims / idempotency keys / Redis leader locks).
+# worker count is a capacity knob only — the background loops (41 today;
+# _WATCHDOG_LOOP_NAMES in backend/core/lifespan.py is the live registry, do not
+# hard-code a count elsewhere) are replay-safe per process (atomic DB claims /
+# idempotency keys / Redis leader locks).
 #
 # BURST CAPACITY (see docs/runbooks/capacity-scaling.md). The app is scaled to 8
 # machines in yyz (bootstrap-fly.yml); autostop suspends idle ones down to
@@ -18,8 +20,8 @@
 # exceed soft_limit. That suspended pool IS the autoscaling mechanism — before
 # it existed the fleet was a fixed 2 machines and hard-rejected past ~500
 # connections. Suspend (not stop) is deliberate: memory-snapshot resume is
-# sub-second versus a 5-15s cold boot (VM + uvicorn + lifespan DB probe + 18
-# loops) plus the 30s check grace period. Suspend supports machines <=2GB, so
+# sub-second versus a 5-15s cold boot (VM + uvicorn + lifespan DB probe + the
+# background loops) plus the 30s check grace period. Suspend supports machines <=2GB, so
 # 1gb qualifies. If resumed machines show stale-connection anomalies beyond what
 # run_sync's httpx.NetworkError retry absorbs, flip this to "stop".
 #

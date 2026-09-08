@@ -302,7 +302,13 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
     amount_cents = invoice.get("amount_paid")
     if amount_cents is None:
         amount_cents = invoice.get("amount_due") or 0
-    payment_intent_id = _extract_invoice_payment_intent(invoice, stripe_secret)
+    # F8: _extract_invoice_payment_intent's fallback path makes a synchronous
+    # Stripe API call (Invoice.retrieve) — run off the event loop so a slow
+    # Stripe response doesn't stall every other coroutine on this worker
+    # (webhook processing has a <500ms SLA). The helper itself stays sync;
+    # several tests call it directly and patch stripe.Invoice.retrieve as a
+    # module attribute, which asyncio.to_thread still respects.
+    payment_intent_id = await asyncio.to_thread(_extract_invoice_payment_intent, invoice, stripe_secret)
     if not payment_intent_id:
         # No PI means later refund/dispute webhooks (keyed on payment_intent_id)
         # cannot find this ride. This is usually a transient Stripe-retrieve
@@ -1176,30 +1182,112 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 refunded_cents = int(charge.get("amount_refunded", 0))
                 refunded_amount = Decimal(str(refunded_cents)) / Decimal("100")
                 refunded_amount = refunded_amount.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
-                previous_refunded_cents = dollars_to_cents(ride.get("refund_amount") or 0)
+                # F1: the raw read-back value (may be None on a fresh ride) is the
+                # compare-and-swap filter's other half below — the CAS must match
+                # the exact stored representation, not the int-cents projection.
+                prev_refund_amount_raw = ride.get("refund_amount")
+                previous_refunded_cents = dollars_to_cents(prev_refund_amount_raw or 0)
                 delta_cents = refunded_cents - previous_refunded_cents
-                if delta_cents <= 0:
-                    # Stale or out-of-order delivery: this event's cumulative
-                    # amount is not ahead of what's already recorded (a retry
-                    # of an older event arriving after a newer one already
-                    # applied, or a genuine duplicate that slipped past
-                    # claim_stripe_event under a different event_id). Skip the
-                    # ledger write and don't overwrite payment_status/
-                    # refund_amount backward — both are treated as terminal/
-                    # authoritative elsewhere in this file and in
-                    # admin/rides.py. Deliberately NOT a bare `return`: the
-                    # shared mark_stripe_event_processed(event_id) tail call
-                    # at the end of this function must still run, or Stripe
-                    # will retry this event forever.
-                    logger.info(
-                        "Stripe charge.refunded for ride %s: cumulative amount_refunded=%s not ahead of "
-                        "already-recorded refund_amount=%s — skipping as stale/out-of-order (event %s)",
-                        ride_id,
-                        refunded_cents,
-                        previous_refunded_cents,
-                        event_id,
-                        extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                # Identifies THIS money movement (the cumulative amount this event
+                # asserts), not the delivery attempt — a redelivery of the same
+                # event recomputes the same key, making the ledger write below a
+                # no-op duplicate-key rather than a second booking. Same pattern as
+                # the dispute path's balance-transaction-id key.
+                refund_dedupe_key = f"stripe_refund|{payment_intent_id}|{refunded_cents}"
+                try:
+                    from ..services.payment_service import record_refund_event, refund_booked_cents
+                except ImportError:
+                    from services.payment_service import (  # type: ignore
+                        record_refund_event,
+                        refund_booked_cents,
                     )
+                if delta_cents <= 0:
+                    # F1 replay recovery: any non-forward delivery is a chance to
+                    # verify the ledger has actually caught up to the ride's own
+                    # CURRENTLY recorded cumulative (previous_refunded_cents, read
+                    # fresh above) and top it off if not — regardless of whether
+                    # THIS event's own cumulative happens to match that value.
+                    # Gating on exact equality with refunded_cents (an earlier
+                    # version of this fix did that) has a real gap: if event A's
+                    # CAS succeeds and its ledger write fails, then event B (and
+                    # possibly C, D, ...) supersede the ride to a HIGHER cumulative
+                    # before A's Stripe retry arrives, A's retry sees
+                    # refunded_cents != previous_refunded_cents and would fall
+                    # through untouched — permanently losing A's ledger row, since
+                    # Stripe payloads are immutable and that equality can never
+                    # hold again once superseded. Keying the check (and the
+                    # recovery dedupe key) off previous_refunded_cents instead
+                    # catches the gap regardless of which event happens to
+                    # trigger it: whichever event last advanced the ride to
+                    # previous_refunded_cents used exactly that value as ITS OWN
+                    # cumulative, so this reconstructs the correct dedupe key for
+                    # the money movement that may be missing.
+                    recovered = False
+                    if previous_refunded_cents > 0:
+                        already_booked_cents = await refund_booked_cents(payment_intent_id)
+                        missing_cents = previous_refunded_cents - already_booked_cents
+                        if missing_cents > 0:
+                            recovery_dedupe_key = f"stripe_refund|{payment_intent_id}|{previous_refunded_cents}"
+                            recovery_ledger_id = await record_refund_event(
+                                ride_id=ride_id,
+                                user_id=ride.get("rider_id") or "",
+                                refund_cents=missing_cents,
+                                payment_intent_id=payment_intent_id,
+                                ride=ride,
+                                dedupe_key=recovery_dedupe_key,
+                            )
+                            if recovery_ledger_id is None:
+                                logger.error(
+                                    "Stripe charge.refunded recovery FAILED for ride %s: ledger write for "
+                                    "missing %s cents (of recorded total %s) returned no id (event %s) — "
+                                    "unclaiming for retry",
+                                    ride_id,
+                                    missing_cents,
+                                    previous_refunded_cents,
+                                    event_id,
+                                    extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                                )
+                                await unclaim_stripe_event(event_id)
+                                raise HTTPException(
+                                    status_code=500,
+                                    detail="Refund ledger recovery failed — Stripe will retry",
+                                )
+                            logger.info(
+                                "Stripe charge.refunded for ride %s: recovered %s missing ledger cents "
+                                "(of recorded total %s) after a prior partial failure (event %s)",
+                                ride_id,
+                                missing_cents,
+                                previous_refunded_cents,
+                                event_id,
+                                extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                            )
+                            recovered = True
+                    if not recovered:
+                        # Stale or out-of-order delivery: this event's cumulative
+                        # amount is not ahead of what's already recorded (a retry
+                        # of an older event arriving after a newer one already
+                        # applied, or a genuine duplicate that slipped past
+                        # claim_stripe_event under a different event_id — the
+                        # SAME event_id redelivered is deduped upstream by
+                        # claim_stripe_event; two DIFFERENT sequential partial
+                        # refunds are not, which is exactly why this delta
+                        # comparison exists instead of relying on that dedupe).
+                        # Skip the ledger write and don't overwrite payment_status/
+                        # refund_amount backward — both are treated as terminal/
+                        # authoritative elsewhere in this file and in
+                        # admin/rides.py. Deliberately NOT a bare `return`: the
+                        # shared mark_stripe_event_processed(event_id) tail call
+                        # at the end of this function must still run, or Stripe
+                        # will retry this event forever.
+                        logger.info(
+                            "Stripe charge.refunded for ride %s: cumulative amount_refunded=%s not ahead of "
+                            "already-recorded refund_amount=%s — skipping as stale/out-of-order (event %s)",
+                            ride_id,
+                            refunded_cents,
+                            previous_refunded_cents,
+                            event_id,
+                            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                        )
                 else:
                     delta_amount = cents_to_dollars(delta_cents)
                     # A partial refund must NOT collapse into the same 'refunded'
@@ -1225,9 +1313,16 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     else:
                         is_full_refund = True
                     new_payment_status = "refunded" if is_full_refund else "partially_refunded"
-                    await db_supabase.update_one(
+                    # F1 compare-and-swap: filtering on refund_amount==prev_refund_amount_raw
+                    # (in addition to id) means a concurrent charge.refunded delivery for the
+                    # same ride that wins this race first will cause THIS call to match 0 rows
+                    # instead of silently overwriting the other event's already-applied
+                    # cumulative total. update_one returns None on a 0-row match (repositories/
+                    # _base.py's _single_row_from_res) — a real conflict, not "not found", since
+                    # this exact ride_id was read moments ago.
+                    cas_updated = await db_supabase.update_one(
                         "rides",
-                        {"id": ride_id},
+                        {"id": ride_id, "refund_amount": prev_refund_amount_raw},
                         {
                             "payment_status": new_payment_status,
                             # Cumulative total refunded on this ride so far —
@@ -1238,27 +1333,62 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                         },
                     )
+                    if cas_updated is None:
+                        logger.error(
+                            "Stripe charge.refunded CAS conflict for ride %s: refund_amount changed "
+                            "concurrently since read (expected %s) — unclaiming for retry (event %s)",
+                            ride_id,
+                            prev_refund_amount_raw,
+                            event_id,
+                            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                        )
+                        await unclaim_stripe_event(event_id)
+                        raise HTTPException(
+                            status_code=500,
+                            detail="Refund state changed concurrently — Stripe will retry",
+                        )
                     # C3: write a compensating ledger row so the 7-year tax/audit
                     # ledger nets the refund out (it previously recorded none). Per
                     # policy the driver KEEPS their pay — driver_earnings is NOT
                     # clawed back — but the reversed rider-side GST/PST is captured
-                    # here for remittance. Idempotent-ish: a duplicate charge.refunded
-                    # delivery is deduped upstream by claim_stripe_event(event_id).
+                    # here for remittance. F1: dedupe_key makes a redelivery of this
+                    # exact event a no-op duplicate-key write rather than a second
+                    # booking (the CAS above already prevents the ride row from being
+                    # double-applied; this prevents the ledger row from being
+                    # double-applied if this handler re-runs after the CAS succeeded
+                    # but before this call completed on a prior attempt).
                     # Uses delta_cents (THIS event's actual refund), not the
                     # cumulative refunded_cents — see the comment on delta_cents
                     # above for why passing cumulative here would double-count
                     # across sequential partial refunds.
-                    try:
-                        from ..services.payment_service import record_refund_event
-                    except ImportError:
-                        from services.payment_service import record_refund_event  # type: ignore
-                    await record_refund_event(
+                    ledger_id = await record_refund_event(
                         ride_id=ride_id,
                         user_id=ride.get("rider_id") or "",
                         refund_cents=delta_cents,
                         payment_intent_id=payment_intent_id,
                         ride=ride,
+                        dedupe_key=refund_dedupe_key,
                     )
+                    if ledger_id is None:
+                        # Deliberately NOT reverting the ride row: a revert would let
+                        # a delayed invoice.paid re-settle a refunded ride (payment_status
+                        # is treated as terminal/authoritative elsewhere in this file and
+                        # in admin/rides.py). The next redelivery of this same event (or
+                        # the delta_cents<=0 recovery branch above, on a later delivery
+                        # with an unchanged cumulative amount) will retry the ledger
+                        # write via the same dedupe_key.
+                        logger.error(
+                            "Stripe charge.refunded ride %s: CAS succeeded but ledger write "
+                            "returned no id — unclaiming for retry (event %s)",
+                            ride_id,
+                            event_id,
+                            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                        )
+                        await unclaim_stripe_event(event_id)
+                        raise HTTPException(
+                            status_code=500,
+                            detail="Refund ledger write failed — Stripe will retry",
+                        )
                     logger.info(
                         f"Stripe refund: ride {ride_id} marked {new_payment_status} "
                         f"(this refund ${delta_amount:.2f}, total refunded ${refunded_amount:.2f}); "
@@ -1649,7 +1779,12 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 try:
                     import stripe as _stripe
 
-                    _sub_obj = _stripe.Subscription.retrieve(stripe_sub_id, api_key=stripe_secret)
+                    # F8: synchronous Stripe call — off the event loop (see
+                    # the comment on the analogous invoice.paid PI-extraction
+                    # call above).
+                    _sub_obj = await asyncio.to_thread(
+                        _stripe.Subscription.retrieve, stripe_sub_id, api_key=stripe_secret
+                    )
                     _meta_sub_id = (_sub_obj.get("metadata") or {}).get("subscription_id")
                     if _meta_sub_id:
                         row = await db_supabase.find_one("driver_subscriptions", {"id": _meta_sub_id})

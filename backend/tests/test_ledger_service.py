@@ -178,15 +178,70 @@ async def test_header_write_retries_then_succeeds():
 
 @pytest.mark.anyio
 async def test_duplicate_key_counts_as_written():
-    """A retry after a lost response hits the PK we supplied — that is success."""
+    """A retry after a lost response hits the PK we supplied — that is
+    success, PROVIDED the existing row's content actually matches (F1: a
+    duplicate-key hit is now verified by content, not blindly trusted —
+    see _verify_duplicate_matches)."""
 
     async def dup(_table, _row):
         raise RuntimeError("duplicate key value violates unique constraint (23505)")
 
-    with patch.object(ls.db_supabase, "insert_one", side_effect=dup):
+    async def get_rows(_table, _filters, limit=None):
+        return [{"delta_cents": 2000}]  # matches this write's own delta_cents
+
+    with (
+        patch.object(ls.db_supabase, "insert_one", side_effect=dup),
+        patch.object(ls.db_supabase, "get_rows", side_effect=get_rows),
+    ):
         event_id = await ls.record_event(event_type="stripe_charge", user_id="u1", ride_id="r1", delta_cents=2000)
 
     assert event_id is not None, "duplicate key must not be reported as a lost row"
+
+
+@pytest.mark.anyio
+async def test_duplicate_key_with_mismatched_content_is_not_treated_as_success():
+    """F1: two different money movements deriving the same id (a rare async
+    race, e.g. between the refund-recovery path and an in-flight normal-path
+    write) must NOT silently no-op — the existing row's delta_cents differs
+    from what this write wanted, so it must be reported as a failure the
+    caller's own escalation path can alert on."""
+
+    async def dup(_table, _row):
+        raise RuntimeError("duplicate key value violates unique constraint (23505)")
+
+    async def get_rows(_table, _filters, limit=None):
+        return [{"delta_cents": -999999}]  # does NOT match this write's delta_cents
+
+    with (
+        patch.object(ls.db_supabase, "insert_one", side_effect=dup),
+        patch.object(ls.db_supabase, "get_rows", side_effect=get_rows),
+        patch.object(ls, "escalate") as escalate,
+    ):
+        event_id = await ls.record_event(event_type="stripe_charge", user_id="u1", ride_id="r1", delta_cents=2000)
+
+    assert event_id is None, "a dedupe-key collision between different amounts must not report success"
+    escalate.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_duplicate_key_readback_failure_is_not_treated_as_success():
+    """If the read-back itself fails, the state is unconfirmed — never
+    default to claiming success on an unverifiable duplicate."""
+
+    async def dup(_table, _row):
+        raise RuntimeError("duplicate key value violates unique constraint (23505)")
+
+    async def get_rows(_table, _filters, limit=None):
+        raise RuntimeError("db down")
+
+    with (
+        patch.object(ls.db_supabase, "insert_one", side_effect=dup),
+        patch.object(ls.db_supabase, "get_rows", side_effect=get_rows),
+        patch.object(ls, "escalate"),
+    ):
+        event_id = await ls.record_event(event_type="stripe_charge", user_id="u1", ride_id="r1", delta_cents=2000)
+
+    assert event_id is None
 
 
 @pytest.mark.anyio

@@ -201,6 +201,10 @@
     "370_driver_earnings_rollup_fn.sql",
     "370_location_marker_write_gate_flag.sql"
   ],
+  "376": [
+    "376_corporate_wallet_adjust_idempotency.sql",
+    "376_service_area_tax_history.sql"
+  ],
   "48": [
     "48_faqs_audience.sql",
     "48_notifications_tables.sql"

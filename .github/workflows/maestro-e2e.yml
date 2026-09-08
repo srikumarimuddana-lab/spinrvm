@@ -50,36 +50,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  maestro-android:
-    # Gate 1 (trigger): workflow_dispatch always runs; on a PR, only when
+  # C76: the app-selection filter used to be folded into maestro-android's
+  # own job-level `if:` as `github.event.inputs.apps == matrix.app.dir` —
+  # but the `matrix` context is only available in `jobs.<id>.strategy` and
+  # `jobs.<id>.steps`, never in `jobs.<id>.if` (GitHub Actions' context-
+  # availability table). Every run of this workflow therefore failed
+  # workflow validation before a single job started — 3,206 zero-duration
+  # "failure" runs recorded on every push, none of them the missing-secrets
+  # issue B25 tracks. This job resolves the matrix instead, so the
+  # downstream job's `if:` and `strategy.matrix` never need `matrix` itself.
+  plan:
+    name: Resolve Maestro app matrix
+    # Trigger gate: workflow_dispatch always runs; on a PR, only when
     # explicitly labeled "run-maestro" — EAS Build + Maestro Cloud both
     # consume real, billed minutes, so this must never run silently on
     # every push (same cost discipline as this repo's `[build]`-commit-
-    # message gate on mobile-build below).
-    # Gate 2 (matrix filter): GitHub Actions' matrix `exclude` only accepts
-    # literal values, not runtime expressions, so picking one app via the
-    # workflow_dispatch `apps` input can't be done with `exclude` — it's
-    # folded into this same `if` instead (a job can only have one `if:`
-    # key; a second one would silently overwrite the first, not combine
-    # with it). The `pull_request` trigger has no `inputs.apps` at all, so
-    # both matrix entries run by default in that case.
+    # message gate on mobile-build below). Only `github` context is used
+    # here, which job-level `if:` does support.
     if: >
-      (
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'pull_request' && github.event.label.name == 'run-maestro')
-      ) && (
-        github.event.inputs.apps == null ||
-        github.event.inputs.apps == 'both' ||
-        github.event.inputs.apps == matrix.app.dir
-      )
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'run-maestro')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.compute.outputs.matrix }}
+    steps:
+      - id: compute
+        name: Compute app matrix from the "apps" input
+        # The pull_request trigger has no inputs.apps at all (empty string
+        # here), so both matrix entries run by default in that case, same
+        # as workflow_dispatch's own "both" default. Passed via env: rather
+        # than interpolated directly into the script — `apps` is a fixed
+        # `type: choice` enum so there's no real injection risk today, but
+        # env: is this repo's standing convention for untrusted-ish inputs.
+        env:
+          APPS: ${{ github.event.inputs.apps }}
+        run: |
+          if [ "$APPS" = "driver-app" ]; then
+            MATRIX='[{"dir":"driver-app","appId":"com.spinr.driver","flows":".maestro/driver"}]'
+          elif [ "$APPS" = "rider-app" ]; then
+            MATRIX='[{"dir":"rider-app","appId":"com.spinr.user","flows":".maestro/rider"}]'
+          else
+            MATRIX='[{"dir":"driver-app","appId":"com.spinr.driver","flows":".maestro/driver"},{"dir":"rider-app","appId":"com.spinr.user","flows":".maestro/rider"}]'
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  maestro-android:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        app:
-          - { dir: driver-app, appId: com.spinr.driver, flows: .maestro/driver }
-          - { dir: rider-app, appId: com.spinr.user, flows: .maestro/rider }
+        app: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

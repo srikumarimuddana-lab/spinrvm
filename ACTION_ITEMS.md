@@ -22699,30 +22699,59 @@ how much they de-risk a public launch._
      mandatory pre-merge verification step from PR #5088's Tier 7 was
      never actually performed against a database that has the column in
      question, on either side of the merge.
-- **Action:** (1) a human with `Spinr-Prod` access should run the actual
-  round-trip check (`SELECT id, refund_amount FROM rides WHERE
-  refund_amount = <a real value read back> AND id = <that row's id>`,
-  confirm it returns that exact row) against the real column — if it
-  doesn't round-trip cleanly, the F1 CAS filter needs the `$lte`-based
-  fallback documented in the change-log referenced above. **Still open —
-  requires `Spinr-Prod` access this session doesn't have; see C89.**
-  (2) ~~Add the missing `ALTER TABLE rides ADD COLUMN IF NOT EXISTS
-  refund_amount NUMERIC(8,2) DEFAULT 0` as a proper new-numbered
-  migration~~ **Done 2026-09-08**:
-  `backend/migrations/408_rides_refund_amount.sql`, reviewed by
-  `spinr-migration-reviewer`. Safe no-op on production (already has the
-  column via undocumented DDL); actually creates it on `spinrmobileapp` and
-  any future environment bootstrapped from `backend/migrations/` alone. (3)
-  Re-scope this session's Supabase connector (or add a second one) to
-  reach `Spinr-Prod` if ongoing production verification access is wanted —
-  **see C89 for the concrete recommendation**, still pending human
-  execution (needs an interactive Supabase dashboard/OAuth action no
-  session can perform).
+- **CORRECTION (2026-09-08, human-confirmed): `spinrmobileapp`
+  (`soavhtdhefowwvforzwb`) IS production.** Every "the real column is
+  presumably on `Spinr-Prod`, which we can't reach" framing below (in this
+  item and the original write-up above) was built on an unverified
+  name-based assumption — see `.claude/context/connector-scoping.md`'s
+  Supabase row for the full corrected account. This does **not** change
+  finding #2 above; it changes what that finding means: the column is
+  confirmed missing on **the real production database**, re-confirmed
+  live again on 2026-09-08 (empty `information_schema.columns` result),
+  not on some pre-production stand-in. Practical implication worth
+  stating plainly: if this column has truly never existed on production,
+  every real `charge.refunded` Stripe webhook hitting production would
+  have failed at the `db_supabase.update_one(..., {"refund_amount": ...})`
+  call — this code path's own error handling raises loudly rather than
+  swallowing (`if cas_updated is None: ... raise HTTPException(500, ...)`),
+  so this should have been visible (failed webhook retries in Stripe's
+  dashboard, 500s in logs/Sentry) if any real refund has actually occurred
+  against this project. Not yet investigated whether any has.
+- **Action, corrected:** (1) run the round-trip check directly — no longer
+  blocked, since production is the project this session's connector
+  already reaches. Blocked instead on step (2): the column has to exist
+  first. ~~a human with `Spinr-Prod` access~~ not needed. (2)
+  `backend/migrations/408_rides_refund_amount.sql` (added 2026-09-08,
+  reviewed by `spinr-migration-reviewer`, merged) has **not yet been
+  applied to `spinrmobileapp`** — this is now a write to a confirmed
+  production database and needs the user's explicit go-ahead before
+  running it from a session, not something to apply unilaterally. (3)
+  ~~Re-scope the connector to reach `Spinr-Prod`~~ **moot** — production
+  was already reachable the whole time. C89 (below) is superseded by this
+  correction.
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
 ### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
 
-- [ ] **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
+- [x] **Status:** SUPERSEDED 2026-09-08 (human-confirmed) — the entire
+  premise was wrong. `spinrmobileapp` (`soavhtdhefowwvforzwb`, org
+  `Spinr_MobileApp`) IS production; it was never a pre-production stand-in
+  needing a second connector to reach the "real" database. `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`) / `MobileAppStaging` (`mvmyygoinicjdpqprizr`),
+  under `swarnkiran88@gmail.com's Org`, remain completely unidentified —
+  the only fact ever recorded about them is a project name seen once via
+  a live API call on 2026-09-07 — and are **not being pursued**; the human
+  confirmed `spinrmobileapp` is the project to work with, full stop. No
+  second connector is needed. See `.claude/context/connector-scoping.md`'s
+  Supabase row for the corrected account and the real, more urgent
+  follow-up this correction raises: the *existing* connector carries
+  full read/write/admin tools (including `pause_project`/`restore_project`)
+  against what is now confirmed to be production, which the row's own
+  previously-written policy already says should be narrowed to read-only
+  — not yet done, flagged to the user, awaiting their call on timing.
+- **Original (superseded) framing below, kept for the record — do not act
+  on it, it assumes production was unreachable, which is now known false:**
+- [ ] (superseded) **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
   Supabase row already flags this as "a separate, still-open decision, not
   yet made"; recorded here as its own tracked item so it doesn't stay
   buried inside a connector-audit doc, and because C88 just hit its real

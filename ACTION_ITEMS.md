@@ -22505,6 +22505,78 @@ how much they de-risk a public launch._
   `if: always() && hashFiles('trivy-results.sarif') != ''`.
 - **Found during:** PR #5085's validation of PR #5079's testing finding.
 
+### C88. `rides.refund_amount` has no committed schema definition anywhere in this repo, and is missing entirely on `spinrmobileapp`
+
+- [ ] **Status:** open — found 2026-09-08 while attempting the mandatory
+  post-merge verification step for PR #5088's F1 fix (the `charge.refunded`
+  compare-and-swap on `rides.refund_amount`, `docs/change-log/
+  2026-09-08-charge-refunded-cas-ledger-dedupe.md`). Two distinct findings:
+  1. **No migration file defines this column.** Grepped every `*.sql` under
+     `backend/migrations/` (and the whole repo) for `refund_amount` — the
+     only hits are `10_disputes_table.sql` (a column on `disputes`, a
+     different table entirely despite the identical name),
+     `163_earnings_overview_aggregates_fn.sql`, and
+     `380_admin_dispute_stats_rollup_fn.sql` (both also querying
+     `disputes.refund_amount`, confirmed via their `FROM disputes` clause).
+     Nothing anywhere adds a `refund_amount` column to `rides`, yet
+     `backend/routes/webhooks.py`'s refund handling has read and written
+     `rides.refund_amount` since before this session (not something F1
+     introduced — F1 only added a CAS filter on top of an already-existing
+     column reference). Wherever this column actually lives, it was added
+     by an untracked, ad-hoc DDL statement outside the migration system —
+     the exact class of drift `backend/migrations/CLAUDE.md`'s append-only
+     convention exists to prevent, just from before that convention had
+     full coverage.
+  2. **The column doesn't exist at all on `spinrmobileapp`** (project
+     `soavhtdhefowwvforzwb`, org `Spinr_MobileApp`), the one Supabase
+     project this session's connector could reach per
+     `.claude/context/connector-scoping.md`'s tracking table.
+     `information_schema.columns` confirms zero results for `rides` +
+     `refund_amount` (or any `%refund%`-named column) on that project. This
+     means `spinrmobileapp` cannot currently run the `charge.refunded`
+     webhook path at all — every read/write of `rides.refund_amount` there
+     would fail or silently no-op depending on the exact Supabase-py error
+     path, independent of anything F1 changed. Practical effect: no
+     verification of F1 was possible against this project's actual
+     `refund_amount` column (it doesn't have one); a **proxy** verification
+     used `area_fees_total` (same `NUMERIC(8,2)` shape) on the same `rides`
+     table instead, confirming the general Postgres-level round-trip
+     (read a stored value back, re-filter on the exact same value, get the
+     same row) — DB-level round-trip: **verified working**. The
+     client-side leg (Supabase-py's JSON decode of a PostgREST `numeric`
+     response → Python `float`/`str` → `_apply_filters`' bare-value
+     `q.eq()` → PostgREST query string) was reasoned through by reading
+     `repositories/_base.py` (no custom JSON decoder; `_serialize_for_api`
+     only special-cases `Decimal`/`datetime`, so a plain `float` passes
+     through unchanged to `postgrest-py`'s `.eq()`) rather than observed
+     live — Python's `float.__repr__` is a documented shortest-round-trip
+     representation, so this should be safe for ordinary 2-decimal money
+     values, but "should be safe by code reading" is not the same as
+     watching the real `rides.refund_amount` column round-trip on the
+     project that actually has it. **`Spinr-Prod`
+     (`cfrazforbupizntxvvtp`), the project that presumably does have this
+     column, is not reachable from this session's Supabase connector at
+     all** (see the connector-scoping table's Supabase row) — the
+     mandatory pre-merge verification step from PR #5088's Tier 7 was
+     never actually performed against a database that has the column in
+     question, on either side of the merge.
+- **Action:** (1) a human with `Spinr-Prod` access should run the actual
+  round-trip check (`SELECT id, refund_amount FROM rides WHERE
+  refund_amount = <a real value read back> AND id = <that row's id>`,
+  confirm it returns that exact row) against the real column — if it
+  doesn't round-trip cleanly, the F1 CAS filter needs the `$lte`-based
+  fallback documented in the change-log referenced above. (2) Add the
+  missing `ALTER TABLE rides ADD COLUMN IF NOT EXISTS refund_amount
+  NUMERIC(8,2) DEFAULT 0` as a proper new-numbered migration (append-only;
+  never edit history) so `spinrmobileapp` and any future environment
+  bootstrapped from `backend/migrations/` alone actually has this column,
+  and so it's no longer solely dependent on undocumented manual DDL. (3)
+  Re-scope this session's Supabase connector (or add a second one) to
+  reach `Spinr-Prod` if ongoing production verification access is wanted —
+  a decision `.claude/context/connector-scoping.md` already flags as "not
+  yet made."
+- **Found during:** post-merge verification attempt for PR #5088 (F1).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

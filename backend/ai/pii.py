@@ -16,7 +16,7 @@ data-minimization mitigation — see the pattern list below for specifics.
 
 import re
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 # (category, pattern, replacement). The category tag is what a ScrubPolicy
 # skips by (see _POLICY_SKIPS) so this list stays the single source of truth.
@@ -87,10 +87,14 @@ _PII_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     # digits), Amex (34/37, 15 digits), Discover (6011 or 65, 16 digits). Each
     # brand's remaining digits after the prefix are chunked into groups of up
     # to 4 with an optional space/dash between groups, matching how a card
-    # number is conventionally displayed — Amex's real 4-6-5 grouping is NOT
-    # matched when dash/space-separated (chunked here as 4-4-4-3 instead); a
-    # bare, unseparated Amex number is still caught, which is the common case
-    # for a rider troubleshooting a decline in chat.
+    # number is conventionally displayed.
+    #
+    # Amex carries TWO alternatives, ordered 4-6-5 first. F06 (2026-09-08 AI
+    # security assessment) found only the 4-4-4-3 chunking was matched, so an
+    # Amex written the way Amex actually prints it — "3782 822463 10005" —
+    # reached the provider intact; only the unseparated form was caught. The
+    # specific 4-6-5 branch is kept first rather than relying on the shorter
+    # branch failing mid-way.
     # CLAUDE.md: "Payment card numbers — Stripe handles; never log even masked
     # PANs." Spinr never stores or transmits a PAN server-side; this exists
     # for the case a rider pastes one into an AI chat message or support
@@ -103,7 +107,8 @@ _PII_PATTERNS: list[tuple[str, re.Pattern, str]] = [
             r"|4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{1}"  # Visa 13
             r"|5[1-5]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Mastercard (legacy range)
             r"|2(?:22[1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Mastercard (2-series)
-            r"|3[47]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{3}"  # Amex
+            r"|3[47]\d{2}[\s-]\d{6}[\s-]\d{5}"  # Amex, real 4-6-5 grouping
+            r"|3[47]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{3}"  # Amex, 4-4-4-3 / unseparated
             r"|6011[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Discover (6011)
             r"|65\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"  # Discover (65)
             r")(?!\d)"
@@ -282,6 +287,84 @@ def scrub_pii_deep(value: Any, depth: int = 0, *, policy: ScrubPolicy = ScrubPol
     return _scrub_deep(value, depth, policy)
 
 
+# ── Key-name denylist (F06) ──────────────────────────────────────────────────
+#
+# The pattern pass above can only see string CONTENT. Two categories are
+# invisible to it no matter how good the regex is:
+#
+#   * a coordinate stored as a float. `{"lat": 52.1332, "lng": -106.67}` has no
+#     string leaf, so the recursive scrubber walked straight past it. /mcp's
+#     "STRICT serialization" therefore shipped exact pickup/dropoff coordinates
+#     to an external MCP client, and the saved-place tool supplies exactly those
+#     fields. (2026-09-08 AI security assessment, F06.)
+#   * a bare nine-digit SIN. A content regex for it is deliberately NOT added --
+#     see the "govid" pattern's own comment: nine bare digits collide with this
+#     codebase's own id/timestamp shapes, and matching on digit count alone
+#     reproduces a regression already documented there. The field NAME is the
+#     discriminator instead, which has no such collision.
+#
+# This is a DENYLIST (which keys always lose their value), not the allowlist
+# scrub_pii_deep's docstring rejects. That rejection is about keys to SKIP --
+# utils/sentry_scrub.py treating a bare "name" key as a benign symbol, which
+# would be wrong here because a tool result's "name" is routinely a person's
+# name. Denying specific keys adds redaction; it never exempts a key from the
+# pattern pass, so the two reasonings do not conflict.
+#
+# Location keys are policy-gated exactly like the string "coords" pattern:
+# redacted under STRICT, kept under AI_CHAT, where trip-endpoint coordinates
+# are the accepted exception (ADR 012 / PIA Section 3) and the in-app assistant
+# needs them verbatim to avoid re-geocode drift.
+_LOCATION_KEYS = frozenset({"lat", "latitude", "lng", "lon", "long", "longitude"})
+
+# Always redacted, under every policy: the assistant has no use for these and
+# CLAUDE.md forbids them outright.
+_ALWAYS_SENSITIVE_KEYS = frozenset(
+    {
+        "sin",
+        "social_insurance_number",
+        "sin_number",
+        "drivers_license",
+        "driver_license",
+        "drivers_license_number",
+        "license_number",
+        "licence_number",
+        "passport",
+        "passport_number",
+        "card_number",
+        "pan",
+        "cvv",
+        "cvc",
+    }
+)
+
+_KEY_REDACTIONS = {
+    "lat": "[COORD]",
+    "latitude": "[COORD]",
+    "lng": "[COORD]",
+    "lon": "[COORD]",
+    "long": "[COORD]",
+    "longitude": "[COORD]",
+}
+
+
+def _redaction_for_key(key: Any, policy: ScrubPolicy) -> Optional[str]:
+    """The redaction token for a denylisted key, or None to scrub normally."""
+    if not isinstance(key, str):
+        return None
+    normalized = key.strip().lower()
+    if normalized in _ALWAYS_SENSITIVE_KEYS:
+        return "[REDACTED]"
+    if normalized in _LOCATION_KEYS:
+        # Not expressed via _POLICY_SKIPS: that table gates the string PATTERN
+        # pass, where AI_CHAT skips only "postal" and free-text coordinates are
+        # still scrubbed. Structured trip-endpoint floats are the opposite case
+        # — they are the data AI_CHAT deliberately keeps (ADR 012, PIA S3), so
+        # the condition is stated directly rather than borrowed from a table
+        # that means something else.
+        return None if policy is ScrubPolicy.AI_CHAT else _KEY_REDACTIONS[normalized]
+    return None
+
+
 def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
     if depth >= _MAX_SCRUB_DEPTH:
         return value
@@ -289,7 +372,18 @@ def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
         if isinstance(value, str):
             return scrub_pii(value, policy=policy)
         if isinstance(value, dict):
-            return {k: _scrub_deep(v, depth + 1, policy) for k, v in value.items()}
+            out = {}
+            for k, v in value.items():
+                token = _redaction_for_key(k, policy)
+                # Only a scalar is replaced wholesale. A denylisted key holding
+                # a dict/list is still recursed into: replacing the container
+                # would silently drop structure the caller may depend on, and
+                # its leaves get the same treatment one level down anyway.
+                if token is not None and not isinstance(v, (dict, list, tuple)):
+                    out[k] = token
+                else:
+                    out[k] = _scrub_deep(v, depth + 1, policy)
+            return out
         if isinstance(value, (list, tuple)):
             return type(value)(_scrub_deep(v, depth + 1, policy) for v in value)
     except Exception:  # noqa: BLE001 - never let scrubbing break a tool result

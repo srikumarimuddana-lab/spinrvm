@@ -127,9 +127,21 @@ def build_ticket_context(
     the third-party LLM.
 
     ``instruction`` is the support agent's own guidance for this reply (what to
-    say, the decision to convey). It is first-party staff input — not customer
-    PII — so it is passed through verbatim (the agent is steering the draft, the
-    same text they'd otherwise type by hand) and only length-bounded.
+    say, the decision to convey). It is scrubbed like every other field here.
+
+    F06 (2026-09-08 AI security assessment) reversed the previous behaviour,
+    which passed it through verbatim on the reasoning that staff input is
+    "first-party — not customer PII". That confuses the AUTHOR of the text with
+    its SUBJECT. The boundary this function protects is egress to a third-party
+    LLM provider, and a phone number or email pasted into the guidance ("call
+    them back on +1306...", "refund went to a@b.ca") is the customer's PII
+    reaching that provider regardless of who typed it — bypassing the scrub
+    applied one line earlier to the ticket body carrying the same string.
+
+    Consequence worth knowing: an agent cannot get a real phone/email/card into
+    the drafted reply through this field. That is the same constraint the
+    customer's own message body already operates under, and the draft is
+    reviewed and edited by the agent before sending.
     """
     lines: List[str] = []
     if service_area_name:
@@ -180,7 +192,7 @@ def build_ticket_context(
             "within the ground rules above (never fabricate facts the guidance does "
             "not supply):"
         )
-        lines.append(_truncate(instruction.strip(), _MAX_FIELD_CHARS))
+        lines.append(_truncate(scrub_pii(instruction.strip()), _MAX_FIELD_CHARS))
 
     lines.append("")
     lines.append("Draft the reply to send to the customer now.")

@@ -1,9 +1,9 @@
 import '../utils/backgroundLocation';
 import { registerDriverSessionTeardown } from '../utils/sessionTeardown';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Stack, useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import { Stack, useRouter, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Platform, LogBox, AppState } from 'react-native';
+import { Platform, LogBox, AppState, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -17,7 +17,13 @@ import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useDriverStore } from '../store/driverStore';
 import { useAlertPrefsStore } from '../store/alertPrefsStore';
+import * as SplashScreen from 'expo-splash-screen';
 import BrandSplash from '../components/BrandSplash';
+import { useSplashPhase } from '../hooks/useSplashPhase';
+import {
+  NATIVE_SPLASH_WATCHDOG_MS,
+  SPLASH_MIN_DISPLAY_MS,
+} from '../constants/splash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
@@ -48,10 +54,32 @@ if (__DEV__) {
   LogBox.ignoreAllLogs(true);
 }
 
-// Minimum time the branded splash (logo + tagline) stays on screen, even when
-// auth/location init finishes sooner — otherwise the tagline animation (which
-// only starts ~400ms in) is cut off and the driver barely sees the branding.
-const SPLASH_MIN_DISPLAY_MS = 3000;
+// Keep the native splash up until BrandSplash has painted its first frame.
+// Both draw the same picture (halo + mark), so the handoff is invisible — but
+// only if nothing hides the native one early. Expo requires this at module
+// scope, not inside a component, or it can run after the auto-hide already
+// fired.
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // Already hidden (fast boot, or a reload in dev). Nothing to keep up.
+});
+
+// One-shot, module-scope so a re-render can never hide twice.
+let nativeSplashHidden = false;
+function hideNativeSplash(reason: 'ready' | 'watchdog' | 'error') {
+  if (nativeSplashHidden) return;
+  nativeSplashHidden = true;
+  SplashScreen.hideAsync().catch(() => {
+    // Non-fatal: the JS splash is already covering the screen either way.
+  });
+  if (reason !== 'ready') {
+    // Reaching here means the JS splash never told us it was ready — worth
+    // knowing about, because the fallback is the only thing standing between a
+    // stalled boot and a permanently frozen native splash.
+    captureMessage(`native splash force-hidden (${reason})`, 'warning');
+  }
+}
+const hideNativeSplashReady = () => hideNativeSplash('ready');
+const hideNativeSplashOnError = () => hideNativeSplash('error');
 
 // EAS Observe. Native module — present only in binaries built with it, so the
 // guarded require keeps older installed builds and Expo Go booting with
@@ -566,8 +594,6 @@ function RootLayout() {
     };
   }, [isAuthInitialized, authToken]);
 
-  const onLoadingLayout = useCallback(() => {}, []);
-
   // EAS Observe: Time-to-Interactive ends when the loading gate below clears
   // — the first moment the driver can actually act.
   const appInteractive =
@@ -575,32 +601,57 @@ function RootLayout() {
   useEffect(() => {
     if (appInteractive) ObserveMetrics?.markInteractive?.();
   }, [appInteractive]);
+  // Backstop for the native splash: if BrandSplash never reports in (bundle
+  // stall, image decode failure), force it down rather than leave the driver
+  // staring at a frozen launch screen.
+  useEffect(() => {
+    const timer = setTimeout(() => hideNativeSplash('watchdog'), NATIVE_SPLASH_WATCHDOG_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  // The splash stays mounted over the app and fades out once a real route is
+  // up, so the driver never sees a hard cut into a half-painted screen.
+  const pathname = usePathname();
+  const { phase: splashPhase, onExitComplete: onSplashExitComplete } = useSplashPhase({
+    navReady: appInteractive,
+    pathname,
+  });
 
-  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized || !minSplashElapsed) {
-    return (
-      <QueryClientProvider client={queryClient}>
-        <ErrorBoundary>
-          <BrandSplash onLayout={onLoadingLayout} />
-        </ErrorBoundary>
-      </QueryClientProvider>
-    );
-  }
-
+  // The app tree and the splash are siblings rather than two branches of an
+  // if/else: the splash has to survive `appInteractive` flipping so it can fade
+  // out over a mounted app instead of being swapped away in one frame. Nothing
+  // below renders any earlier than it used to — the condition here is exactly
+  // the old gate's, inverted.
   return (
-    <PersistQueryClientProvider
-      client={queryClient}
-      persistOptions={{
-        persister: asyncStoragePersister,
-        // 24h max age — anything older is dropped on rehydrate, so the
-        // app can't boot with a week-old earnings number on screen.
-        maxAge: 24 * 60 * 60 * 1000,
-        buster: QUERY_CACHE_BUSTER,
-      }}
-    >
-      <ThemeProvider>
-        <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} forceUpdate={forceUpdate} />
-      </ThemeProvider>
-    </PersistQueryClientProvider>
+    <View style={{ flex: 1 }}>
+      {appInteractive ? (
+        <PersistQueryClientProvider
+          client={queryClient}
+          persistOptions={{
+            persister: asyncStoragePersister,
+            // 24h max age — anything older is dropped on rehydrate, so the
+            // app can't boot with a week-old earnings number on screen.
+            maxAge: 24 * 60 * 60 * 1000,
+            buster: QUERY_CACHE_BUSTER,
+          }}
+        >
+          <ThemeProvider>
+            <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} forceUpdate={forceUpdate} />
+          </ThemeProvider>
+        </PersistQueryClientProvider>
+      ) : null}
+      {splashPhase !== 'done' ? (
+        <QueryClientProvider client={queryClient}>
+          <ErrorBoundary onError={hideNativeSplashOnError}>
+            <BrandSplash
+              phase={splashPhase === 'exit' ? 'exit' : 'intro'}
+              fontsReady={fontsLoaded}
+              onNativeHideReady={hideNativeSplashReady}
+              onExitComplete={onSplashExitComplete}
+            />
+          </ErrorBoundary>
+        </QueryClientProvider>
+      ) : null}
+    </View>
   );
 }
 

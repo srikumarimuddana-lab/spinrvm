@@ -23411,12 +23411,20 @@ how much they de-risk a public launch._
   as its own open thread below rather than fixed unilaterally (adding
   `exit-code: '1'` to a scan with an unknown-sized existing findings set
   could immediately red-line `main`; needs a baseline/suppression pass
-  first, a bigger, separate decision). **Only the one site blocking this
-  session's own PR was fixed** — `security-gates.yml`'s G3/semgrep and
-  G6/container-scan, and `ci.yml`'s `docker-image-scan`, still fail on the
-  same root cause and would benefit from the identical
-  `continue-on-error: true` mitigation as a follow-up; not done here to
-  keep this fix scoped to what was actually blocking.
+  first, a bigger, separate decision). **Second site fixed same day, same
+  PR:** `security-gates.yml`'s G3/Semgrep upload-sarif step (`:386-397`)
+  hit the identical failure, which flipped that job's overall conclusion
+  to `failure` (even though its own Semgrep scan and the SR-03
+  money-safety gate both passed) and cascaded into the required "Security
+  gates summary" check — concretely blocking this PR's mergeability, not
+  just a `main`-branch nuisance. Same `continue-on-error: true` mitigation
+  applied there too; confirmed the underlying gate (SR-03's own
+  `sys.exit(1)` on a real finding) is independent of the upload step and
+  still enforces regardless. **Still not done:** `security-gates.yml`'s
+  G6/container-scan (`:682-685`) and `ci.yml`'s `docker-image-scan`
+  (`:1083-1084`) have the same latent issue but were `skipped` (path-
+  filtered, docs-only PR) rather than actively blocking anything here —
+  left as a follow-up rather than fixed pre-emptively.
 - **Verification performed:** read the full `security-scan` and `G3 ·
   Semgrep` job logs for both original failures; re-read every enclosing
   `permissions:` block directly (not via a context-truncated grep this

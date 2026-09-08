@@ -385,6 +385,17 @@ jobs:
 
       - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         if: always()
+        # C94: fails on every run with "Code scanning is not enabled for this
+        # repository" (a repo-settings gap, not a workflow defect — see
+        # ACTION_ITEMS.md C94). Without this, that failure alone flips this
+        # job's conclusion to failure even when the actual Semgrep scan and
+        # SR-03 money-safety gate above both passed, which then fails the
+        # "Security gates summary" required check for every PR. Semgrep's own
+        # findings still fail this job directly (the scan step above exits
+        # non-zero on a real finding) — this only stops the best-effort
+        # publish-to-Security-tab step from being a second, unrelated failure
+        # mode.
+        continue-on-error: true
         with:
           sarif_file: semgrep.sarif
 

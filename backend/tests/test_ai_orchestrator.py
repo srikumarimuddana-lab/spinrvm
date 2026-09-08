@@ -745,6 +745,122 @@ class TestConversationLock:
         set_nx.assert_not_awaited()
         assert [n for n, _ in frames][-1] == "done"
 
+    @pytest.mark.anyio
+    async def test_lock_release_is_ownership_checked(self):
+        """F09 (2026-09-08 AI security assessment): the lock was released with
+        an unconditional DELETE. When a turn outlives the 90s TTL, turn A's
+        release deletes turn B's freshly-acquired lock and turn C can start
+        alongside B — so the release made the concurrency it exists to prevent
+        MORE likely. Release now goes through a compare-and-delete keyed on a
+        per-turn token."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter)
+        stored = {}
+
+        async def fake_set_nx(key, value, ttl):
+            if key in stored:
+                return False
+            stored[key] = value
+            return True
+
+        released = []
+
+        async def fake_eval(script, numkeys, *args):
+            key, token = args[0], args[1]
+            # Mirror the Lua: delete only on a token match.
+            if stored.get(key) == token:
+                del stored[key]
+                released.append(token)
+                return 1
+            return 0
+
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock(side_effect=fake_set_nx)),
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=fake_eval)),
+        ):
+            async for _ in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message="hi"):
+                pass
+
+        # The lock was taken with a unique token, not a constant, and released
+        # with that same token.
+        assert len(released) == 1
+        assert released[0] != "1"
+        assert "ai:conv_lock:conv-1" not in stored
+
+    @pytest.mark.anyio
+    async def test_release_does_not_delete_another_turns_lock(self):
+        """The scenario the token exists for: our own lock has expired and a
+        DIFFERENT turn now holds the key. Our release must be a no-op."""
+        stored = {"ai:conv_lock:conv-1": "someone-elses-token"}
+
+        async def fake_eval(script, numkeys, *args):
+            key, token = args[0], args[1]
+            if stored.get(key) == token:
+                del stored[key]
+                return 1
+            return 0
+
+        with patch.object(orch, "redis_eval", AsyncMock(side_effect=fake_eval)):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "our-expired-token")
+
+        assert stored["ai:conv_lock:conv-1"] == "someone-elses-token"
+
+    @pytest.mark.anyio
+    async def test_fail_open_path_does_not_release_a_lock_it_never_held(self):
+        """On a Redis error the turn proceeds WITHOUT the lock. Releasing then
+        would delete a lock a concurrent turn legitimately holds — the same
+        clobber as above, reached by a different route."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
+            patch.object(orch, "redis_eval", AsyncMock()) as eval_mock,
+            patch.object(orch, "redis_delete", AsyncMock()) as del_mock,
+        ):
+            async for _ in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message="hi"):
+                pass
+
+        eval_mock.assert_not_awaited()
+        del_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_release_falls_back_when_redis_has_no_lua(self):
+        """redis_eval raises RuntimeError when REDIS_URL is unset (dev/test).
+        A single in-process dict has no other holder to clobber, so the
+        non-atomic compare-and-delete is exact there."""
+        with (
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=RuntimeError("no lua"))),
+            patch.object(orch, "redis_get", AsyncMock(return_value="tok")),
+            patch.object(orch, "redis_delete", AsyncMock()) as del_mock,
+        ):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "tok")
+        del_mock.assert_awaited_once_with("ai:conv_lock:conv-1")
+
+    @pytest.mark.anyio
+    async def test_release_never_raises(self):
+        """A failed release must not fail the turn — the rider has already seen
+        the reply stream, and the lock carries a TTL."""
+        with patch.object(orch, "redis_eval", AsyncMock(side_effect=ConnectionError("down"))):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "tok")
+
 
 class TestDailyCapFallback:
     """AI1b (#3742): a Redis error on the daily-cap check falls back to a

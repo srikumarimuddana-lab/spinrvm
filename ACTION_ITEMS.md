@@ -22598,6 +22598,16 @@ how much they de-risk a public launch._
   about it was already correct.
 - **Found during:** PR #5085's validation of PR #5079's maintainability
   finding (documentation drift).
+- **Follow-up (2026-09-08):** the 2026-09-08 closure was incomplete — grep
+  found 2 more "16 startup loops" instances the original fix missed
+  (`AGENTS.md`'s "Background task safety" line and its "Background Loop
+  Recipe" section header line) plus one dead `graphify-out/GRAPH_REPORT.md`
+  reference in a "Graphify coverage" bullet under the `agents/` role table
+  — inconsistent with this same fix's own removal of the `## graphify`
+  section for citing a directory that never existed. All 3 corrected in
+  place; verified no remaining "16 loops"/"18 loops" or `graphify-out`
+  references anywhere in `AGENTS.md`. Status stays closed; this is a
+  same-item correction, not a reopen.
 
 ### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed — CLOSED (2026-09-08)
 

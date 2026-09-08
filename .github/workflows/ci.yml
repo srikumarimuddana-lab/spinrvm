@@ -860,23 +860,32 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
+      # Was previously omitted entirely, deliberately held back (ACTION_ITEMS.md
+      # B41) pending confirmation of what an omitted --profile actually
+      # resolves to. Confirmed: EAS CLI defaults to the profile literally
+      # named "production" when --profile is omitted — so this job's builds
+      # were always resolving to production by that default, never anything
+      # else. Pinned explicitly rather than left implicit.
+      #
+      # staging is deliberately NOT added here: test-env.yml's
+      # build-mobile-test job already owns staging + '[build]' with
+      # --profile preview (same eas.json "preview" profile, which this
+      # change also fixes to explicitly set distribution: internal rather
+      # than defaulting to "store" — see the same Change Impact Log). Giving
+      # this job the same trigger would double-build (8 real EAS builds
+      # instead of 4 per push) — caught by spinr-cicd-infra-reviewer before
+      # merge, not shipped.
       - name: Install rider app dependencies
         working-directory: rider-app
         run: yarn install --frozen-lockfile
 
-      # No --profile flag here (deliberately held, not an oversight): the
-      # question of what profile a main-branch [build] trigger should
-      # actually produce — this job has never pinned one explicitly — is
-      # captured for discussion, see ACTION_ITEMS.md B25 area / this PR's
-      # discussion. Do not add --profile production without that decision
-      # being made first.
       - name: Build iOS (Rider)
         working-directory: rider-app
-        run: eas build --platform ios --non-interactive
+        run: eas build --platform ios --profile production --non-interactive
 
       - name: Build Android (Rider)
         working-directory: rider-app
-        run: eas build --platform android --non-interactive
+        run: eas build --platform android --profile production --non-interactive
 
       # Driver-app was previously missing here even though this job's `needs`
       # already required driver-app-test to pass — gating on a test job whose
@@ -888,11 +897,11 @@ jobs:
 
       - name: Build iOS (Driver)
         working-directory: driver-app
-        run: eas build --platform ios --non-interactive
+        run: eas build --platform ios --profile production --non-interactive
 
       - name: Build Android (Driver)
         working-directory: driver-app
-        run: eas build --platform android --non-interactive
+        run: eas build --platform android --profile production --non-interactive
 
   # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:

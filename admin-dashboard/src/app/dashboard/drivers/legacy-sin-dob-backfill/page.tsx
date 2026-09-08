@@ -19,6 +19,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Upload, CheckCircle2, AlertTriangle, Loader2, Info, Copy } from "lucide-react";
 import {
     adminValidateSinDobBackfill,
@@ -28,7 +29,7 @@ import {
     type SinDobBackfillFiles,
 } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
-import { BackToMigrationChecklistLink } from "@/components/bulk-operations-nav";
+import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -58,8 +59,10 @@ import {
     AlertDialogCancel,
     AlertDialogAction,
 } from "@/components/ui/alert-dialog";
+import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
 import { exportToCsv } from "@/lib/export-csv";
 import Link from "next/link";
 
@@ -159,6 +162,7 @@ function buildSummaryText(report: SinDobBackfillReport): string {
 export default function LegacySinDobBackfillPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    const router = useRouter();
 
     const [files, setFiles] = useState<FileState>({});
     const [report, setReport] = useState<SinDobBackfillReport | null>(null);
@@ -171,6 +175,8 @@ export default function LegacySinDobBackfillPage() {
         if (!banks || !drivers) return null;
         return { banks, drivers };
     }, [files]);
+
+    useUnsavedChangesWarning(!!report?.can_commit && !committedSummary);
 
     if (!allowed) return null;
 
@@ -228,6 +234,14 @@ export default function LegacySinDobBackfillPage() {
                 toast({
                     title: "Backfill complete",
                     description: `${res.updated ?? 0} driver(s) updated.`,
+                    action: (
+                        <ToastAction
+                            altText="Go to Migration Checklist"
+                            onClick={() => router.push(BULK_OPERATIONS_HREF)}
+                        >
+                            Go to Checklist
+                        </ToastAction>
+                    ),
                 });
             } else {
                 // The CSVs no longer validate (data changed since validate).

@@ -23391,6 +23391,32 @@ how much they de-risk a public launch._
   correct, and should still merge (it fixes a genuine defect and is a
   prerequisite for these jobs ever going green), but it does not alone
   close this item.
+- **Mitigation added 2026-09-08 (`claude/pr-5085-5079-hardening-b11-rg-determination`,
+  found while `security-scan` blocked an unrelated docs-only PR #5134):**
+  with the admin toggle's timeline unknown, every PR touching any file was
+  being blocked on a required check that no PR diff can fix — added
+  `continue-on-error: true` to `ci.yml`'s `security-scan` job's "Upload
+  Trivy results to GitHub Security" step (`:975-988`) only, so this one
+  known, repo-wide, non-diff-caused failure stops blocking merges while
+  the admin action above is still pending. This restores that job's actual
+  gating behavior to what it was before this upload step started failing:
+  the filesystem Trivy scan feeding it has no `exit-code` set (unlike
+  `docker-image-scan`'s image scan, which does, at `:1071`, and is
+  unaffected by this — its own upload-sarif call still fails today, just
+  no longer the thing enforcing anything), so this upload was never the
+  thing gating `security-scan` pass/fail even when it worked. **Deeper
+  finding this surfaces, not fixed here:** with Code Scanning disabled,
+  the filesystem Trivy scan's findings currently reach no enforcement path
+  at all — a real security-posture gap, not just a CI-noise one, tracked
+  as its own open thread below rather than fixed unilaterally (adding
+  `exit-code: '1'` to a scan with an unknown-sized existing findings set
+  could immediately red-line `main`; needs a baseline/suppression pass
+  first, a bigger, separate decision). **Only the one site blocking this
+  session's own PR was fixed** — `security-gates.yml`'s G3/semgrep and
+  G6/container-scan, and `ci.yml`'s `docker-image-scan`, still fail on the
+  same root cause and would benefit from the identical
+  `continue-on-error: true` mitigation as a follow-up; not done here to
+  keep this fix scoped to what was actually blocking.
 - **Verification performed:** read the full `security-scan` and `G3 ·
   Semgrep` job logs for both original failures; re-read every enclosing
   `permissions:` block directly (not via a context-truncated grep this

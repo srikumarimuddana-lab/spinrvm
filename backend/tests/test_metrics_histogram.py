@@ -146,3 +146,17 @@ class TestWorkerPidLabel:
         assert f'le="10",worker_pid="{pid}"' in out
         assert f'test_pid_hist_ms_sum{{worker_pid="{pid}"}}' in out
         assert f'test_pid_hist_ms_count{{worker_pid="{pid}"}}' in out
+
+    def test_caller_supplied_worker_pid_label_is_not_duplicated(self):
+        """A caller-supplied `worker_pid` label must be replaced, not
+        duplicated -- two `worker_pid="..."` entries in one `{...}` block is
+        invalid Prometheus exposition format and risks a scrape-wide parse
+        failure rather than one bad series (flagged by review)."""
+        import os
+
+        metrics.inc("test_pid_collision_total", {"worker_pid": "bogus"})
+        out = metrics.render_prometheus()
+        line = next(line for line in out.splitlines() if line.startswith("test_pid_collision_total{"))
+        assert line.count("worker_pid=") == 1
+        assert f'worker_pid="{os.getpid()}"' in line
+        assert 'worker_pid="bogus"' not in line

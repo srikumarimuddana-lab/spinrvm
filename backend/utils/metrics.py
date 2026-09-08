@@ -152,7 +152,13 @@ def _escape_label_value(v: str) -> str:
 
 
 def _with_worker_pid(labels_tuple: Tuple[Tuple[str, str], ...], worker_pid: str) -> Tuple[Tuple[str, str], ...]:
-    return tuple(sorted(labels_tuple + (("worker_pid", worker_pid),)))
+    # Drop any caller-supplied "worker_pid" first: two entries with the same
+    # key would render as an invalid Prometheus line (duplicate label in one
+    # `{...}` block), risking a scrape-wide parse failure instead of one bad
+    # series. No current call site passes this key, but nothing stops one
+    # from doing so by accident later.
+    without_pid = tuple(kv for kv in labels_tuple if kv[0] != "worker_pid")
+    return tuple(sorted(without_pid + (("worker_pid", worker_pid),)))
 
 
 def render_prometheus() -> str:

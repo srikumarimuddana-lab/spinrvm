@@ -22418,8 +22418,40 @@ how much they de-risk a public launch._
 
 ### C82. Per-worker metrics counters flap under >1 Uvicorn worker (F6)
 
-- [ ] **Status:** open, scheduled with WS-3 (worker-tier topology), NOT
-  fixed in the 2026-09-08 hardening tranche. Per-process metrics design is
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  for the metrics-labeling half; the `UVICORN_WORKERS` consistency half was
+  attempted and then **reverted** after review (see below) —
+  `should_spawn_on_api()` loop-spawning topology (WS-3's other half) remains
+  a separate, untouched concern. `render_prometheus()` now attaches a
+  `worker_pid` label (`os.getpid()`, read live at render time, not cached
+  at import, plus a guard that strips any caller-supplied `worker_pid` key
+  first so it can never render as a duplicate label) to every
+  counter/gauge/histogram line via a new `_with_worker_pid()` helper,
+  reusing the same label name/reasoning already established in
+  `routes/admin/monitoring.py`'s fan-out stats. Docstring states the
+  aggregation contract: counters/histograms are additive (`sum by (...)`
+  across workers is correct); gauges are not (`max by (...)`, never
+  `sum by (...)`) — confirmed via grep that no existing query in
+  `metrics-agent/grafana/alert-rules.yaml` or `dashboard-panel.json`
+  currently sums a gauge, so this is a preventive contract for future
+  dashboard authors, not a fix to an existing wrong query.
+  **`UVICORN_WORKERS` default was NOT changed** — an initial attempt pinned
+  `${UVICORN_WORKERS:-4}` → `${UVICORN_WORKERS:-2}` in `backend/Dockerfile`
+  and `railway.json` to match `fly.toml`'s explicit setting, but
+  `spinr-observability-reviewer` caught that this assumed Railway shares
+  Fly's memory budget with no evidence — `docs/adr/006-railway-deployment.md`
+  documents `--workers 4` as a *deliberate*, resource-sized decision specific
+  to Railway's own topology (4 workers × background loops across its 2
+  replicas), not an arbitrary default. Reverted both files rather than ship
+  an unverified capacity assumption; **still open**: someone with access to
+  Railway's dashboard should confirm its actual current instance
+  plan/memory before any future attempt to change this default (note
+  ADR-006 predates the Fly-primary switch, ADR-007, and the loop count
+  growing from 7 to 41, so its own "4 workers × 7 loops" math is itself
+  stale — the right number today isn't necessarily either 2 or 4, it's
+  whatever Railway's current instance size actually supports). See
+  `docs/change-log/2026-09-08-c82-metrics-worker-pid-label.md`.
+- **Original plan:** Per-process metrics design is
   documented and cross-replica scraping is solved (ADR-010); the untracked
   gap is `fly.toml`'s `UVICORN_WORKERS="2"` sharing one port so each scrape
   hits a random worker. Plan: add a `worker_pid` label in
@@ -22475,31 +22507,92 @@ how much they de-risk a public launch._
 
 ### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)
 
-- [ ] **Status:** open, deliberately NOT fixed in the 2026-09-08 hardening
-  tranche (only the two `routes/webhooks.py` sites were — see this file's
-  now-closed F8 entry, folded into the change-log rather than its own
-  numbered item since it shipped same-day). Remaining bare
-  `stripe.*.retrieve/create/...(` call sites, none touched:
-  `services/stripe_kyc_sync.py:471`, `utils/payment_retry.py:465/491/558`,
-  `utils/reconciliation.py:303`, `utils/stripe_reconcile.py:157`,
-  `services/stripe_payout_sync_service.py:234`,
-  `services/stripe_mapping_import_service.py:967`,
-  `routes/admin/dispute_evidence_submission.py:143`,
-  `services/legacy_payout_correction_service.py:569`. Most of these run in
-  background loops (lower urgency than a request-path webhook handler) —
-  triage each for actual event-loop-blocking impact before wrapping in
-  `asyncio.to_thread` wholesale.
-- **Found during:** PR #5085's validation of PR #5079's F8 finding.
+- [ ] **Status:** open, triaged 2026-09-08 (not fixed yet — see corrected list
+  below; the two `routes/webhooks.py` sites were fixed same-day, see the
+  now-closed F8 entry). The original list of 9 call sites was not fully
+  accurate — 2 of the 9 turned out to already be off the event loop and 1 is
+  not reachable from any live code path at all. Re-triaged by reading each
+  site's enclosing function and its actual caller (not just grepping for the
+  bare Stripe call):
+  - **Already fixed, no action needed:**
+    `services/stripe_payout_sync_service.py:234`
+    (`stripe.Transfer.list(...).auto_paging_iter()` lives inside a nested
+    `def _list()` that `_list_transfers_for_account` already runs via
+    `await asyncio.to_thread(_list)`) and
+    `services/stripe_mapping_import_service.py:967`
+    (`_list_connected_accounts` is a plain `def`, and its only call site,
+    `build_plan` at this file's line 1033, already does
+    `asyncio.to_thread(_list_connected_accounts, stripe_secret)`). The
+    original F8-validation pass apparently found the bare call by grepping
+    for `stripe.*.retrieve/create/...(` without checking whether the
+    enclosing function was itself already thread-wrapped from its caller.
+  - **Not applicable — no live caller at all:**
+    `services/legacy_payout_correction_service.py:569`
+    (`fire_ready_transfers`). This module's own docstring says outright:
+    "not wired into any route, CLI entry point, or background loop — every
+    call is manual, and `fire_ready_transfers` ... has never been invoked
+    against production." Grepped the whole backend for a caller outside
+    `tests/` — none exists. There is no shared event loop for this to block;
+    wrapping it would be busywork with no effect, per this repo's
+    simplicity-first convention.
+  - **Genuinely still open, ranked by real severity (not just "background
+    loop = low urgency" — a synchronous Stripe call blocks the *entire*
+    process's single event loop for every concurrent request/loop while it
+    runs, regardless of which loop or route triggered it; frequency and
+    per-call duration are what actually differ):**
+    1. `utils/payment_retry.py:465` (confirm), `:491` (confirm-retry), `:558`
+       (capture) — `retry_failed_payments()`, the `payment_retry (5min)` loop
+       (`core/lifespan.py:304`). Highest real-world exposure: runs every 5
+       minutes and can issue up to 3 blocking Stripe calls per retried ride
+       in that tick.
+    2. `utils/stripe_reconcile.py:157` — `_run_reconciliation_tick()`, the
+       `stripe_reconcile (24h)` loop. Only runs daily, but
+       `.auto_paging_iter()` can make many sequential blocking HTTP calls in
+       one tick (one per page of that day's PaymentIntents) — worst per-run
+       blocking duration of the three loop sites, even though least frequent.
+    3. `utils/reconciliation.py:303` — `_sum_stripe_intents()`, called from a
+       separate daily reconciliation tick (`utils/reconciliation.py`, not to
+       be confused with `stripe_reconcile.py` above — this repo has two
+       distinct daily Stripe-reconciliation subsystems). Same
+       pagination-loop risk as #2.
+    4. `services/stripe_kyc_sync.py:471` —
+       `get_legal_name_and_address_from_stripe()`. Caller frequency not yet
+       traced in this pass (admin-triggered KYC sync vs. its own loop) —
+       whoever picks this up should confirm before assuming urgency.
+    5. `routes/admin/dispute_evidence_submission.py:143` — a request-path
+       admin route handler (`admin_submit_dispute_evidence`), not a
+       background loop. Lower frequency (manual admin action) but blocks
+       concurrent traffic for every other user during the call, same as any
+       other bare-sync-in-request-handler case.
+  - **Recommended fix, once picked up:** same `asyncio.to_thread` pattern
+    already applied to `routes/webhooks.py` (F8) and already present at the
+    two "already fixed" sites above — wrap the specific blocking call (or,
+    for the two `auto_paging_iter()` loops, the whole paging function like
+    `stripe_payout_sync_service.py`'s `_list()` pattern does), not the whole
+    enclosing coroutine. Each site needs its own test coverage and, since
+    these are Stripe-adjacent, a `spinr-money-auditor` pass before merge per
+    CLAUDE.md.
+- **Found during:** PR #5085's validation of PR #5079's F8 finding;
+  re-triaged 2026-09-08 while picking this item up as a hardening-plan
+  follow-up.
 
 ### C87. CI scanner-download flakiness (admin-bundle secret scan, trufflehog install)
 
-- [ ] **Status:** open, deliberately skipped in the 2026-09-08 hardening
-  tranche — explicitly marked optional in the validating plan. Observed:
-  `ci.yml`'s `security-scan` failed once at "Install trufflehog v3" (a
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Implemented the proposed fix below in both call sites plus, self-found
+  while fixing the first, the second Trivy→SARIF upload pair in
+  `docker-image-scan`: `curl -fsSL --retry 5 --retry-delay 3
+  --retry-all-errors` download-to-file, `tar -tzf` verify before extracting,
+  and `hashFiles(...) != ''` guards on both SARIF-upload steps so a failed
+  scan produces one clear failure instead of a second, misleading one.
+  `spinr-cicd-infra-reviewer`: SAFE TO MERGE, no blockers/warnings. See
+  `docs/change-log/2026-09-08-c87-ci-scanner-download-retry.md`.
+- **Original observation:** `ci.yml`'s
+  `security-scan` failed once at "Install trufflehog v3" (a
   non-gzip download) and `security-gates.yml`'s `bundle-secrets` (G5b)
   failed once on an HTTP 504 the same day; both passed on the next run
   without any code change, consistent with transient CDN/network flakes
-  rather than a real defect. Proposed fix if this recurs:
+  rather than a real defect. Proposed fix (now implemented):
   `curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors`, verify with
   `tar -tzf` before extraction, and guard the Trivy SARIF upload with
   `if: always() && hashFiles('trivy-results.sarif') != ''`.

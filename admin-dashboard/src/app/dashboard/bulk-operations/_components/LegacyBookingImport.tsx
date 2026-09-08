@@ -17,7 +17,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Info, Loader2, Upload } from "lucide-react";
 import {
     adminCommitBookingImport,
     adminValidateBookingImport,
@@ -127,6 +127,32 @@ function Stat({
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below.
+function buildSummaryText(report: BookingImportReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["TOTAL rides to import", c.total_rides_planned],
+        ["— completed", c.rides_planned],
+        ["— cancelled/failed", c.cancelled_failed_rides_planned],
+        ["Offset payouts", c.payouts_planned],
+        ["Unmatched riders", c.unmatched_riders + c.cancelled_failed_unmatched_riders],
+        ["Unmatched drivers", c.unmatched_drivers + c.cancelled_failed_unmatched_drivers],
+        ["Rider paid (total)", c.sum_rider_paid],
+        ["Driver earnings", c.sum_driver_total],
+        ["Offset total", c.sum_offset_payouts],
+        ["Already imported", c.skipped_already_imported + c.cancelled_failed_skipped_already_imported],
+        ["Warnings", report.warnings.length],
+        ["Errors", report.errors.length],
+    ];
+    const lines = [
+        `Legacy Booking Import — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export function LegacyBookingImport() {
@@ -425,6 +451,20 @@ export function LegacyBookingImport() {
                             )}{" "}
                             Batch <span className="font-mono">{report.batch}</span>.
                         </p>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
+                        </div>
 
                         {report.errors.length > 0 ? (
                             <div className="space-y-2">

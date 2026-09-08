@@ -6896,6 +6896,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   add the two secrets) and #2 (run the workflow once to prove the Android
   lane completes) are the only two still needed to get real device
   coverage live; both still need a repo/org admin, same as before.
+- **2026-09-08, answered directly by the product owner — item #1 is now
+  resolved, and it's a deliberate cost decision, not an oversight.**
+  Checked the repo's Settings → Secrets page directly (screenshot):
+  `EXPO_TOKEN` **is** present. `MAESTRO_CLOUD_API_KEY` is **not** —
+  confirmed by the product owner as intentional: "I have not set it
+  because it might cost me." This is not "unconfirmed" any more; treat it
+  as a standing decision not to pay for Maestro Cloud's hosted device
+  farm, not a to-do to chase. Consequence: `maestro-e2e.yml` as currently
+  designed (EAS-builds an APK, then uploads it to Maestro Cloud to run
+  the flows there) cannot proceed past its Maestro Cloud login step and
+  should not be dispatched expecting a different outcome — action item #2
+  (run it once to prove the Android lane completes) is now moot for this
+  specific implementation, not just still-blocked.
+  **Real alternative worth scoping, not yet built:** Maestro itself can
+  run the same `.maestro/{driver,rider}` flows locally against a free
+  Android emulator inside the GitHub Actions runner (`maestro test`
+  targeting an emulator started via `reactivecircus/android-emulator-runner`
+  or equivalent) — this gets the same real-native-build E2E coverage
+  `maestro-e2e.yml`'s own header comment describes wanting (catching a
+  native-module-only bug like #3174) without any Maestro Cloud billing at
+  all, only ordinary GitHub-hosted-runner minutes. Still needs
+  `EXPO_TOKEN` (already present) to build the APK via EAS, but not
+  `MAESTRO_CLOUD_API_KEY`. Not scoped or built as of this update — a
+  candidate follow-up if zero real-device coverage remains unacceptable
+  long-term, but the product owner has not asked for it and it should not
+  be built speculatively.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —

@@ -2,6 +2,8 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+Codex-facing view; `CLAUDE.md` is canonical — where the two disagree, `CLAUDE.md` wins. Both are hand-maintained separately and can drift (see `docs/change-log/` entries around 2026-09-08 for the last drift-correction pass); if something here looks stale, check `CLAUDE.md` first.
+
 ## Working Style
 
 ### Task decomposition (mandatory)
@@ -24,24 +26,15 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Context Imports
 
-Sprint-scoped and domain-deep context is loaded on demand, not baked into this file. Reference these when the task enters the relevant area:
+Sprint-scoped and domain-deep context is loaded on demand, not baked into this file. Reference these when the task enters the relevant area. **Correction (2026-09-08):** these previously pointed at `.Codex/context/*.md`, a path that has never existed in this repo (wrong case, and no `context/` subdirectory under `.codex/` at all) — the files below are the real, shared location `CLAUDE.md` itself uses:
 
-- `@.Codex/context/sprint-current.md` — active sprint goal, in-flight tickets, blockers
-- `@.Codex/context/domain-dispatch.md` — dispatch algorithm, driver matching, offer timeout
-- `@.Codex/context/domain-payments.md` — fare calc, surge, Stripe flows, corporate billing
-- `@.Codex/context/domain-safety.md` — SOS, insurance periods, emergency flows
-- `@.Codex/context/regulatory-sk.md` — Saskatchewan Transportation Act obligations
+- `@.claude/context/sprint-current.md` — active sprint goal, in-flight tickets, blockers
+- `@.claude/context/domain-dispatch.md` — dispatch algorithm, driver matching, offer timeout
+- `@.claude/context/domain-payments.md` — fare calc, surge, Stripe flows, corporate billing
+- `@.claude/context/domain-safety.md` — SOS, insurance periods, emergency flows
+- `@.claude/context/regulatory-sk.md` — Saskatchewan Transportation Act obligations
 
-## graphify
-
-This project has a graphify knowledge graph at graphify-out/.
-
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
-- The package is published on PyPI as `graphifyy` (double-y), but imports as `graphify`. Install with `pip install graphifyy` if the rebuild command fails with `ModuleNotFoundError`.
-- `graphify-out/cache/` is the per-file extraction cache and is gitignored (regenerated on rebuild). The tracked outputs are `graph.json`, `GRAPH_REPORT.md`, and `manifest.json`.
+**(2026-09-08) Removed: a "## graphify" section previously here.** It described a knowledge graph at `graphify-out/` — that directory has never existed in this repo, and the section instructed reading/rebuilding a graph that was never real. Removed rather than fixed in place; if a graphify integration is added later, document it from what's actually on disk.
 
 ## Project Overview
 
@@ -108,7 +101,7 @@ python -m backend.scripts.run_migrations   # ordered SQL runner over backend/mig
 
 ```
 Rider App ──┐
-Driver App ─┤── REST + WebSocket ──► FastAPI (Railway)
+Driver App ─┤── REST + WebSocket ──► FastAPI (Fly.io primary / Railway standby)
 Admin ───────┘                            │
                              Supabase(Postgres+RLS)  Redis  Stripe
                              Firebase  Twilio  FCM
@@ -120,7 +113,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 16 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, stuck-ride sweeper, push retry, loop watchdog)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 41 background asyncio loops (`_WATCHDOG_LOOP_NAMES` in `lifespan.py` is the live registry — do not hard-code a count elsewhere; among them: subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, stuck-ride sweeper, push retry, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active
@@ -144,7 +137,7 @@ This is intentional (`python -m backend.server` vs top-level). Do not simplify a
 
 **Ride state machine** — always guard transitions with `_require_ride_in_state()`. `cancelled` is only valid before `in_progress`. State changes must emit a WebSocket event.
 
-Valid states and transitions (source: `backend/routes/rides.py`):
+Valid states and transitions (source: `backend/routes/rides/` package — see `lifecycle.py`, `booking.py`, `matching.py`):
 
 ```
                 ┌─► cancelled (rider/driver/system, pre-trip only)
@@ -232,7 +225,7 @@ Rules:
 
 Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/run_migrations.py` (a second runner, `backend/scripts/migrate.py`, targeted an older schema that was never actually applied to production — deleted; see `CLAUDE.md`'s Database Migrations section and `ACTION_ITEMS.md` A39).
 
-Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest applied is `101_users_add_is_rider.sql`; **next free slot is `102`**). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (Pre-existing duplicate prefixes at 08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58, 91, 92, 96 are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.)
+Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number — check the current highest with `ls backend/migrations/*.sql | xargs -n1 basename | sort -V | tail -1` before picking the next one (a hard-coded number here will drift, and has: this line previously cited "101/102"; the real highest is well past 400). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (~60 numeric prefixes are shared by 2+ files repo-wide from history, handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them, see `CLAUDE.md`'s Database & Migration Conventions section for the current detail.)
 
 Migration rules:
 - **Append-only**: never edit a merged migration. Schema changes go in a new file.
@@ -291,6 +284,7 @@ Forbidden: in-process locks, filesystem flags, "this pod is primary" environment
 
 Logging:
 - Python: `logger = logging.getLogger(__name__)` per module. Use structured context via `extra={...}`.
+- **~50 backend modules use loguru instead of stdlib `logging`** (`from loguru import logger`, directly or via a package-local re-export). loguru has no `extra=` parameter and no `exc_info=` parameter — both are silently swallowed as `str.format` keywords with no error, so structured context or a traceback silently never reaches the log line. On a loguru logger use `logger.bind(**kwargs).<level>(msg)` for context and `logger.opt(exception=True).<level>(msg)` for a traceback; use `{}`-style placeholders, not `%s` (loguru doesn't support `%s`). `backend/tests/test_loguru_call_conventions.py` statically scans every loguru module for these misuses. Check which style a file already uses (`import logging` + `logging.getLogger` vs. `from loguru import logger`) before adding a log call to it.
 - Log levels: `error` for actionable failures, `warning` for recoverable anomalies, `info` for state transitions, `debug` gated behind env flag.
 - Never `print()` in production code. Never `logger.warning(...)` and continue on a DB/auth/payment error.
 
@@ -332,7 +326,7 @@ Test tiers:
 
 Coverage minimums (per domain):
 - `routes/payments.py`, `services/fare_service.py`, `utils/crypto.py`: ≥ 90%
-- `routes/rides.py`, `services/dispatch_service.py`: ≥ 80%
+- `routes/rides/`, `services/dispatch_service.py`: ≥ 80%
 - Admin routes, utilities: ≥ 70%
 
 What must have a test:
@@ -364,7 +358,7 @@ Anti-patterns that reliably breach SLAs:
 
 ## Saskatchewan Regulatory
 
-Spinr operates under Saskatchewan Government Insurance (SGI) and the province's ride-share regulations. The detailed checklist lives in `@.Codex/context/regulatory-sk.md`; the non-negotiables appear below.
+Spinr operates under Saskatchewan Government Insurance (SGI) and the province's ride-share regulations. The detailed checklist lives in `@.claude/context/regulatory-sk.md`; the non-negotiables appear below.
 
 Driver eligibility (enforced at onboarding + every `go_online`):
 - Valid Class 5 driver's license (standard) — Class 1-4 drivers need separate approval
@@ -471,7 +465,7 @@ Production health is measured against these targets. Code that risks breaching t
 
 ## Deployment
 
-- **Backend**: Railway (auto-deploy from `main`; Render fallback)
+- **Backend**: deployed to **both** Railway (Canada) and Fly.io (`yyz`, Toronto) from `main` in parallel *by design*. Fly.io is the intended primary; Railway is the warm standby — see `CLAUDE.md`'s Deployment section for the current failover status.
 - **Frontend/Admin**: Vercel
 - **Mobile builds**: Expo EAS — only triggered when commit message contains `[build]`
 
@@ -498,7 +492,7 @@ Python SDK for multi-agent development automation. **Not part of the production 
 
 ## Codex-Adjacent Directories
 
-These directories exist alongside `.Codex/` but serve different tooling:
+These directories exist alongside `.codex/` but serve different tooling:
 
 | Directory | Status | Purpose |
 |-----------|--------|---------|

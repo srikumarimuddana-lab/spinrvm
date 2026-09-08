@@ -26,9 +26,11 @@ except ImportError:
 try:
     from .. import db_supabase
     from ..settings_loader import get_app_settings
+    from ..utils.background import log_task_exception, spawn
 except ImportError:
     import db_supabase
     from settings_loader import get_app_settings
+    from utils.background import log_task_exception, spawn
 
 logger = logging.getLogger(__name__)
 
@@ -178,8 +180,13 @@ def _schedule_persist(pairs: list, model: str) -> None:
     async def _run() -> None:
         await asyncio.gather(*(_persist_embedding(r, v, model) for r, v in pairs))
 
-    task = asyncio.create_task(_run())
-    task.add_done_callback(lambda t: t.exception())  # swallow, avoid warnings
+    # F7: spawn() also keeps a strong reference until the task completes (a
+    # bare asyncio.create_task's return value going out of scope here risked
+    # GC dropping the write mid-flight) and clears the request deadline,
+    # appropriate for a persist that outlives the tool call's own budget.
+    task = spawn(_run())
+    if task is not None:
+        task.add_done_callback(log_task_exception)
 
 
 def _merge_results(primary: list, secondary: list) -> list:

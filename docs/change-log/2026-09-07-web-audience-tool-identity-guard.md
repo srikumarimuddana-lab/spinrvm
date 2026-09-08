@@ -44,6 +44,25 @@ Added a companion registration-time invariant in `register()`: a tool cannot be 
 |---|---|---|
 | `backend/ai/tools.py` | `_execute_tool_inner`'s identity guard now exempts `audience == "web"`; `register()` gained a registration-time check rejecting a web-audience tool with `owned_id_args` | Fix the guard to match the "web" audience's documented anonymous-by-design contract, and prevent a future silent regression of the same shape |
 
+### Addendum (2026-09-07, follow-up on `claude/pr-5085-5079-hardening-5a2aj7`): audit-insert sentinel
+
+This original fix let `search_faqs`/`get_company_info` actually run for the web audience, but the
+`_schedule_tool_audit` record it feeds still set `"user_id": (user or {}).get("id")` — `None` for
+every anonymous call. `ai_tool_audit.user_id` is `TEXT NOT NULL` (migration 217:33), so every
+newly-unblocked web tool call was insert-failing its own audit row (caught silently by
+`_schedule_tool_audit`'s `try/except`, logged as `"ai tool-audit write failed"`, never raised).
+Net effect: the fix worked for the visitor, but Layer-7 governance had zero audit rows for the
+one surface (anonymous, internet-facing) that most needs one. No test caught it because every
+existing audit test patches `_schedule_tool_audit` itself rather than exercising the real insert.
+
+Fix: `"user_id": (user or {}).get("id") or ("web:anonymous" if audience == "web" else None)`.
+Rider/driver calls are unaffected (they always have a real id). Added
+`TestToolAudit::test_web_audience_audit_uses_anonymous_sentinel` in
+`tests/test_ai_tool_scoping.py`, which patches `tools._schedule_tool_audit` and asserts the
+sentinel — same pattern as the class's other audit tests, still doesn't hit the real DB.
+**Not verified**: no live Supabase access from this session, so the NOT-NULL insert failure
+itself was reasoned from the migration's schema, not reproduced against a real table.
+
 ## 7. Before / after
 
 ```python

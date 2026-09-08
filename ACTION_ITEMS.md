@@ -17933,22 +17933,26 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   `ai:quote:{conversation_id}` on "new conversation" or
   `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
 
-- [ ] **AI18. Anonymous web assistant's tool path is dead in production** —
+- [x] **AI18. Anonymous web assistant's tool path is dead in production** —
   found during AI16's review round, pre-existing and unrelated to that fix.
-  `backend/ai/public_assistant.py` deliberately builds its synthetic
-  `tool_user` with NO `id` key ("so any handler that reached for one would
-  raise loudly"), but `backend/ai/tools.py::_execute_tool_inner` fails
-  closed on a missing `user["id"]` *before* any handler runs
-  (`logger.error("ai tool blocked: no authenticated user id")` →
-  `{"error": "not authorized"}`). Every anonymous `search_faqs` /
-  `get_company_info` call therefore returns "not authorized" and emits an
-  error log; the model answers from the prompt alone. Not caught by
-  `tests/test_ai_public_assistant.py`, which mocks `execute_tool`. Fix
-  needs its own design — an explicit anonymous-scope allow-list on the
-  `ToolSpec` (e.g. `allow_anonymous=True` for the two web tools, honoured
-  only for audience `web`), never a blanket relaxation of the fail-closed
-  identity check — plus an integration test through the real
-  `execute_tool`. Until then the public site's assistant is prompt-only.
+  Fixed 2026-09-07 in PR #5082 (commit `e5bce05`): `_execute_tool_inner`'s
+  identity guard now exempts `audience == "web"` specifically (rider/driver
+  calls still fail closed unchanged), and `register()` gained a
+  registration-time check rejecting a web-audience tool that also declares
+  `owned_id_args`. Fixed the 7 `TestSearchFaqsPublicWeb` failures that had
+  been red on `main` since this finding was written. See
+  `docs/change-log/2026-09-07-web-audience-tool-identity-guard.md`.
+  **Follow-up (same day, `claude/pr-5085-5079-hardening-5a2aj7`):** the
+  landed fix let anonymous tool calls run but still fed `_schedule_tool_audit`
+  a `None` `user_id` for them — `ai_tool_audit.user_id` is `TEXT NOT NULL`
+  (migration 217), so every newly-unblocked web call was silently failing
+  its own audit-row insert. Patched to substitute a `"web:anonymous"`
+  sentinel when `audience == "web"`; see the change-log addendum above.
+  Independently validated during PR #5079's three-lens review (PR #5085,
+  `docs/audit/2026-09-07-pr-5079-validation-and-hardening-plan.md`), which
+  had flagged both the original bug and, in its not-yet-implemented PR-1
+  design, this exact audit-sentinel gap — confirmed still present in what
+  actually landed and fixed here.
 
 - [x] **D1. PostGIS surge query** — stale, already substantially done by
   another session before this pass. `utils/surge_engine.py` already: (1)
@@ -22271,6 +22275,235 @@ how much they de-risk a public launch._
   check-run timestamps, but not *why* the platform allowed it (config gap
   vs. bypass), which needs human settings-page access this session
   doesn't have.
+
+### C74. `security-gates.yml`/`ci-guardrails.yml` summary jobs never failed regardless of gate results
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Both jobs used `if: always()` with no check of constituent job results, so
+  the "Security gates summary"/"Post guard rail summary" required checks
+  always reported success. Fixed: each now has a final step,
+  `if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')`
+  → `exit 1`. `skipped` (path-filtered) and job-level `continue-on-error`
+  gates (gitleaks, coverage-regression-gate, etc.) are unaffected —
+  confirmed via `actionlint` and by reasoning through GitHub's documented
+  `needs.*.result`/`continue-on-error` semantics (`spinr-cicd-infra-reviewer`
+  pass). Once this lands, add these two check names to A43/C73's
+  required-checks list.
+- **Found during:** PR #5085's validation of PR #5079's F4b finding.
+
+### C75. Nightly duplicate-migration-prefix sweep red every night since 2026-09-02
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  `backend/migrations/.known_duplicate_prefixes.json` didn't list the "376"
+  pair (`376_corporate_wallet_adjust_idempotency.sql`,
+  `376_service_area_tax_history.sql`) even though both are already applied
+  in production and accepted as a historical duplicate. Added the entry;
+  verified locally by re-running the workflow's own embedded Python script
+  against the current migrations directory (`PASS: no new duplicate
+  migration prefixes`). A human with Actions-dispatch access should
+  `workflow_dispatch` the nightly sweep once this merges rather than
+  waiting for the next 09:17 UTC run.
+- **Found during:** PR #5085's validation of PR #5079's maintainability finding.
+
+### C76. `maestro-e2e.yml` fails every run before any job starts — invalid `matrix` reference in a job-level `if`
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  `maestro-android`'s job-level `if:` referenced `matrix.app.dir` — the
+  `matrix` context is only available in `jobs.<id>.strategy`/`jobs.<id>.steps`,
+  never `jobs.<id>.if` (confirmed with `actionlint`, which errors on the
+  original file and passes clean after the fix). Every push produced a
+  zero-duration failed run — 3,206 to date, not the missing-secrets issue
+  B25 tracks. Fixed by splitting into a `plan` job (computes the app matrix
+  as JSON from the `apps` input, job-level `if:` uses only `github`
+  context) and `maestro-android` consuming it via
+  `strategy.matrix.app: ${{ fromJSON(needs.plan.outputs.matrix) }}`.
+  Cross-ref B25: its "wired but never fires" premise hid this second,
+  in-repo cause — B25 (missing `EXPO_TOKEN`/Maestro Cloud secrets) is now
+  the only remaining blocker; a manual dispatch should reach "Setup EAS"
+  and fail there, which is the expected next state, not a regression.
+- **Found during:** PR #5085's validation of PR #5079's testing finding.
+
+### C77. `charge.refunded` refund accounting: no compare-and-swap, no ledger dedupe, no replay recovery
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F1). Added a compare-and-swap on `rides.refund_amount`, a `dedupe_key`
+  on the ledger write (same mechanism the dispute path already used), and
+  a replay-recovery branch that re-books a lost ledger row after a
+  crash/failure between the two writes — keyed off the ride's own current
+  recorded cumulative rather than the triggering event's own asserted
+  amount (an earlier design gated on exact equality with the triggering
+  event's own value, which could permanently lose a superseded event's
+  row once later events advanced the ride past it). A related gap this
+  fix surfaced — `ledger_service`'s duplicate-key handling treated any
+  unique-violation as unconditional success, so the recovery path's
+  dedupe key colliding with a still-in-flight event's own key could
+  silently over/under-book — was closed in the same commit by making
+  duplicate-key writes verify `delta_cents` content before declaring
+  success. Developed over three `spinr-money-auditor` review rounds; see
+  `docs/change-log/2026-09-08-charge-refunded-cas-ledger-dedupe.md` for
+  the full trace.
+- **Residual, deferred to WS-6/WS-9:** the two-write (ride update + ledger
+  insert) design stays in the application layer; a single-statement RPC
+  (matching the pattern of `288_settle_ride_card_payment.sql`) would
+  remove the CAS/race surface entirely but is a larger change, out of
+  scope for this fix.
+- **Mandatory before deploy, not performable from a sandboxed session:** a
+  live read-only round-trip confirming the CAS filter's exact-value match
+  works against the real stored representation of `rides.refund_amount`
+  — see the Change Impact Log's "What was NOT verified" section for the
+  `$lte` fallback if it doesn't round-trip cleanly.
+- **Found during:** PR #5085's validation of PR #5079's F1 finding.
+
+### C78. `SpinrException.details` leaked internal diagnostics (exception class name, unredacted DB error text) to API responses
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F2). `spinr_exception_handler` now drops `exception_type` and redacts
+  `original` (via the existing `redact_error_detail`) for every status
+  code; every other `details` key (`client_secret`, `unpaid_ride_id`,
+  `code`, `next_action`) passes through unchanged — confirmed as a live
+  client contract via `shared/api/client.ts` before deciding what to keep.
+  `dependencies/__init__.py`'s two raw `DatabaseError(details={"original":
+  str(e)})` raise sites now redact before the exception object is even
+  built (defense in depth for the loguru→Sentry bridge).
+- **Confirmed-not-fixed, out of this entry's scope:** `redact_error_detail`
+  has no name or lat/lng pattern (a Postgres error embedding a full name or
+  coordinate pair would survive), and the actual PII source at
+  `repositories/_base.py:561` is itself still unredacted for server-side
+  logging — several `logger.error` call sites elsewhere still log
+  `e.details["original"]` verbatim. Deliberate per CLAUDE.md's
+  "server-side logs keep raw text" design for on-call diagnostics, but it
+  undercuts full Sentry-safety — worth a follow-up to redact at the
+  `_base.py:561` source itself rather than only at response-serialization
+  time. One dead-code bypass also found: `routes/main.py` spreads raw
+  `.details` into its own response, but that router is never mounted.
+- **Found during:** PR #5085's validation of PR #5079's F2 finding;
+  `spinr-security-auditor` review pass.
+
+### C79. Redis connection log line could leak credentials
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F5). `redis_client.py`'s connected-log logged `url[:30]` directly — a
+  `redis://user:pass@host` URL carries credentials before the host, so
+  truncation isn't redaction. Now logs only parsed, credential-free
+  endpoint metadata (scheme/host/port), matching `utils/redis_diag.py`'s
+  existing masking helper.
+- **Found during:** PR #5085's validation of PR #5079's F5 finding.
+
+### C80. Fire-and-forget task done-callbacks called `.exception()` on cancelled tasks
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F7). Three sites (`ai/tools.py`'s tool-audit write, `ai/threat.py`'s
+  security-event write, `ai/tools_support.py`'s embedding persist) used
+  `task.add_done_callback(lambda t: t.exception())` — calling `.exception()`
+  on a cancelled task raises `CancelledError` from inside the callback
+  itself, logged by asyncio's default handler as a noisy, context-free
+  "Exception in callback". Added
+  `utils/background.log_task_exception(task)` (checks `cancelled()` first)
+  and switched all three sites to `utils.background.spawn()` (also fixes
+  the GC hazard of a bare `asyncio.create_task()` whose return value goes
+  out of scope unreferenced).
+- **Found during:** PR #5085's validation of PR #5079's F7 finding.
+
+### C81. Admin auth wrote `last_activity_at` on every single request
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F12). `_verify_admin_payload` ran an unconditional `update_one` write on
+  every authenticated admin request purely to serve a 30-minute idle
+  check. Throttled to skip the write when the existing timestamp is under
+  60s old; NULL/malformed timestamps still always write (unchanged). Idle
+  detection can now lag reality by up to 60s (disclosed, not
+  attacker-exploitable per `spinr-security-auditor` review — 3.3% of the
+  30-minute window).
+- **Found during:** PR #5085's validation of PR #5079's F12 finding.
+
+### C82. Per-worker metrics counters flap under >1 Uvicorn worker (F6)
+
+- [ ] **Status:** open, scheduled with WS-3 (worker-tier topology), NOT
+  fixed in the 2026-09-08 hardening tranche. Per-process metrics design is
+  documented and cross-replica scraping is solved (ADR-010); the untracked
+  gap is `fly.toml`'s `UVICORN_WORKERS="2"` sharing one port so each scrape
+  hits a random worker. Plan: add a `worker_pid` label in
+  `utils/metrics.render_prometheus`; counters/histograms already use
+  `sum()` in ADR-010 §3 and the Grafana alert rules, but **gauges**
+  (`set_gauge`, e.g. `spinr_redis_used_memory_bytes`) must move to
+  `max by()` first. Also pin `UVICORN_WORKERS` consistently across
+  `railway.json`/`Dockerfile` (currently default 4, ≠ Fly's 2).
+- **Found during:** PR #5085's validation of PR #5079's F6 finding.
+
+### C83. `fly.toml` comments cited stale background-loop counts ("16"/"18")
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  (F13). Actual count is 41 (`_WATCHDOG_LOOP_NAMES` in
+  `backend/core/lifespan.py` is the live registry). No per-worker gating
+  needed — every loop already holds its own Redis leader lock; comment-only
+  fix, `should_spawn_on_api()` topology work stays with WS-3.
+- **Found during:** PR #5085's validation of PR #5079's F13 finding.
+
+### C84. `AGENTS.md` drift from `CLAUDE.md`/reality (5 contradictions)
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Fixed: deploy topology (said Railway-only; is Fly.io primary/Railway
+  standby), background-loop count (said 16; is 41), `routes/rides.py`
+  (is now the `routes/rides/` package), hard-coded migration number
+  ("101/102"; real highest is past 400 and drifts — replaced with the
+  `ls | sort -V | tail -1` lookup command), missing loguru logging-
+  convention rule, `.Codex/` → `.codex/` casing (the referenced
+  `.Codex/context/*.md` paths never existed under either casing — repointed
+  at the real, shared `.claude/context/*.md` files `CLAUDE.md` itself
+  uses), and a stale "## graphify" section describing a `graphify-out/`
+  knowledge graph that has never existed in this repo (removed). Added a
+  two-line header: "Codex-facing view; `CLAUDE.md` is canonical — where
+  they disagree, `CLAUDE.md` wins." The PR #5079 review's `migrate.py`
+  sub-claim was checked and found wrong — `AGENTS.md`'s existing line
+  about it was already correct.
+- **Found during:** PR #5085's validation of PR #5079's maintainability
+  finding (documentation drift).
+
+### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed
+
+- [x] **Status:** partially closed 2026-09-08 on
+  `claude/pr-5085-5079-hardening-5a2aj7` — 8 `docs/change-log/2026-09-05-*.md`
+  files cite this document by section number (§1.6–§1.11) and it does not
+  exist anywhere in `docs/audit/` or in git history. Added a one-line note
+  under each citation pointing here instead of recovering the document
+  (the finding text each log describes is reproduced in full in that log's
+  own §1, so nothing depends on the missing file to be understood).
+  **Still open:** recovering the actual document from its author's machine
+  (if it still exists) would let readers see the original's other
+  findings in context — human action, not something this session can do.
+- **Found during:** PR #5085's validation of PR #5079's finding.
+
+### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)
+
+- [ ] **Status:** open, deliberately NOT fixed in the 2026-09-08 hardening
+  tranche (only the two `routes/webhooks.py` sites were — see this file's
+  now-closed F8 entry, folded into the change-log rather than its own
+  numbered item since it shipped same-day). Remaining bare
+  `stripe.*.retrieve/create/...(` call sites, none touched:
+  `services/stripe_kyc_sync.py:471`, `utils/payment_retry.py:465/491/558`,
+  `utils/reconciliation.py:303`, `utils/stripe_reconcile.py:157`,
+  `services/stripe_payout_sync_service.py:234`,
+  `services/stripe_mapping_import_service.py:967`,
+  `routes/admin/dispute_evidence_submission.py:143`,
+  `services/legacy_payout_correction_service.py:569`. Most of these run in
+  background loops (lower urgency than a request-path webhook handler) —
+  triage each for actual event-loop-blocking impact before wrapping in
+  `asyncio.to_thread` wholesale.
+- **Found during:** PR #5085's validation of PR #5079's F8 finding.
+
+### C87. CI scanner-download flakiness (admin-bundle secret scan, trufflehog install)
+
+- [ ] **Status:** open, deliberately skipped in the 2026-09-08 hardening
+  tranche — explicitly marked optional in the validating plan. Observed:
+  `ci.yml`'s `security-scan` failed once at "Install trufflehog v3" (a
+  non-gzip download) and `security-gates.yml`'s `bundle-secrets` (G5b)
+  failed once on an HTTP 504 the same day; both passed on the next run
+  without any code change, consistent with transient CDN/network flakes
+  rather than a real defect. Proposed fix if this recurs:
+  `curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors`, verify with
+  `tar -tzf` before extraction, and guard the Trivy SARIF upload with
+  `if: always() && hashFiles('trivy-results.sarif') != ''`.
+- **Found during:** PR #5085's validation of PR #5079's testing finding.
 
 ## Recently completed (do not redo)
 

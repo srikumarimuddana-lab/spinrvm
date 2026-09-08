@@ -287,12 +287,22 @@ class TestStripeWebhookChargeRefunded:
         update_mock = AsyncMock()
         record_refund_mock = AsyncMock()
 
+        # F1 replay recovery reads financial_events to check whether the $10
+        # already recorded on the ride has a matching ledger row. This IS that
+        # case (a genuinely already-fully-booked duplicate, not a lost-ledger-
+        # row gap) — the ledger already has -1000 cents, so recovery must find
+        # nothing missing and fall through to the stale/skip path untouched.
+        async def _get_rows(table, *args, **kwargs):
+            if table == "financial_events":
+                return [{"delta_cents": -1000}]
+            return [ride]
+
         with (
             patch("backend.routes.webhooks.get_app_settings", _settings_fn()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()) as mark_mock,
-            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
             patch("backend.services.payment_service.record_refund_event", record_refund_mock),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),

@@ -169,6 +169,40 @@ async def test_no_instruction_omits_guidance_block(monkeypatch):
     assert "support agent handling this ticket gave you specific guidance" not in user_msg
 
 
+async def test_agent_instruction_is_pii_scrubbed(monkeypatch):
+    """F06 (2026-09-08 AI security assessment).
+
+    The instruction field used to be appended verbatim, on the reasoning that
+    staff input is "first-party — not customer PII". That confuses the AUTHOR
+    of the text with its SUBJECT: this boundary protects egress to a
+    third-party LLM provider, and a customer's phone/email pasted into the
+    guidance is the customer's PII reaching that provider regardless of who
+    typed it — while the identical string in the ticket body one line earlier
+    was scrubbed.
+    """
+    fake = _FakeAdapter()
+
+    async def _get_adapter():
+        return fake
+
+    monkeypatch.setattr(sa, "get_adapter", _get_adapter)
+    await sa.suggest_ticket_reply(
+        ticket={"subject": "Refund", "description": "please help"},
+        instruction="Call them back on 306-555-1234 or email jane.doe@example.ca about card 4111 1111 1111 1111.",
+        settings={"ai_assistant_enabled": True},
+    )
+    user_msg = fake.captured["messages"][0]["content"]
+
+    assert "306-555-1234" not in user_msg
+    assert "jane.doe@example.ca" not in user_msg
+    assert "4111" not in user_msg
+    assert "[PHONE]" in user_msg and "[EMAIL]" in user_msg and "[CARD]" in user_msg
+    # The guidance itself must still reach the model — scrubbing identifiers,
+    # not dropping the agent's steer.
+    assert "support agent handling this ticket gave you specific guidance" in user_msg
+    assert "Call them back on" in user_msg
+
+
 async def test_misconfigured_adapter_raises(monkeypatch):
     from ai.providers.base import AIConfigError
 

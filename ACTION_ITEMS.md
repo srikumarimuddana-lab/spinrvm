@@ -23381,6 +23381,81 @@ how much they de-risk a public launch._
   fix, at any of the 4 sites (moot now — Code Scanning being disabled
   repo-wide means the answer is almost certainly "no" for all of them).
 
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job failed with `Repository not found` on PR #5131's merge commit — status unresolved
+- [ ] **Status:** OPEN, inconclusive. Found 2026-09-08 as a `check_run.completed`
+  failure wake on PR #5131 — a PR that does not touch `label-run-maestro.yml`
+  at all, so not this PR's regardless of cause.
+- **Issue/gap:** `actions/checkout`'s 3 retries of
+  `git fetch ... origin +<merge-sha>:refs/remotes/pull/5131/merge` all
+  returned `remote: Repository not found.` /
+  `fatal: repository 'https://github.com/srikumarimuddana-lab/spinrvm/' not
+  found` — a 404-class failure, not the 403-class `Resource not accessible
+  by integration` failures C93/C94 are about. The job's own token banner
+  showed only `Metadata: read`, `PullRequests: write` — no `contents` at
+  all, consistent with `label-run-maestro.yml:59-60`'s workflow-level
+  `permissions: pull-requests: write` (only key present, so every other
+  scope including `contents` implicitly becomes `none`, not the org
+  default).
+- **Context — this contradicts an earlier same-day finding, not
+  independently new:** a `spinr-cicd-infra-reviewer` pass on the C93/C94
+  diff flagged this exact file as a *theoretical* risk for exactly this
+  reason. At the time, pulled `label-run-maestro.yml`'s own recent run
+  history and found multiple real `conclusion: "success"` runs, and
+  concluded (reported to the user as) a "false alarm" — checkout evidently
+  worked in practice despite the theory. This C95 failure is the first
+  *direct, current* contradiction of that conclusion: same workflow, same
+  permissions block, now actually failing — on the exact PR whose own
+  merge commit triggered it.
+- **Two live hypotheses, not disambiguated:**
+  1. **Real, intermittent permissions gap** — `actions/checkout` on a
+     private repo with `contents: none` can produce `Repository not
+     found` (GitHub's documented behavior: a token with no read access to
+     a private repo gets a 404-shaped "not found" rather than a 403, to
+     avoid leaking the repo's existence) rather than always failing
+     outright — would explain both the historical successes and this
+     failure without contradiction if success depends on some other
+     factor (fork vs. same-repo PR, event type, timing) not yet isolated.
+  2. **Transient GitHub-side ref-propagation race** — fetching
+     `refs/pull/5131/merge` immediately after a push that created a new
+     merge commit (`6980eb3`, itself a `git merge origin/main` this
+     session pushed seconds earlier) is a known class of flake: GitHub
+     recomputes the PR's merge ref asynchronously after a push, and a
+     workflow triggered too soon can 404 on a ref that hasn't finished
+     recomputing yet. 3 retries over ~34 seconds could still be inside
+     that window on a slow recompute.
+- **Attempted to disambiguate, blocked:** tried one re-run
+  (`rerun_failed_jobs` via `mcp__github__actions_run_trigger`) to rule out
+  hypothesis 2 per the flake-triage allowance for a job that died at
+  checkout before any real step ran. **This session's own GitHub
+  integration lacks permission to trigger it**: `403 Resource not
+  accessible by integration` — a different token/permission surface than
+  the workflow's own `GITHUB_TOKEN`, so this is not itself evidence for or
+  against either hypothesis above. No further disambiguation possible from
+  this session.
+- **Not fixed here:** `label-run-maestro.yml` is unrelated to PR #5131's
+  actual diff (`ci.yml`, `security-gates.yml`, `ACTION_ITEMS.md`, one
+  change-log doc) — widening that PR to touch a third, unrelated workflow
+  file over one unconfirmed failure would violate the "don't widen the PR"
+  rule. If hypothesis 1 is confirmed by a future occurrence, the fix is
+  the same shape as C93/C94: add `contents: read` to
+  `label-run-maestro.yml:59-60`'s `permissions:` block. A human with
+  Actions-dispatch access re-running this specific job (or watching the
+  next few real PR runs of this workflow) would settle which hypothesis is
+  correct.
+- **Verification performed:** pulled the full job log directly (not
+  inferred from the check-run summary alone); compared the token
+  permissions banner against the file's own `permissions:` block; searched
+  for a rerun mechanism and attempted it before concluding no
+  disambiguation was possible from this session.
+- **What was NOT verified:** which of the two hypotheses is correct;
+  whether this reproduces on the next real (non-merge-commit) push to any
+  PR touching `rider-app/**`/`driver-app/**` (the only condition under
+  which this job's labeling step — as opposed to just checkout — actually
+  matters); whether GitHub Advanced Security or private-repo status
+  affects the 404-vs-403 behavior claimed in hypothesis 1 for this specific
+  repo (asserted from general GitHub documentation, not confirmed against
+  this repo's actual settings).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

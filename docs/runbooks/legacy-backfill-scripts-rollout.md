@@ -10,7 +10,44 @@ crosswalk-resolution numbers), and reviewed — but **none has ever been run wit
 against any environment** (mocked, staging, or production) **by any Claude Code session**. This
 document describes the safe procedure for whoever runs them. **It is not, itself, the sign-off to run
 any of them** — the sign-off now exists for all four (see "Decision recorded" and its "fourth
-capability" follow-up immediately below).
+capability" follow-up immediately below), **except capability #1 (SIN/DOB) — see the 2026-09-08 update
+directly below, which supersedes "Decision recorded" for that one capability specifically.**
+
+## Update (2026-09-08): SIN/DOB backfill (§1) — do not run, new blocker found; unrelated engineering fix landed
+
+Two independent things changed for capability #1 only; the other three (§2-§4) are unaffected.
+
+**1. Blocker — `ACTION_ITEMS.md` B11 (consent/legal basis) is a harder finding than this document's
+"Decision recorded" section reflects.** That section's 2026-08-20 answer ("run now") explicitly
+carved out "the underlying legal-sufficiency judgment on old-app consent" as a separate, open
+business/counsel call — but treated it as background, not as an active gate on the 2026-08-20
+go-ahead. A 2026-09-07 product-owner interview and the underlying
+`docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md` found **zero evidence of any
+consent-acceptance record**, either in the old app's own export (no `consent|accept|agree|tos_|
+policy|terms`-shaped column in any of 51 CSVs) or in these same drivers' own Spinr onboarding data
+(`legacy_saskatoon_driver_import`'s `users_to_insert` has no `consent_version`/`consent_accepted_at`
+field either). As of 2026-09-08 a reviewer is named (the product owner) but **the determination itself
+has not been made.** A `spinr-regulatory-compliance-checker` pre-flight review run this same day
+confirmed this is the sole remaining blocker — verdict "NEEDS LEGAL REVIEW" — with everything
+engineering-side (minimization, encryption, never-clobber/legacy-only gates, no-PII-in-logs) checked
+clean. **Do not run `--apply` for capability #1 until B11 is resolved and the determination is
+recorded** — the "Decision recorded" section's "run now" answer for capability #1 is stale; treat this
+update as the current status instead.
+
+**2. Unrelated fix, already merged — encrypt-result validation.** The same 2026-09-08 review also
+found `apply_legacy_sin_dob_import` never checked whether `encrypt_driver_pii` actually returned
+ciphertext before writing it and marking the SIN as imported — a silent encryption failure (e.g. the
+vault RPC returning null without raising) would have been recorded as a successful import while
+`drivers.sin` stayed NULL. Fixed and merged: [PR #5098](https://github.com/srikumarimuddana-lab/spinrvm/pull/5098),
+full detail in `docs/change-log/2026-09-08-a34-sin-dob-encrypt-validation-fix.md`. **If your checkout
+predates that merge, pull first** — same category of "silently no-op instead of failing loudly" risk
+as the 2026-08-20 CSV-header bug documented in §1 below, on a non-repeatable write of real government
+IDs.
+
+**Net effect for whoever eventually runs capability #1:** the tool is now safer to run than it was on
+2026-08-20, but it is *further* from being clear to run in practice, because B11 wasn't fully
+understood as a hard blocker until 2026-09-07/08. Follow the pre-flight checklist below in full,
+starting from its new step 0.
 
 ## Correction (2026-08-20, same day): "no live Supabase credentials" was imprecise
 
@@ -107,8 +144,11 @@ against the real export: 157/157 resolve correctly now) — see
 `docs/change-log/2026-08-20-mongo-export-header-normalization-bug.md`. **The "Decision recorded"
 timing/execution answers above still stand** (this was a bug in the tool, not a reason to revisit the
 go-ahead) but if you have a copy of this repo checked out from before 2026-08-20's later commits, pull
-first — an unpatched checkout would silently no-op. **Status: built, unit-tested, fixed, never run with
-`--apply`.**
+first — an unpatched checkout would silently no-op. **Status (2026-09-08): built, unit-tested, fixed
+(this bug + the encrypt-result-validation fix in the 2026-09-08 update above), never run with
+`--apply`, and — unlike when this line was first written — now known to be blocked on
+`ACTION_ITEMS.md` B11 (consent/legal basis), not just on execution logistics. See the 2026-09-08 update
+near the top of this document before proceeding.**
 
 ### 2. `backend/scripts/backfill_legacy_ride_duration_estimated.py`
 
@@ -269,6 +309,14 @@ any of the four.
 
 ## Pre-flight checklist (before ever passing `--apply`/`commit`)
 
+0. **SIN/DOB backfill (§1) only: confirm `ACTION_ITEMS.md` B11 is resolved and the determination is
+   recorded, before doing anything else in this checklist.** Per the 2026-09-08 update near the top of
+   this document, this is a hard blocker specific to capability #1 — it does not apply to §2-§4. Check
+   `ACTION_ITEMS.md`'s B11 entry directly (do not rely on this runbook staying current — re-check the
+   live status) for a recorded legal/consent-sufficiency determination, not just a named reviewer. If
+   it is still open, stop here — do not proceed to step 1 for the SIN/DOB backfill. This step does not
+   gate §2 (duration-estimated), §3 (booking import), or §4 (vehicle-history) — none of those write a
+   government-ID field, and none is affected by B11.
 1. **Confirm the target environment explicitly.** The CLI scripts read `SUPABASE_URL` /
    `SUPABASE_SERVICE_ROLE_KEY` from the environment; the booking import runs as an authenticated
    admin-dashboard action against whichever backend the admin's session is pointed at — verify which
@@ -337,6 +385,14 @@ booking import against the existing 2026-07-26-vintage CSV, executed by the prod
 (the CLI scripts have no Supabase credentials configured in this session, and the separate read-only
 MCP path described in "Correction" above is authorized for verification only, not for writes without
 the product owner's explicit go-ahead).
+
+**Correction (2026-09-08): the SIN/DOB backfill (§1) is no longer covered by that "run now" answer.**
+See the 2026-09-08 update near the top of this document — the 2026-08-20 "Decision recorded" timing
+sign-off covered *when* to run it, not the separate legal-sufficiency question, and that question
+(`ACTION_ITEMS.md` B11) turned out to be an unresolved hard blocker, not settled background. Capability
+#1's sign-off is: (a) B11's determination recorded, **and** (b) the original timing/execution answer
+from "Decision recorded" above, both required — not (b) alone. §2, §3, and §4 are unaffected and keep
+their existing sign-off as-is.
 
 **The vehicle-history backfill (§4) is NOT covered by that existing decision** — it was built after
 the "Decision recorded" section above was written, and has not been put to the product owner. Treat it

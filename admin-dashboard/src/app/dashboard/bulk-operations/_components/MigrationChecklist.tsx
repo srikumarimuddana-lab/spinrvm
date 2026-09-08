@@ -13,12 +13,13 @@
  * guessing at order.
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { CheckCircle2, Circle, AlertTriangle, HelpCircle, RefreshCw, Loader2 } from "lucide-react";
 import { adminGetMigrationStatus, type MigrationToolStatus, type MigrationToolState } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 const STATE_META: Record<MigrationToolState, { label: string; icon: typeof CheckCircle2; cls: string }> = {
     done: { label: "Done", icon: CheckCircle2, cls: "text-success" },
@@ -38,7 +39,7 @@ function StateBadge({ state }: { state: MigrationToolState }) {
     );
 }
 
-function ChecklistRow({ tool }: { tool: MigrationToolStatus }) {
+function ChecklistRow({ tool, isNext }: { tool: MigrationToolStatus; isNext: boolean }) {
     return (
         <div className="flex items-start justify-between gap-4 border-b py-2.5 last:border-b-0">
             <div className="flex items-start gap-3">
@@ -53,6 +54,7 @@ function ChecklistRow({ tool }: { tool: MigrationToolStatus }) {
                 </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+                {isNext && <Badge variant="outline-accent">Next</Badge>}
                 {tool.warning && (
                     <span className="rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning">
                         {tool.warning}
@@ -86,16 +88,47 @@ export function MigrationChecklist() {
         void load();
     }, [load]);
 
+    // "Next" is just the first tool (in dependency order — the array is
+    // already sorted by `order`) that isn't done yet. partial/not_started/
+    // manual_check_required all count as "needs your attention" for this
+    // purpose; the state badge on the row already says which.
+    const doneCount = useMemo(() => tools?.filter((t) => t.state === "done").length ?? 0, [tools]);
+    const nextTool = useMemo(() => tools?.find((t) => t.state !== "done"), [tools]);
+
     return (
         <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-4">
                 <div>
-                    <CardTitle>Migration Checklist</CardTitle>
+                    <CardTitle className="flex items-center gap-2">
+                        Migration Checklist
+                        {tools && (
+                            <span className="text-sm font-normal text-muted-foreground">
+                                ({doneCount} of {tools.length} done)
+                            </span>
+                        )}
+                    </CardTitle>
                     <CardDescription>
-                        All 19 legacy-migration tools, in dependency order — run top to bottom against a
+                        Every legacy-migration tool, in dependency order — run top to bottom against a
                         fresh Mongo export. Each tool below is still its own dry-run-first process; this
                         panel only shows what&apos;s already run.
                     </CardDescription>
+                    {tools && (
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            {nextTool ? (
+                                <>
+                                    Next up:{" "}
+                                    <Link
+                                        href={nextTool.admin_path}
+                                        className="font-medium text-foreground underline-offset-2 hover:underline"
+                                    >
+                                        {nextTool.name}
+                                    </Link>
+                                </>
+                            ) : (
+                                tools.length > 0 && "All steps are done."
+                            )}
+                        </p>
+                    )}
                 </div>
                 <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
                     {loading ? (
@@ -116,7 +149,7 @@ export function MigrationChecklist() {
                 {tools && (
                     <div className="divide-y-0">
                         {tools.map((t) => (
-                            <ChecklistRow key={t.id} tool={t} />
+                            <ChecklistRow key={t.id} tool={t} isNext={t.id === nextTool?.id} />
                         ))}
                     </div>
                 )}

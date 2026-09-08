@@ -32,6 +32,7 @@ non-trivial, user-visible+external changes, this endpoint:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -140,7 +141,8 @@ async def admin_submit_dispute_evidence(
         # blanket idempotency-key convention doesn't apply here. The claim
         # above is what prevents a double *logical* submission from this
         # endpoint.
-        stripe.Dispute.modify(
+        await asyncio.to_thread(
+            stripe.Dispute.modify,
             stripe_dispute_id,
             evidence={"uncategorized_text": evidence_text},
             api_key=stripe_secret,

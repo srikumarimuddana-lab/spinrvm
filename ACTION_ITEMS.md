@@ -22666,7 +22666,10 @@ how much they de-risk a public launch._
 
 ### C88. `rides.refund_amount` has no committed schema definition anywhere in this repo, and is missing entirely on `spinrmobileapp`
 
-- [ ] **Status:** open — found 2026-09-08 while attempting the mandatory
+- [x] **Status:** CLOSED 2026-09-08 — all three action items complete. See
+  "Closed" entry below the original write-up for the final state; the
+  original write-up is kept as-is for the investigation history.
+- [ ] **Status (original, superseded by "Closed" below):** open — found 2026-09-08 while attempting the mandatory
   post-merge verification step for PR #5088's F1 fix (the `charge.refunded`
   compare-and-swap on `rides.refund_amount`, `docs/change-log/
   2026-09-08-charge-refunded-cas-ledger-dedupe.md`). Two distinct findings:
@@ -22749,6 +22752,51 @@ how much they de-risk a public launch._
   ~~Re-scope the connector to reach `Spinr-Prod`~~ **moot** — production
   was already reachable the whole time. C89 (below) is superseded by this
   correction.
+- **Closed 2026-09-08 (human-directed).** The user gave explicit,
+  documented authorization to apply migration 408 directly to production
+  and to keep the Supabase connector at full read/write/other permissions
+  (not narrowed to read-only) through **October 31, 2026** as a time-boxed
+  exception — see `.claude/context/connector-scoping.md`'s Supabase row for
+  the exact wording and the revisit trigger. All three action items are
+  now done:
+  1. **Migration applied.** `backend/migrations/408_rides_refund_amount.sql`
+     applied to `spinrmobileapp` (`soavhtdhefowwvforzwb`) via
+     `mcp__Supabase__apply_migration`. `rides.refund_amount NUMERIC(8,2)
+     DEFAULT 0` now exists on production, re-confirmed via
+     `information_schema.columns`. A matching row was inserted into that
+     project's own `schema_migrations` table (`filename`, `checksum` =
+     sha256 of the file bytes) so this repo's own
+     `backend/scripts/run_migrations.py --status` will show 408 as applied,
+     not pending, the next time it runs against this project — reconciling
+     the two separate tracking mechanisms (Supabase's native
+     `supabase_migrations` from the MCP tool, and this repo's
+     `schema_migrations`) rather than leaving them to drift apart.
+  2. **Live round-trip verification performed, safely.** Ran the exact
+     write → CAS-filter → read sequence `routes/webhooks.py`'s F1 fix
+     depends on, against a real production `rides` row
+     (`261cd5f1-7c67-44bf-84bd-09a06206123a`), wrapped in
+     `BEGIN; UPDATE ...; SELECT ...; ROLLBACK;` so no production data was
+     actually left changed. Confirmed: writing `refund_amount` and then
+     re-reading it with an equality filter on the just-written value
+     matches the same row (the exact pattern `webhooks.py`'s
+     `update_one({"id": ride_id, "refund_amount": prev_refund_amount_raw},
+     ...)` CAS check relies on) — no float/Decimal round-trip mismatch.
+     Post-rollback re-read confirmed `refund_amount` back at its default
+     `0.00`, proving the transaction left no trace. This supersedes the
+     earlier `area_fees_total` proxy verification with a direct check on
+     the real column.
+  3. **Connector re-scoping:** explicitly deferred, not skipped — the user
+     decided to keep full read/write/other permissions (not narrow to
+     read-only) until October 31, 2026, to retain write access for
+     migration work like this one. Recorded as a dated, time-boxed
+     exception in `.claude/context/connector-scoping.md`, not a silent
+     "won't fix."
+  - **Not verified:** whether any real `charge.refunded` webhook ever hit
+    production before today while the column was missing (the "every real
+    refund webhook would have 500'd" implication raised above). Out of
+    scope for this closure — would require a Stripe dashboard / Sentry
+    log review, not a schema check. If this matters, it's a follow-up, not
+    part of C88.
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
 ### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
@@ -22769,6 +22817,13 @@ how much they de-risk a public launch._
   against what is now confirmed to be production, which the row's own
   previously-written policy already says should be narrowed to read-only
   — not yet done, flagged to the user, awaiting their call on timing.
+  **Resolved 2026-09-08:** the user's call was to keep full read/write/other
+  permissions (explicitly declining to narrow to read-only right now,
+  since write access was still needed for C88's migration apply) through
+  **October 31, 2026**, as an explicit, dated, time-boxed exception — not a
+  silent "leave it broad." See `.claude/context/connector-scoping.md`'s
+  Supabase row for the exact text and the revisit trigger that date sets
+  up. No second connector was needed or created.
 - **Original (superseded) framing below, kept for the record — do not act
   on it, it assumes production was unreachable, which is now known false:**
 - [ ] (superseded) **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s

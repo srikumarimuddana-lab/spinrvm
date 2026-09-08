@@ -22577,6 +22577,146 @@ how much they de-risk a public launch._
   yet made."
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
+### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
+
+- [ ] **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
+  Supabase row already flags this as "a separate, still-open decision, not
+  yet made"; recorded here as its own tracked item so it doesn't stay
+  buried inside a connector-audit doc, and because C88 just hit its real
+  cost directly: a live-DB verification step (F1's refund CAS filter
+  round-trip check) could not be completed against the actual environment
+  that has the column in question, only against a pre-production stand-in
+  missing it entirely.
+- **Background:** this session's account-level Supabase connector was
+  reconnected 2026-09-07 under a different account, which put it into org
+  `Spinr_MobileApp` (`hjdwxavwnkmtizqjukoh`) with exactly one project,
+  `spinrmobileapp` (`soavhtdhefowwvforzwb`, pre-production). That account
+  switch had a side effect nobody decided on directly: `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`) and `MobileAppStaging` (`mvmyygoinicjdpqprizr`),
+  both under the original `swarnkiran88@gmail.com's Org`, became completely
+  unreachable from this connector. No session using this connector can
+  currently query, verify, or diagnose anything against the actual
+  production database — only against `spinrmobileapp`, whose schema has
+  already been shown (C88) to lag behind whatever created `Spinr-Prod`'s
+  live tables.
+- **The decision itself:** how (if at all) should a Claude session regain
+  read access to `Spinr-Prod`/`MobileAppStaging` for verification work like
+  C88's? Options, not mutually exclusive:
+  1. Invite the current connector's account into
+     `swarnkiran88@gmail.com's Org` as well, so one connector reaches both
+     orgs' projects (simplest, but widens this connector's blast radius
+     back to two orgs — re-run the same live `list_projects` check
+     afterward to confirm exactly what it can now reach, per this doc's
+     "verified live, not assumed" standard).
+  2. Add a **second**, separately-scoped Supabase connector dedicated to
+     `Spinr-Prod`/`MobileAppStaging`, ideally with `read_only=true` or a
+     read-only PAT from the start — keeps the two orgs' access separate
+     and auditable, costs an extra connector to manage.
+  3. Do neither, and accept that any future "verify against the real
+     database" step is a request routed to a human with direct
+     `Spinr-Prod` access, not something a session can do itself — cheapest
+     to set up, slowest per verification.
+- **Not this session's call to make unilaterally:** granting broader
+  database reach is exactly the kind of access-scope change
+  `.claude/context/connector-scoping.md`'s own checklist says to get right
+  "from day one" rather than widen reactively — whoever owns the Supabase
+  account/org memberships should pick one of the options above (or reject
+  the need entirely, if C88-style live verification isn't considered worth
+  the access it requires).
+- **Found during:** C88's investigation, PR #5088 F1's post-merge
+  verification attempt.
+
+### C90. Phone-screen (rider-app + driver-app) vehicle-icon fixes unverified on a real device — distinct from C70 (Android Auto head-unit surface, separate item)
+- [ ] **Status:** open — found 2026-09-07 during a vehicle-icon movement/animation
+  audit and the two follow-up fixes it produced. All three PRs on branch
+  `claude/vehicle-icon-movement-animation-8tys8o` (#5086, merged, and #5089, open
+  as of filing) were verified only via unit/component tests, `tsc --noEmit`, and
+  `expo export --platform web` — no device or simulator was available in the
+  agent session that made these changes.
+- **Issue/gap:** three behavior-changing fixes to `shared/components/CarMarker.tsx`
+  (rider-app's on-map driver icon) have never been watched actually render on a
+  phone: (1) the route-segment continuity hint (`preferredFromIndex`) meant to stop
+  a one-tick bearing flip at intersections, (2) GPS pre-smoothing + implausible-jump
+  rejection, and (3) the ring-change re-arm effect meant to stop the Android marker
+  snapshot freezing on just a colored ring with no car icon. All three are direct
+  ports of logic already proven live in `driver-app`'s own copy since 2026-09-05 —
+  but "the driver-app original worked" and "the rider-app port renders correctly on
+  a real phone" are different claims, and only the first has device evidence behind
+  it. rider-app also has zero automated visual-regression tooling (per `CLAUDE.md`),
+  so nothing catches a visually-wrong-but-non-crashing regression here except a
+  human actually looking at a device.
+- **Root cause:** no device/simulator access in this session (same class of gap as
+  C70, different surface — C70 is the Android Auto head-unit projection,
+  specifically called out there as a distinct concern from the phone screen).
+- **Risk if left open:** any of the three fixes could look correct in code and in a
+  headless test yet still be visually wrong on-device (e.g. the ring re-arm timing
+  feeling like a visible flicker instead of invisible, or the route-snap continuity
+  hint picking the wrong segment on an actual GPS trace with real noise) — exactly
+  the class of bug this whole audit was started to catch in the first place.
+- **Action:** once someone has a physical Android device (the ring-freeze bug is
+  Android-snapshot-specific; iOS is unaffected by design) or an Android
+  simulator/emulator free, drive both apps through: (a) rider-app — book/simulate a
+  ride and watch the driver icon through `ride-options` → `driver-arriving` →
+  `driver-arrived` → `ride-in-progress`, specifically at an intersection/divided
+  road and immediately on each screen transition (ring-freeze repro window); (b)
+  driver-app — confirm no regression from a driver's own perspective (unchanged by
+  this work, but shares the same underlying utilities). Record the pass/fail result
+  as a dated `docs/change-log/` entry, same pattern as `2026-08-16-android-auto-
+  hardware-validation.md`.
+- **Owner / follow-up:** needs a person with a device or Android emulator — no
+  session in this repo's agent integration has that. Flag for the next mobile/
+  device-testing cycle; not gating merge of #5089 given the ported-and-proven-in-
+  driver-app risk mitigation already in its Change Impact Log, but should be closed
+  out before this is considered fully done.
+- **Files (reference only, no code changed by this entry):**
+  `shared/components/CarMarker.tsx`, `rider-app/__tests__/carMarkerPositionChange.
+  test.tsx`, `docs/change-log/2026-09-07-rider-app-marker-parity-fix.md`,
+  `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
+
+### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI
+- [ ] **Status:** open — found 2026-09-08 while auditing admin-dashboard for any
+  vehicle-icon-related settings/rendering, as a follow-up to the rider-app/
+  driver-app marker fixes in C90 above.
+- **Issue/gap:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
+  `dashboard-monitoring` baseline stubs `tiles.openfreemap.org` with a
+  **sourceless** `STUB_MAP_STYLE` (`sources: {}`, a single `background` layer)
+  so the map style/tile load is deterministic — but `setupAdminMocks`
+  (`admin-dashboard/e2e/admin-mocks.ts`) mocks generic `/api/**` REST calls
+  without ever mocking `monitoring-map.tsx`'s WebSocket feed (`page.tsx` line
+  ~103+), so no live driver data arrives during the test run. The snapshot
+  this baseline compares against every PR is only the empty map chrome
+  (background + controls + sidebar) — no driver/vehicle marker
+  (`maplibregl.Marker`, built in `updateDriverMarker`,
+  `monitoring-map.tsx:238-285`) is ever seeded or rendered in it.
+- **Root cause:** the visual-regression setup treats "make the map
+  deterministic" (stubbing tile fetches) and "seed realistic page state"
+  (mocking the WS feed) as the same problem; only the first was done for this
+  page. CLAUDE.md's pre-merge release gates (§6) documents this baseline as
+  "fully active" and CI-blocking, which is true for the map's static chrome
+  but creates a false sense of coverage for anything driver-marker-related.
+- **Risk if left open:** a future change that breaks `updateDriverMarker`,
+  `driverColor()`, or the marker-creation path in `monitoring-map.tsx` would
+  not fail this CI gate — the admin ops team would only discover it by
+  actually looking at the live monitoring page, the exact failure mode this
+  gate exists to prevent for the rest of that screen.
+- **Action:** extend `setupAdminMocks`/the `dashboard-monitoring` spec to also
+  seed a deterministic WebSocket driver-location payload (or a small fixed
+  set of driver fixtures) before capturing the baseline, so the snapshot
+  actually includes rendered driver markers; then re-capture the baseline via
+  `update-visual-baselines.yml` (needs Actions-dispatch access this repo's
+  agent integration doesn't have — flag for a human, same constraint noted
+  elsewhere in `CLAUDE.md` for baseline re-seeding).
+- **Note:** this is a testing-infrastructure gap, not a vehicle-icon animation
+  bug — admin-dashboard's own marker rendering (plain `maplibregl.Marker`,
+  instant `setLngLat()`, no interpolation/smoothing) is a simpler,
+  intentionally non-animated ops-tool design and does not need any of the
+  `CarMarker.tsx` smoothing/route-snapping/ring-freeze fixes ported to it.
+- **Files (reference only, no code changed by this entry):**
+  `admin-dashboard/e2e/visual-regression.spec.ts`,
+  `admin-dashboard/e2e/admin-mocks.ts`,
+  `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`,
+  `admin-dashboard/src/app/dashboard/monitoring/page.tsx`.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

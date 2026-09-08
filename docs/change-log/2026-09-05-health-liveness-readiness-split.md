@@ -11,7 +11,7 @@
 | PR / commit link | branch `claude/pickup-otp-payment-fixes-5a8dnk` |
 | Related issue or gap ID | `docs/audit/2026-09-05-engineering-director-review-round3.md` §1.8 (critical #8) |
 
-> **Note (2026-09-08):** `docs/audit/2026-09-05-engineering-director-review-round3.md`, cited above, was never committed to this repo (confirmed missing from `docs/audit/` and from git history) — see `ACTION_ITEMS.md` C85. The finding text this entry describes is reproduced in full in section 1 below; nothing in this log depends on the missing document to be understood.
+> **Note (2026-09-08, corrected same day):** `docs/audit/2026-09-05-engineering-director-review-round3.md`, cited above, is committed and present — it landed via PR #5033, merged 2026-09-08 16:21:54 UTC. An earlier version of this note said the document was missing (from `ACTION_ITEMS.md` C85's original partial close); that has since been resolved and C85 is now fully closed.
 
 ## 1. Issue / gap identified
 

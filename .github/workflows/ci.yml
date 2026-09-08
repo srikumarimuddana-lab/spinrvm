@@ -35,6 +35,18 @@ jobs:
   # leak in any file type, including a workflow file itself. Same
   # reasoning as G3/G5a in security-gates.yml.
   detect-changes:
+    # C93: ci.yml has no top-level `permissions:` block, so without this
+    # override the job falls through to the repo's restrictive default
+    # token scope (contents/metadata/packages read only -- no
+    # pull-requests). dorny/paths-filter needs pull-requests: read to call
+    # the Files API on this shallow (fetch-depth: 1) checkout; without it
+    # every run of this job 403s and every caller in this file falls back
+    # to its fail-open "run everything" leg (see the comment above) --
+    # correct behavior, but it silently loses the fast-feedback
+    # path-filtering optimization on every single PR.
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/detect-changes.yml
 
   # Backend Tests
@@ -546,7 +558,15 @@ jobs:
     # All 6 baselines are seeded and this job is blocking (2026-09-04) --
     # a real visual regression on any admin-dashboard page is exactly the
     # kind of change path-filtering would risk skipping.
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    #
+    # always() is required here (ACTION_ITEMS.md C92) -- without it, a PR
+    # that doesn't touch backend/ (so backend-test is itself skipped by its
+    # own path-filtered `if:`) skips this job too via GitHub Actions'
+    # default "needs must succeed" propagation, silently defeating the
+    # "deliberately NOT gated" comment above for every admin-dashboard-only
+    # PR. e2e-test below already guards against the exact same failure mode
+    # with the same always() pattern -- this job was just missing it.
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     defaults:
       run:
         working-directory: admin-dashboard
@@ -871,23 +891,32 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
+      # Was previously omitted entirely, deliberately held back (ACTION_ITEMS.md
+      # B41) pending confirmation of what an omitted --profile actually
+      # resolves to. Confirmed: EAS CLI defaults to the profile literally
+      # named "production" when --profile is omitted — so this job's builds
+      # were always resolving to production by that default, never anything
+      # else. Pinned explicitly rather than left implicit.
+      #
+      # staging is deliberately NOT added here: test-env.yml's
+      # build-mobile-test job already owns staging + '[build]' with
+      # --profile preview (same eas.json "preview" profile, which this
+      # change also fixes to explicitly set distribution: internal rather
+      # than defaulting to "store" — see the same Change Impact Log). Giving
+      # this job the same trigger would double-build (8 real EAS builds
+      # instead of 4 per push) — caught by spinr-cicd-infra-reviewer before
+      # merge, not shipped.
       - name: Install rider app dependencies
         working-directory: rider-app
         run: yarn install --frozen-lockfile
 
-      # No --profile flag here (deliberately held, not an oversight): the
-      # question of what profile a main-branch [build] trigger should
-      # actually produce — this job has never pinned one explicitly — is
-      # captured for discussion, see ACTION_ITEMS.md B25 area / this PR's
-      # discussion. Do not add --profile production without that decision
-      # being made first.
       - name: Build iOS (Rider)
         working-directory: rider-app
-        run: eas build --platform ios --non-interactive
+        run: eas build --platform ios --profile production --non-interactive
 
       - name: Build Android (Rider)
         working-directory: rider-app
-        run: eas build --platform android --non-interactive
+        run: eas build --platform android --profile production --non-interactive
 
       # Driver-app was previously missing here even though this job's `needs`
       # already required driver-app-test to pass — gating on a test job whose
@@ -899,11 +928,11 @@ jobs:
 
       - name: Build iOS (Driver)
         working-directory: driver-app
-        run: eas build --platform ios --non-interactive
+        run: eas build --platform ios --profile production --non-interactive
 
       - name: Build Android (Driver)
         working-directory: driver-app
-        run: eas build --platform android --non-interactive
+        run: eas build --platform android --profile production --non-interactive
 
   # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:
@@ -911,6 +940,12 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: codeql-action/upload-sarif's wait-for-processing: true polls
+      # GET /repos/.../actions/runs/{run_id} to confirm the SARIF finished
+      # processing -- a different scope than the security-events:write
+      # that authorizes the upload itself. Without this the poll 403s and
+      # fails the whole job even though the SARIF upload already succeeded.
+      actions: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -918,9 +953,14 @@ jobs:
           fetch-depth: 0  # full history required for trufflehog --since-commit
 
       - name: Install trufflehog v3
+        # C87: retry a transient CDN/network flake instead of failing the whole
+        # job on it, and verify the archive is actually gzip before extracting
+        # (a truncated/HTML-error-page download previously failed with a
+        # cryptic tar error instead of a clear one).
         run: |
-          curl -sLo trufflehog.tar.gz \
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o trufflehog.tar.gz \
             https://github.com/trufflesecurity/trufflehog/releases/download/v3.94.3/trufflehog_3.94.3_linux_amd64.tar.gz
+          tar -tzf trufflehog.tar.gz >/dev/null
           tar -xzf trufflehog.tar.gz trufflehog
           chmod +x trufflehog && sudo mv trufflehog /usr/local/bin/
 
@@ -945,7 +985,11 @@ jobs:
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
-        if: always()
+        # C87: only upload if Trivy actually produced the file -- `if: always()`
+        # alone meant a Trivy step failure (e.g. its own transient flake) hit a
+        # second, misleading "file not found" failure here instead of a clean
+        # single point of failure.
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -964,6 +1008,9 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: same wait-for-processing gap as security-scan above -- see
+      # its comment for why this is a separate scope from security-events.
+      actions: read
       packages: write    # GHCR push (main only, see "Push image to GHCR" step)
       id-token: write    # cosign keyless OIDC signing (main only)
 
@@ -1057,7 +1104,10 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload image scan results to GitHub Security
-        if: always()
+        # C87: same hashFiles guard as the filesystem-scan upload above -- a
+        # failed "Upload SARIF report" step (its own transient flake) must not
+        # cascade into a second, misleading "file not found" failure here.
+        if: always() && hashFiles('trivy-image.sarif') != ''
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
         with:
           sarif_file: 'trivy-image.sarif'

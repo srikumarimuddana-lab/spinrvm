@@ -1185,7 +1185,22 @@ def apply_legacy_sin_dob_import(plan: SinDobImportPlan, *, batch: str) -> list[s
         fields: dict[str, Any] = {"updated_at": now_iso}
         plain_sin = upd.get("_plain_sin")
         if plain_sin:
-            fields["sin"] = encrypt_pii(plain_sin)
+            encrypted_sin = encrypt_pii(plain_sin)
+            # encrypt_driver_pii returns the vault.secrets row's UUID as text.
+            # A null/malformed result (e.g. vault.create_secret() returning
+            # NULL without the RPC itself raising) must never be written as
+            # the "encrypted" SIN — that would silently leave drivers.sin
+            # NULL while sin_written below still records true, making a
+            # failed encryption indistinguishable from a successful one on a
+            # non-repeatable write of real government IDs.
+            try:
+                uuid.UUID(encrypted_sin)
+            except (TypeError, ValueError) as e:
+                raise RuntimeError(
+                    f"encrypt_driver_pii returned no usable ciphertext for "
+                    f"old_driver_id={upd['old_driver_id']!r} — refusing to write"
+                ) from e
+            fields["sin"] = encrypted_sin
             fields["sin_last4"] = sin_last4(plain_sin)
             fields["sin_collected_at"] = now_iso
         if upd.get("date_of_birth"):

@@ -461,8 +461,12 @@ async def retry_failed_payments():
         try:
             import stripe
 
-            # Attempt to confirm the payment intent
-            intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+            # Attempt to confirm the payment intent. Off the event loop (C86):
+            # this runs inside a shared-process background loop, but a
+            # synchronous Stripe call still blocks every other coroutine
+            # (requests, dispatch, WS) on this worker for the HTTP round-trip,
+            # not just this loop's own tick.
+            intent = await asyncio.to_thread(stripe.PaymentIntent.retrieve, payment_intent_id, api_key=stripe_secret)
 
             if intent.status == "succeeded":
                 await db.update_one(
@@ -488,7 +492,8 @@ async def retry_failed_payments():
                 # loop fires, that initial window has closed and we need a new
                 # idempotency key to avoid Stripe replaying a cached transient
                 # error from attempt 1 on attempts 2+.
-                stripe.PaymentIntent.confirm(
+                await asyncio.to_thread(
+                    stripe.PaymentIntent.confirm,
                     payment_intent_id,
                     api_key=stripe_secret,
                     idempotency_key=f"ride-confirm-{ride_id}-{intent.amount}-retry-{attempt}",
@@ -555,7 +560,8 @@ async def retry_failed_payments():
                 )
                 # Same key shape as stripe_charge.capture_ride so a partially
                 # completed settlement capture for the same amount dedupes.
-                stripe.PaymentIntent.capture(
+                await asyncio.to_thread(
+                    stripe.PaymentIntent.capture,
                     payment_intent_id,
                     amount_to_capture=capture_cents,
                     api_key=stripe_secret,

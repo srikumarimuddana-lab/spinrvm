@@ -650,3 +650,87 @@ def test_id_crosswalk_backfill_ignores_rider_rows_in_the_driver_ratio(monkeypatc
     report = svc.get_migration_status()
     t19 = next(t for t in report.tools if t.id == "id_crosswalk_backfill")
     assert t19.state == "not_started"
+
+
+# --------------------------------------------------------------------------
+# Oversized `.in_()` regression -- see backend/tests/test_oversized_in_batching.py
+# for the production incidents (2026-08-31, 2026-09-03) this class of bug
+# already caused elsewhere. Found live on the Bulk Operations checklist panel
+# on 2026-09-08 once the eligible-driver population crossed _IN_BATCH_SIZE:
+# tools #4, #5, #6, #9 and #19 each built a single unbatched
+# `.in_(id_column, eligible_ids_or_similar)` call, which is exactly the shape
+# the edge proxy rejects at fleet scale.
+# --------------------------------------------------------------------------
+
+
+def _track_in_chunk_sizes(monkeypatch) -> list[int]:
+    chunk_sizes: list[int] = []
+    original_in_ = _Query.in_
+
+    def _tracking_in_(self, col, vals):
+        vals = list(vals)
+        chunk_sizes.append(len(vals))
+        return original_in_(self, col, vals)
+
+    monkeypatch.setattr(_Query, "in_", _tracking_in_)
+    return chunk_sizes
+
+
+def test_eligible_gated_tools_batch_in_queries_above_threshold(monkeypatch):
+    """Tools #4, #5, #9, #19 all key an `.in_()` lookup off the shared
+    eligible-driver population. At a fleet size above _IN_BATCH_SIZE, every
+    such call must be split into batches -- and the batched results must
+    still merge into a correct, undropped total."""
+    n = svc._IN_BATCH_SIZE * 2 + 20  # 320: forces 3 batches (150 + 150 + 20)
+    drivers = [
+        _driver(
+            f"d{i}",
+            source="legacy_saskatoon_driver_import",
+            extra={"sin": "enc", "date_of_birth": "1990-01-01", "gst_bn": "123"},
+        )
+        for i in range(n)
+    ]
+    store = _fresh_store(
+        drivers=drivers,
+        driver_vehicle_history=[{"driver_id": f"d{i}"} for i in range(n)],
+        legacy_id_crosswalk=[{"spinr_user_id": f"d{i}", "entity_type": "driver"} for i in range(n)],
+    )
+    _use(monkeypatch, store)
+    chunk_sizes = _track_in_chunk_sizes(monkeypatch)
+
+    report = svc.get_migration_status()
+
+    assert chunk_sizes, "expected at least one .in_() call to have run"
+    assert max(chunk_sizes) <= svc._IN_BATCH_SIZE, "a single .in_() call exceeded the batch ceiling"
+    assert chunk_sizes.count(svc._IN_BATCH_SIZE) >= 4  # 4 tools x 2 full batches each at n=320
+
+    for tool_id, expect_ratio in (
+        ("sin_dob_backfill", f"SIN {n}/{n}"),
+        ("vehicle_history_backfill", f"{n}/{n} eligible"),
+        ("tax_id_import", f"GST/HST BN {n}/{n}"),
+        ("id_crosswalk_backfill", f"{n}/{n} eligible"),
+    ):
+        tool = next(t for t in report.tools if t.id == tool_id)
+        assert tool.state == "done", f"{tool_id}: {tool.detail}"
+        assert expect_ratio in tool.detail, f"{tool_id}: {tool.detail}"
+
+
+def test_orphaned_accounts_batches_in_queries_above_threshold(monkeypatch):
+    """Tool #6 keys its `.in_()` lookup off the flagged-driver `users`
+    population, not the shared eligible-driver list -- a separate call site
+    with the same failure shape, so it needs its own batching proof."""
+    n = svc._IN_BATCH_SIZE * 2 + 20  # 320
+    store = _fresh_store(
+        users=[{"id": f"u{i}", "is_driver": True} for i in range(n)],
+        drivers=[{"id": f"d{i}", "user_id": f"u{i}", "legacy_import_metadata": {}} for i in range(n)],
+    )
+    _use(monkeypatch, store)
+    chunk_sizes = _track_in_chunk_sizes(monkeypatch)
+
+    report = svc.get_migration_status()
+
+    assert chunk_sizes
+    assert max(chunk_sizes) <= svc._IN_BATCH_SIZE
+    t6 = next(t for t in report.tools if t.id == "orphaned_accounts")
+    assert t6.state == "done"
+    assert "Clean" in t6.detail

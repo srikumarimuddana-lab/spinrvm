@@ -134,6 +134,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ## P0 — Launch gating (code)
 
+> **Filing note (2026-09-08):** four items that are P0-severity in substance
+> physically live under the `## P4` header at the end of this file, not here
+> — a backlog-manifest review flagged this. They landed there purely because
+> each was appended chronologically to whatever section header was current
+> when the finding was made, the same append-only convention this file uses
+> everywhere else (see A34's own note on its duplicate heading number for
+> the same "don't renumber/relocate, annotate instead" precedent). Rather
+> than physically move ~250 lines of already-cross-referenced entries this
+> late in the file's life, they're flagged here so a top-to-bottom P0 read
+> doesn't miss them:
+> - **A43** — PR #5048 merged a 34-file rides/payments/auth batch 47 seconds
+>   after opening, bypassing every CI check (governance/rides/payments/auth).
+> - **B42** — `payment_failed` Stripe webhook events silently dropped for
+>   ~36 minutes during #5048's live window; no data remediation done yet
+>   (payments/money).
+> - **C73** — `main`'s merge path doesn't wait for `backend-test` or block
+>   on an already-failed check — the mechanical cause of A43 (governance/infra).
+> - **C43** — RLS disabled on 4 production tables, including the one holding
+>   Stripe/Twilio/Google Maps keys (security/infra) — deliberately deferred
+>   by the product owner until A41 concludes, but still P0-severity, not
+>   P4, while it's true.
+>
+> Treat these four as P0 for prioritization purposes regardless of where
+> they physically sit in the file.
+
 ### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline — CLOSED (2026-09-04 status correction), 2 named residual follow-ups remain
 > **Regression note (2026-09-04):** the fix for this audit's ranked blocker
 > #5/#6 (`scrub_pii_deep` wired into `tools.py::_cap_result`) also scrubbed
@@ -6896,6 +6921,32 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   add the two secrets) and #2 (run the workflow once to prove the Android
   lane completes) are the only two still needed to get real device
   coverage live; both still need a repo/org admin, same as before.
+- **2026-09-08, answered directly by the product owner — item #1 is now
+  resolved, and it's a deliberate cost decision, not an oversight.**
+  Checked the repo's Settings → Secrets page directly (screenshot):
+  `EXPO_TOKEN` **is** present. `MAESTRO_CLOUD_API_KEY` is **not** —
+  confirmed by the product owner as intentional: "I have not set it
+  because it might cost me." This is not "unconfirmed" any more; treat it
+  as a standing decision not to pay for Maestro Cloud's hosted device
+  farm, not a to-do to chase. Consequence: `maestro-e2e.yml` as currently
+  designed (EAS-builds an APK, then uploads it to Maestro Cloud to run
+  the flows there) cannot proceed past its Maestro Cloud login step and
+  should not be dispatched expecting a different outcome — action item #2
+  (run it once to prove the Android lane completes) is now moot for this
+  specific implementation, not just still-blocked.
+  **Real alternative worth scoping, not yet built:** Maestro itself can
+  run the same `.maestro/{driver,rider}` flows locally against a free
+  Android emulator inside the GitHub Actions runner (`maestro test`
+  targeting an emulator started via `reactivecircus/android-emulator-runner`
+  or equivalent) — this gets the same real-native-build E2E coverage
+  `maestro-e2e.yml`'s own header comment describes wanting (catching a
+  native-module-only bug like #3174) without any Maestro Cloud billing at
+  all, only ordinary GitHub-hosted-runner minutes. Still needs
+  `EXPO_TOKEN` (already present) to build the APK via EAS, but not
+  `MAESTRO_CLOUD_API_KEY`. Not scoped or built as of this update — a
+  candidate follow-up if zero real-device coverage remains unacceptable
+  long-term, but the product owner has not asked for it and it should not
+  be built speculatively.
 
 ### B26. Regina (main, non-airport) service area shows `pst_enabled=false` despite `pst_rate=6` already set and a prior change log claiming it was enabled
 - [x] **Status:** CLOSED (2026-08-22). **This item's own tracking was stale —
@@ -12922,7 +12973,32 @@ record of what was assumed vs. what was actually true</summary>
 
 ### B41. `ci.yml`'s `mobile-build` job never pins `--profile` on its `eas build` calls — decision held for discussion, not yet made
 
-- [ ] **Status:** open. Found 2026-09-02 while reviewing `ci.yml`'s
+- [x] **Status:** CLOSED (2026-09-08), PR #5104. `mobile-build` now pins
+  `--profile production` explicitly on all 4 `eas build` calls — the
+  `eas build:list`-history question below is now moot: confirmed via
+  EAS's own documented default (omitting `--profile` resolves to a
+  profile literally named `production`, if one exists), not by dashboard
+  access. Every prior run of this job was therefore already building
+  `production`; this just makes it explicit instead of implicit.
+  **The 2026-09-07 target design's `staging` → `preview` half turned out
+  to already be built and live**: `test-env.yml`'s `build-mobile-test`
+  job already triggers on `staging` + `[build]` with `--profile preview`
+  — a fact this item's prior updates never cross-referenced. A first
+  draft of the PR #5104 fix tried adding the same `staging` trigger to
+  `mobile-build` too, which `spinr-cicd-infra-reviewer` caught before
+  merge as a real duplicate-billing bug (8 real EAS builds instead of 4
+  per staging push) — reverted; `mobile-build` stays `main`-only, exactly
+  as before, `staging` stays solely `test-env.yml`'s. Also fixed a real
+  latent bug found along the way: both apps' `eas.json` `preview` profile
+  had no explicit `distribution` field (EAS defaults to `store`, not
+  `internal`, when omitted) — added `distribution: internal` explicitly,
+  which also corrects `test-env.yml`'s existing, already-running
+  `staging` builds (previously silently store-shaped). Full trace:
+  `docs/change-log/2026-09-08-b41-mobile-build-profile-pin.md`. Not
+  verified against a real EAS build (no EAS/Expo credentials in this
+  session) — verified via EAS's own documented defaults, YAML/JSON
+  parsing, and a dedicated CI/CD reviewer pass instead.
+- [ ] **Status (superseded by the above):** open. Found 2026-09-02 while reviewing `ci.yml`'s
   `mobile-build` job (rider+driver-app native builds gated on `[build]` in
   a `main`-branch commit message, per PR #4871). A related gap in the same
   job (driver-app missing entirely despite `needs: [rider-app-test,
@@ -19306,6 +19382,9 @@ how much they de-risk a public launch._
 
 ### C43. RLS disabled on 4 production tables — including `settings` (holds Stripe/Twilio/Google Maps keys)
 
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
+
 - [ ] **Status:** open, deliberately deferred by the user (2026-08-25) until
   the legacy-migration work (A41-family, this item's own §"related work"
   below) concludes — not fixed, not forgotten. Found via the Supabase MCP
@@ -22006,8 +22085,28 @@ how much they de-risk a public launch._
 - **Files:** `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_db_errors.py`,
   `backend/tests/test_dispatch_match_attempt_branches.py`.
 
-### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue
+### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue — CLOSED (2026-09-08)
 
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c72-fingerprint`.
+  Implemented fix option 1 from below: `compute_fingerprint()` now also
+  hashes a normalized `log_excerpt` per error, not just `job::category::
+  description`. Normalization (`_normalize_excerpt`, new helper) collapses
+  digit runs to `#` so trivial run-to-run noise (failure counts, line
+  numbers, durations) doesn't fragment the fingerprint for a genuinely
+  recurring failure, while the excerpt's actual test/assertion/error text
+  — the part that actually distinguishes two different bugs sharing the
+  same fixed description template, exactly what #4925 (see below) showed
+  missing — now flows into the hash. Added 3 new tests: distinct excerpts
+  in the same job/category/description bucket now diverge; digit-only
+  excerpt differences still dedupe onto one fingerprint; `_normalize_excerpt`
+  handles empty/missing input. All 7 tests in
+  `test_create_github_issue.py` pass (4 pre-existing, unaffected in
+  behavior; 3 new). Options 2 and 3 below were not implemented — option 1
+  alone directly closes the finding (a title/severity staying accurate
+  follows from failures no longer being merged in the first place), and
+  adding label-reconciliation on top would be a second, separable change
+  to the same file, not needed to close this specific gap.
+- **Original status (superseded by "closed" above):**
 - [ ] **Status:** open — found 2026-09-04 while root-causing what first
   looked like a gap in C21's 2026-09-04 follow-up (see that entry's
   same-day correction for the full investigation trail; this item is the
@@ -22063,6 +22162,9 @@ how much they de-risk a public launch._
 
 ### A43. #5048 merged a 34-file security/money batch 47 seconds after opening, before CI finished, bypassing CLAUDE.md's own escalation gate — directly caused B42 and a live OTP-regex defect
 
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
+
 - [ ] **Status:** open — found 2026-09-07 while compiling a PR/backlog
   status review of 2026-09-06 activity (PR #5048, #5050). Not a code
   finding — a process/governance gap in how a live-tested-surface PR got
@@ -22116,6 +22218,9 @@ how much they de-risk a public launch._
   audit log, which this session also cannot read).
 
 ### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
+
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
 
 - [ ] **Status:** open, blocked on data access — found 2026-09-07 while
   reviewing PR #5050's own body, which disclosed the defect and fixed the
@@ -22217,6 +22322,9 @@ how much they de-risk a public launch._
   not be read as "no events were affected."
 
 ### C73. `main`'s merge path doesn't wait for `backend-test` (or block on an already-failed check) — #5048 merged while both were still failing/in-flight
+
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
 
 - [x] **Status:** root cause CONFIRMED 2026-09-07 via `mcp__github__
   pull_request_read(method="get_check_runs")` against PR #5048's actual
@@ -22418,8 +22526,40 @@ how much they de-risk a public launch._
 
 ### C82. Per-worker metrics counters flap under >1 Uvicorn worker (F6)
 
-- [ ] **Status:** open, scheduled with WS-3 (worker-tier topology), NOT
-  fixed in the 2026-09-08 hardening tranche. Per-process metrics design is
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`
+  for the metrics-labeling half; the `UVICORN_WORKERS` consistency half was
+  attempted and then **reverted** after review (see below) —
+  `should_spawn_on_api()` loop-spawning topology (WS-3's other half) remains
+  a separate, untouched concern. `render_prometheus()` now attaches a
+  `worker_pid` label (`os.getpid()`, read live at render time, not cached
+  at import, plus a guard that strips any caller-supplied `worker_pid` key
+  first so it can never render as a duplicate label) to every
+  counter/gauge/histogram line via a new `_with_worker_pid()` helper,
+  reusing the same label name/reasoning already established in
+  `routes/admin/monitoring.py`'s fan-out stats. Docstring states the
+  aggregation contract: counters/histograms are additive (`sum by (...)`
+  across workers is correct); gauges are not (`max by (...)`, never
+  `sum by (...)`) — confirmed via grep that no existing query in
+  `metrics-agent/grafana/alert-rules.yaml` or `dashboard-panel.json`
+  currently sums a gauge, so this is a preventive contract for future
+  dashboard authors, not a fix to an existing wrong query.
+  **`UVICORN_WORKERS` default was NOT changed** — an initial attempt pinned
+  `${UVICORN_WORKERS:-4}` → `${UVICORN_WORKERS:-2}` in `backend/Dockerfile`
+  and `railway.json` to match `fly.toml`'s explicit setting, but
+  `spinr-observability-reviewer` caught that this assumed Railway shares
+  Fly's memory budget with no evidence — `docs/adr/006-railway-deployment.md`
+  documents `--workers 4` as a *deliberate*, resource-sized decision specific
+  to Railway's own topology (4 workers × background loops across its 2
+  replicas), not an arbitrary default. Reverted both files rather than ship
+  an unverified capacity assumption; **still open**: someone with access to
+  Railway's dashboard should confirm its actual current instance
+  plan/memory before any future attempt to change this default (note
+  ADR-006 predates the Fly-primary switch, ADR-007, and the loop count
+  growing from 7 to 41, so its own "4 workers × 7 loops" math is itself
+  stale — the right number today isn't necessarily either 2 or 4, it's
+  whatever Railway's current instance size actually supports). See
+  `docs/change-log/2026-09-08-c82-metrics-worker-pid-label.md`.
+- **Original plan:** Per-process metrics design is
   documented and cross-replica scraping is solved (ADR-010); the untracked
   gap is `fly.toml`'s `UVICORN_WORKERS="2"` sharing one port so each scrape
   hits a random worker. Plan: add a `worker_pid` label in
@@ -22458,48 +22598,119 @@ how much they de-risk a public launch._
   about it was already correct.
 - **Found during:** PR #5085's validation of PR #5079's maintainability
   finding (documentation drift).
+- **Follow-up (2026-09-08):** the 2026-09-08 closure was incomplete — grep
+  found 2 more "16 startup loops" instances the original fix missed
+  (`AGENTS.md`'s "Background task safety" line and its "Background Loop
+  Recipe" section header line) plus one dead `graphify-out/GRAPH_REPORT.md`
+  reference in a "Graphify coverage" bullet under the `agents/` role table
+  — inconsistent with this same fix's own removal of the `## graphify`
+  section for citing a directory that never existed. All 3 corrected in
+  place; verified no remaining "16 loops"/"18 loops" or `graphify-out`
+  references anywhere in `AGENTS.md`. Status stays closed; this is a
+  same-item correction, not a reopen.
 
-### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed
+### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed — CLOSED (2026-09-08)
 
-- [x] **Status:** partially closed 2026-09-08 on
+- [x] **Status:** CLOSED 2026-09-08. Originally partially closed on
   `claude/pr-5085-5079-hardening-5a2aj7` — 8 `docs/change-log/2026-09-05-*.md`
-  files cite this document by section number (§1.6–§1.11) and it does not
-  exist anywhere in `docs/audit/` or in git history. Added a one-line note
-  under each citation pointing here instead of recovering the document
-  (the finding text each log describes is reproduced in full in that log's
-  own §1, so nothing depends on the missing file to be understood).
-  **Still open:** recovering the actual document from its author's machine
-  (if it still exists) would let readers see the original's other
-  findings in context — human action, not something this session can do.
+  files cite this document by section number (§1.6–§1.11) and it did not
+  exist anywhere in `docs/audit/` or in git history at the time. A one-line
+  note was added under each citation pointing here instead of recovering the
+  document.
+  **Fully resolved:** the actual document was recovered and committed —
+  `docs/audit/2026-09-05-engineering-director-review-round3.md` landed via
+  PR #5033 ("Engineering Director Review Round 3 (2026-09-05)"), merged
+  2026-09-08 16:21:54 UTC, 945 lines. Confirmed present on `main` and
+  content-verified against a separately-read export used to build a
+  cross-reference report the same day — byte-identical. The 8 "missing
+  document" notes added by the original partial-close are now themselves
+  stale (they assert the file doesn't exist, which is no longer true) and
+  were corrected in the same commit that closes this entry.
 - **Found during:** PR #5085's validation of PR #5079's finding.
 
 ### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)
 
-- [ ] **Status:** open, deliberately NOT fixed in the 2026-09-08 hardening
-  tranche (only the two `routes/webhooks.py` sites were — see this file's
-  now-closed F8 entry, folded into the change-log rather than its own
-  numbered item since it shipped same-day). Remaining bare
-  `stripe.*.retrieve/create/...(` call sites, none touched:
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c86-stripe-loop`.
+  Re-triage of the original 9-site list (below) found it was partly stale —
+  2 sites were already correctly offloaded by their callers (the original
+  grep-based pass found the bare `stripe.X.Y(` text but never checked
+  whether the enclosing function was itself thread-wrapped from outside),
+  and 1 has no live caller anywhere in the codebase at all (dead code per
+  its own module docstring). The remaining 5 genuinely-blocking sites are
+  now fixed, each via `asyncio.to_thread` — single calls wrapped directly
+  (`await asyncio.to_thread(stripe.X.Y, args...)`), and the two
+  multi-call pagination loops (which can't be inlined as a lambda) extracted
+  into a named nested function run via `asyncio.to_thread(name)`, the same
+  idiom already used in `stripe_payout_sync_service.py`:
+  1. `utils/payment_retry.py` (`retry_failed_payments`, the
+     `payment_retry (5min)` loop) — 3 sites (`retrieve`/`confirm`/`capture`).
+  2. `utils/reconciliation.py`'s `_sum_stripe_intents` — pagination loop
+     extracted to `_list_and_sum`.
+  3. `utils/stripe_reconcile.py`'s `_run_reconciliation_tick` — pagination
+     loop extracted to `_list_stripe_pis`.
+  4. `services/stripe_kyc_sync.py`'s `get_legal_name_and_address_from_stripe`
+     — single call. Its caller, `routes/admin/compliance.py`'s annual T4A
+     export, invokes this once per driver inside a loop over the whole
+     qualifying set — the original "caller frequency not yet traced" note
+     undersold this: infrequent (once a year) but every call in that loop
+     blocks all other traffic on the worker while the export runs.
+  5. `routes/admin/dispute_evidence_submission.py`'s
+     `admin_submit_dispute_evidence` — single call, a request-path admin
+     route handler.
+
+  `backend/tests/test_stripe_event_loop_offload.py`'s AST-based static
+  checker (previously only recognizing the lambda-wrapped idiom) was
+  generalized to also recognize the named-nested-function idiom, with
+  coverage added for all 5 fixed files, a lock-in regression test for the
+  2 already-correctly-wrapped files found during re-triage
+  (`stripe_payout_sync_service.py`, `stripe_mapping_import_service.py`),
+  and 3 synthetic tests proving the checker's own logic isn't vacuously
+  true. `spinr-money-auditor`: **SAFE TO MERGE, no findings** — confirmed
+  every diff is a byte-for-byte argument-identical execution-model change,
+  exception propagation unchanged at both `try/except`-wrapped sites,
+  atomic-claim-before-Stripe-call ordering unchanged in `payment_retry.py`,
+  and both idempotency keys unchanged. 273+ tests pass with zero test
+  behavior changes needed for the 5 application fixes (existing tests
+  patch the Stripe SDK methods as module attributes, which `to_thread`
+  still resolves and calls correctly). See
+  `docs/change-log/2026-09-08-c86-stripe-event-loop-offload.md`.
+- **Not fixed here, and correctly so:**
+  `services/legacy_payout_correction_service.py:569`'s `fire_ready_transfers`
+  — its own module docstring states it "is not wired into any route, CLI
+  entry point, or background loop... every call is manual," confirmed via
+  a repo-wide grep for callers outside `tests/` (none exist). No shared
+  event loop for this to block; wrapping it would be busywork with no
+  effect, per this repo's simplicity-first convention.
+- **Original 9-site list (2026-09-08, superseded by the re-triage above):**
   `services/stripe_kyc_sync.py:471`, `utils/payment_retry.py:465/491/558`,
   `utils/reconciliation.py:303`, `utils/stripe_reconcile.py:157`,
   `services/stripe_payout_sync_service.py:234`,
   `services/stripe_mapping_import_service.py:967`,
   `routes/admin/dispute_evidence_submission.py:143`,
-  `services/legacy_payout_correction_service.py:569`. Most of these run in
-  background loops (lower urgency than a request-path webhook handler) —
-  triage each for actual event-loop-blocking impact before wrapping in
-  `asyncio.to_thread` wholesale.
-- **Found during:** PR #5085's validation of PR #5079's F8 finding.
+  `services/legacy_payout_correction_service.py:569`.
+- **Found during:** PR #5085's validation of PR #5079's F8 finding;
+  re-triaged and closed 2026-09-08 on
+  `claude/pr-5085-5079-hardening-c86-stripe-loop` (superseding an
+  intermediate "triaged, not yet fixed" note that briefly existed on
+  `main` via PR #5100 — that snapshot predates the fix in this section).
 
 ### C87. CI scanner-download flakiness (admin-bundle secret scan, trufflehog install)
 
-- [ ] **Status:** open, deliberately skipped in the 2026-09-08 hardening
-  tranche — explicitly marked optional in the validating plan. Observed:
-  `ci.yml`'s `security-scan` failed once at "Install trufflehog v3" (a
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-5a2aj7`.
+  Implemented the proposed fix below in both call sites plus, self-found
+  while fixing the first, the second Trivy→SARIF upload pair in
+  `docker-image-scan`: `curl -fsSL --retry 5 --retry-delay 3
+  --retry-all-errors` download-to-file, `tar -tzf` verify before extracting,
+  and `hashFiles(...) != ''` guards on both SARIF-upload steps so a failed
+  scan produces one clear failure instead of a second, misleading one.
+  `spinr-cicd-infra-reviewer`: SAFE TO MERGE, no blockers/warnings. See
+  `docs/change-log/2026-09-08-c87-ci-scanner-download-retry.md`.
+- **Original observation:** `ci.yml`'s
+  `security-scan` failed once at "Install trufflehog v3" (a
   non-gzip download) and `security-gates.yml`'s `bundle-secrets` (G5b)
   failed once on an HTTP 504 the same day; both passed on the next run
   without any code change, consistent with transient CDN/network flakes
-  rather than a real defect. Proposed fix if this recurs:
+  rather than a real defect. Proposed fix (now implemented):
   `curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors`, verify with
   `tar -tzf` before extraction, and guard the Trivy SARIF upload with
   `if: always() && hashFiles('trivy-results.sarif') != ''`.
@@ -22507,7 +22718,10 @@ how much they de-risk a public launch._
 
 ### C88. `rides.refund_amount` has no committed schema definition anywhere in this repo, and is missing entirely on `spinrmobileapp`
 
-- [ ] **Status:** open — found 2026-09-08 while attempting the mandatory
+- [x] **Status:** CLOSED 2026-09-08 — all three action items complete. See
+  "Closed" entry below the original write-up for the final state; the
+  original write-up is kept as-is for the investigation history.
+- [ ] **Status (original, superseded by "Closed" below):** open — found 2026-09-08 while attempting the mandatory
   post-merge verification step for PR #5088's F1 fix (the `charge.refunded`
   compare-and-swap on `rides.refund_amount`, `docs/change-log/
   2026-09-08-charge-refunded-cas-ledger-dedupe.md`). Two distinct findings:
@@ -22560,26 +22774,111 @@ how much they de-risk a public launch._
      mandatory pre-merge verification step from PR #5088's Tier 7 was
      never actually performed against a database that has the column in
      question, on either side of the merge.
-- **Action:** (1) a human with `Spinr-Prod` access should run the actual
-  round-trip check (`SELECT id, refund_amount FROM rides WHERE
-  refund_amount = <a real value read back> AND id = <that row's id>`,
-  confirm it returns that exact row) against the real column — if it
-  doesn't round-trip cleanly, the F1 CAS filter needs the `$lte`-based
-  fallback documented in the change-log referenced above. (2) Add the
-  missing `ALTER TABLE rides ADD COLUMN IF NOT EXISTS refund_amount
-  NUMERIC(8,2) DEFAULT 0` as a proper new-numbered migration (append-only;
-  never edit history) so `spinrmobileapp` and any future environment
-  bootstrapped from `backend/migrations/` alone actually has this column,
-  and so it's no longer solely dependent on undocumented manual DDL. (3)
-  Re-scope this session's Supabase connector (or add a second one) to
-  reach `Spinr-Prod` if ongoing production verification access is wanted —
-  a decision `.claude/context/connector-scoping.md` already flags as "not
-  yet made."
+- **CORRECTION (2026-09-08, human-confirmed): `spinrmobileapp`
+  (`soavhtdhefowwvforzwb`) IS production.** Every "the real column is
+  presumably on `Spinr-Prod`, which we can't reach" framing below (in this
+  item and the original write-up above) was built on an unverified
+  name-based assumption — see `.claude/context/connector-scoping.md`'s
+  Supabase row for the full corrected account. This does **not** change
+  finding #2 above; it changes what that finding means: the column is
+  confirmed missing on **the real production database**, re-confirmed
+  live again on 2026-09-08 (empty `information_schema.columns` result),
+  not on some pre-production stand-in. Practical implication worth
+  stating plainly: if this column has truly never existed on production,
+  every real `charge.refunded` Stripe webhook hitting production would
+  have failed at the `db_supabase.update_one(..., {"refund_amount": ...})`
+  call — this code path's own error handling raises loudly rather than
+  swallowing (`if cas_updated is None: ... raise HTTPException(500, ...)`),
+  so this should have been visible (failed webhook retries in Stripe's
+  dashboard, 500s in logs/Sentry) if any real refund has actually occurred
+  against this project. Not yet investigated whether any has.
+- **Action, corrected:** (1) run the round-trip check directly — no longer
+  blocked, since production is the project this session's connector
+  already reaches. Blocked instead on step (2): the column has to exist
+  first. ~~a human with `Spinr-Prod` access~~ not needed. (2)
+  `backend/migrations/408_rides_refund_amount.sql` (added 2026-09-08,
+  reviewed by `spinr-migration-reviewer`, merged) has **not yet been
+  applied to `spinrmobileapp`** — this is now a write to a confirmed
+  production database and needs the user's explicit go-ahead before
+  running it from a session, not something to apply unilaterally. (3)
+  ~~Re-scope the connector to reach `Spinr-Prod`~~ **moot** — production
+  was already reachable the whole time. C89 (below) is superseded by this
+  correction.
+- **Closed 2026-09-08 (human-directed).** The user gave explicit,
+  documented authorization to apply migration 408 directly to production
+  and to keep the Supabase connector at full read/write/other permissions
+  (not narrowed to read-only) through **October 31, 2026** as a time-boxed
+  exception — see `.claude/context/connector-scoping.md`'s Supabase row for
+  the exact wording and the revisit trigger. All three action items are
+  now done:
+  1. **Migration applied.** `backend/migrations/408_rides_refund_amount.sql`
+     applied to `spinrmobileapp` (`soavhtdhefowwvforzwb`) via
+     `mcp__Supabase__apply_migration`. `rides.refund_amount NUMERIC(8,2)
+     DEFAULT 0` now exists on production, re-confirmed via
+     `information_schema.columns`. A matching row was inserted into that
+     project's own `schema_migrations` table (`filename`, `checksum` =
+     sha256 of the file bytes) so this repo's own
+     `backend/scripts/run_migrations.py --status` will show 408 as applied,
+     not pending, the next time it runs against this project — reconciling
+     the two separate tracking mechanisms (Supabase's native
+     `supabase_migrations` from the MCP tool, and this repo's
+     `schema_migrations`) rather than leaving them to drift apart.
+  2. **Live round-trip verification performed, safely.** Ran the exact
+     write → CAS-filter → read sequence `routes/webhooks.py`'s F1 fix
+     depends on, against a real production `rides` row
+     (`261cd5f1-7c67-44bf-84bd-09a06206123a`), wrapped in
+     `BEGIN; UPDATE ...; SELECT ...; ROLLBACK;` so no production data was
+     actually left changed. Confirmed: writing `refund_amount` and then
+     re-reading it with an equality filter on the just-written value
+     matches the same row (the exact pattern `webhooks.py`'s
+     `update_one({"id": ride_id, "refund_amount": prev_refund_amount_raw},
+     ...)` CAS check relies on) — no float/Decimal round-trip mismatch.
+     Post-rollback re-read confirmed `refund_amount` back at its default
+     `0.00`, proving the transaction left no trace. This supersedes the
+     earlier `area_fees_total` proxy verification with a direct check on
+     the real column.
+  3. **Connector re-scoping:** explicitly deferred, not skipped — the user
+     decided to keep full read/write/other permissions (not narrow to
+     read-only) until October 31, 2026, to retain write access for
+     migration work like this one. Recorded as a dated, time-boxed
+     exception in `.claude/context/connector-scoping.md`, not a silent
+     "won't fix."
+  - **Not verified:** whether any real `charge.refunded` webhook ever hit
+    production before today while the column was missing (the "every real
+    refund webhook would have 500'd" implication raised above). Out of
+    scope for this closure — would require a Stripe dashboard / Sentry
+    log review, not a schema check. If this matters, it's a follow-up, not
+    part of C88.
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
 ### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
 
-- [ ] **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
+- [x] **Status:** SUPERSEDED 2026-09-08 (human-confirmed) — the entire
+  premise was wrong. `spinrmobileapp` (`soavhtdhefowwvforzwb`, org
+  `Spinr_MobileApp`) IS production; it was never a pre-production stand-in
+  needing a second connector to reach the "real" database. `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`) / `MobileAppStaging` (`mvmyygoinicjdpqprizr`),
+  under `swarnkiran88@gmail.com's Org`, remain completely unidentified —
+  the only fact ever recorded about them is a project name seen once via
+  a live API call on 2026-09-07 — and are **not being pursued**; the human
+  confirmed `spinrmobileapp` is the project to work with, full stop. No
+  second connector is needed. See `.claude/context/connector-scoping.md`'s
+  Supabase row for the corrected account and the real, more urgent
+  follow-up this correction raises: the *existing* connector carries
+  full read/write/admin tools (including `pause_project`/`restore_project`)
+  against what is now confirmed to be production, which the row's own
+  previously-written policy already says should be narrowed to read-only
+  — not yet done, flagged to the user, awaiting their call on timing.
+  **Resolved 2026-09-08:** the user's call was to keep full read/write/other
+  permissions (explicitly declining to narrow to read-only right now,
+  since write access was still needed for C88's migration apply) through
+  **October 31, 2026**, as an explicit, dated, time-boxed exception — not a
+  silent "leave it broad." See `.claude/context/connector-scoping.md`'s
+  Supabase row for the exact text and the revisit trigger that date sets
+  up. No second connector was needed or created.
+- **Original (superseded) framing below, kept for the record — do not act
+  on it, it assumes production was unreachable, which is now known false:**
+- [ ] (superseded) **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
   Supabase row already flags this as "a separate, still-open decision, not
   yet made"; recorded here as its own tracked item so it doesn't stay
   buried inside a connector-audit doc, and because C88 just hit its real
@@ -22623,6 +22922,55 @@ how much they de-risk a public launch._
   account/org memberships should pick one of the options above (or reject
   the need entirely, if C88-style live verification isn't considered worth
   the access it requires).
+- **Recommendation (2026-09-08): Option 2** — a second, separately-scoped
+  Supabase connector dedicated to `Spinr-Prod`/`MobileAppStaging`, kept
+  read-only, never the same connector used for routine `spinrmobileapp`
+  dev work. Reasoning: Option 1 (invite the current account into the other
+  org) directly contradicts the narrowest-scope principle
+  `.claude/context/connector-scoping.md` itself states — it would hand
+  *every* future session using the existing dev connector standing reach
+  into production, for the sake of an occasional verification need. Option
+  3 (do nothing) is the safest in isolation but means C88-style questions
+  keep stalling on a human every time; not worth foreclosing entirely when
+  Option 2 gets the same safety at a one-time setup cost. A second,
+  narrowly-scoped, read-only connector is the one path that gets
+  verification capability without ever widening what a routine dev session
+  can reach or mutate in production.
+  **Concrete steps for whoever owns the Supabase account (human action,
+  not executable from a session):**
+  1. In the Supabase dashboard, under the account that is a member of
+     `swarnkiran88@gmail.com's Org` (the org holding `Spinr-Prod` /
+     `cfrazforbupizntxvvtp` and `MobileAppStaging` / `mvmyygoinicjdpqprizr`),
+     open **Account → Access Tokens** and check whether a token can be
+     scoped to a specific project/org there (Supabase has been adding
+     scoped-PAT support in its dashboard; confirm current availability
+     rather than assuming — this doc can't verify a UI it can't reach).
+     If scoped tokens are available, generate one restricted to
+     `Spinr-Prod` only (add `MobileAppStaging` only if verification work
+     genuinely needs it too — don't grant both by default).
+  2. In claude.ai → **Settings → Connectors**, add a **second** Supabase
+     connector (do not edit/reuse the existing `spinrmobileapp` one) using
+     that scoped token. If the MCP integration exposes URL params, also
+     append `?project_ref=cfrazforbupizntxvvtp&read_only=true` so the
+     restriction holds even if the token itself turns out to be broader
+     than intended.
+  3. Label the two connectors distinguishably in the Connectors UI (e.g.
+     "Supabase — spinrmobileapp (dev)" vs. "Supabase — Spinr-Prod
+     (read-only verification)") so nobody attaches the wrong one to a
+     routine session by mistake.
+  4. **Verify live before trusting it**: from a session using only the new
+     connector, call `list_projects` and confirm it returns exactly
+     `Spinr-Prod` (and `MobileAppStaging` only if deliberately included) —
+     per this doc's own "verified live, not assumed" standard. If it
+     returns more than intended, the token/connector is broader than
+     configured and needs fixing before use.
+  5. Update `.claude/context/connector-scoping.md`'s Supabase row (or add a
+     second row for this new connector) recording the mechanism, scope,
+     and verification date, same as every other entry in that table.
+  This mirrors the user's own stated project-specific-access guardrail
+  (never grant account-/org-wide reach when a narrower scope will do), so
+  it should be the default answer for any future connector-scoping
+  decision in this repo, not just this one.
 - **Found during:** C88's investigation, PR #5088 F1's post-merge
   verification attempt.
 
@@ -22674,7 +23022,59 @@ how much they de-risk a public launch._
   `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
 
 ### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI
-- [ ] **Status:** open — found 2026-09-08 while auditing admin-dashboard for any
+- [x] **Status:** code fix done 2026-09-08 on
+  `claude/pr-5085-5079-hardening-c91-monitoring-baseline`; one step remains
+  and needs a human (see below) — not fully closed until that runs.
+  **Correction to the original root-cause below: driver markers are NOT
+  WebSocket-only.** `page.tsx`'s `loadData()` also fetches
+  `GET /api/admin/monitoring/drivers` (`getMonitoringDrivers()`) on mount
+  and every poll interval, independent of WS health, and feeds the exact
+  same `applyDriver()` path the WS `drivers_snapshot` event does. The real
+  gap was simpler than first diagnosed: `admin-mocks.ts`'s generic `/api/**`
+  fallback returns an **object** shape (`{items:[], data:[], ...}`), but
+  `getMonitoringDrivers()`/`getMonitoringRides()` both expect a **bare
+  array** — `loadData()`'s `Array.isArray(rawDriversResult) ? ... : []`
+  guard silently turned that mismatch into "zero drivers," on every poll,
+  which is why no marker ever appeared. Fixed by adding one `extra` mock
+  case to `visual-regression.spec.ts`'s existing `setupAdminMocks()` call
+  (mirroring `monitoring.spec.ts`'s already-working `mockMonitoring()`
+  pattern for the same two endpoints) returning one fixture driver — no
+  WebSocket mocking needed at all; verified locally that the WS still fails
+  to connect exactly as before (same "Live data paused" banner already in
+  the committed baseline) and the REST mock alone is sufficient. An initial
+  attempt at this fix used `page.routeWebSocket()` to fake the WS handshake
+  end-to-end — it worked for the handshake itself but the driver_snapshot
+  it seeded was then swept away by this same REST-poll gap moments later;
+  diagnosed by tracing actual message delivery with a scratch Playwright
+  script rather than guessing, found the REST path was both the real gap
+  *and* a strictly simpler fix, and the WS-mock code was removed entirely
+  rather than kept alongside a redundant fix.
+  **Verified locally** (this environment's preinstalled Chromium via
+  `LOCAL_CHROMIUM_PATH`, temporary — not committed): built the app with
+  CI's exact env (`NEXT_PUBLIC_API_URL=http://localhost:8000`), ran the
+  real `visual-regression` Playwright project against the committed
+  baseline (not just a scratch script) — `dashboard-monitoring` fails
+  against the *old* baseline exactly as expected, with a diff showing
+  **only** a new green driver marker at the map's center plus the
+  online-count changing from 0 to 1; visually confirmed via the actual
+  diff/actual PNGs. `tsc --noEmit` and `eslint` both clean on the changed
+  file. The dashboard-home/dashboard-rides/dashboard-settings baselines
+  *also* failed in this same local run, on an unrelated ~32px page-height
+  mismatch (font-metric difference between this sandbox's Chromium build
+  and whatever produced the committed baselines) — confirmed pre-existing
+  and unrelated by checking those pages' mocks are untouched by this diff;
+  not something this fix caused or can fix, and not new information beyond
+  what CLAUDE.md §6 already says about baseline recapture needing a real
+  CI runner.
+  **Remaining step (needs a human):** re-capture the `dashboard-monitoring`
+  baseline via `update-visual-baselines.yml` (Actions-dispatch access this
+  session doesn't have) so the committed PNG reflects the fixture marker —
+  `visual-regression-test` in `ci.yml` **will show a real, expected diff on
+  this PR** for that one page until that runs; this is not a spurious CI
+  failure to chase, per CLAUDE.md §6's own guidance for this exact
+  scenario.
+- **Status (original, superseded by "code fix done" above):** open — found
+  2026-09-08 while auditing admin-dashboard for any
   vehicle-icon-related settings/rendering, as a follow-up to the rider-app/
   driver-app marker fixes in C90 above.
 - **Issue/gap:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
@@ -22716,6 +23116,407 @@ how much they de-risk a public launch._
   `admin-dashboard/e2e/admin-mocks.ts`,
   `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`,
   `admin-dashboard/src/app/dashboard/monitoring/page.tsx`.
+
+### C92. `ci.yml`'s `visual-regression-test` job silently never runs on any PR that doesn't also touch `backend/` — contradicts its own "deliberately NOT gated on detect-changes" comment
+- [x] **Status:** CLOSED 2026-09-08 on `claude/pr-5085-5079-hardening-c92-visual-regression-gate`.
+  Found while investigating why PR #5123 (the C91 fix)'s own CI run showed
+  `visual-regression-test` as `skipped`, not the expected real diff against
+  the old baseline documented in that PR's own risk log.
+- **Issue/gap:** `visual-regression-test` (`ci.yml` line ~528) has
+  `needs: [backend-test]` and its own `if:` is a plain
+  `github.ref == 'refs/heads/main' || github.event_name == 'pull_request'`
+  — no `always()`. `backend-test` itself is deliberately path-filtered
+  (skipped when a PR touches neither `backend/**` nor `.github/workflows/**`).
+  GitHub Actions' default dependency semantics apply an implicit
+  `success()` to any `needs` a job's own `if:` doesn't explicitly override
+  with `always()`/`failure()`/`cancelled()` — so whenever `backend-test` is
+  skipped, `visual-regression-test` is skipped too, **regardless of what
+  its own `if:` condition evaluates to.** Confirmed directly against PR
+  #5123's own `detect-changes` job log: `backend=false` (only
+  `admin-dashboard/e2e/visual-regression.spec.ts` and `ACTION_ITEMS.md`
+  changed) → `backend-test` skipped → `visual-regression-test` skipped,
+  even though its own condition (a plain `pull_request` check) was true.
+- **Root cause:** the job's own comment directly above the `if:` line says
+  "Phase 2 ... deliberately NOT gated on detect-changes, unlike e2e-test
+  above" — but `e2e-test` (the job right next to it) guards against this
+  *exact* failure mode with `always() && (...)` in its own `if:`, and
+  `visual-regression-test` was simply missing that same guard. Not a new
+  regression — this has silently been true since the job was made
+  blocking (2026-09-04, ACTION_ITEMS.md B38), meaning **this "fully active
+  and merge-blocking" gate CLAUDE.md's pre-merge release gates §6
+  documents has likely never actually run on any PR that changed
+  admin-dashboard without also touching backend/ or a workflow file** —
+  probably the large majority of real admin-dashboard-only PRs, including
+  PR #5123 itself.
+- **Why this is worse than a normal CI bug:** it fails silent-green, not
+  red — the check shows as `skipped`, which GitHub does not treat as a
+  failing required status the way a red check is, so it would not have
+  been noticed by normal "is CI green" triage. Same failure class as C74
+  (`security-gates.yml`/`ci-guardrails.yml` summary jobs never failing
+  regardless of gate results) — a gate that looks like it's enforcing
+  something but silently isn't for a subset of triggering conditions.
+- **Fix:** added `always() &&` to `visual-regression-test`'s `if:`
+  condition, exactly matching the pattern `e2e-test`'s own `if:` already
+  uses one job above it for the identical purpose. One-line change; no
+  other job in `ci.yml` has this gap — checked every job's `needs:` +
+  `if:` pair. `docker-image-scan`'s own cascade-from-`backend-test` skip
+  is explicitly documented as intentional-and-correct in its own comment
+  (it only ever needs to run when backend changed, since it builds and
+  scans the backend Docker image) — not the same bug, left unchanged.
+  `python-dependency-audit`/`driver-app-test`/`rider-app-test`/`admin-test`
+  all correctly use `always()` already, gated on `detect-changes` directly
+  rather than transitively through `backend-test`.
+- **Verification performed:** `actionlint` clean before and after the
+  change (`/tmp/actionlint .github/workflows/ci.yml`, exit 0 both times).
+  Could not re-run the actual GitHub Actions job in this session (would
+  require pushing and waiting on a real workflow run) — the fix mirrors an
+  already-proven-working pattern (`e2e-test`'s identical `always()` guard)
+  rather than introducing new untested logic, but this specific
+  `if:`-evaluates-correctly-now claim is reasoned from GitHub Actions'
+  documented `needs`/`if` semantics, not observed directly in this session.
+  **Not yet observed**: whether PR #5123 (or this PR) actually shows
+  `visual-regression-test` running (not skipped) in its next CI run —
+  worth a human spot-check once either PR's CI completes.
+- **Files:** `.github/workflows/ci.yml` (`visual-regression-test`'s `if:`
+  condition only — one line changed, comment expanded).
+
+### C93. `ci.yml`'s `detect-changes` job fails on every PR — `pulls.listFiles` 403s for lack of `pull-requests: read`
+- [x] **Status:** CLOSED 2026-09-08 on `claude/ci-token-permissions-c93-c94`.
+  Found 2026-09-08 investigating a `check_run.completed`
+  failure wake on PR #5128 (a 2-file docs-only PR — no plausible causal link
+  to a CI token-permissions error, so the root cause was traced instead of
+  assumed innocent).
+- **Issue/gap:** the `detect-changes / Detect changed surfaces` job (shared
+  by `ci.yml`, `ci-guardrails.yml`, `security-gates.yml` via
+  `workflow_call`) fails on every PR run **of `ci.yml` specifically**. Job
+  log: `dorny/paths-filter`'s `listFiles(pull_number, per_page: 100)`
+  GitHub API call returns `Resource not accessible by integration`,
+  immediately after the job's own token-permissions banner shows only
+  `Contents: read`, `Metadata: read`, `Packages: read` — no
+  `pull-requests: read`.
+- **Root cause (corrected 2026-09-08 — the original write-up above
+  overclaimed the scope):** only `ci.yml`'s invocation is missing the
+  permission — it has no top-level `permissions:` block and no job-level
+  override on `detect-changes` (`ci.yml:37-38`), so the job falls through
+  to this repo's restrictive default token scope. **`ci-guardrails.yml`
+  and `security-gates.yml` do NOT need a fix** — both already grant
+  `pull-requests: write` at the workflow level (`ci-guardrails.yml:25-27`,
+  `security-gates.yml:37-39`), and `write` is a superset of `read` for the
+  same scope. Confirmed directly, not assumed: pulled the job list for
+  `security-gates.yml`'s own run on this PR's head commit
+  (`f998b7d`/run `34252912555`) — its `detect-changes / Detect changed
+  surfaces` job shows `conclusion: "success"`, proving it does not
+  reproduce there. Every actual failure event received in this session
+  traced back to `ci.yml` (`workflow_name: "CI/CD Pipeline"`) specifically
+  — never to the other two callers. `dorny/paths-filter` needs
+  `pull-requests: read` to call the Files API on a shallow
+  (`fetch-depth: 1`) checkout, since it can't do a local `git diff` for a
+  merge-commit ref.
+- **Confirmed not this PR's (or any single PR's) fault:** same job, same
+  step, same error on PR #5128 (docs-only) — a two-file `AGENTS.md`/
+  `ACTION_ITEMS.md` change cannot alter a GitHub Actions token's granted
+  permission scopes. This is a workflow-config defect, reproducible on any
+  PR in the repo (in `ci.yml` specifically).
+- **Why it hasn't blocked merges:** `detect-changes.yml`'s own header
+  comment (lines 14-27) documents this exact failure mode as an accepted,
+  designed fallback — every caller treats `result != 'success'` as
+  fail-open ("run everything") rather than as a blocking failure. So this
+  bug currently only costs the fast-feedback optimization (every job in
+  `ci.yml` runs unfiltered on every PR, i.e. no time/cost saved by
+  path-scoping there) — it has never caused a false-skip or a false
+  merge-block. Distinct from C74 (summary jobs that never fail) and C92
+  (a job that silently skips when it shouldn't) — this is the filter
+  itself failing, in the direction that costs CI minutes, not correctness.
+- **Fix:** add a job-level `permissions:` block (`contents: read`,
+  `pull-requests: read`) to `ci.yml`'s `detect-changes` job only — a
+  4-line addition, no other file needs to change for this item. Filed and
+  fixed together as `docs/change-log/2026-09-08-c93-c94-ci-token-permissions.md`;
+  see that PR for the applied diff.
+- **Verification performed:** read `detect-changes.yml` in full (fail-open
+  design confirmed from its own comments); grepped `ci.yml` /
+  `ci-guardrails.yml` / `security-gates.yml` for `permissions:` blocks;
+  pulled `security-gates.yml`'s own job-run data for this PR's head commit
+  to directly confirm its `detect-changes` job succeeds (not just reasoned
+  about); traced every failure event's originating workflow via
+  `actions_get`/`get_workflow_run` rather than assuming from the shared
+  job display name.
+- **What was NOT verified:** did not check whether org-level default
+  workflow permissions (Settings → Actions → General) were recently
+  tightened, which would be an alternate/additional root cause reachable
+  only by a repo admin, not by reading files in this session; did not
+  independently reproduce on `ci-guardrails.yml` beyond the absence of any
+  failure event for it in this session (no direct job-run pull for that
+  workflow, unlike the one done for `security-gates.yml`).
+
+### C94. Every `codeql-action/upload-sarif` call site in the repo fails on every PR — `wait-for-processing` 403s for lack of `actions: read`, PLUS a deeper repo-setting blocker underneath
+- [ ] **Status:** PARTIALLY FIXED 2026-09-08 on `claude/ci-token-permissions-c93-c94`
+  (same PR as C93's fix) — reopened, not closed. The `actions: read` fix is real,
+  necessary, and verified working on PR #5131's own first CI run: the original
+  `##[error]Resource not accessible by integration - .../workflow-runs#get-a-workflow-run`
+  is confirmed **gone** from the `security-scan` job log after the fix. But the
+  job still fails end-to-end — a **separate, deeper blocker** surfaced right
+  behind it (see "New blocker" below), so the user-visible symptom (these jobs
+  going green) is **not yet achieved**. Do not re-close this without confirming
+  that blocker is also resolved. Found immediately after C93, same PR (#5128),
+  same investigation session — the `security-scan` check itself came back
+  `failure` right after `detect-changes` did. **Widened same day**: `G3 ·
+  Semgrep (Spinr rules + public)` in `security-gates.yml` failed on this
+  same PR with the identical `##[error]Resource not accessible by
+  integration - .../rest/actions/workflow-runs#get-a-workflow-run` after
+  its own `codeql-action/upload-sarif` step (`security-gates.yml:380`,
+  uploading `semgrep.sarif`) — proving this isn't isolated to
+  `security-scan`. Grepped every `codeql-action/upload-sarif` call site in
+  `.github/workflows/`: **4 total** — `security-gates.yml:380` (G3
+  semgrep), `security-gates.yml:676` (G6 container-scan), `ci.yml:958`
+  (security-scan/Trivy fs scan), `ci.yml:1079` (docker-image-scan/Trivy
+  image scan). Renamed this entry from "`security-scan`'s..." to "every
+  call site..." to reflect the full scope found — same ID, not a new one,
+  since it's one root cause.
+- **Correction (2026-09-08, before filing the fix):** the original
+  write-up below said all 4 sites were missing `security-events: write`
+  too — **that was wrong.** Re-read every enclosing job/workflow block
+  directly: `ci.yml`'s `security-scan` job already has `security-events:
+  write` at `:919` (a `-A 3` grep context cut it off the first time,
+  producing the false "`contents: read` only" claim); `ci.yml`'s
+  `docker-image-scan` job (the real home of the `:1079` call — not
+  `security-scan`, another correction to the original site list above)
+  already has it at `:981`; `security-gates.yml`'s workflow-level block
+  already has it at `:40`. **`security-events: write` is present
+  everywhere it's used. The only permission actually missing at all 4
+  sites is `actions: read`**, needed for `wait-for-processing: true`'s own
+  workflow-run status poll — a different scope than the one that
+  authorizes the SARIF upload itself.
+- **Issue/gap:** `ci.yml`'s `security-scan` job (`:915-919`, `permissions:
+  contents: read` + `security-events: write`, no `actions: read`) runs
+  `github/codeql-action/upload-sarif@...` with `wait-for-processing: true`
+  (`:958`). Job log shows the SARIF file itself gets built, validated and
+  fingerprinted successfully, then:
+  `##[warning] Failed to gather information for telemetry: Resource not
+  accessible by integration - .../rest/actions/workflow-runs#get-a-workflow-run.
+  Will skip sending status report.` (non-fatal, x2), followed by
+  `##[error] Resource not accessible by integration -
+  .../rest/actions/workflow-runs#get-a-workflow-run` — the same call,
+  logged as a hard error rather than a warning, which is what turns the
+  job `failure`. Same root cause class as C93: `actions: read` is missing
+  everywhere `wait-for-processing: true` is used.
+- **Separate incidental finding, same job, non-fatal:** the `trufflehog`
+  step (`:~940`) also logs `error trufflehog encountered errors during
+  scan {... "unable to resolve ref: no base refs succeeded for base:
+  \"origin/main\""}` — the shallow/multi-branch checkout this job uses
+  doesn't give trufflehog a resolvable `origin/main` ref for its
+  `--since-commit` diff scan. This one does **not** fail the job (trufflehog
+  reports `chunks: 0` and exits clean) — noted here only because it's in
+  the same job and looks alarming in the log; not itself C94's cause, and
+  not filed separately since it has zero observed effect on job outcome.
+- **Confirmed not this PR's:** same causal-impossibility argument as C93 —
+  a 2-file `AGENTS.md`/`ACTION_ITEMS.md` diff cannot alter a workflow
+  job's declared `permissions:` block or GitHub App installation scopes.
+- **Why it hasn't silently corrupted security posture:** the Trivy scan
+  itself ran and produced real results (`trivy-results.sarif` built,
+  validated, fingerprinted) — the failure is in *uploading/confirming* the
+  scan's own results to GitHub's code-scanning UI, not in running the
+  scan. Whether the SARIF actually reached Code Scanning despite the
+  `wait-for-processing` failure was **not verified** in this session (would
+  need to check the repo's Security → Code scanning alerts tab, which this
+  session has no browsing access to) — flagging this as the one part of
+  C94 that needs a human check, since a scan that silently never uploads
+  would be worse than one that fails loudly.
+- **Fix:** add `actions: read` (only — `security-events: write` needs no
+  change) to the enclosing scope at all 4 sites: `ci.yml`'s `security-scan`
+  job (`:917-919`) and `docker-image-scan` job (`:979-983`); one addition
+  to `security-gates.yml`'s workflow-level `permissions:` block
+  (`:37-40`), which covers both `semgrep` (G3) and `container-scan` (G6)
+  since neither declares its own job-level override. Considered dropping
+  `wait-for-processing: true` instead (removes the failing poll entirely)
+  but rejected it — that would remove real verification that the SARIF
+  upload actually completed, trading a loud failure for a silent unknown;
+  granting the missing permission is the smaller, more correct fix. Filed
+  and fixed together — see
+  `docs/change-log/2026-09-08-c93-c94-ci-token-permissions.md` for the
+  applied diff.
+- **New blocker found 2026-09-08, confirmed on PR #5131's own first CI run
+  after the `actions: read` fix landed:** the `actions: read` fix works —
+  the original `Resource not accessible by integration -
+  .../workflow-runs#get-a-workflow-run` error is confirmed gone from
+  `security-scan`'s job log. But the job still fails, now on a different,
+  deeper error: `##[warning]Code scanning is not enabled for this
+  repository. Please enable code scanning in the repository settings.`
+  immediately followed by `##[error]Please verify that the necessary
+  features are enabled: Code scanning is not enabled for this repository.`
+  This is **not** a GITHUB_TOKEN permission scope — it's a repository-level
+  GitHub feature toggle (Settings → Code security and analysis → Code
+  scanning), and for a private repo it may require GitHub Advanced
+  Security (a paid add-on) to even be enableable. No workflow YAML change
+  can fix this. It also means the earlier "considered dropping
+  `wait-for-processing`" reasoning above was based on incomplete
+  information: the failure is on the SARIF upload's own precondition
+  check, not on the `wait-for-processing` poll specifically, so dropping
+  that flag would not have helped either. **Confirmed on all 4 sites**
+  (2026-09-08, later same day): `security-scan`, `G6`/`container-scan`,
+  `G3`/`semgrep`, and `docker-image-scan` all show the identical
+  `Code scanning is not enabled for this repository` error — this is
+  conclusively repo-wide, not specific to any one job.
+- **Human/admin action needed:** a repo admin must enable Code scanning
+  under Settings → Code security and analysis (and, if this is a private
+  repo without GitHub Advanced Security, that may need enabling/purchasing
+  first) before any of these 4 `codeql-action/upload-sarif` steps can
+  succeed. Until then, C94 stays open — the `actions: read` fix is real,
+  correct, and should still merge (it fixes a genuine defect and is a
+  prerequisite for these jobs ever going green), but it does not alone
+  close this item.
+- **Verification performed:** read the full `security-scan` and `G3 ·
+  Semgrep` job logs for both original failures; re-read every enclosing
+  `permissions:` block directly (not via a context-truncated grep this
+  time) for all 4 sites, catching the `security-events: write`
+  misdiagnosis above before shipping a fix based on it; traced the failing
+  API call to the exact `codeql-action/upload-sarif` step via log line
+  ordering in both cases; grepped `.github/workflows/` for every
+  `codeql-action/upload-sarif` call site to confirm the full set of 4;
+  after pushing the fix, pulled the actual job log from PR #5131's own
+  first CI run to confirm the original error is gone and to find the new
+  blocker; after that, pulled job logs for the other 3 sites too and
+  confirmed each independently — not assumed from the first one.
+- **What was NOT verified:** whether the SARIF results actually landed in
+  GitHub's Code Scanning UI despite the reported failures, before this
+  fix, at any of the 4 sites (moot now — Code Scanning being disabled
+  repo-wide means the answer is almost certainly "no" for all of them).
+
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — fixed on the favored hypothesis, not yet independently reconfirmed
+- [x] **Status:** FIX APPLIED 2026-09-08 on `claude/label-run-maestro-contents-perm`,
+  at the user's explicit request to apply the same-shape fix already
+  described below ("Not fixed here" section — since superseded). Added
+  `contents: read` to `label-run-maestro.yml:59-60`'s `permissions:` block,
+  identical in kind to the C93/C94 fix. **This closes the item on
+  hypothesis 1 (real gap) without independently ruling out hypothesis 2**
+  (see below) — the fix is correct either way it turns out (a real gap: it
+  directly fixes it; a pure race: it's a harmless no-op, since `contents:
+  read` was always the correct minimum scope for `actions/checkout`
+  regardless of which hypothesis explained the specific failures observed).
+  Verification of whether this actually resolves the failures needs a real
+  PR run of this workflow (its own PR's checks, or the next `rider-app`/
+  `driver-app`-touching PR) — not yet observed as of this fix.
+- **Verification attempt that didn't work, corrected rather than left
+  standing (2026-09-08):** tried marking PR #5133 (this fix's own PR) ready
+  for review, assuming that would re-trigger `label-run-maestro.yml`'s job
+  and let the `if: github.event.pull_request.draft == false` gate finally
+  pass. It didn't — checked the workflow's actual trigger afterward:
+  `on: pull_request: types: [opened, synchronize, reopened]`.
+  `ready_for_review` is not one of those three event types, so converting
+  a PR out of draft does not itself fire this workflow at all; only a
+  genuine `opened`/`synchronize` (a new commit)/`reopened` event does.
+  **Still not independently confirmed as of this note.** Real confirmation
+  needs either a new commit pushed to this PR while it's non-draft, or
+  observation on the next real PR touching `rider-app/**`/`driver-app/**`
+  after this fix merges to `main`.
+- **First real synchronize-triggered test, inconclusive (2026-09-08):** the
+  correction commit above (`671fb00`) landed as a genuine `synchronize`
+  event on the now-non-draft PR — `label-run-maestro.yml`'s job ran for
+  real and failed, but **not diagnostically**: `status: completed`,
+  `conclusion: failure`, empty `output.title`/`summary`/`text`, no `steps`
+  array in the job listing, and `get_job_logs` 404'd on every attempt
+  (log content never became available). Before concluding the fix failed,
+  checked whether this was isolated to this one job: **all 6 jobs of the
+  wholly unrelated `pr-checks.yml` workflow failed identically, at the
+  same push, with the same empty-output/404-logs signature** —
+  `pr-checks.yml` already declares `contents: read` explicitly
+  (`pr-checks.yml:18-20`), so a permissions gap cannot explain its
+  failure. A correctly-permissioned workflow failing in the identical
+  shape at the identical moment is strong evidence this specific failure
+  wave is a transient, repo-wide GitHub Actions platform hiccup at that
+  push (job logs never materializing is consistent with runs that never
+  really executed), not a defect in the C95 fix itself. Could not spend
+  another re-run to confirm (this session's own GitHub integration lacks
+  rerun permission, established earlier on this same item). **Still not
+  cleanly confirmed either way** — the next real `synchronize`/`opened`
+  event on this branch, or the next real PR touching
+  `rider-app/**`/`driver-app/**` after merge, is the next opportunity to
+  observe a clean pass or a genuine repeat of the original
+  `Repository not found` error.
+- **Original investigation (2026-09-08, before the fix), preserved below for
+  the record:** Found
+  2026-09-08 as a `check_run.completed` failure wake on PR #5131 — a PR
+  that does not touch `label-run-maestro.yml` at all, so not this PR's
+  regardless of cause. **Reproduced a second time** ~4 minutes later on a
+  different commit (`f9754b3`'s merge ref `09225e8`, vs. the first
+  occurrence on `6980eb3`'s merge ref) — same 3-retry `Repository not
+  found` pattern, same `Metadata: read` / `PullRequests: write`-only token
+  banner. Two independent occurrences on two different underlying commits,
+  each with 3 retries spanning ~30s, makes a one-off GitHub-side ref-
+  propagation race (hypothesis 2 below) less likely as the *sole*
+  explanation — a real, reproducible `contents: none` permissions gap
+  (hypothesis 1) is now the better-supported read, though still not
+  confirmed by a source outside this session's own observations.
+- **Issue/gap:** `actions/checkout`'s 3 retries of
+  `git fetch ... origin +<merge-sha>:refs/remotes/pull/5131/merge` all
+  returned `remote: Repository not found.` /
+  `fatal: repository 'https://github.com/srikumarimuddana-lab/spinrvm/' not
+  found` — a 404-class failure, not the 403-class `Resource not accessible
+  by integration` failures C93/C94 are about. The job's own token banner
+  showed only `Metadata: read`, `PullRequests: write` — no `contents` at
+  all, consistent with `label-run-maestro.yml:59-60`'s workflow-level
+  `permissions: pull-requests: write` (only key present, so every other
+  scope including `contents` implicitly becomes `none`, not the org
+  default).
+- **Context — this contradicts an earlier same-day finding, not
+  independently new:** a `spinr-cicd-infra-reviewer` pass on the C93/C94
+  diff flagged this exact file as a *theoretical* risk for exactly this
+  reason. At the time, pulled `label-run-maestro.yml`'s own recent run
+  history and found multiple real `conclusion: "success"` runs, and
+  concluded (reported to the user as) a "false alarm" — checkout evidently
+  worked in practice despite the theory. This C95 failure is the first
+  *direct, current* contradiction of that conclusion: same workflow, same
+  permissions block, now actually failing — on the exact PR whose own
+  merge commit triggered it.
+- **Two live hypotheses, not disambiguated:**
+  1. **Real, intermittent permissions gap** — `actions/checkout` on a
+     private repo with `contents: none` can produce `Repository not
+     found` (GitHub's documented behavior: a token with no read access to
+     a private repo gets a 404-shaped "not found" rather than a 403, to
+     avoid leaking the repo's existence) rather than always failing
+     outright — would explain both the historical successes and this
+     failure without contradiction if success depends on some other
+     factor (fork vs. same-repo PR, event type, timing) not yet isolated.
+  2. **Transient GitHub-side ref-propagation race** — fetching
+     `refs/pull/5131/merge` immediately after a push that created a new
+     merge commit (`6980eb3`, itself a `git merge origin/main` this
+     session pushed seconds earlier) is a known class of flake: GitHub
+     recomputes the PR's merge ref asynchronously after a push, and a
+     workflow triggered too soon can 404 on a ref that hasn't finished
+     recomputing yet. 3 retries over ~34 seconds could still be inside
+     that window on a slow recompute.
+- **Attempted to disambiguate, blocked:** tried one re-run
+  (`rerun_failed_jobs` via `mcp__github__actions_run_trigger`) to rule out
+  hypothesis 2 per the flake-triage allowance for a job that died at
+  checkout before any real step ran. **This session's own GitHub
+  integration lacks permission to trigger it**: `403 Resource not
+  accessible by integration` — a different token/permission surface than
+  the workflow's own `GITHUB_TOKEN`, so this is not itself evidence for or
+  against either hypothesis above. No further disambiguation possible from
+  this session.
+- **Originally not fixed in #5131** (superseded): `label-run-maestro.yml`
+  was unrelated to that PR's actual diff — widening it to touch a third,
+  unrelated workflow file over one then-unconfirmed failure would have
+  violated the "don't widen the PR" rule. Fixed separately, in its own PR,
+  once the user explicitly asked for it.
+- **Verification performed (original investigation):** pulled the full job
+  log directly (not inferred from the check-run summary alone); compared
+  the token permissions banner against the file's own `permissions:`
+  block; searched for a rerun mechanism and attempted it before concluding
+  no disambiguation was possible from that session.
+- **Verification performed (fix):** re-read the file after editing to
+  confirm no other job in it declares its own `permissions:` override that
+  would also need the addition (only one `permissions:` block exists,
+  workflow-level, covering the file's single job); `yaml.safe_load`
+  validated. No `actionlint` available in this sandboxed session (no
+  Docker daemon), same disclosed gap as C93/C94's fix.
+- **What was NOT verified:** which of the two original hypotheses was
+  actually correct (moot for correctness — the fix is right either way —
+  but left unresolved as a fact about what was actually happening); a real
+  post-fix PR run of this exact job confirming it now succeeds; whether
+  GitHub Advanced Security or private-repo status affects the 404-vs-403
+  behavior claimed in hypothesis 1 for this specific repo (asserted from
+  general GitHub documentation, not confirmed against this repo's actual
+  settings).
 
 ## Recently completed (do not redo)
 

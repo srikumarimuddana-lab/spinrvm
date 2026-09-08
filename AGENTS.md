@@ -172,7 +172,7 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **WebSocket auth** — first message must be `{"type": "auth", "token": "<jwt>"}`. Connection keys: `"driver_{user_id}"` / `"rider_{user_id}"`. 30-second ping heartbeat; 30 msg/s rate limit; 64 KB max message.
 
-**Background task safety** — the 16 startup loops run on every replica concurrently. Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
+**Background task safety** — the 41 startup loops (`_WATCHDOG_LOOP_NAMES` in `core/lifespan.py` is the live registry — do not hard-code a count elsewhere) run on every replica concurrently. Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
 
 **Settings in DB** — Stripe keys, Twilio credentials, and Google Maps API keys live in the `app_settings` Supabase table (managed via admin dashboard), not in `.env`. This allows rotation without redeployment.
 
@@ -248,7 +248,7 @@ Postgres functions for mutating money or credits: call from backend only, never 
 
 ## Background Loop Recipe
 
-The 16 startup loops in `core/lifespan.py` all run on every replica simultaneously. A new loop must satisfy the replay-safety contract or it will cause duplicate writes, charges, or notifications.
+The 41 startup loops in `core/lifespan.py` (`_WATCHDOG_LOOP_NAMES` is the live registry) all run on every replica simultaneously. A new loop must satisfy the replay-safety contract or it will cause duplicate writes, charges, or notifications.
 
 Template for a new loop:
 
@@ -488,7 +488,6 @@ Python SDK for multi-agent development automation. **Not part of the production 
 | `knowledge_base.py` | `KnowledgeBaseAgent` | Shared knowledge store for all agents |
 | `cli.py` | — | CLI entry-point (`python -m agents.cli`) |
 
-**Graphify coverage** — `OrchestratorAgent` and `AgentRegistry` are high-centrality god nodes in the graphify graph (community 0). Read `graphify-out/GRAPH_REPORT.md` before making cross-agent changes.
 
 ## Codex-Adjacent Directories
 

@@ -24,6 +24,23 @@ import { setupAdminMocks } from './admin-mocks';
  * background and fires its "load" event without issuing any further
  * requests — no live network involved at all. `visual-regression-test` in
  * ci.yml is blocking as of this fix (ACTION_ITEMS.md B38 closed).
+ *
+ * `dashboard-monitoring`'s driver markers are seeded two ways: the page's
+ * WebSocket feed (useMonitoringSocket -> /ws/admin/<clientId>, which this
+ * mocked-network sandbox lets fail exactly like monitoring.spec.ts's
+ * interaction tests already do — see its own file comment) AND a REST poll
+ * (getMonitoringDrivers() -> GET /api/admin/monitoring/drivers, fired on
+ * mount by page.tsx's loadData(), independent of WS health). Before this
+ * fix, nothing mocked either path, so admin-mocks.ts's generic /api/**
+ * fallback (an object shape, not the bare array this endpoint returns) made
+ * loadData()'s Array.isArray guard treat the response as "zero drivers" on
+ * every poll, and the baseline only ever captured the empty map chrome
+ * (background + controls + sidebar) -- a regression in
+ * updateDriverMarker/driverColor in monitoring-map.tsx would not have been
+ * caught here (ACTION_ITEMS.md C91). Fixed below by mocking that one REST
+ * endpoint with a single fixture driver -- confirmed sufficient on its own
+ * (verified locally with the WS left genuinely failing, exactly as today)
+ * to render a real driver marker before capture.
  */
 
 const PAGES = [
@@ -48,10 +65,54 @@ const STUB_MAP_STYLE = {
   layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#e2e2e2' } }],
 };
 
+// One deterministic online driver, positioned at the map's own default
+// center (src/lib/map/maplibre-base.ts's DEFAULT_CENTER = [-106.67, 52.13])
+// so it's always inside the initial viewport regardless of zoom. Matches
+// the MonitoringDriver shape (types.ts) exactly -- the drivers_snapshot
+// handler in page.tsx applies it with no extra validation.
+const FIXTURE_DRIVER = {
+  id: 'e2e_baseline_driver',
+  name: 'Baseline Driver',
+  phone: '+13065550100',
+  photo_url: null,
+  lat: 52.13,
+  lng: -106.67,
+  is_online: true,
+  intent_online: true,
+  is_present: true,
+  presence_ttl: 90,
+  is_available: true,
+  vehicle_make: 'Toyota',
+  vehicle_model: 'Camry',
+  vehicle_color: 'Silver',
+  license_plate: 'SGI-0001',
+  vehicle_type_id: 'standard',
+  rating: 4.9,
+  total_rides: 120,
+  active_ride_id: null,
+  service_area_id: 'saskatoon',
+};
+
 test.describe('Visual regression', () => {
   for (const { name, path, waitFor, hasSidebar } of PAGES) {
     test(`${name} matches baseline`, async ({ page }) => {
-      await setupAdminMocks(page);
+      await setupAdminMocks(page, {
+        extra: async (route, url, method, json) => {
+          // Harmless no-op for every page except dashboard-monitoring,
+          // matching the tile-stub precedent above. getMonitoringDrivers()/
+          // getMonitoringRides() (src/lib/api/live-monitoring.ts) both
+          // expect a bare array -- admin-mocks.ts's generic fallback
+          // returns an object, which loadData()'s Array.isArray guard
+          // would silently treat as "no drivers/rides" (see file comment).
+          if (url.includes('/monitoring/drivers') && method === 'GET') {
+            return json(200, [FIXTURE_DRIVER]);
+          }
+          if (url.includes('/monitoring/rides') && method === 'GET') {
+            return json(200, []);
+          }
+          return null;
+        },
+      });
       await page.route('**/tiles.openfreemap.org/**', (route) =>
         route.fulfill({
           status: 200,
@@ -75,6 +136,13 @@ test.describe('Visual regression', () => {
         // caught failure), for a wait this test can assert on directly
         // instead of inferring from a timeout.
         await page.locator('nav[data-nav-hydrated="true"]').waitFor({ state: 'attached', timeout: 5000 });
+      }
+      if (name === 'dashboard-monitoring') {
+        // Wait for the actual fixture driver marker rather than inferring
+        // from a fixed delay whether loadData()'s initial REST fetch and
+        // subsequent map render finished in time (same rationale as the
+        // data-nav-hydrated wait above).
+        await page.locator('.spinr-map-marker').first().waitFor({ state: 'attached', timeout: 5000 });
       }
       // Let any mount-time transitions/skeleton states settle before capture.
       await page.waitForTimeout(500);

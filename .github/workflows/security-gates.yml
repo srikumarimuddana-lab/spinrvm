@@ -38,6 +38,12 @@ permissions:
   contents: read
   pull-requests: write      # to post finding comments
   security-events: write    # to upload SARIF
+  # C94: codeql-action/upload-sarif's wait-for-processing: true (G3 semgrep,
+  # G6 container-scan) polls GET /repos/.../actions/runs/{run_id} to confirm
+  # the SARIF finished processing -- a different scope than security-events
+  # above, which only authorizes the upload itself. Without this the poll
+  # 403s and fails the job even though the SARIF upload already succeeded.
+  actions: read
 
 jobs:
   # Phase 2 blast-radius-aware triggering (docs/audit/2026-08-27-cicd-gates-
@@ -596,9 +602,14 @@ jobs:
         # gitleaks-action@v2 does not support the `args` input.
         # Use a direct invocation via the gitleaks binary for non-git directory scans.
         run: |
+          # C87: download-then-verify instead of piping straight into tar --
+          # a truncated/HTTP-error download previously failed as a cryptic
+          # tar error mid-extract; --retry absorbs a transient CDN 5xx.
           GITLEAKS_VERSION="8.18.4"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin/ gitleaks
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -tzf gitleaks.tar.gz >/dev/null
+          tar -xzf gitleaks.tar.gz -C /usr/local/bin/ gitleaks
           gitleaks detect \
             --source admin-dashboard/.next/static \
             --no-git \

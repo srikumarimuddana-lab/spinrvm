@@ -107,4 +107,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 # `curl http://[$FLY_PRIVATE_IP]:8000/health` (the same machine's own 6PN
 # address) failed with `ConnectionRefusedError: [Errno 111]` — proving no
 # socket was listening on IPv6 at all, not a firewall/routing issue.
-CMD ["sh", "-c", "uvicorn server:app --host :: --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-4}"]
+# Default of 2 (not 4) mirrors fly.toml's explicit UVICORN_WORKERS="2" --
+# both are the same shared-cpu-1x/1gb-class memory budget, and this default
+# only takes effect when the caller (e.g. Railway, or a manual `docker run`)
+# doesn't set the env var itself. See ACTION_ITEMS.md C82.
+CMD ["sh", "-c", "uvicorn server:app --host :: --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-2}"]

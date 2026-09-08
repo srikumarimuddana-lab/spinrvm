@@ -91,16 +91,58 @@ class TestTimedDecorator:
 
 class TestExposition:
     def test_render_histogram_lines(self):
+        import os
+
         metrics.observe("test_r_ms", 30.0, {"path": "fare"}, buckets=(10, 100))
         out = metrics.render_prometheus()
+        pid = os.getpid()
         assert "# TYPE test_r_ms histogram" in out
-        assert 'test_r_ms_bucket{le="10",path="fare"} 0' in out
-        assert 'test_r_ms_bucket{le="100",path="fare"} 1' in out
-        assert 'test_r_ms_bucket{le="+Inf",path="fare"} 1' in out
-        assert 'test_r_ms_sum{path="fare"} 30.0' in out
-        assert 'test_r_ms_count{path="fare"} 1' in out
+        assert f'test_r_ms_bucket{{le="10",path="fare",worker_pid="{pid}"}} 0' in out
+        assert f'test_r_ms_bucket{{le="100",path="fare",worker_pid="{pid}"}} 1' in out
+        assert f'test_r_ms_bucket{{le="+Inf",path="fare",worker_pid="{pid}"}} 1' in out
+        assert f'test_r_ms_sum{{path="fare",worker_pid="{pid}"}} 30.0' in out
+        assert f'test_r_ms_count{{path="fare",worker_pid="{pid}"}} 1' in out
 
     def test_counters_and_gauges_unaffected(self):
         metrics.inc("test_plain_total")
         out = metrics.render_prometheus()
-        assert "test_plain_total 1" in out
+        assert "test_plain_total{worker_pid=" in out
+        assert out.rstrip("\n").endswith("} 1")
+
+
+class TestWorkerPidLabel:
+    """C82: every exposed series must carry worker_pid so a multi-process
+    Uvicorn deployment doesn't smear one worker's counters into another's
+    on each scrape (see the docstring on render_prometheus)."""
+
+    def test_counter_gets_worker_pid_label(self):
+        import os
+
+        metrics.inc("test_pid_total")
+        out = metrics.render_prometheus()
+        assert f'test_pid_total{{worker_pid="{os.getpid()}"}} 1' in out
+
+    def test_existing_labels_are_preserved_alongside_worker_pid(self):
+        import os
+
+        metrics.inc("test_pid_labeled_total", {"outcome": "success"})
+        out = metrics.render_prometheus()
+        assert 'outcome="success"' in out
+        assert f'worker_pid="{os.getpid()}"' in out
+
+    def test_gauge_gets_worker_pid_label(self):
+        import os
+
+        metrics.set_gauge("test_pid_gauge", 3.0)
+        out = metrics.render_prometheus()
+        assert f'test_pid_gauge{{worker_pid="{os.getpid()}"}} 3.0' in out
+
+    def test_histogram_bucket_and_sum_lines_get_worker_pid_label(self):
+        import os
+
+        metrics.observe("test_pid_hist_ms", 5.0, buckets=(10, 100))
+        out = metrics.render_prometheus()
+        pid = os.getpid()
+        assert f'le="10",worker_pid="{pid}"' in out
+        assert f'test_pid_hist_ms_sum{{worker_pid="{pid}"}}' in out
+        assert f'test_pid_hist_ms_count{{worker_pid="{pid}"}}' in out

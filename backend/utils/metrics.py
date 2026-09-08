@@ -27,6 +27,7 @@ compat shim and the metric names are already Prometheus-idiomatic
 from __future__ import annotations
 
 import functools
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -150,21 +151,41 @@ def _escape_label_value(v: str) -> str:
     return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
+def _with_worker_pid(labels_tuple: Tuple[Tuple[str, str], ...], worker_pid: str) -> Tuple[Tuple[str, str], ...]:
+    return tuple(sorted(labels_tuple + (("worker_pid", worker_pid),)))
+
+
 def render_prometheus() -> str:
-    """Render all counters + gauges in Prometheus text exposition format."""
+    """Render all counters + gauges in Prometheus text exposition format.
+
+    Every series carries a `worker_pid` label (read live via `os.getpid()`,
+    same convention as `routes/admin/monitoring.py`'s per-worker fan-out
+    stats) so a multi-process Uvicorn deployment (`fly.toml`'s
+    UVICORN_WORKERS) doesn't smear one worker's counters into another's on
+    each scrape: without it, a scrape landing on a different worker than the
+    previous one looks like the counter dropped, which breaks Prometheus's
+    rate()/increase() (a real decrease reads as a process restart).
+    Downstream aggregation across workers: counters and histograms are
+    additive, safe to `sum by (...)`. Gauges are NOT additive across
+    workers — each worker independently reports its own read of what's
+    conceptually one shared value (e.g. Redis memory) — so query them with
+    `max by (...)` (grouping out worker_pid), never `sum by (...)`.
+    """
+    worker_pid = str(os.getpid())
     lines: list[str] = []
     snap = snapshot()
     for name, bucket in sorted(snap["counters"].items()):
         lines.append(f"# TYPE {name} counter")
         for labels_tuple, value in sorted(bucket.items()):
-            lines.append(f"{name}{_format_labels(labels_tuple)} {value}")
+            lines.append(f"{name}{_format_labels(_with_worker_pid(labels_tuple, worker_pid))} {value}")
     for name, bucket in sorted(snap["gauges"].items()):
         lines.append(f"# TYPE {name} gauge")
         for labels_tuple, value in sorted(bucket.items()):
-            lines.append(f"{name}{_format_labels(labels_tuple)} {value}")
+            lines.append(f"{name}{_format_labels(_with_worker_pid(labels_tuple, worker_pid))} {value}")
     for name, series in sorted(snap.get("histograms", {}).items()):
         lines.append(f"# TYPE {name} histogram")
         for labels_tuple, cell in sorted(series.items()):
+            labels_tuple = _with_worker_pid(labels_tuple, worker_pid)
             for le, count in zip(cell["le"], cell["buckets"]):
                 le_labels = tuple(sorted(labels_tuple + (("le", _format_le(le)),)))
                 lines.append(f"{name}_bucket{_format_labels(le_labels)} {count}")

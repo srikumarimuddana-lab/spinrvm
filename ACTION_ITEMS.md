@@ -5515,18 +5515,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   this item's acceptance).
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-29) — R-A through R-F all DONE/resolved.
-  The dual-approval gate itself is now DONE (shipped as part of B10 above,
-  PRs #2819/#2820 — Data Transfer's `export_entities` route is wired through
-  the same shared gate as Compliance). Only R-G remains open, and only
-  because it genuinely requires a human privacy/legal determination — a
-  self-contained request package for that
-  review has been prepared at `reports/legal/data-transfer-implied-consent-review.md`
-  (2026-07-28), but the actual determination is still pending a named
-  reviewer. Plus the still-open AI-3 dual-approval wiring (shared with B10,
-  not specific to this item). The module's P0 gaps (access-control, missing
-  PIA) were fixed 2026-07-28 (PRs #2685, #2687); this item tracks the PIA's
-  own follow-up recommendations.
+- [ ] **Status:** in progress (2026-09-08) — R-A through R-G all
+  DONE/resolved. The dual-approval gate itself is DONE (shipped as part of
+  B10 above, PRs #2819/#2820 — Data Transfer's `export_entities` route is
+  wired through the same shared gate as Compliance). **Only remaining open
+  work:** (1) R-G's own follow-up — drafting and publishing the disclosure
+  language R-G's determination calls for (see R-G entry below for the
+  exact tracking pointer), and (2) A41's separately-tied consent-
+  sufficiency question (see its own note below — not resolved by R-G).
+  The module's P0 gaps (access-control, missing PIA) were fixed 2026-07-28
+  (PRs #2685, #2687); this item tracks the PIA's own follow-up
+  recommendations.
   - **2026-09-07:** the product owner directed that A41's legacy-migration
     consent-legal-sufficiency question (whether the old app's consent basis
     was sufficient for the 2026-07-29 migration — fact sheet already
@@ -5548,6 +5547,34 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     record the determination in the PIA's Section 8/9 sign-off table per
     the request package's own "what a closed-out review looks like"
     instructions, and update this item's Status line when done.
+  - **R-G RESOLVED 2026-09-08 (Spinr Team, Product Owner).** Determination:
+    **option (a) — this secondary use needs a distinct privacy-policy
+    disclosure**, not left as implied consent alone. Recorded in
+    `docs/privacy/2026-07-28-pia-data-transfer-export.md` Section 8 (R-G)
+    and Section 9 (Reviewed by: Spinr Team, Product Owner, 2026-09-08); the
+    request package's own Status table
+    (`reports/legal/data-transfer-implied-consent-review.md`) updated to
+    match. **Follow-up still open** (this determination records the
+    decision, it does not itself draft or publish new legal text): add
+    disclosure language naming the Data Transfer module's internal
+    cross-environment data movement to `docs/legal/privacy-policy.md` —
+    tracked as a new open row in `docs/legal/legal-text-publication-
+    checklist.md`'s `privacy-policy.md` gating-conditions list. That
+    document is **already live in production** (published 2026-08-17,
+    ahead of its own required Saskatchewan/Canada counsel review, with
+    several other gaps already open — signed Supabase DPA, unverified
+    Railway data-region env var, a 2yr-vs-3yr GPS-retention contradiction
+    against `docs/data-classification.md`, and an unprovisioned
+    `accessibility@spinr.ca` contact) — this new disclosure sentence should
+    land at that document's next reviewed/re-published version, not as a
+    standalone unreviewed edit to the already-live text.
+  - **A41's tied-in legacy-migration consent-sufficiency question remains
+    separately open** — the 2026-09-07 entry above grouped it with R-G for
+    reviewer convenience (same blocker: no named reviewer), but it is a
+    different factual/legal question (whether the *old app's* consent
+    basis was sufficient for the 2026-07-29 migration, not this module's
+    ongoing secondary-use question) and was not addressed in this pass. See
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/

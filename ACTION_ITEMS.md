@@ -23181,7 +23181,8 @@ how much they de-risk a public launch._
   condition only — one line changed, comment expanded).
 
 ### C93. `ci.yml`'s `detect-changes` job fails on every PR — `pulls.listFiles` 403s for lack of `pull-requests: read`
-- [ ] **Status:** OPEN. Found 2026-09-08 investigating a `check_run.completed`
+- [x] **Status:** CLOSED 2026-09-08 on `claude/ci-token-permissions-c93-c94`.
+  Found 2026-09-08 investigating a `check_run.completed`
   failure wake on PR #5128 (a 2-file docs-only PR — no plausible causal link
   to a CI token-permissions error, so the root cause was traced instead of
   assumed innocent).
@@ -23248,7 +23249,8 @@ how much they de-risk a public launch._
   workflow, unlike the one done for `security-gates.yml`).
 
 ### C94. Every `codeql-action/upload-sarif` call site in the repo fails on every PR — `wait-for-processing` 403s for lack of `actions: read`
-- [ ] **Status:** OPEN. Found immediately after C93, same PR (#5128), same
+- [x] **Status:** CLOSED 2026-09-08 on `claude/ci-token-permissions-c93-c94`
+  (same PR as C93's fix). Found immediately after C93, same PR (#5128), same
   investigation session — the `security-scan` check itself came back
   `failure` right after `detect-changes` did. **Widened same day**: `G3 ·
   Semgrep (Spinr rules + public)` in `security-gates.yml` failed on this

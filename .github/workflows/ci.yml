@@ -35,6 +35,18 @@ jobs:
   # leak in any file type, including a workflow file itself. Same
   # reasoning as G3/G5a in security-gates.yml.
   detect-changes:
+    # C93: ci.yml has no top-level `permissions:` block, so without this
+    # override the job falls through to the repo's restrictive default
+    # token scope (contents/metadata/packages read only -- no
+    # pull-requests). dorny/paths-filter needs pull-requests: read to call
+    # the Files API on this shallow (fetch-depth: 1) checkout; without it
+    # every run of this job 403s and every caller in this file falls back
+    # to its fail-open "run everything" leg (see the comment above) --
+    # correct behavior, but it silently loses the fast-feedback
+    # path-filtering optimization on every single PR.
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/detect-changes.yml
 
   # Backend Tests
@@ -917,6 +929,12 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: codeql-action/upload-sarif's wait-for-processing: true polls
+      # GET /repos/.../actions/runs/{run_id} to confirm the SARIF finished
+      # processing -- a different scope than the security-events:write
+      # that authorizes the upload itself. Without this the poll 403s and
+      # fails the whole job even though the SARIF upload already succeeded.
+      actions: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -979,6 +997,9 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: same wait-for-processing gap as security-scan above -- see
+      # its comment for why this is a separate scope from security-events.
+      actions: read
       packages: write    # GHCR push (main only, see "Push image to GHCR" step)
       id-token: write    # cosign keyless OIDC signing (main only)
 

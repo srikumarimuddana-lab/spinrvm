@@ -24,7 +24,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Info, Loader2, Upload } from "lucide-react";
 import {
     adminCommitWalletImport,
     adminValidateWalletImport,
@@ -129,6 +129,30 @@ function Stat({
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
+}
+
+// Compact, copy-pasteable markdown table mirroring the stat tiles below.
+function buildSummaryText(report: WalletImportReport): string {
+    const c = report.counts;
+    const rows: [string, number][] = [
+        ["Deltas to apply", c.target_rows],
+        ["Rider-owned", c.rider_rows],
+        ["Driver-owned", c.driver_rows],
+        ["Unmatched (skipped)", c.skipped_unmatched],
+        ["Sum credited", c.sum_add],
+        ["Sum debited", c.sum_deduct],
+        ["Net", c.sum_net],
+        ["Zero-amount (skipped)", c.skipped_zero_amount],
+        ["Warnings", report.warnings.length],
+        ["Errors", report.errors.length],
+    ];
+    const lines = [
+        `Legacy Wallet-Balance Import — batch ${report.batch}`,
+        "| Metric | Count |",
+        "|---|---|",
+        ...rows.map(([label, value]) => `| ${label} | ${value} |`),
+    ];
+    return lines.join("\n");
 }
 
 export function LegacyWalletImport() {
@@ -334,6 +358,20 @@ export function LegacyWalletImport() {
                             {c.skipped_duplicate_id} duplicate id(s) in the CSV. Batch{" "}
                             <span className="font-mono">{report.batch}</span>.
                         </p>
+
+                        <div className="flex justify-end">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(buildSummaryText(report));
+                                    toast({ description: "Summary copied", duration: 1500 });
+                                }}
+                            >
+                                <Copy className="mr-2 h-4 w-4" />
+                                Copy summary
+                            </Button>
+                        </div>
 
                         {report.errors.length > 0 ? (
                             <div className="space-y-2">

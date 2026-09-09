@@ -22,6 +22,13 @@
  * them, and the component is pinned by source contract below. That split is
  * deliberate: a behavioural test of maths the component does not actually use
  * would be worse than none.
+ *
+ * 2026-09-09 update: the finite-coordinate guard and the sort-a-copy fix
+ * (points 1 and 2 above) moved out of HeatmapCells.tsx into
+ * hooks/useVisibleHeatmapCells.ts (shared with the new Skia gradient
+ * overlay, HM-32) — the source contract below now pins each pattern to
+ * whichever file actually owns it, rather than assuming they're all still
+ * in the component.
  */
 
 const DEFAULT_CELL_LAT = 0.004;
@@ -141,35 +148,42 @@ describe('server-supplied grid size', () => {
 /**
  * Source contract — the fixes above must actually be the ones in the component.
  */
-describe('HeatmapCells source', () => {
+describe('HeatmapCells + useVisibleHeatmapCells source', () => {
   const fs = require('fs');
   const path = require('path');
-  const source: string = fs.readFileSync(
+  const componentSource: string = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'components', 'dashboard', 'HeatmapCells.tsx'),
+    'utf8',
+  );
+  // Finite-coordinate guard + sort-a-copy fix now live in the shared hook
+  // (extracted 2026-09-09 so the new Skia gradient overlay, HM-32, gets the
+  // same filtering for free instead of a second, possibly-drifting copy).
+  const hookSource: string = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'hooks', 'useVisibleHeatmapCells.ts'),
     'utf8',
   );
 
   it('filters non-finite coordinates', () => {
-    expect(source).toMatch(/Number\.isFinite\(c\.lat\)/);
+    expect(hookSource).toMatch(/Number\.isFinite\(c\.lat\)/);
   });
 
   it('sorts a copy, never the prop array', () => {
-    expect(source).toMatch(/\[\.\.\.filtered\]\.sort/);
-    expect(source).not.toMatch(/^\s*filtered\.sort\(/m);
+    expect(hookSource).toMatch(/\[\.\.\.filtered\]\.sort/);
+    expect(hookSource).not.toMatch(/^\s*filtered\.sort\(/m);
   });
 
   it('accepts the grid size as a prop instead of hardcoding it', () => {
-    expect(source).toMatch(/cellLatDeg/);
+    expect(componentSource).toMatch(/cellLatDeg/);
     // cellToCorners (4-corner Polygon geometry) was replaced by cellCenter
     // (a single center point) when the renderer split by platform — Heatmap
     // (Android) and Circle (iOS) both take a center, not corners. Same guard,
     // same call shape, new function name.
-    expect(source).toMatch(/cellCenter\(cell\.lat, cell\.lng, cellLat, cellLng\)/);
+    expect(componentSource).toMatch(/cellCenter\(cell\.lat, cell\.lng, cellLat, cellLng\)/);
   });
 
   it('keys polygons on coordinates, not array index', () => {
     // The list is re-sorted by weight every poll, so an index-based key churned
     // native views for cells that had only moved position in the array.
-    expect(source).toMatch(/key=\{`hm-\$\{cell\.lat\}-\$\{cell\.lng\}`\}/);
+    expect(componentSource).toMatch(/key=\{`hm-\$\{cell\.lat\}-\$\{cell\.lng\}`\}/);
   });
 });

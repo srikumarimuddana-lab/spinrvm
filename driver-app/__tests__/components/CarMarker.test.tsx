@@ -44,6 +44,11 @@ jest.mock('expo-image', () => {
   return { Image: (props: any) => ReactActual.createElement('ExpoImage', props) };
 });
 
+const mockCaptureException = jest.fn();
+jest.mock('@shared/services/errorReporting', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
+
 describe('CarMarker — mount bounce-in (round 8)', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -85,6 +90,94 @@ describe('CarMarker — mount bounce-in (round 8)', () => {
     act(() => {
       jest.advanceTimersByTime(6000);
     });
+  });
+});
+
+describe('CarMarker — car-icon decode failure retries then reports once (2026-09-09, "green circle, never a car")', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockCaptureException.mockClear();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('retries a failed decode with backoff, remounting a fresh Image each time', () => {
+    const { UNSAFE_getByType } = render(
+      <CarMarker coordinate={{ latitude: 50.4452, longitude: -104.6189 }} heading={90} />,
+    );
+
+    const firstImage = UNSAFE_getByType(Image);
+    // onError and the timer advance are deliberately in SEPARATE act() calls:
+    // onError's setState updater schedules its setTimeout as a side effect of
+    // being invoked, and act() only flushes/commits at the end of its own
+    // callback — combining both statements into one act() call would advance
+    // the fake clock before React has actually run the updater and
+    // registered the timer, which never happens in real usage (a native
+    // onError callback is itself already an async boundary).
+    act(() => {
+      firstImage.props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // A retry bumps the Image's key, producing a distinct element instance —
+    // proof the native view actually remounted to re-attempt the decode,
+    // not just re-rendered with the same broken one.
+    const secondImage = UNSAFE_getByType(Image);
+    expect(secondImage).not.toBe(firstImage);
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('reports to error tracking exactly once after MAX_IMAGE_RETRIES exhausted, never before', () => {
+    const { UNSAFE_getByType } = render(
+      <CarMarker coordinate={{ latitude: 50.4452, longitude: -104.6189 }} heading={90} />,
+    );
+
+    // 4 failures: 3 retries (0->1->2->3), the 4th finds retries exhausted.
+    for (let i = 0; i < 4; i++) {
+      act(() => {
+        UNSAFE_getByType(Image).props.onError();
+      });
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+    }
+
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ domain: 'drivers', surface: 'driver-app' }),
+    );
+
+    // A further failure past exhaustion must not report again.
+    act(() => {
+      UNSAFE_getByType(Image).props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+
+  it('never reports once the image successfully loads', () => {
+    const { UNSAFE_getByType } = render(
+      <CarMarker coordinate={{ latitude: 50.4452, longitude: -104.6189 }} heading={90} />,
+    );
+    act(() => {
+      UNSAFE_getByType(Image).props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    act(() => {
+      UNSAFE_getByType(Image).props.onLoad();
+    });
+    act(() => {
+      jest.advanceTimersByTime(6000);
+    });
+    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 });
 
@@ -202,6 +295,73 @@ describe('CarMarker — onBearingChange (shared bearing source for map camera + 
       longitude: -104.6189,
     });
     unmount();
+  });
+});
+
+describe('CarMarker — Android rotation interpolates through a turn, not a single snap (2026-09-09, "no smooth animation")', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+  const mockPlaybackPosition = playbackPosition as jest.Mock;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+    // ~89m north of `coord`, bearing 90 — a sharp turn from the initial
+    // heading=0 — clears both the ticker's 0.5m churn guard and
+    // selectBearing's MIN_BEARING_MOVE_M so the tick actually applies it.
+    mockPlaybackPosition.mockReturnValue({
+      coordinate: { latitude: 50.446, longitude: -104.6189 },
+      bearing: 90,
+      mode: 'interpolating',
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+    mockPlaybackPosition.mockReturnValue(null);
+  });
+
+  it('passes through intermediate rotation values instead of jumping straight to the target', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} heading={0} />,
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(500); // one TICK_MS — selects bearing 90, starts the tween
+    });
+
+    const seenValues = new Set<number>();
+    for (let i = 0; i < 6; i++) {
+      act(() => {
+        jest.advanceTimersByTime(16); // ~1 animation frame
+      });
+      seenValues.add(UNSAFE_root.findByType(Marker).props.rotation);
+    }
+
+    // At least one sampled frame lands strictly between the start (0) and
+    // target (90) heading — proof rotation is interpolated across frames,
+    // not stepped to the target in a single jump the way it was before this
+    // fix (which set androidRotation to the target directly, once, per tick).
+    const midValues = [...seenValues].filter((v) => v > 0 && v < 90);
+    expect(midValues.length).toBeGreaterThan(0);
+
+    // And it settles exactly at the target once the tween completes.
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.rotation).toBe(90);
+
+    unmount();
+  });
+
+  it('does not throw across repeated ticks, unmount included (RAF loop cleans up)', () => {
+    const { unmount } = render(<CarMarker coordinate={coord} heading={0} />);
+    expect(() => {
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+    }).not.toThrow();
+    expect(() => unmount()).not.toThrow();
   });
 });
 

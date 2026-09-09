@@ -33,7 +33,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { Text, TouchableOpacity, Linking } from 'react-native';
+import { Text, TouchableOpacity, Linking, Platform } from 'react-native';
 
 const appStateListeners: Array<(state: string) => void> = [];
 jest.mock('react-native/Libraries/AppState/AppState', () => ({
@@ -266,6 +266,9 @@ jest.mock('../../components/dashboard', () => {
     DemandLegend: (props: any) => <RNText accessibilityLabel="demand-legend">{`layer:${props.layer}`}</RNText>,
     ForecastStrip: (props: any) => <RNText accessibilityLabel="forecast-strip">{`forecast:${props.forecast.length}`}</RNText>,
     HeatmapCells: (props: any) => <RNText accessibilityLabel="heatmap-cells">{`cells:${props.cells.length}`}</RNText>,
+    HeatmapGradientOverlay: (props: any) => (
+      <RNText accessibilityLabel="heatmap-gradient-overlay">{`cells:${props.cells.length}`}</RNText>
+    ),
     HotspotChips: (props: any) => (
       <RNTouchableOpacity accessibilityLabel="hotspot-chip" onPress={() => props.onPress(52.15, -106.65)}>
         <RNText>{`hotspots:${props.hotspots.length}`}</RNText>
@@ -560,25 +563,44 @@ describe('DriverDashboardScreen', () => {
 });
 
 describe('demand heatmap overlay (idle only)', () => {
-  it('renders HeatmapCells when cells are present', async () => {
+  // jest-expo defaults Platform.OS to 'ios' — HeatmapCells is Android-only
+  // since HM-32 (it renders react-native-maps' native <Heatmap>, a MapView
+  // child; iOS gets HeatmapGradientOverlay, a sibling Skia canvas, instead).
+  const originalPlatformOS = Platform.OS;
+  afterEach(() => {
+    Platform.OS = originalPlatformOS;
+  });
+
+  it('renders HeatmapCells on Android when cells are present', async () => {
+    Platform.OS = 'android';
     mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
     expect(r.root.findByProps({ accessibilityLabel: 'heatmap-cells' })).toBeTruthy();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
   });
 
-  it('omits HeatmapCells with zero cells', async () => {
+  it('omits HeatmapCells with zero cells (Android)', async () => {
+    Platform.OS = 'android';
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
   });
 
-  it('renders the DemandLegend only when visible', async () => {
-    mockHeatmapState.visible = true;
+  it('renders HeatmapGradientOverlay on iOS when cells are present, never HeatmapCells', async () => {
+    Platform.OS = 'ios';
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
-    expect(r.root.findByProps({ accessibilityLabel: 'demand-legend' })).toBeTruthy();
+    expect(r.root.findByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toBeTruthy();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
   });
 
-  it('omits the DemandLegend when not visible', async () => {
-    mockHeatmapState.visible = false;
+  it('omits HeatmapGradientOverlay with zero cells (iOS)', async () => {
+    Platform.OS = 'ios';
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
+  });
+
+  it('never renders the DemandLegend pill — removed entirely (was overlapping the SOS button)', async () => {
+    mockHeatmapState.visible = true;
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
   });
@@ -616,6 +638,15 @@ describe('demand heatmap overlay (idle only)', () => {
     mockHeatmapState.isV2 = true;
     mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
     const r = await renderScreen();
+    // HeatmapCells/HeatmapGradientOverlay are asserted here too, not just
+    // their sibling widgets: the render site itself must gate on
+    // rideState === 'idle' rather than relying only on useDemandHeatmap
+    // clearing `cells` internally — see the driver dashboard screen's
+    // comment at this render site for why (this exact test previously
+    // mocked non-empty cells during an active ride without ever checking
+    // heatmap-cells stayed absent).
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'hotspot-chip' })).toHaveLength(0);
   });

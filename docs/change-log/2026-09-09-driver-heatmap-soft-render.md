@@ -86,7 +86,22 @@ Untouched by design, still open from PR #5142: both renderers still normalise in
 
 ## 5. User-experience effect
 
-**Nobody sees any difference from this change as shipped.** The flag is `false`, so every
+**Updated 2026-09-09 after PR #5144 review — one part is now a live change.**
+
+The Android Auto cell selection is filtered to the car viewport (plus the shape's overlap
+margin) before the shape budget is applied, and this is applied to the **legacy square path
+too**, not only behind the flag. Off-screen cells were never visible, so nothing a driver
+could previously see is removed. What changes: visible cells that were being starved by
+stronger off-screen ones now render. Concretely, a driver whose car map showed no heat while
+demand sat in view — because 26–80 stronger cells kilometres away had consumed the budget —
+now sees that demand. This is visible mid-session to a driver who is online with the head
+unit connected. No copy, notification, or control changes.
+
+Gating it behind the flag was considered and rejected: the flag-off path is what ships today,
+so gating would have left the defect live. Review thread:
+https://github.com/srikumarimuddana-lab/spinrvm/pull/5144#discussion_r3967262705
+
+**Everything else below is unchanged — nobody sees any difference from it as shipped.** The flag is `false`, so every
 driver — mid-shift, online, or on a car head unit — keeps the exact renderer they have today.
 
 When the flag is flipped (a separate commit + OTA), the affected party is drivers only: the
@@ -101,7 +116,8 @@ navigation. Riders, corporate admins and internal admins see nothing.
 |---|---|---|
 | `driver-app/lib/heatFalloff.ts` | New. Ring stops, Gaussian falloff solver, `cellCenter`, `METERS_PER_LAT_DEG`, `paintedPeakAlpha()`, the flag | One definition of the shape so three renderers cannot disagree |
 | `driver-app/components/dashboard/HeatmapCells.tsx` | iOS 5-ring soft path; Android opacity from `HEAT_NATIVE_LAYER_ALPHA`; `MAX_SOFT_BLOBS` 40; radius factor 0.62 → 1.35; local `cellCenter`/`METERS_PER_LAT_DEG` removed | Kill the bullseye; make the two phones agree on peak translucency |
-| `driver-app/lib/androidAuto/carSurface.tsx` | Soft circle path via `Maps.Circle`; `CAR_MAX_SOFT_BLOBS` 26; `CAR_RAMP` → `darkColors.heatmapRamp`; `rampIndex` extracted; shared `cellCenter` | Car stops looking like a different product; ramp cannot drift from the phone legend |
+| `driver-app/lib/androidAuto/carHeatSelection.ts` | New (post-review). Viewport + halo filter before the shape budget; degenerate camera falls through unfiltered | Off-screen cells were starving visible ones; extracted pure so it is testable without mounting the surface |
+| `driver-app/lib/androidAuto/carSurface.tsx` | Soft circle path via `Maps.Circle`; `CAR_MAX_SOFT_BLOBS` 26; camera state added to the selection deps; `CAR_RAMP` → `darkColors.heatmapRamp`; `rampIndex` extracted; shared `cellCenter` | Car stops looking like a different product; ramp cannot drift from the phone legend |
 | `driver-app/__tests__/lib/heatFalloff.test.ts` | New. 17 assertions on the falloff, kernel width, density build-up and grid snap | The maths is the part that is actually verifiable here |
 | `driver-app/__tests__/components/HeatmapCellsSoft.test.tsx` | New. Renderer assertions with the flag forced on | The soft path is unreachable in tests otherwise |
 

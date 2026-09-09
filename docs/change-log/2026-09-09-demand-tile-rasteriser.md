@@ -49,6 +49,27 @@ Two defects found and fixed while building it:
   Android. An opaque lowest entry paints every pixel the kernel touches at all, so the
   field ends at a visible disc edge instead of fading into bare map.
 
+## 3b. Post-review fix — kernel taper (2026-09-09)
+
+PR #5144 review found that the bare 3-sigma truncation left a hard disk edge. The residue at
+the cut is ~1.11% of peak, which an earlier comment in this module wrongly called negligible —
+it is multiplied by weight and divided by scale *before* becoming alpha, so at weight 500
+against scale 5 it normalised to 1.11, clipped to the ceiling, and fell to zero one pixel out.
+
+Measured on the pixel grid:
+
+```
+untapered  [82, 82, 82, 82, 82, 0]   worst adjacent step 82, zero intermediate values
+tapered    [82, 71, 43, 20,  0, 0]   worst adjacent step 28, three intermediate values
+```
+
+`kernel_value()` subtracts the Gaussian's value at the support edge and renormalises, reaching
+zero there by construction. Peak stays 1.0. The remaining edge is steep but continuous; at
+100x the published scale the field saturates and the gradient compresses into the rim, which
+is scale calibration rather than kernel shape. Test thresholds are set from the measured
+numbers, not an idealised zero. Review thread:
+https://github.com/srikumarimuddana-lab/spinrvm/pull/5144#discussion_r3967262691
+
 ## 4. Risk & impact on existing functionality
 
 **Blast radius: none. The module is new and nothing imports it.**

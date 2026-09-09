@@ -20,6 +20,7 @@ import {
   MapControls,
   ForecastStrip,
   HeatmapCells,
+  HeatmapGradientOverlay,
   HotspotChips,
 } from '../../../components/dashboard';
 import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
@@ -357,6 +358,17 @@ function DriverDashboard() {
   const [heatmapRegion, setHeatmapRegion] = useState<
     { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number } | null
   >(null);
+
+  // iOS Skia gradient overlay (HM-32) needs two things HeatmapCells' own
+  // Android/iOS-fallback paths don't: a region that updates DURING a drag
+  // (not just on settle, per the user's explicit "best-effort follow"
+  // choice — onRegionChange is a JS-bridge event, not frame-synced, so this
+  // will visibly lag/stutter on fast pans rather than track perfectly; see
+  // the HM-32 change-log for why true frame sync isn't achievable through
+  // react-native-maps' public API here), and the map container's own pixel
+  // size, to project cells' lat/lng into the overlay canvas's screen space.
+  const [liveHeatmapRegion, setLiveHeatmapRegion] = useState<typeof heatmapRegion>(null);
+  const [mapViewport, setMapViewport] = useState({ width: 0, height: 0 });
 
   // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
   const { zones: airportZones, activeZone: activeAirportZone } = useAirportZones(
@@ -956,7 +968,21 @@ function DriverDashboard() {
       )}
 
       {/* Map */}
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <View
+        style={StyleSheet.absoluteFill}
+        pointerEvents="box-none"
+        // iOS-only: measures the map container so the Skia gradient overlay
+        // (HM-32, rendered as a sibling below, not a MapView child — Skia
+        // draws to its own canvas view, not a react-native-maps annotation)
+        // can project cells' lat/lng into this exact pixel space. This View
+        // and the MapView both use styles.map === StyleSheet.absoluteFill,
+        // so they always occupy identical bounds.
+        onLayout={
+          Platform.OS === 'ios'
+            ? (e) => setMapViewport({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })
+            : undefined
+        }
+      >
       <MapView
         key={mapKey}
         ref={mapRef}
@@ -1019,6 +1045,11 @@ function DriverDashboard() {
             latitudeDelta: region.latitudeDelta,
             longitudeDelta: region.longitudeDelta,
           };
+          // iOS-only: feeds the Skia gradient overlay's best-effort drag
+          // tracking (HM-32). Android never reads liveHeatmapRegion (it
+          // gets a real native gradient layer, no Skia overlay at all), so
+          // skip the extra re-render there entirely.
+          if (Platform.OS === 'ios') setLiveHeatmapRegion(region);
         }}
         onPanDrag={() => {
           // Driver is exploring (heatmap, hotspots) — stop the follow camera
@@ -1204,17 +1235,22 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Demand heatmap — cross-platform cell polygons (HM-05). Explicitly
-            gated on rideState === 'idle' (not just heatmapCells.length),
-            matching every sibling heatmap widget below: useDemandHeatmap
-            already clears `cells` to [] outside idle, but that gate lived
-            only in the hook, not here — this render had no guard of its
-            own, so the "idle only" invariant held incidentally rather than
-            by construction. driverLocation lets HeatmapCells drop any cell
+        {/* Demand heatmap — Android only here (HM-05). react-native-maps'
+            native <Heatmap> gradient layer (which HeatmapCells uses on
+            Android) must be a MapView child to render as a map annotation.
+            iOS gets the Skia gradient overlay instead (HM-32, rendered as a
+            sibling below MapView — Skia draws to its own canvas view, not a
+            map annotation, so it can't live in here). Explicitly gated on
+            rideState === 'idle' (not just heatmapCells.length), matching
+            every sibling heatmap widget below: useDemandHeatmap already
+            clears `cells` to [] outside idle, but that gate lived only in
+            the hook, not here — this render had no guard of its own, so the
+            "idle only" invariant held incidentally rather than by
+            construction. driverLocation lets HeatmapCells drop any cell
             centered close enough to overlap the driver's own CarMarker (see
             its prop doc — root cause of the "concentric circles around the
             car icon" report on iOS). */}
-        {rideState === 'idle' && heatmapCells.length > 0 && Platform.OS !== 'web' && (
+        {rideState === 'idle' && heatmapCells.length > 0 && Platform.OS === 'android' && (
           <HeatmapCells
             cells={heatmapCells}
             region={heatmapRegion}
@@ -1238,6 +1274,27 @@ function DriverDashboard() {
           )
         ))}
       </MapView>
+
+      {/* Demand heatmap — iOS Skia gradient overlay (HM-32). A sibling of
+          MapView, not a child: Skia renders to its own canvas view, which
+          react-native-maps has no slot for as a map annotation (unlike
+          <Heatmap>/<Circle> above, which the native map SDK positions in
+          geo-space itself). Positioned absolutely over the same bounds via
+          mapViewport (measured by the wrapping View's onLayout above), and
+          projects cells into that pixel space itself (utils/
+          heatmapProjection.ts) since it has no native map to anchor to.
+          Same idle-only + driverLocation-exclusion gating as the Android
+          branch above. */}
+      {Platform.OS === 'ios' && rideState === 'idle' && heatmapCells.length > 0 && (
+        <HeatmapGradientOverlay
+          cells={heatmapCells}
+          region={liveHeatmapRegion ?? heatmapRegion}
+          cellLatDeg={heatmapCellLat}
+          cellLngDeg={heatmapCellLng}
+          driverLocation={location?.coords ?? null}
+          viewport={mapViewport}
+        />
+      )}
       </View>
 
       {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}

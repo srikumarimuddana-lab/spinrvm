@@ -1,5 +1,4 @@
 import React, { useMemo } from 'react';
-import { Canvas, Group, Circle, Paint, Blur } from '@shopify/react-native-skia';
 import { useTheme } from '@shared/theme/ThemeContext';
 import { rampColorForRatio, rgbaString } from '../../utils/heatmapColor';
 import { cellCenter, useVisibleHeatmapCells, type HeatmapRegion, type LatLng } from '../../hooks/useVisibleHeatmapCells';
@@ -52,27 +51,52 @@ interface HeatmapGradientOverlayProps {
   viewport: Viewport;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SkiaModule = { Canvas: any; Group: any; Circle: any; Paint: any; Blur: any };
+
+// @shopify/react-native-skia is a NATIVE dependency added 2026-09-09 (HM-32).
+// A plain top-level `import` would throw at module-evaluation time — before
+// React ever gets a chance to render anything — on a JS bundle that reaches
+// a native binary built before this dependency existed (exactly the
+// OTA/native-build mismatch class this session already found real instances
+// of: the ring-freeze fix, the OTA-channel bug). No React error boundary can
+// catch an import-time crash, so this lazily requires the module instead —
+// the same guard carSurface.tsx already uses for its own react-native-maps-
+// dependent imports — and degrades to "no gradient overlay" rather than
+// crashing the driver dashboard screen.
+function loadSkia(): SkiaModule | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('@shopify/react-native-skia');
+  } catch {
+    return null;
+  }
+}
+
 export const HeatmapGradientOverlay: React.FC<HeatmapGradientOverlayProps> = React.memo(
   ({ cells, region, cellLatDeg, cellLngDeg, driverLocation, viewport }) => {
     const { colors } = useTheme();
+    const Skia = loadSkia();
 
     const { visibleCells, maxWeight, cellLat, cellLng } = useVisibleHeatmapCells(
       cells, region, cellLatDeg, cellLngDeg, driverLocation,
     );
 
-    // Memoized: recreated only if the blur radius itself ever changes (it
-    // doesn't, today) — avoids reallocating a fresh <Paint> element on every
-    // region-change-driven re-render during a drag.
-    const blurLayer = useMemo(
-      () => (
+    // Memoized: recreated only if Skia's own module identity or the blur
+    // radius changes (neither does, today) — avoids reallocating a fresh
+    // <Paint> element on every region-change-driven re-render during a drag.
+    const blurLayer = useMemo(() => {
+      if (!Skia) return null;
+      const { Paint, Blur } = Skia;
+      return (
         <Paint>
           <Blur blur={BLUR_RADIUS_PX} mode="decal" />
         </Paint>
-      ),
-      [],
-    );
+      );
+    }, [Skia]);
 
-    if (!region || !visibleCells.length || viewport.width <= 0 || viewport.height <= 0) return null;
+    if (!Skia || !region || !visibleCells.length || viewport.width <= 0 || viewport.height <= 0) return null;
+    const { Canvas, Group, Circle } = Skia;
 
     return (
       <Canvas

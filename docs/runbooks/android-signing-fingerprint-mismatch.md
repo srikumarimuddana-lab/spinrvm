@@ -88,10 +88,24 @@ Seen twice on this project:
 
 - **`com.spinr.driver`, 2026-08:** registered upload key `B7:F7:…` had no custodian;
   EAS held `D7:51:…`. Resolved by an upload key reset, not by code.
-- **`com.spinr.user`, 2026-09:** Play's upload key certificate is
+- **`com.spinr.user`, 2026-09:** Play's upload key certificate was
   `D3:C7:7E:B0:…:43:7A`; EAS's single build-credentials set (`xa8QcCZa5i`, alias
   `9eebacda…c6451`, JKS, uploaded 2026-04-09) is `26:39:10:88:…:7C:DB`. No second
-  credentials set exists in EAS to switch to → §3b.
+  credentials set existed in EAS to switch to → §3b.
+  **RESOLVED 2026-09-09** by the §3b upload-key reset. Play now registers the
+  keystore EAS already held, so nothing changed in EAS and no new key was minted:
+
+  | | |
+  |---|---|
+  | SHA-1 | `26:39:10:88:F5:85:BB:62:E0:70:DD:10:32:DC:09:C2:A0:28:7C:DB` |
+  | SHA-256 | `C3:B8:7F:4F:04:5C:F6:8D:58:12:34:0B:3C:80:65:D6:EF:27:17:3E:33:E6:28:1E:C3:44:49:8F:6D:3B:C1:CE` |
+  | MD5 | `94:0D:45:2A:A9:A5:B6:54:A9:B2:D4:8B:16:91:94:F1` |
+
+  Because the reset registered the key EAS was *already* signing with, §3c's
+  "the old upload fingerprint is dead everywhere it was registered" cleanup does
+  **not** apply here — EAS-distributed APKs were always signed with
+  `26:39:10:88:…`, so any registration that made them work still holds. The dead
+  value is `D3:C7:7E:B0:…:43:7A`; remove it if you find it registered anywhere.
 
 Fingerprints are public information — recording them here is deliberate, so the next
 mismatch can be compared against history instead of re-derived.

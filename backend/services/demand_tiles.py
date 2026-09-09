@@ -63,8 +63,16 @@ EARTH_CIRCUMFERENCE_M = 40_075_016.686
 _MPP_ZOOM_0 = EARTH_CIRCUMFERENCE_M / TILE_SIZE
 
 # Kernel geometry, in metres so it is a real-world footprint rather than a
-# screen-space blur. Support is 3 sigma: beyond that a Gaussian contributes
-# under 1.2% of its peak, which is below one step of an 8-bit alpha channel.
+# screen-space blur. Support is 3 sigma, where a Gaussian still holds ~1.11% of
+# its peak.
+#
+# That residue is NOT negligible, and an earlier comment here wrongly claimed it
+# fell below one step of an 8-bit alpha channel. It is amplified by weight/scale
+# before it reaches alpha: at weight 500 against scale 5 the value just inside
+# the boundary normalises to 1.11, clips to the alpha ceiling, and drops to 0 one
+# pixel further out — an 82-step cliff, i.e. dense demand rendered as a hard
+# disk. `kernel_taper` removes it by construction instead of by hoping the
+# numbers stay small.
 KERNEL_SIGMA_M = 180.0
 KERNEL_SUPPORT_M = 3.0 * KERNEL_SIGMA_M
 
@@ -176,6 +184,32 @@ def kernel_px(sigma_m: float, support_m: float, mpp: float) -> Tuple[float, floa
     ratio = support_m / sigma_m
     sigma = max(sigma_m / mpp, MIN_SIGMA_PX)
     return sigma, sigma * ratio
+
+
+def kernel_taper(sigma_px: float, support_px: float) -> float:
+    """Constant subtracted from the Gaussian so it reaches zero at its support.
+
+    Truncating a Gaussian leaves a step equal to its value at the cut. Scaled by
+    weight/scale that step can be most of the alpha range, so a busy area renders
+    as a sharply bounded disk. Subtracting this constant and renormalising makes
+    the kernel continuous at the boundary whatever the weight, at the cost of a
+    marginally narrower effective footprint.
+    """
+    if sigma_px <= 0 or support_px <= 0:
+        return 0.0
+    return math.exp(-(support_px * support_px) / (2.0 * sigma_px * sigma_px))
+
+
+def kernel_value(distance_px: float, sigma_px: float, support_px: float) -> float:
+    """Tapered Gaussian at one distance: 1.0 at the centre, exactly 0 at support.
+
+    The scalar reference for the vectorised accumulation in render_demand_tile.
+    """
+    if distance_px >= support_px:
+        return 0.0
+    taper = kernel_taper(sigma_px, support_px)
+    raw = math.exp(-(distance_px * distance_px) / (2.0 * sigma_px * sigma_px))
+    return max(0.0, (raw - taper) / (1.0 - taper))
 
 
 def tile_local_cells(
@@ -351,6 +385,7 @@ def render_demand_tile(snapshot: TileSnapshot, *, z: int, x: int, y: int) -> byt
     acc = np.zeros((TILE_SIZE, TILE_SIZE), dtype=np.float32)
     two_sigma_sq = 2.0 * sigma_px * sigma_px
     support_sq = support_px * support_px
+    taper = np.float32(kernel_taper(sigma_px, support_px))
 
     for px, py, weight in local:
         # Only the patch this kernel can reach, clipped to the tile. A cell in
@@ -364,8 +399,12 @@ def render_demand_tile(snapshot: TileSnapshot, *, z: int, x: int, y: int) -> byt
         dx = (np.arange(x0, x1, dtype=np.float32) + 0.5) - px
         dy = (np.arange(y0, y1, dtype=np.float32) + 0.5) - py
         d2 = dy[:, None] ** 2 + dx[None, :] ** 2
-        patch = np.exp(-d2 / two_sigma_sq, dtype=np.float32)
-        patch *= d2 <= support_sq  # hard cut at support, so no faint infinite tail
+        # Tapered, not merely truncated: subtract the value at the support edge
+        # and renormalise so the kernel reaches exactly zero there. A bare cut
+        # leaves a step that weight/scale can amplify into a hard disk edge.
+        patch = (np.exp(-d2 / two_sigma_sq, dtype=np.float32) - taper) / (1.0 - taper)
+        np.maximum(patch, 0.0, out=patch)
+        patch *= d2 <= support_sq
         acc[y0:y1, x0:x1] += weight * patch
 
     # Absolute scale, then clip. Clipping is what stops a dense cluster

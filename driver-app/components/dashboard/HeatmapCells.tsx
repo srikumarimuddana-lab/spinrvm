@@ -6,6 +6,8 @@ import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import {
   HEAT_BLOB_RADIUS_FACTOR,
   HEAT_RING_STOPS,
+  METERS_PER_LAT_DEG,
+  cellCenter,
   SOFT_HEAT_RENDER_ENABLED,
   paintedPeakAlpha,
   ringAlphas,
@@ -28,10 +30,6 @@ const MAX_BLOBS = 60;
 // can profile Apple Maps or an Auto head unit, so this is a deliberately
 // conservative budget rather than a measured one.
 const MAX_SOFT_BLOBS = 45;
-// Metres per degree of latitude — used to size blob radii off the server's
-// own grid cell size rather than a hardcoded metre value, so denser grids
-// (smaller service areas) automatically get smaller, tighter blobs.
-const METERS_PER_LAT_DEG = 111_320;
 
 interface HeatmapCellsProps {
   cells: HeatmapCell[];
@@ -39,12 +37,6 @@ interface HeatmapCellsProps {
   /** Grid size from the server; null falls back to the constants above. */
   cellLatDeg?: number | null;
   cellLngDeg?: number | null;
-}
-
-function cellCenter(lat: number, lng: number, cellLat: number, cellLng: number) {
-  const baseLat = Math.floor(lat / cellLat) * cellLat;
-  const baseLng = Math.floor(lng / cellLng) * cellLng;
-  return { latitude: baseLat + cellLat / 2, longitude: baseLng + cellLng / 2 };
 }
 
 function weightToRampIndex(weight: number, maxWeight: number): number {

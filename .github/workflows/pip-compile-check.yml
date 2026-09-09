@@ -23,6 +23,10 @@ on:
       - 'backend/requirements.in'
       - 'backend/requirements.txt'
 
+concurrency:
+  group: pip-compile-check-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: requirements.txt up to date

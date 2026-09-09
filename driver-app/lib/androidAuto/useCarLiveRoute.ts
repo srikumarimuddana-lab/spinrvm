@@ -26,8 +26,16 @@ import {
   type LiveRouteLeg,
 } from '../../hooks/liveRouteShared';
 
-/** Matches the phone's cadence in app/driver/(tabs)/index.tsx. */
-const POLL_MS = 20_000;
+/**
+ * Matches the phone's cadence in app/driver/(tabs)/index.tsx. Shortened from
+ * 20s to 6s (2026-09-09) — live-testing report: the route line/ETA visibly
+ * lagged the car through turns at the old cadence. Self-hosted OSRM (the
+ * primary provider in utils.route_distance.compute_route) absorbs the extra
+ * polling as infra load, not metered spend; the Google Directions fallback
+ * (only invoked when OSRM is down) stays behind its own daily-budget circuit
+ * breaker (utils/maps_budget.py) regardless of how often this polls.
+ */
+const POLL_MS = 6_000;
 
 /**
  * How long a line stays drawable after it was fetched.

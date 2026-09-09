@@ -579,7 +579,13 @@ function DriverDashboard() {
     // to us instead of running a second timer against the same endpoint.
     const releasePublisher = registerLiveRoutePublisher();
     fetchLiveRoute();
-    const id = setInterval(fetchLiveRoute, 20000);
+    // Shortened from 20s to 6s (2026-09-09) — live-testing report: the route
+    // line/ETA visibly lagged the car through turns. Must match
+    // lib/androidAuto/useCarLiveRoute.ts's POLL_MS (see its own comment for
+    // why this is safe: self-hosted OSRM absorbs the extra load as infra
+    // cost, and the metered Google Directions fallback stays behind its own
+    // daily-budget circuit breaker regardless of poll frequency).
+    const id = setInterval(fetchLiveRoute, 6000);
     return () => {
       cancelled = true;
       releasePublisher();

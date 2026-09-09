@@ -1,0 +1,104 @@
+import {
+  HEAT_RING_STOPS,
+  HEAT_PEAK_ALPHA,
+  SOFT_HEAT_RENDER_ENABLED,
+  ringAlphas,
+  paintedPeakAlpha,
+} from '../../lib/heatFalloff';
+
+/** Stack `alphas` largest-first the way the renderer draws them. */
+function cumulative(alphas: number[]): number[] {
+  let acc = 0;
+  return alphas.map((a) => {
+    acc = acc + a * (1 - acc);
+    return acc;
+  });
+}
+
+describe('ringAlphas', () => {
+  it('returns one alpha per ring stop', () => {
+    expect(ringAlphas(1)).toHaveLength(HEAT_RING_STOPS.length);
+  });
+
+  it('keeps every alpha a finite number inside [0, 1]', () => {
+    for (const intensity of [0, 0.1, 0.5, 0.9, 1]) {
+      for (const a of ringAlphas(intensity)) {
+        expect(Number.isFinite(a)).toBe(true);
+        expect(a).toBeGreaterThanOrEqual(0);
+        expect(a).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('grows denser toward the centre', () => {
+    const alphas = ringAlphas(1);
+    for (let i = 1; i < alphas.length; i++) {
+      expect(alphas[i]).toBeGreaterThan(alphas[i - 1]);
+    }
+  });
+
+  it('stacks into a monotonically rising cumulative opacity', () => {
+    const stacked = cumulative(ringAlphas(1));
+    for (let i = 1; i < stacked.length; i++) {
+      expect(stacked[i]).toBeGreaterThan(stacked[i - 1]);
+    }
+  });
+
+  // The whole point of the change: the old two-circle stand-in jumped from
+  // 0.14 to ~0.57 in one step, which is what reads as a bullseye ring on iOS.
+  it('never steps as hard as the two-circle renderer it replaces', () => {
+    const OLD_WORST_STEP = 1 - (1 - 0.14) * (1 - 0.5) - 0.14; // ≈ 0.43
+    const stacked = cumulative(ringAlphas(1));
+    let worst = 0;
+    let prev = 0;
+    for (const c of stacked) {
+      worst = Math.max(worst, c - prev);
+      prev = c;
+    }
+    expect(worst).toBeLessThan(OLD_WORST_STEP / 2);
+  });
+
+  it('scales the painted peak linearly with intensity', () => {
+    const full = paintedPeakAlpha();
+    const half = cumulative(ringAlphas(0.5)).slice(-1)[0];
+    expect(half / full).toBeCloseTo(0.5, 2);
+  });
+
+  it('paints nothing for a zero-weight cell', () => {
+    expect(ringAlphas(0).every((a) => a === 0)).toBe(true);
+  });
+
+  it('clamps out-of-range and non-finite intensities instead of leaking NaN', () => {
+    // A NaN alpha reaches the platform SDK unmodified, so this must clamp
+    // rather than propagate — Math.min/max alone would return NaN here.
+    for (const bad of [NaN, Infinity, -Infinity, -1, 2]) {
+      const alphas = ringAlphas(bad as number);
+      expect(alphas.every((a) => Number.isFinite(a))).toBe(true);
+    }
+    expect(ringAlphas(NaN as number).every((a) => a === 0)).toBe(true);
+    expect(ringAlphas(-1)).toEqual(ringAlphas(0));
+    expect(ringAlphas(2)).toEqual(ringAlphas(1));
+  });
+});
+
+describe('paintedPeakAlpha', () => {
+  it('matches the cumulative opacity of a full-intensity stack', () => {
+    const stacked = cumulative(ringAlphas(1));
+    expect(paintedPeakAlpha()).toBeCloseTo(stacked[stacked.length - 1], 6);
+  });
+
+  // Android sets this as its layer opacity, so it has to stay a usable
+  // translucency: opaque enough to read, transparent enough to see the road.
+  it('stays translucent and below the notional Gaussian peak', () => {
+    expect(paintedPeakAlpha()).toBeGreaterThan(0.4);
+    expect(paintedPeakAlpha()).toBeLessThan(HEAT_PEAK_ALPHA);
+  });
+});
+
+describe('SOFT_HEAT_RENDER_ENABLED', () => {
+  // Guards the release gate, not the maths: this renderer has never been seen
+  // on Apple Maps, Google Maps or an Auto head unit, so it must ship dark.
+  it('is off until native screenshots exist for all three surfaces', () => {
+    expect(SOFT_HEAT_RENDER_ENABLED).toBe(false);
+  });
+});

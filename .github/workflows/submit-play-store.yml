@@ -15,10 +15,13 @@ name: Submit to Play Store
 #
 # ─── Prerequisites ─────────────────────────────────────────────────────────
 #   • Repo secret EXPO_TOKEN.
-#   • The EAS project's stored Google Service Account key (it has one — that
-#     is what the conflict above proves). The `production` submit profiles
-#     deliberately omit `serviceAccountKeyPath` so eas-cli resolves the key
-#     from EAS rather than from a file that only CI ever creates.
+#   • Repo secret PLAY_SERVICE_ACCOUNT_JSON (base64-encoded Google Cloud
+#     service account key), decoded at runtime into
+#     <app>/play-service-account.json — the path both apps' `production`
+#     submit profiles point at. The EAS project holds NO stored service
+#     account key, so this file is the only credential source; without it
+#     eas-cli fails with "Google Service Account Keys cannot be set up in
+#     --non-interactive mode".
 #   • The app must already exist in Play Console under its package name.
 #     Google's Publishing API cannot create a new app entry.
 
@@ -109,6 +112,44 @@ jobs:
       # with "Cannot find module '@expo/config-plugins'".
       - run: yarn install --frozen-lockfile
 
+      # Required. Run 1 of this workflow failed here-ish with "Google Service
+      # Account Keys cannot be set up in --non-interactive mode" because the
+      # step did not exist: eas-cli found no credential for com.spinr.user /
+      # com.spinr.driver and wanted to create one interactively.
+      #
+      # The EAS project does NOT hold a stored Google Service Account key —
+      # this file is the only working credential source, proven by
+      # deploy-driver-play-testing.yml's 7 successful runs, which all decode
+      # this same secret. (An earlier reading of the Expo connector's
+      # "conflict between exclusive peers [googleServiceAccountKeyId,
+      # googleServiceAccountKeyJson]" error suggested a stored key existed;
+      # that was wrong — the connector contributes the duplicate itself.)
+      #
+      # Passed via env, never interpolated into the script body: a raw-JSON
+      # value (the obvious mistake for a secret named *_JSON) carries double
+      # quotes and would break shell quoting, letting $(...) in the key
+      # material execute on the runner.
+      - name: Decode Play service account key
+        env:
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_KEY_B64" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON secret is empty or unset."
+            echo "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          printf '%s' "$PLAY_KEY_B64" | base64 -d > play-service-account.json
+
+          # An empty/garbage decode otherwise stays green here and fails deep
+          # inside EAS, where it is far harder to attribute.
+          if ! jq -e '.client_email and .private_key' play-service-account.json > /dev/null 2>&1; then
+            echo "::error::Decoded key is not valid service-account JSON (missing client_email/private_key)."
+            echo "The secret must hold the BASE64-encoded key file, not raw JSON."
+            exit 1
+          fi
+          echo "Service account key decoded and validated."
+
       # Validate before touching anything: a malformed build ID otherwise
       # fails deep inside eas-cli where it is harder to attribute, and these
       # inputs are interpolated into a shell below.
@@ -184,6 +225,10 @@ jobs:
             eas submit --platform android --profile production \
               --latest --non-interactive
           fi
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json
 
       # Only runs when the submit above succeeded — a failed step halts the
       # job, so this never claims a release that did not happen.

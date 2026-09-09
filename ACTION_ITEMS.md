@@ -5515,18 +5515,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   this item's acceptance).
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-29) — R-A through R-F all DONE/resolved.
-  The dual-approval gate itself is now DONE (shipped as part of B10 above,
-  PRs #2819/#2820 — Data Transfer's `export_entities` route is wired through
-  the same shared gate as Compliance). Only R-G remains open, and only
-  because it genuinely requires a human privacy/legal determination — a
-  self-contained request package for that
-  review has been prepared at `reports/legal/data-transfer-implied-consent-review.md`
-  (2026-07-28), but the actual determination is still pending a named
-  reviewer. Plus the still-open AI-3 dual-approval wiring (shared with B10,
-  not specific to this item). The module's P0 gaps (access-control, missing
-  PIA) were fixed 2026-07-28 (PRs #2685, #2687); this item tracks the PIA's
-  own follow-up recommendations.
+- [ ] **Status:** in progress (2026-09-08) — R-A through R-G all
+  DONE/resolved. The dual-approval gate itself is DONE (shipped as part of
+  B10 above, PRs #2819/#2820 — Data Transfer's `export_entities` route is
+  wired through the same shared gate as Compliance). **Only remaining open
+  work:** (1) R-G's own follow-up — drafting and publishing the disclosure
+  language R-G's determination calls for (see R-G entry below for the
+  exact tracking pointer), and (2) A41's separately-tied consent-
+  sufficiency question (see its own note below — not resolved by R-G).
+  The module's P0 gaps (access-control, missing PIA) were fixed 2026-07-28
+  (PRs #2685, #2687); this item tracks the PIA's own follow-up
+  recommendations.
   - **2026-09-07:** the product owner directed that A41's legacy-migration
     consent-legal-sufficiency question (whether the old app's consent basis
     was sufficient for the 2026-07-29 migration — fact sheet already
@@ -5548,6 +5547,34 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     record the determination in the PIA's Section 8/9 sign-off table per
     the request package's own "what a closed-out review looks like"
     instructions, and update this item's Status line when done.
+  - **R-G RESOLVED 2026-09-08 (Spinr Team, Product Owner).** Determination:
+    **option (a) — this secondary use needs a distinct privacy-policy
+    disclosure**, not left as implied consent alone. Recorded in
+    `docs/privacy/2026-07-28-pia-data-transfer-export.md` Section 8 (R-G)
+    and Section 9 (Reviewed by: Spinr Team, Product Owner, 2026-09-08); the
+    request package's own Status table
+    (`reports/legal/data-transfer-implied-consent-review.md`) updated to
+    match. **Follow-up still open** (this determination records the
+    decision, it does not itself draft or publish new legal text): add
+    disclosure language naming the Data Transfer module's internal
+    cross-environment data movement to `docs/legal/privacy-policy.md` —
+    tracked as a new open row in `docs/legal/legal-text-publication-
+    checklist.md`'s `privacy-policy.md` gating-conditions list. That
+    document is **already live in production** (published 2026-08-17,
+    ahead of its own required Saskatchewan/Canada counsel review, with
+    several other gaps already open — signed Supabase DPA, unverified
+    Railway data-region env var, a 2yr-vs-3yr GPS-retention contradiction
+    against `docs/data-classification.md`, and an unprovisioned
+    `accessibility@spinr.ca` contact) — this new disclosure sentence should
+    land at that document's next reviewed/re-published version, not as a
+    standalone unreviewed edit to the already-live text.
+  - **A41's tied-in legacy-migration consent-sufficiency question remains
+    separately open** — the 2026-09-07 entry above grouped it with R-G for
+    reviewer convenience (same blocker: no named reviewer), but it is a
+    different factual/legal question (whether the *old app's* consent
+    basis was sufficient for the 2026-07-29 migration, not this module's
+    ongoing secondary-use question) and was not addressed in this pass. See
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -23364,6 +23391,49 @@ how much they de-risk a public launch._
   correct, and should still merge (it fixes a genuine defect and is a
   prerequisite for these jobs ever going green), but it does not alone
   close this item.
+- **Mitigation added 2026-09-08 (`claude/pr-5085-5079-hardening-b11-rg-determination`,
+  found while `security-scan` blocked an unrelated docs-only PR #5134):**
+  with the admin toggle's timeline unknown, every PR touching any file was
+  being blocked on a required check that no PR diff can fix — added
+  `continue-on-error: true` to `ci.yml`'s `security-scan` job's "Upload
+  Trivy results to GitHub Security" step (`:975-988`) only, so this one
+  known, repo-wide, non-diff-caused failure stops blocking merges while
+  the admin action above is still pending. This restores that job's actual
+  gating behavior to what it was before this upload step started failing:
+  the filesystem Trivy scan feeding it has no `exit-code` set (unlike
+  `docker-image-scan`'s image scan, which does, at `:1071`, and is
+  unaffected by this — its own upload-sarif call still fails today, just
+  no longer the thing enforcing anything), so this upload was never the
+  thing gating `security-scan` pass/fail even when it worked. **Deeper
+  finding this surfaces, not fixed here:** with Code Scanning disabled,
+  the filesystem Trivy scan's findings currently reach no enforcement path
+  at all — a real security-posture gap, not just a CI-noise one, tracked
+  as its own open thread below rather than fixed unilaterally (adding
+  `exit-code: '1'` to a scan with an unknown-sized existing findings set
+  could immediately red-line `main`; needs a baseline/suppression pass
+  first, a bigger, separate decision). **Second site fixed same day, same
+  PR:** `security-gates.yml`'s G3/Semgrep upload-sarif step (`:386-397`)
+  hit the identical failure, which flipped that job's overall conclusion
+  to `failure` (even though its own Semgrep scan and the SR-03
+  money-safety gate both passed) and cascaded into the required "Security
+  gates summary" check — concretely blocking this PR's mergeability, not
+  just a `main`-branch nuisance. Same `continue-on-error: true` mitigation
+  applied there too; confirmed the underlying gate (SR-03's own
+  `sys.exit(1)` on a real finding) is independent of the upload step and
+  still enforces regardless. **Third and fourth sites fixed same PR, same
+  day:** touching `.github/workflows/**` itself made path-filtering run
+  `security-gates.yml`'s G6/container-scan on this PR too (previously
+  observed `skipped`) — it hit the identical failure and, being in
+  "Security gates summary"'s `needs:` list, would have blocked the PR the
+  same way G3 did. Fixed identically (`:682-685`), confirmed the real
+  enforcing scan (`exit-code: '1'`) and the SARIF-generating trivy-action
+  run both already succeeded before this upload step's failure. Applied
+  the same fix pre-emptively to the 4th and last known site,
+  `ci.yml`'s `docker-image-scan` (`:1109-1122`), for the same reason
+  (workflow-file changes make it run too) rather than wait for a third
+  round-trip to discover it failing. **All 4 known
+  `codeql-action/upload-sarif` call sites in the repo now have this
+  mitigation.**
 - **Verification performed:** read the full `security-scan` and `G3 ·
   Semgrep` job logs for both original failures; re-read every enclosing
   `permissions:` block directly (not via a context-truncated grep this
@@ -23517,6 +23587,109 @@ how much they de-risk a public launch._
   behavior claimed in hypothesis 1 for this specific repo (asserted from
   general GitHub documentation, not confirmed against this repo's actual
   settings).
+
+### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session
+
+- [ ] **Status:** OPEN — escalated to the user; needs a human with GitHub
+  org/repo billing or Actions-admin access. Found while investigating a CI
+  failure wake on PR #5134 (a docs-only B11/R-G recording PR, whose only
+  code touch is `continue-on-error: true` additions to `ci.yml`/
+  `security-gates.yml` for C94). PR #5134's own CI showed **every single
+  job failing** — not just the 4 known C94 SARIF-upload sites, but
+  `detect-changes`, `security-scan`, `backend-test`, `rider-app-test`,
+  `admin-test`, `driver-app-test`, `python-dependency-audit`, every `G1`-
+  `G7b` job in `security-gates.yml`, `Rider/Driver app E2E tests
+  (Playwright)`, `Visual regression (Playwright)`, `E2E tests
+  (Playwright)` — 12+ distinct jobs across both required workflows, all
+  `conclusion: failure`, most completing in **2-40 seconds** (implausible
+  for real test suites that normally run minutes).
+- **Confirmed NOT this PR's diff, and NOT any single PR's diff** — checked
+  `main`'s own last 3 merge-commit CI runs via `list_workflow_runs`
+  (branch: main, event: push):
+  - PR #5132's merge (`03dfb9f`, ~20:44 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `failure`.
+  - PR #5131's merge (`4fcbecc`, ~20:19-20:40 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `cancelled`.
+  - PR #5128's merge (`1306f01`, ~18:12-18:16 UTC): `Security Gates` →
+    `failure`.
+  Three independent merges to `main` itself, by different sessions, all
+  red on both required workflows — this is base-branch-red at the widest
+  possible scope, not a single PR's regression.
+- **Escalating in scale from C94/C47, not the same root cause:**
+  - C94 (still valid, separately) is 4 specific `codeql-action/upload-
+    sarif` steps failing on a repo-setting gap ("Code scanning is not
+    enabled"). That's a narrow, understood, already-mitigated (`continue-
+    on-error: true`) failure mode — it does not explain `backend-test`,
+    `rider-app-test`, `admin-test`, `driver-app-test`, or E2E jobs failing,
+    none of which touch `codeql-action` at all.
+  - C47 (2026-08-27, closed) documented a *similar-shaped* but narrower
+    anomaly: `ci-guardrails.yml` coverage jobs externally cancelled
+    mid-suite (`exit 143`, "runner has received a shutdown signal"),
+    `get_workflow_run_usage` reporting `duration_ms: 0` for every job
+    despite real multi-minute wall-clock execution — flagged then as
+    "GitHub-side runner preemption and an Actions-minutes/spend-limit
+    cutoff are both plausible externally-caused candidates, neither
+    confirmed," with no billing-API access from that session to
+    investigate further. **This looks like the same class of problem,
+    now far more severe**: instead of one job being killed mid-suite
+    after several minutes, essentially *every* job across *every*
+    workflow is failing within seconds, with **zero log content
+    retrievable** (`mcp__github__get_job_logs` returns HTTP 404 for every
+    job ID tried, including `detect-changes`, `security-scan`, and all 4
+    `-test` jobs) — consistent with jobs failing before a runner ever
+    picked them up (queue rejection / spend-limit block), not mid-run.
+  - `mcp__github__pull_request_read` method `get_status` (combined commit
+    status) itself 403'd — `Resource not accessible by integration` —
+    a token-permission gap on this session's GitHub MCP integration
+    specifically, separate from (and not the cause of) the underlying
+    Actions failures themselves (confirmed via `get_check_runs`, which
+    does work and shows the same failures).
+- **What this session could not do:** confirm the root cause. No access
+  from this session to GitHub's own Actions-usage/billing dashboard
+  (`Settings → Billing → Actions` or the org's usage page), no access to
+  the GitHub Status page (`githubstatus.com` — blocked by this session's
+  own network egress proxy, `EGRESS_BLOCKED`), and no permission to
+  trigger a re-run (`actions_run_trigger` 403's the same way it did for
+  C95). Two leading hypotheses, same as C47's, now with much stronger
+  signal toward the first:
+  1. **GitHub Actions spend limit / included-minutes cap reached** for
+     this account — would explain near-instant failure with no logs
+     (jobs rejected at queue time, before a runner is assigned) far
+     better than C47's "cancelled mid-run" pattern did.
+  2. **A GitHub-side platform incident** (Actions infra outage) —
+     unverifiable from this session; a human should check
+     `githubstatus.com` directly, which this session cannot reach.
+- **Action needed (human, not code):** whoever owns this GitHub
+  organization's billing/admin settings should check
+  `https://github.com/organizations/<org>/settings/billing` (or the
+  personal-account equivalent) for an Actions spend-limit/usage-cap hit,
+  and check `githubstatus.com` for an active incident. Until one of those
+  is confirmed and resolved, **every open PR in this repo will show every
+  CI check failing, and this is not a signal about any individual PR's
+  code** — do not merge-block-triage individual PRs' "failures" as if
+  they were real defects until this is ruled out or fixed.
+- **Not fixed here, cannot be fixed from this session:** this is
+  infra/billing, not a workflow YAML defect — no `continue-on-error:`,
+  permissions grant, or code change addresses a spend-limit block or a
+  GitHub-side outage. Flagging per CLAUDE.md's pre-merge release gate #9
+  ("Escalate, don't silently ship, when in doubt") and #8 ("a CI check
+  that's red for a reason unrelated to your diff is a signal the gate
+  itself has decayed, not 'not my problem'").
+- **Verification performed:** `get_check_runs` on PR #5134 (45 check runs,
+  overwhelming majority `failure`); `list_workflow_runs` filtered to
+  `branch: main, event: push` showing 3 independent recent merge commits
+  all red; `list_workflow_jobs` on the specific run confirming job-level
+  timestamps (2-40s durations); `get_job_logs` with `failed_only: true`
+  attempted on all 12 failed jobs in the run — 100% HTTP 404.
+- **What was NOT verified:** the actual root cause (spend-limit vs.
+  platform incident vs. a third unconsidered cause); whether this started
+  exactly between PR #5131's own successful partial run (~20:23 UTC,
+  where `security-scan`'s `actions:read` fix was confirmed working with
+  real log output, before hitting the separate "Code scanning not
+  enabled" error) and this discovery (~21:09-21:11 UTC) — bounded to that
+  ~45-minute window by the available evidence, not narrowed further;
+  whether the same failure is hitting *every* repo under this account or
+  is scoped to this one.
 
 ## Recently completed (do not redo)
 

@@ -181,6 +181,30 @@ env:
 - No feature flag needed: every change here is either a pure trigger addition or a
   scheduling config, not a behavior toggle a live user could be mid-session on.
 
+## 8a. Caught by proactive review before push, fixed same session
+
+Ran `spinr-cicd-infra-reviewer` against this exact diff before pushing (per its own "use
+proactively on any `.github/workflows` change" mandate). It found two real issues, both fixed
+before push — recorded here rather than silently folded into the sections above, since this
+is exactly the "escalate, don't silently ship" + "verify before shipping" discipline this repo
+asks for, and worth being visible that it worked:
+
+- **BLOCKER (fixed, commit after b3ad045):** `test-env.yml`'s new `cancel-in-progress: true`
+  was unconditional, but this workflow's `push`-triggered path runs `eas build`/`eas update`
+  against Expo — non-idempotent external state a mid-flight cancellation could orphan or race.
+  Rescoped to `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, matching
+  `ci.yml`'s own conditional pattern in this same diff.
+- **WARNING (fixed, commit after 3e5d3ff):** `ci.yml`'s 4 GHCR-push/cosign-sign steps gate only
+  on `github.ref == 'refs/heads/main'`, which is also true for the new nightly `schedule` run —
+  so every night was about to re-push and re-sign an unchanged image with no new commit behind
+  it. Added `&& github.event_name != 'schedule'` to all 4; the Trivy scan itself (the actual
+  nightly value) is unaffected.
+
+Everything else the reviewer checked (deploy-admin's `workflow_dispatch` gate, mobile-build's
+`[build]`-tag gate, `sync-mobile-lockfiles.yml`/`sync-pip-lockfile.yml`/`dependabot-auto-merge.yml`'s
+idempotency under cancellation) came back confirmed-safe, consistent with Section 4's reasoning
+above.
+
 ## 9. Verification performed
 
 - [x] `yaml.safe_load` against all 9 edited workflow files post-edit — all parse clean.

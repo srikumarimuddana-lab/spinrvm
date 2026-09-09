@@ -17,6 +17,7 @@ import {
 } from '@shared/utils/markerPlayback';
 import { smoothFix, isImplausibleJump, type SmoothingState } from '@shared/utils/gpsSmoothing';
 import type { FixFeed, MarkerFix } from '@shared/utils/fixFeed';
+import { captureException } from '@shared/services/errorReporting';
 
 const CAR_IMAGES = {
     standard: require('../assets/images/car_marker.png'),
@@ -166,6 +167,16 @@ const MAX_ROUTE_SNAP_M = 35;
 // Cap on the rotation tween so the car visibly turns rather than snapping,
 // without lagging a full position-animation behind sharp turns.
 const MAX_ROTATE_MS = 600;
+// A car-icon Image that fails to decode (transient OOM/codec glitch on a
+// low-end device — live-testing report 2026-09-09: "green circle, never a
+// car" persisting indefinitely) previously had no way back: onError only
+// ever toggled the custom-vs-bundled image choice, which is a no-op when
+// there was no custom image to begin with, so a bundled-asset failure left
+// hasLoadedImageRef permanently false and the marker froze at the mount
+// effect's 5s hard cap showing the ring only, forever. Retrying up to this
+// many times (remounting the Image via a bumped key) gives a transient
+// failure a chance to self-heal within that same 5s window.
+const MAX_IMAGE_RETRIES = 3;
 
 /**
  * Top-down car marker using the transparent PNG from shared/assets.
@@ -670,9 +681,55 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // back to the bundled variant. Reset when the URL changes so a fixed
     // upload is retried.
     const [imageFailed, setImageFailed] = useState(false);
+    // Bumped on every onError, up to MAX_IMAGE_RETRIES — included in the
+    // <Image>'s key below so a failed decode gets a fresh native Image
+    // instance to retry with, instead of the bundled fallback (which has
+    // nowhere further to fall back to) simply staying broken. See
+    // MAX_IMAGE_RETRIES' own doc comment for why this exists.
+    const [imageAttempt, setImageAttempt] = useState(0);
+    const imageRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Reported to error tracking at most once per mount — a flapping image
+    // must not spam Sentry every retry cycle.
+    const imageErrorReportedRef = useRef(false);
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    useEffect(() => setImageFailed(false), [imageUri]);
+    useEffect(() => {
+        setImageFailed(false);
+        setImageAttempt(0);
+        imageErrorReportedRef.current = false;
+    }, [imageUri]);
+    useEffect(() => () => {
+        if (imageRetryTimerRef.current) clearTimeout(imageRetryTimerRef.current);
+    }, []);
     const useCustomImage = !!imageUri && !imageFailed;
+
+    // Do not silently swallow a decode failure (CLAUDE.md: DB/auth/payment
+    // errors must surface loudly — the same applies here, since a silently
+    // broken car icon is a live-testing-confirmed regression with no other
+    // signal). Retries with backoff first (transient OOM/codec glitches on
+    // low-end devices self-heal); once retries are exhausted, report once so
+    // this is visible in production monitoring instead of a driver silently
+    // shipping with no vehicle icon for the rest of their session.
+    const handleImageError = useCallback(() => {
+        setImageFailed(true);
+        setTracksViewChanges(true);
+        setImageAttempt((attempt) => {
+            if (attempt >= MAX_IMAGE_RETRIES) {
+                if (!imageErrorReportedRef.current) {
+                    imageErrorReportedRef.current = true;
+                    captureException(
+                        new Error('CarMarker: car icon image failed to decode after retries'),
+                        { domain: 'drivers', surface: 'driver-app' },
+                    );
+                }
+                return attempt;
+            }
+            if (imageRetryTimerRef.current) clearTimeout(imageRetryTimerRef.current);
+            imageRetryTimerRef.current = setTimeout(() => {
+                setImageAttempt((n) => n + 1);
+            }, 300 * (attempt + 1));
+            return attempt;
+        });
+    }, []);
 
     // Android: plain Marker + native animator (see the teleport-guard note
     // above). iOS: Marker.Animated + AnimatedRegion, which is smooth there.
@@ -765,8 +822,9 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 {/* eslint-disable-next-line react-hooks/refs -- mountAnimatedStyle is a plain object computed above from the stable mountAnim ref value, not a fresh ref read */}
                 <Animated.View style={mountAnimatedStyle}>
                     <Image
+                        key={imageAttempt}
                         source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
-                        onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
+                        onError={handleImageError}
                         onLoad={handleImageLoaded}
                         resizeMode="contain"
                         style={{

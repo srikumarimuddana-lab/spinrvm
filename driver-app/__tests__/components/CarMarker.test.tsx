@@ -44,6 +44,11 @@ jest.mock('expo-image', () => {
   return { Image: (props: any) => ReactActual.createElement('ExpoImage', props) };
 });
 
+const mockCaptureException = jest.fn();
+jest.mock('@shared/services/errorReporting', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
+
 describe('CarMarker — mount bounce-in (round 8)', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -85,6 +90,94 @@ describe('CarMarker — mount bounce-in (round 8)', () => {
     act(() => {
       jest.advanceTimersByTime(6000);
     });
+  });
+});
+
+describe('CarMarker — car-icon decode failure retries then reports once (2026-09-09, "green circle, never a car")', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockCaptureException.mockClear();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('retries a failed decode with backoff, remounting a fresh Image each time', () => {
+    const { UNSAFE_getByType } = render(
+      <CarMarker coordinate={{ latitude: 50.4452, longitude: -104.6189 }} heading={90} />,
+    );
+
+    const firstImage = UNSAFE_getByType(Image);
+    // onError and the timer advance are deliberately in SEPARATE act() calls:
+    // onError's setState updater schedules its setTimeout as a side effect of
+    // being invoked, and act() only flushes/commits at the end of its own
+    // callback — combining both statements into one act() call would advance
+    // the fake clock before React has actually run the updater and
+    // registered the timer, which never happens in real usage (a native
+    // onError callback is itself already an async boundary).
+    act(() => {
+      firstImage.props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // A retry bumps the Image's key, producing a distinct element instance —
+    // proof the native view actually remounted to re-attempt the decode,
+    // not just re-rendered with the same broken one.
+    const secondImage = UNSAFE_getByType(Image);
+    expect(secondImage).not.toBe(firstImage);
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('reports to error tracking exactly once after MAX_IMAGE_RETRIES exhausted, never before', () => {
+    const { UNSAFE_getByType } = render(
+      <CarMarker coordinate={{ latitude: 50.4452, longitude: -104.6189 }} heading={90} />,
+    );
+
+    // 4 failures: 3 retries (0->1->2->3), the 4th finds retries exhausted.
+    for (let i = 0; i < 4; i++) {
+      act(() => {
+        UNSAFE_getByType(Image).props.onError();
+      });
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+    }
+
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ domain: 'drivers', surface: 'driver-app' }),
+    );
+
+    // A further failure past exhaustion must not report again.
+    act(() => {
+      UNSAFE_getByType(Image).props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+
+  it('never reports once the image successfully loads', () => {
+    const { UNSAFE_getByType } = render(
+      <CarMarker coordinate={{ latitude: 50.4452, longitude: -104.6189 }} heading={90} />,
+    );
+    act(() => {
+      UNSAFE_getByType(Image).props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    act(() => {
+      UNSAFE_getByType(Image).props.onLoad();
+    });
+    act(() => {
+      jest.advanceTimersByTime(6000);
+    });
+    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 });
 

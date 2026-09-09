@@ -22085,6 +22085,46 @@ how much they de-risk a public launch._
 - **Files:** `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_db_errors.py`,
   `backend/tests/test_dispatch_match_attempt_branches.py`.
 
+### HM-32. iOS demand heatmap: true raster-gradient renderer (Skia) — scoped, not implemented
+- [ ] **Status:** open — scoped 2026-09-09 after the user shared a reference screenshot
+  (Uber driver-app demand heatmap: a soft, blurred, continuous gradient) and asked for a
+  recommendation. An immediate incremental improvement shipped the same session (see
+  `docs/change-log/2026-09-09-heatmap-soft-gradient-style-ios.md`) — this item tracks the
+  fuller fix the user explicitly chose to scope separately rather than rush into that
+  session ("do both": ship the incremental fix now, track this properly).
+- **Issue/gap:** Android already renders a true GPU-blended gradient via
+  `react-native-maps`' native `<Heatmap>` layer. iOS (deliberately Apple Maps, not Google
+  Maps — see `driver-app/app.config.ts`'s comment on why switching would be a much bigger
+  change than this one feature warrants) has no native equivalent — the same limitation
+  `HM-GRAD-1` originally worked around. The 2026-09-09 fix (`BLOB_LAYERS` layered circles +
+  `rampColorForRatio` continuous color interpolation in `HeatmapCells.tsx`) is a real,
+  tested improvement but is explicitly a hand-rolled approximation, not a real Gaussian
+  blur — it will still read as "layered circles" up close on iOS, not the seamless blurred
+  raster look in the reference screenshot.
+- **Proposed approach:** render the heat-density field as an actual blurred raster bitmap
+  client-side (e.g. via `@shopify/react-native-skia`'s blur filters/canvas), then overlay it
+  on the map as a positioned image synced to the visible region on every pan/zoom —
+  architecturally the same result Android's native layer already gives, computed in
+  JS/Skia instead of the native Google Maps SDK.
+- **Why not done now:** requires a new native dependency (`@shopify/react-native-skia` is
+  not currently in `driver-app/package.json`) and meaningful implementation work
+  (density-kernel computation; keeping the overlay image aligned through zoom/pan without
+  visible lag; GPU-cost testing on low-end iOS devices). Unlike the same-day incremental
+  fix, this is **not OTA-eligible** — a new native dependency needs a full EAS native
+  build + device/App-Store cycle before any driver sees it.
+- **Acceptance:** iOS heatmap reads as a continuous blurred gradient (no visible individual
+  circle/layer edges at normal zoom); no dropped frames panning/zooming with a full-size
+  cell set on a mid-tier iOS device; overlay stays correctly positioned/scaled through
+  zoom and pan.
+- **Owner / follow-up:** needs a dedicated session/sprint, not a same-session bolt-on —
+  evaluate `@shopify/react-native-skia`'s bundle-size/cold-start cost before committing,
+  and get a real EAS build + physical-device pass before merge (this repo's agent sessions
+  cannot trigger EAS builds themselves — see the PR template's own "Native build
+  verification" field).
+- **Files (reference/likely, not yet touched):** `driver-app/components/dashboard/HeatmapCells.tsx`,
+  `driver-app/package.json`, `driver-app/eas.json`; likely a new
+  `driver-app/components/dashboard/HeatmapGradientOverlay.tsx`.
+
 ### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue — CLOSED (2026-09-08)
 
 - [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c72-fingerprint`.

@@ -1,28 +1,43 @@
 "use client";
 
 /**
- * Legacy Tax-ID (SIN + GST/HST BN) Backfill — one CSV, header exactly
- * "phone,sin,gst_bn", matched against already-legacy-imported drivers by
- * phone. Mirrors the validate → review → commit shape every other bulk
- * tool on this page uses; no typed confirmation phrase, matching the
- * sibling SIN/DOB backfill page's own convention (the NULL-only fill
- * policy plus the backend's compare-and-set write already make an
- * accidental re-commit a no-op, not a silent overwrite). It does, however,
- * get that same sibling's AlertDialog gut-check before the first commit —
- * this was the one bulk tool on this page with neither a typed-confirm
- * phrase nor a dialog, and it writes vault-encrypted SIN plus a background
- * push to Stripe, which a mis-click shouldn't trigger unconfirmed.
+ * Legacy Tax-ID (SIN + GST/HST BN) Backfill.
+ *
+ * Two ways to get to the same validate → review → commit flow every other
+ * bulk tool on this page uses:
+ *
+ *  - "I have the ready CSV" — one file, header exactly "phone,sin,gst_bn",
+ *    matched against already-legacy-imported drivers by phone. The original
+ *    flow this tool shipped with.
+ *  - "Prepare from Mongo export" — the raw banks.csv + drivers.csv straight
+ *    from the previous app's MongoDB export. The backend joins them
+ *    server-side (backend/routes/admin/tax_id_import.py's prepare-validate/
+ *    prepare-commit, reusing the same join scripts/build_legacy_tax_id_csv.py
+ *    uses) so an operator never has to build the ready CSV by hand or paste
+ *    real SIN/GST values into a chat session to get one built.
+ *
+ * No typed confirmation phrase, matching the sibling SIN/DOB backfill page's
+ * own convention (the NULL-only fill policy plus the backend's
+ * compare-and-set write already make an accidental re-commit a no-op, not a
+ * silent overwrite) — it does, however, get that same sibling's AlertDialog
+ * gut-check before the first commit, since it writes vault-encrypted SIN
+ * plus a background push to Stripe, which a mis-click shouldn't trigger
+ * unconfirmed.
  */
 
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, Info, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, HelpCircle, Info, Loader2, Upload } from "lucide-react";
 import {
     adminCommitTaxIdBackfill,
+    adminPrepareCommitTaxIdFromLegacyExport,
+    adminPrepareValidateTaxIdFromLegacyExport,
     adminValidateTaxIdBackfill,
     type TaxIdBackfillCommitResult,
+    type TaxIdBackfillFromLegacyExportReport,
     type TaxIdBackfillReport,
     type TaxIdBackfillReportItem,
 } from "@/lib/api";
+import { explainTaxIdIssue } from "@/lib/tax-id-error-help";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,6 +56,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
     AlertDialog,
     AlertDialogTrigger,
@@ -55,6 +71,8 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { exportToCsv } from "@/lib/export-csv";
 
+type UploadMode = "single" | "legacy-export";
+
 function IssueTable({ items }: { items: TaxIdBackfillReportItem[] }) {
     return (
         <div className="overflow-x-auto rounded-md border">
@@ -67,13 +85,24 @@ function IssueTable({ items }: { items: TaxIdBackfillReportItem[] }) {
                     </TableRow>
                 </TableHeader>
                 <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.row_ref}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.row_ref}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
+                    {items.map((it, i) => {
+                        const explanation = explainTaxIdIssue(it.message);
+                        return (
+                            <TableRow key={`${it.row_ref}-${it.field}-${i}`}>
+                                <TableCell className="font-mono text-xs align-top">{it.row_ref}</TableCell>
+                                <TableCell className="font-mono text-xs align-top">{it.field}</TableCell>
+                                <TableCell className="text-sm">
+                                    <p>{it.message}</p>
+                                    {explanation ? (
+                                        <div className="mt-1.5 space-y-0.5 rounded border-l-2 border-muted-foreground/30 pl-2 text-xs text-muted-foreground">
+                                            <p>{explanation.cause}</p>
+                                            <p className="font-medium">What to do: {explanation.fix}</p>
+                                        </div>
+                                    ) : null}
+                                </TableCell>
+                            </TableRow>
+                        );
+                    })}
                 </TableBody>
             </Table>
         </div>
@@ -117,30 +146,109 @@ function buildSummaryText(report: TaxIdBackfillReport): string {
     return lines.join("\n");
 }
 
+function WhatThisDoes() {
+    return (
+        <div className="space-y-3 rounded-md border border-muted bg-muted/30 p-4 text-sm">
+            <div className="flex items-center gap-2 font-medium">
+                <HelpCircle className="h-4 w-4" />
+                What this tool does, in plain terms
+            </div>
+            <dl className="grid gap-3 sm:grid-cols-2">
+                <div>
+                    <dt className="text-xs font-semibold uppercase text-muted-foreground">What</dt>
+                    <dd className="text-muted-foreground">
+                        Fills in a driver&apos;s Social Insurance Number (SIN) and GST/HST business
+                        number, but only for drivers who gave us those numbers on the{" "}
+                        <span className="font-medium text-foreground">previous app</span> and haven&apos;t
+                        been asked again since moving to Spinr.
+                    </dd>
+                </div>
+                <div>
+                    <dt className="text-xs font-semibold uppercase text-muted-foreground">Why</dt>
+                    <dd className="text-muted-foreground">
+                        Drivers need a SIN on file before Stripe will pay them, and a GST/HST number
+                        before Spinr can report their GST-registered status. Without this backfill,
+                        every migrated driver would be stopped and asked to re-enter numbers they
+                        already gave us once.
+                    </dd>
+                </div>
+                <div>
+                    <dt className="text-xs font-semibold uppercase text-muted-foreground">Which files</dt>
+                    <dd className="text-muted-foreground">
+                        Either a ready <span className="font-mono">phone,sin,gst_bn</span> CSV, or the
+                        raw <span className="font-mono">banks.csv</span> +{" "}
+                        <span className="font-mono">drivers.csv</span> straight from the old app&apos;s
+                        MongoDB export — pick whichever you have under the tabs below.
+                    </dd>
+                </div>
+                <div>
+                    <dt className="text-xs font-semibold uppercase text-muted-foreground">Value</dt>
+                    <dd className="text-muted-foreground">
+                        A driver never has to fish out and re-type their SIN or business number, and
+                        this tool never overwrites a value a driver has already entered themselves —
+                        it only fills in blanks.
+                    </dd>
+                </div>
+            </dl>
+            <p className="border-t pt-2 text-xs text-muted-foreground">
+                Safety rails: a value that&apos;s already on file is never touched (only blank fields
+                get filled), every SIN is encrypted before it&apos;s stored, and nothing you upload or
+                see on this screen — including validation errors — ever shows a full SIN, GST number,
+                or phone number.
+            </p>
+        </div>
+    );
+}
+
 export function LegacyTaxIdImport() {
     const { toast } = useToast();
 
+    const [mode, setMode] = useState<UploadMode>("single");
+
+    // "I have the ready CSV" mode
     const [file, setFile] = useState<File | null>(null);
+
+    // "Prepare from Mongo export" mode
+    const [banksFile, setBanksFile] = useState<File | null>(null);
+    const [driversFile, setDriversFile] = useState<File | null>(null);
+
     const [batch, setBatch] = useState("");
-    const [report, setReport] = useState<TaxIdBackfillReport | null>(null);
+    const [report, setReport] = useState<TaxIdBackfillReport | TaxIdBackfillFromLegacyExportReport | null>(null);
+    const [reportSource, setReportSource] = useState<UploadMode | null>(null);
     const [committed, setCommitted] = useState<TaxIdBackfillCommitResult | null>(null);
     const [validating, setValidating] = useState(false);
     const [committing, setCommitting] = useState(false);
 
-    const onPickFile = (f: File | null) => {
-        setFile(f);
+    const resetReport = () => {
         setReport(null);
+        setReportSource(null);
         setCommitted(null);
     };
 
-    const handleValidate = async () => {
+    const onPickFile = (f: File | null) => {
+        setFile(f);
+        resetReport();
+    };
+    const onPickBanksFile = (f: File | null) => {
+        setBanksFile(f);
+        resetReport();
+    };
+    const onPickDriversFile = (f: File | null) => {
+        setDriversFile(f);
+        resetReport();
+    };
+
+    const handleValidateSingle = async () => {
         if (!file) return;
         setValidating(true);
         setCommitted(null);
         try {
-            setReport(await adminValidateTaxIdBackfill(file, batch || undefined));
+            const r = await adminValidateTaxIdBackfill(file, batch || undefined);
+            setReport(r);
+            setReportSource("single");
         } catch (e) {
             setReport(null);
+            setReportSource(null);
             toast({
                 title: "Validation failed",
                 description: e instanceof Error ? e.message : "Could not validate the CSV.",
@@ -151,27 +259,76 @@ export function LegacyTaxIdImport() {
         }
     };
 
+    const handleValidateLegacyExport = async () => {
+        if (!banksFile || !driversFile) return;
+        setValidating(true);
+        setCommitted(null);
+        try {
+            const r = await adminPrepareValidateTaxIdFromLegacyExport(
+                { banks: banksFile, drivers: driversFile },
+                { batch: batch || undefined }
+            );
+            setReport(r);
+            setReportSource("legacy-export");
+        } catch (e) {
+            setReport(null);
+            setReportSource(null);
+            toast({
+                title: "Preparation failed",
+                description:
+                    e instanceof Error ? e.message : "Could not join and validate banks.csv + drivers.csv.",
+                variant: "destructive",
+            });
+        } finally {
+            setValidating(false);
+        }
+    };
+
+    const handleValidate = mode === "single" ? handleValidateSingle : handleValidateLegacyExport;
+    const canValidate = mode === "single" ? Boolean(file) : Boolean(banksFile && driversFile);
+
+    const applyRefusedCommit = (res: TaxIdBackfillCommitResult) => {
+        setCommitted(res);
+        setReport((prev) =>
+            prev
+                ? {
+                      ...prev,
+                      batch: res.batch,
+                      can_commit: res.can_commit ?? false,
+                      counts: res.counts ?? prev.counts,
+                      warnings: res.warnings ?? [],
+                      errors: res.errors ?? [],
+                  }
+                : prev
+        );
+        toast({
+            title: "Import refused",
+            description: "This no longer validates — fix the errors below and try again.",
+            variant: "destructive",
+        });
+    };
+
     const handleCommit = async () => {
-        if (!file || !report?.can_commit) return;
+        if (!report?.can_commit || !reportSource) return;
         setCommitting(true);
         try {
-            const res = await adminCommitTaxIdBackfill(file, report.batch);
-            setCommitted(res);
+            let res: TaxIdBackfillCommitResult;
+            if (reportSource === "single") {
+                if (!file) return;
+                res = await adminCommitTaxIdBackfill(file, report.batch);
+            } else {
+                if (!banksFile || !driversFile) return;
+                const legacyReport = report as TaxIdBackfillFromLegacyExportReport;
+                res = await adminPrepareCommitTaxIdFromLegacyExport(
+                    { banks: banksFile, drivers: driversFile },
+                    { batch: report.batch, validationToken: legacyReport.validation_token }
+                );
+            }
             if (!res.committed) {
                 // Backend refused and returned the fresh report instead.
-                setReport({
-                    batch: res.batch,
-                    can_commit: res.can_commit ?? false,
-                    counts: res.counts ?? report.counts,
-                    warnings: res.warnings ?? [],
-                    errors: res.errors ?? [],
-                });
-                toast({
-                    title: "Import refused",
-                    description: "The CSV no longer validates — fix the errors below and try again.",
-                    variant: "destructive",
-                });
+                applyRefusedCommit(res);
             } else {
+                setCommitted(res);
                 toast({
                     title: "Backfill committed",
                     description: `${res.written_sin ?? 0} SIN, ${res.written_gst ?? 0} GST BN written.`,
@@ -189,6 +346,7 @@ export function LegacyTaxIdImport() {
     };
 
     const c = report?.counts;
+    const joinStats = reportSource === "legacy-export" ? (report as TaxIdBackfillFromLegacyExportReport)?.join_stats : undefined;
 
     return (
         <Card>
@@ -199,36 +357,99 @@ export function LegacyTaxIdImport() {
                 </CardTitle>
                 <CardDescription>
                     Fill SIN and GST/HST business number for drivers whose numbers were collected on
-                    the previous app, matched by phone. Bank account/routing numbers are never read
-                    from this CSV — only phone, sin, and gst_bn.
+                    the previous app, matched by phone.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-                <div className="flex gap-2 rounded-md border border-muted bg-muted/30 p-3 text-sm">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                    <p className="text-muted-foreground">
-                        CSV header must be exactly <span className="font-mono">phone,sin,gst_bn</span>.
-                        Both sin and gst_bn are NULL-only fills — a driver who already has either value
-                        on file keeps it; corrections go through the driver&apos;s own update-SIN action,
-                        not this tool. Max 500 rows per file.
-                    </p>
-                </div>
+                <WhatThisDoes />
 
                 <div className="space-y-3">
                     <h3 className="text-sm font-medium">1. Upload &amp; validate</h3>
+
+                    <Tabs
+                        value={mode}
+                        onValueChange={(v) => {
+                            setMode(v as UploadMode);
+                            resetReport();
+                        }}
+                    >
+                        <TabsList>
+                            <TabsTrigger value="single">I have the ready CSV</TabsTrigger>
+                            <TabsTrigger value="legacy-export">Prepare from Mongo export</TabsTrigger>
+                        </TabsList>
+
+                        <TabsContent value="single" className="space-y-3 pt-3">
+                            <div className="flex gap-2 rounded-md border border-muted bg-muted/30 p-3 text-sm">
+                                <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                <p className="text-muted-foreground">
+                                    CSV header must be exactly{" "}
+                                    <span className="font-mono">phone,sin,gst_bn</span>. Both sin and
+                                    gst_bn are NULL-only fills — a driver who already has either value on
+                                    file keeps it; corrections go through the driver&apos;s own update-SIN
+                                    action, not this tool. Max 500 rows per file. Bank account/routing
+                                    numbers are never read from this CSV.
+                                </p>
+                            </div>
+                            <div className="space-y-1">
+                                <Label htmlFor="tax-id-csv" className="text-xs">
+                                    Tax-ID CSV
+                                    {file ? <CheckCircle2 className="ml-1 inline h-3 w-3 text-success" /> : null}
+                                </Label>
+                                <Input
+                                    id="tax-id-csv"
+                                    type="file"
+                                    accept=".csv,text/csv"
+                                    onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
+                                />
+                            </div>
+                        </TabsContent>
+
+                        <TabsContent value="legacy-export" className="space-y-3 pt-3">
+                            <div className="flex gap-2 rounded-md border border-muted bg-muted/30 p-3 text-sm">
+                                <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                <p className="text-muted-foreground">
+                                    Upload the two files exactly as exported from the previous app&apos;s
+                                    MongoDB dump — <span className="font-mono">banks.csv</span> and{" "}
+                                    <span className="font-mono">drivers.csv</span>. This tool joins them on
+                                    the server and builds the ready file for you; the SIN and GST/HST
+                                    numbers inside them never leave this admin portal — they are never sent
+                                    to Claude, email, or anywhere else. Max 2 MB / 2,000 rows per file.
+                                </p>
+                            </div>
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                    <Label htmlFor="tax-id-banks-csv" className="text-xs">
+                                        banks.csv
+                                        {banksFile ? (
+                                            <CheckCircle2 className="ml-1 inline h-3 w-3 text-success" />
+                                        ) : null}
+                                    </Label>
+                                    <Input
+                                        id="tax-id-banks-csv"
+                                        type="file"
+                                        accept=".csv,text/csv"
+                                        onChange={(e) => onPickBanksFile(e.target.files?.[0] ?? null)}
+                                    />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label htmlFor="tax-id-drivers-csv" className="text-xs">
+                                        drivers.csv
+                                        {driversFile ? (
+                                            <CheckCircle2 className="ml-1 inline h-3 w-3 text-success" />
+                                        ) : null}
+                                    </Label>
+                                    <Input
+                                        id="tax-id-drivers-csv"
+                                        type="file"
+                                        accept=".csv,text/csv"
+                                        onChange={(e) => onPickDriversFile(e.target.files?.[0] ?? null)}
+                                    />
+                                </div>
+                            </div>
+                        </TabsContent>
+                    </Tabs>
+
                     <div className="grid gap-4 sm:grid-cols-2">
-                        <div className="space-y-1">
-                            <Label htmlFor="tax-id-csv" className="text-xs">
-                                Tax-ID CSV
-                                {file ? <CheckCircle2 className="ml-1 inline h-3 w-3 text-success" /> : null}
-                            </Label>
-                            <Input
-                                id="tax-id-csv"
-                                type="file"
-                                accept=".csv,text/csv"
-                                onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
-                            />
-                        </div>
                         <div className="space-y-1">
                             <Label htmlFor="tax-id-batch" className="text-xs">
                                 Batch name (optional)
@@ -239,20 +460,21 @@ export function LegacyTaxIdImport() {
                                 value={batch}
                                 onChange={(e) => {
                                     setBatch(e.target.value);
-                                    setReport(null);
-                                    setCommitted(null);
+                                    resetReport();
                                 }}
                             />
                         </div>
                     </div>
-                    <Button onClick={handleValidate} disabled={!file || validating}>
+                    <Button onClick={handleValidate} disabled={!canValidate || validating}>
                         {validating ? (
                             <>
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Validating…
+                                {mode === "single" ? "Validating…" : "Preparing & validating…"}
                             </>
-                        ) : (
+                        ) : mode === "single" ? (
                             "Validate (no writes)"
+                        ) : (
+                            "Prepare & validate (no writes)"
                         )}
                     </Button>
                 </div>
@@ -260,6 +482,32 @@ export function LegacyTaxIdImport() {
                 {report && c ? (
                     <div className="space-y-4">
                         <h3 className="text-sm font-medium">2. Review and commit</h3>
+
+                        {joinStats ? (
+                            <div className="space-y-2">
+                                <p className="text-xs font-medium text-muted-foreground">
+                                    From joining banks.csv + drivers.csv:
+                                </p>
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                    <Stat label="banks.csv rows" value={joinStats.banks_rows} />
+                                    <Stat
+                                        label="No matching driver"
+                                        value={joinStats.unmatched_no_phone}
+                                        tone="warn"
+                                    />
+                                    <Stat
+                                        label="Neither SIN nor GST"
+                                        value={joinStats.skipped_no_sin_or_gst}
+                                        tone="warn"
+                                    />
+                                    <Stat
+                                        label="Same driver, multiple records"
+                                        value={joinStats.duplicate_phone_groups}
+                                        tone="warn"
+                                    />
+                                </div>
+                            </div>
+                        ) : null}
 
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                             <Stat label="Rows" value={c.rows} />
@@ -372,8 +620,8 @@ export function LegacyTaxIdImport() {
                             </AlertDialog>
                         ) : (
                             <p className="text-sm text-muted-foreground">
-                                Nothing to commit — fix the errors above, or every row in this CSV has
-                                already been applied.
+                                Nothing to commit — fix the errors above, or every row has already been
+                                applied.
                             </p>
                         )}
                     </div>

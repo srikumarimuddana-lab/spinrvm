@@ -903,6 +903,60 @@ export const adminCommitTaxIdBackfill = (file: File, batch?: string) =>
         body: taxIdBackfillFormData(file, batch),
     });
 
+// The raw-export path (backend/routes/admin/tax_id_import.py's
+// prepare-validate/prepare-commit): an operator uploads the untouched
+// MongoDB-export banks.csv + drivers.csv directly, and the backend joins
+// them server-side (the same join scripts/build_legacy_tax_id_csv.py uses)
+// instead of the operator building a phone,sin,gst_bn CSV out-of-band first
+// -- so real SIN/GST values never have to pass through a chat session or a
+// hand-built intermediate file. Two-file upload/validate/commit shape and
+// the validation_token gate mirror adminValidateSinDobBackfill below.
+export interface TaxIdBackfillJoinStats {
+    banks_rows: number;
+    unmatched_no_phone: number;
+    skipped_no_sin_or_gst: number;
+    duplicate_phone_groups: number;
+}
+export interface TaxIdBackfillFromLegacyExportReport extends TaxIdBackfillReport {
+    join_stats: TaxIdBackfillJoinStats;
+    // Proves a /prepare-validate call happened for this exact (batch,
+    // combined CSV bytes, admin) -- /prepare-commit requires it back.
+    validation_token: string;
+}
+export interface LegacyExportFiles {
+    banks: File;
+    drivers: File;
+}
+export interface LegacyExportOptions {
+    batch?: string;
+    // Required for /prepare-commit -- pass report.validation_token from the
+    // preceding /prepare-validate call. Omitted for /prepare-validate itself.
+    validationToken?: string;
+}
+
+function legacyExportFormData(files: LegacyExportFiles, opts?: LegacyExportOptions): FormData {
+    const fd = new FormData();
+    fd.append("banks_csv", files.banks);
+    fd.append("drivers_csv", files.drivers);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
+    return fd;
+}
+
+/** Dry-run: join banks.csv + drivers.csv server-side, then validate exactly like adminValidateTaxIdBackfill. No writes. */
+export const adminPrepareValidateTaxIdFromLegacyExport = (files: LegacyExportFiles, opts?: LegacyExportOptions) =>
+    request<TaxIdBackfillFromLegacyExportReport>("/api/admin/tax-ids/import/prepare-validate", {
+        method: "POST",
+        body: legacyExportFormData(files, opts),
+    });
+
+/** Commit the tax-ID backfill built from the raw export pair. Returns committed=false + errors if the files no longer validate. */
+export const adminPrepareCommitTaxIdFromLegacyExport = (files: LegacyExportFiles, opts: LegacyExportOptions) =>
+    request<TaxIdBackfillCommitResult>("/api/admin/tax-ids/import/prepare-commit", {
+        method: "POST",
+        body: legacyExportFormData(files, opts),
+    });
+
 /* ── Legacy SIN/DOB Backfill (2 CSVs) ─────── */
 // Admin-dashboard wrapper for the CLI-only
 // backend/scripts/backfill_legacy_driver_sin_dob.py (Phase 2 of the

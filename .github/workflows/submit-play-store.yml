@@ -150,6 +150,18 @@ jobs:
           fi
           echo "Service account key decoded and validated."
 
+          # Print WHICH principal this key is, so a "caller does not have
+          # permission" failure can be matched against Play Console's Users
+          # and permissions list without guessing. Both fields are
+          # identifiers, not credential material: they grant nothing on their
+          # own, and are already visible in Play Console and the GCP console
+          # to anyone who can see the account. The private_key is never
+          # printed and never leaves the file.
+          echo "  service account: $(jq -r '.client_email' play-service-account.json)"
+          echo "  gcp project:     $(jq -r '.project_id' play-service-account.json)"
+          echo "  This principal needs app-level access to the package being"
+          echo "  submitted, in the Play developer account that owns it."
+
       # Validate before touching anything: a malformed build ID otherwise
       # fails deep inside eas-cli where it is harder to attribute, and these
       # inputs are interpolated into a shell below.

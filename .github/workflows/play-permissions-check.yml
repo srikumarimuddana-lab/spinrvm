@@ -1,0 +1,76 @@
+name: Check Play permissions
+
+# ─── What this does ────────────────────────────────────────────────────────
+# Asks the Google Play Developer API, per package, whether the service account
+# in PLAY_SERVICE_ACCOUNT_JSON can actually start a release. Read-only in
+# effect: it creates an edit (a transaction handle that commits nothing) and
+# deletes it again.
+#
+# Why this exists: `eas submit` reports every authorisation problem as one
+# message — "the service account is missing the necessary permissions" — which
+# cannot tell apart "not granted", "granted but not propagated yet", and
+# "granted with the wrong permissions". Diagnosing that by re-running a 3-minute
+# submit is slow and inconclusive. This runs in well under a minute and prints
+# Google's own error text.
+#
+# Takes no build and uploads nothing, so it is safe to run at any time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Space-separated package names to probe"
+        required: true
+        default: "com.spinr.user com.spinr.driver"
+        type: string
+
+concurrency:
+  group: play-permissions-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --quiet google-auth
+
+      - name: Decode Play service account key
+        # Same pattern as every other workflow that touches this secret: passed
+        # via env, never interpolated into the script body, so key material
+        # cannot be executed by the shell.
+        env:
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_KEY_B64" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON secret is empty or unset."
+            exit 1
+          fi
+          printf '%s' "$PLAY_KEY_B64" | base64 -d > play-service-account.json
+          if ! jq -e '.client_email and .private_key' play-service-account.json > /dev/null 2>&1; then
+            echo "::error::Decoded key is not valid service-account JSON."
+            exit 1
+          fi
+
+      - name: Probe each package
+        env:
+          PACKAGES: ${{ github.event.inputs.packages }}
+        run: |
+          # Package names are constrained to the Android identifier charset
+          # before reaching the shell — these come from a dispatch input.
+          for pkg in $PACKAGES; do
+            if ! printf '%s' "$pkg" | grep -Eq '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$'; then
+              echo "::error::'$pkg' is not a valid Android package name."
+              exit 1
+            fi
+          done
+          python3 scripts/check_play_permissions.py play-service-account.json $PACKAGES
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json

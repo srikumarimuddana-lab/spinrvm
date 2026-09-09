@@ -24,6 +24,8 @@ from services.demand_tiles import (
     TileSnapshot,
     build_color_lut,
     kernel_px,
+    kernel_taper,
+    kernel_value,
     lnglat_to_world_px,
     meters_per_pixel,
     tile_center_latlng,
@@ -306,3 +308,75 @@ class TestTileSnapshot:
     def test_rejects_an_empty_palette(self):
         with pytest.raises(ValueError):
             self._snap(palette=())
+
+
+# --------------------------------------------------------------------------
+# Kernel taper — the hard-disk-edge guard
+# --------------------------------------------------------------------------
+
+
+class TestKernelTaper:
+    SIGMA = 15.34  # z=13 at Saskatoon
+    SUPPORT = 3 * SIGMA
+
+    def test_peaks_at_one_in_the_centre(self):
+        assert kernel_value(0.0, self.SIGMA, self.SUPPORT) == pytest.approx(1.0)
+
+    def test_reaches_exactly_zero_at_the_support_boundary(self):
+        # A bare truncation leaves ~1.11% of peak here. Scaled by weight/scale
+        # that residue becomes a visible cliff, so it must be zero by
+        # construction rather than by hoping the numbers stay small.
+        assert kernel_value(self.SUPPORT, self.SIGMA, self.SUPPORT) == 0.0
+
+    def test_decays_monotonically(self):
+        prev = kernel_value(0.0, self.SIGMA, self.SUPPORT)
+        for step in range(1, 60):
+            cur = kernel_value(step * self.SUPPORT / 60, self.SIGMA, self.SUPPORT)
+            assert cur <= prev
+            prev = cur
+
+    def test_approaches_the_boundary_continuously(self):
+        # The defect this guards: at weight 500 / scale 5 the untapered kernel
+        # went from the alpha ceiling straight to 0 across one pixel.
+        near = kernel_value(self.SUPPORT * 0.999, self.SIGMA, self.SUPPORT)
+        assert near < 1e-3, f"residue at the edge is still {near}"
+
+    def _alpha_profile(self, weight=500.0, scale=5.0):
+        """Alpha along a 1-pixel-spaced radius, at the reported fixture."""
+        out = []
+        for d in range(0, int(self.SUPPORT) + 4):
+            k = kernel_value(float(d), self.SIGMA, self.SUPPORT)
+            out.append(round(255 * MAX_ALPHA * min(1.0, max(0.0, weight * k / scale))))
+        return out
+
+    def test_dense_demand_falls_off_over_several_pixels_not_one(self):
+        """The reported defect, measured on the pixel grid it actually renders on.
+
+        Untapered at weight 500 / scale 5 the profile ran [82, 82, 82, 82, 0] —
+        the ceiling straight to nothing between adjacent pixels, with no
+        intermediate value at all. Tapered it runs [82, 71, 43, 20, 0].
+        """
+        profile = self._alpha_profile()
+        ceiling = round(255 * MAX_ALPHA)
+        between = [a for a in profile if 0 < a < ceiling]
+        assert len(between) >= 3, f"edge still collapses in one step: {profile[-8:]}"
+
+    def test_no_adjacent_pixel_jumps_by_half_the_alpha_range(self):
+        profile = self._alpha_profile()
+        worst = max(abs(b - a) for a, b in zip(profile, profile[1:]))
+        # Untapered this was a full-ceiling jump (82). It is now ~28. It is not
+        # smaller because at 100x the published scale the field saturates and
+        # the whole visible gradient compresses into the rim — that is a scale
+        # calibration matter, not a kernel one. What must never return is the
+        # discontinuity.
+        assert worst < round(255 * MAX_ALPHA) // 2, f"adjacent jump of {worst}"
+
+    def test_is_zero_beyond_support(self):
+        assert kernel_value(self.SUPPORT * 1.5, self.SIGMA, self.SUPPORT) == 0.0
+
+    def test_taper_constant_is_the_untruncated_value_at_the_edge(self):
+        assert kernel_taper(self.SIGMA, self.SUPPORT) == pytest.approx(math.exp(-4.5), rel=1e-9)
+
+    @pytest.mark.parametrize("sigma,support", [(0.0, 10.0), (10.0, 0.0), (-1.0, 10.0)])
+    def test_degenerate_geometry_yields_no_taper_instead_of_dividing_by_zero(self, sigma, support):
+        assert kernel_taper(sigma, support) == 0.0

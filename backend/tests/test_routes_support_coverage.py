@@ -1,45 +1,27 @@
 """Coverage for routes/support.py (A1c, Sub-tier B).
 
-Rider/driver-facing AI support chat endpoint (Gemini 1.5 Flash) plus the
-human-escalation-to-Zoho-Desk endpoint. Distinct from routes/admin/support.py
-and routes/admin/support_tickets.py (already covered elsewhere) — this file
-tests only routes/support.py. Had no dedicated test file; 42.22% coverage.
+The legacy support-chat endpoint plus the human-escalation-to-Zoho-Desk
+endpoint. Distinct from routes/admin/support.py and
+routes/admin/support_tickets.py (already covered elsewhere) — this file tests
+only routes/support.py.
 
 Endpoint functions are called directly (bypassing FastAPI's Depends
 machinery), matching the pattern used elsewhere in this repo for
 handler-level unit tests (see test_lost_and_found_route_coverage.py).
 
-Gemini SDK notes: `google.generativeai` is imported *locally* inside
-`support_chat` (`import google.generativeai as genai`), so it cannot be
-patched via a `backend.routes.support.<name>` string target — the module
-attribute doesn't exist on `backend.routes.support`. Instead we patch the
-real `google.generativeai.configure` / `google.generativeai.GenerativeModel`
-attributes directly (the package is a real dependency per requirements.txt),
-which the local `import` picks up since Python module imports are cached
-singletons.
+**2026-09-08 (F04):** /support/chat no longer calls Gemini directly. It
+delegates to ai.orchestrator.run_chat_turn — the same engine /api/v1/ai/chat
+uses — so the global ai_assistant_enabled switch, the provider factory, the
+per-user daily quota, the input length bound and async provider handling all
+apply to it for the first time. The Gemini-SDK patching notes that used to
+live here are gone with the code they described.
 
-Previously-found bug, partially fixed: `support_chat`'s `except Exception`
-handler catches *everything*, including a missing/misconfigured Gemini SDK,
-network errors, and bad API keys, and always converts them into a 200 OK
-`{"reply": FALLBACK_REPLY}` response — that blanket-fallback *design* is
-intentional (the module docstring: this endpoint must never strand a driver
-mid-conversation with a 500) and is unchanged. What WAS a real gap, now
-fixed: the failure used to vanish into an unlevelled, no-name
-`logging.warning(str(exc))` with no `domain`/`surface` tags and no traceback
-— indistinguishable from routine "I don't know" chat noise in the logs. It
-now goes through the module's own `logger.error(..., exc_info=True,
-extra={"domain": "ai", "surface": "backend"})`, matching CLAUDE.md's
-Observability Conventions (see `test_support_chat_failure_logs_error_with_domain_tags`
-below). Still no Sentry capture or a dedicated metric distinguishing "no key
-configured" from "Gemini API failure" from "malformed response" — that
-remains a real, still-open gap, just no longer flagged as test-only scope
-since the logging half is now covered.
-
-Application code was modified alongside this test update: `SYSTEM_PROMPT`'s
-fabricated approval/payout timelines and its self-contradicting "platform
-fee" language (Spinr is a 0%-commission platform — see `routes/support.py`'s
-current prompt and CLAUDE.md) were removed, and the error-logging gap
-described above was fixed.
+The blanket `except Exception` -> 200 `{"reply": FALLBACK_REPLY}` design is
+retained deliberately: an older installed client has no handler for a
+structured error body, and this endpoint must never strand a driver
+mid-conversation with a 500. The failure still surfaces at error level with
+domain/surface tags (CLAUDE.md Observability Conventions). Still no Sentry
+capture or a dedicated metric here — a real, still-open gap.
 """
 
 from __future__ import annotations
@@ -56,8 +38,9 @@ _DRIVER_USER = {"id": "driver-user-1", "email": "driver1@example.com"}
 
 
 def _patches(**overrides):
+    # scrub_pii is no longer a name on routes.support (F04): scrubbing moved
+    # inside the central engine along with the rest of the AI path.
     defaults = {
-        "backend.routes.support.scrub_pii": MagicMock(side_effect=lambda msg: msg),
         "backend.routes.support.create_support_ticket": AsyncMock(return_value={"ticketNumber": "TCK-1"}),
     }
     defaults.update(overrides)
@@ -75,295 +58,72 @@ def _stop(patches):
         p.stop()
 
 
-# ── SYSTEM_PROMPT content ──────────────────────────────────────────────
+# ── support_chat (retired stub) ─────────────────────────────────────────
 #
-# Regression guard for the content fix: SYSTEM_PROMPT used to state a
-# fabricated "usually 2–3 business days" approval/payout timeline and
-# describe driver earnings as reduced by a "platform service fee" — directly
-# contradicting Spinr's 0%-commission model stated everywhere else in the
-# codebase (schemas.py's platform_fee_percent default, fare_service.py,
-# ai/prompts.py's _DRIVER_CORE, and the faqs table content). Prose content
-# can't be meaningfully unit-tested for tone, but these specific factual/
-# policy claims can be asserted against directly.
+# F04 (PR #5138). This endpoint used to call Gemini directly and sat outside
+# every AI control: no ai_assistant_enabled switch, no provider factory, no
+# daily quota, no input length bound, and a synchronous generate_content
+# inside an async route.
+#
+# It was first rewritten to delegate to ai.orchestrator.run_chat_turn. Review
+# caught that this quietly WIDENED it: the pre-F04 route was a prompt-only FAQ
+# bot, and delegating handed a legacy client the full authenticated tool set
+# (propose_ride_booking, escalate_to_support — real Zoho tickets) whose action
+# frames this response shape cannot carry, plus cross-user FAQ-cache
+# eligibility on every call because conversation_id was always None.
+#
+# It is now a stub that makes no provider call at all. The Gemini-SDK tests
+# that used to live here are deleted rather than ported: none of that code
+# path exists.
 
 
-class TestSystemPromptContent:
-    def test_no_fabricated_timelines(self):
-        from backend.routes.support import SYSTEM_PROMPT
-
-        lowered = SYSTEM_PROMPT.lower()
-        for banned in ("2–3 business day", "2-3 business day", "minimum payout is $10"):
-            assert banned not in lowered, f"fabricated timeline/amount reintroduced: {banned!r}"
-
-    def test_no_platform_fee_deduction_language(self):
-        """The prompt correctly says "no platform fee" — this checks the
-        specific affirmative phrasing that used to claim a fee IS deducted,
-        not the (correct) negation of it."""
-        from backend.routes.support import SYSTEM_PROMPT
-
-        lowered = SYSTEM_PROMPT.lower()
-        for banned in ("minus the platform service fee", "what is the platform fee", "platform fee varies"):
-            assert banned not in lowered, f"reintroduces a real platform-fee deduction claim: {banned!r}"
-
-    def test_states_zero_commission(self):
-        from backend.routes.support import SYSTEM_PROMPT
-
-        assert "0% commission" in SYSTEM_PROMPT
-        assert "100% of the fare" in SYSTEM_PROMPT
-
-    def test_includes_emergency_911_redirect(self):
-        """This Gemini-based chat had no emergency-handling instruction at
-        all, unlike every other AI-assistant surface in the codebase (see
-        ai/prompts.py's _DRIVER_CORE/_RIDER_CORE) — a real gap for a
-        driver-facing chat endpoint per CLAUDE.md's SOS/911 requirement."""
-        from backend.routes.support import SYSTEM_PROMPT
-
-        assert "911" in SYSTEM_PROMPT
-        assert "not a replacement" in SYSTEM_PROMPT.lower() or "never a replacement" in SYSTEM_PROMPT.lower()
-
-
-# ── support_chat ────────────────────────────────────────────────────────
-
-
-class TestSupportChat:
+class TestSupportChatIsARetiredStub:
     @pytest.mark.anyio
-    async def test_no_api_key_returns_fallback(self, monkeypatch):
+    async def test_returns_the_fallback_without_calling_any_provider(self):
         from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
 
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-
-        patches = _start(_patches())
-        try:
-            result = await support_chat(ChatRequest(message="How do I get paid?"), user_id="driver-user-1")
-            assert result == {"reply": FALLBACK_REPLY}
-        finally:
-            _stop(patches)
-
-    @pytest.mark.anyio
-    async def test_google_api_key_env_var_also_accepted(self, monkeypatch):
-        """GOOGLE_API_KEY is the secondary env-var name accepted for the key."""
-        from backend.routes.support import ChatRequest, support_chat
-
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
-
-        fake_response = MagicMock()
-        fake_response.text = "You get paid via Stripe payouts."
-        fake_model_instance = MagicMock()
-        fake_model_instance.generate_content.return_value = fake_response
-
-        patches = _start(
-            _patches(
-                **{
-                    "google.generativeai.configure": MagicMock(),
-                    "google.generativeai.GenerativeModel": MagicMock(return_value=fake_model_instance),
-                }
-            )
+        result = await support_chat(
+            ChatRequest(message="How do I get paid?"),
+            request=MagicMock(),
+            current_user=dict(_DRIVER_USER, is_driver=True),
         )
-        try:
-            result = await support_chat(ChatRequest(message="When do I get paid?"), user_id="driver-user-1")
-            assert result == {"reply": "You get paid via Stripe payouts."}
-        finally:
-            _stop(patches)
+        assert result == {"reply": FALLBACK_REPLY}
 
-    @pytest.mark.anyio
-    async def test_happy_path_scrubs_pii_and_returns_stripped_reply(self, monkeypatch):
-        from backend.routes.support import ChatRequest, support_chat
+    def test_module_reaches_for_no_ai_engine_at_all(self):
+        """The strongest form of "the bypass is closed": there is no provider
+        call on this path to bypass a control with. Pins the absence of both
+        the deprecated SDK and the central engine."""
+        import inspect
 
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        from backend.routes import support as support_mod
 
-        fake_response = MagicMock()
-        fake_response.text = "  Call 1-800-SPINR for help.  \n"
-        fake_model_instance = MagicMock()
-        fake_model_instance.generate_content.return_value = fake_response
-        fake_model_cls = MagicMock(return_value=fake_model_instance)
-        scrub = MagicMock(return_value="my phone is [REDACTED]")
+        src = inspect.getsource(support_mod)
+        assert "google.generativeai" not in src
+        assert "run_chat_turn" not in src
 
-        patches = _start(
-            _patches(
-                **{
-                    "backend.routes.support.scrub_pii": scrub,
-                    "google.generativeai.configure": MagicMock(),
-                    "google.generativeai.GenerativeModel": fake_model_cls,
-                }
-            )
-        )
-        try:
-            result = await support_chat(
-                ChatRequest(message="my phone is 306-555-1234", driver_id="driver-1"), user_id="driver-user-1"
-            )
-            # Reply is stripped of surrounding whitespace.
-            assert result == {"reply": "Call 1-800-SPINR for help."}
-            # PII was scrubbed BEFORE being sent to Gemini (PIPEDA / DV-16).
-            scrub.assert_called_once_with("my phone is 306-555-1234")
-            fake_model_instance.generate_content.assert_called_once_with("my phone is [REDACTED]")
-            fake_model_cls.assert_called_once()
-            _, kwargs = fake_model_cls.call_args
-            assert kwargs["model_name"] == "gemini-1.5-flash"
-        finally:
-            _stop(patches)
+    def test_message_is_still_length_bounded(self):
+        """Kept from the delegating version: the legacy field had no
+        max_length, so an arbitrarily long body was accepted."""
+        import pydantic
 
-    @pytest.mark.anyio
-    async def test_empty_response_text_returns_fallback(self, monkeypatch):
-        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
-
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-        fake_response = MagicMock()
-        fake_response.text = ""
-        fake_model_instance = MagicMock()
-        fake_model_instance.generate_content.return_value = fake_response
-
-        patches = _start(
-            _patches(
-                **{
-                    "google.generativeai.configure": MagicMock(),
-                    "google.generativeai.GenerativeModel": MagicMock(return_value=fake_model_instance),
-                }
-            )
-        )
-        try:
-            result = await support_chat(ChatRequest(message="hi"), user_id="driver-user-1")
-            assert result == {"reply": FALLBACK_REPLY}
-        finally:
-            _stop(patches)
-
-    @pytest.mark.anyio
-    async def test_none_response_text_returns_fallback(self, monkeypatch):
-        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
-
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-        fake_response = MagicMock()
-        fake_response.text = None
-        fake_model_instance = MagicMock()
-        fake_model_instance.generate_content.return_value = fake_response
-
-        patches = _start(
-            _patches(
-                **{
-                    "google.generativeai.configure": MagicMock(),
-                    "google.generativeai.GenerativeModel": MagicMock(return_value=fake_model_instance),
-                }
-            )
-        )
-        try:
-            result = await support_chat(ChatRequest(message="hi"), user_id="driver-user-1")
-            assert result == {"reply": FALLBACK_REPLY}
-        finally:
-            _stop(patches)
-
-    @pytest.mark.anyio
-    async def test_gemini_configure_raises_returns_fallback_not_500(self, monkeypatch):
-        """Any exception from the Gemini SDK path (bad key, quota, network)
-        is caught and converted into a 200 fallback reply rather than
-        propagating — see module docstring for the swallowed-error note."""
-        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
-
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-        patches = _start(
-            _patches(
-                **{
-                    "google.generativeai.configure": MagicMock(side_effect=RuntimeError("upstream down")),
-                }
-            )
-        )
-        try:
-            result = await support_chat(ChatRequest(message="hi"), user_id="driver-user-1")
-            assert result == {"reply": FALLBACK_REPLY}
-        finally:
-            _stop(patches)
-
-    @pytest.mark.anyio
-    async def test_generate_content_raises_returns_fallback(self, monkeypatch):
-        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
-
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-        fake_model_instance = MagicMock()
-        fake_model_instance.generate_content.side_effect = Exception("Gemini API error")
-
-        patches = _start(
-            _patches(
-                **{
-                    "google.generativeai.configure": MagicMock(),
-                    "google.generativeai.GenerativeModel": MagicMock(return_value=fake_model_instance),
-                }
-            )
-        )
-        try:
-            result = await support_chat(ChatRequest(message="hi"), user_id="driver-user-1")
-            assert result == {"reply": FALLBACK_REPLY}
-        finally:
-            _stop(patches)
-
-    @pytest.mark.anyio
-    async def test_generate_content_failure_logs_error_with_domain_tags(self, monkeypatch, caplog):
-        """The previously-flagged logging gap (see module docstring): a Gemini
-        failure must surface as an ERROR-level log with a traceback and
-        domain/surface tags, not an unlevelled logging.warning(str(exc))."""
-        import logging
-
-        from backend.routes.support import ChatRequest, support_chat
-
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-        fake_model_instance = MagicMock()
-        fake_model_instance.generate_content.side_effect = RuntimeError("Gemini API error")
-
-        patches = _start(
-            _patches(
-                **{
-                    "google.generativeai.configure": MagicMock(),
-                    "google.generativeai.GenerativeModel": MagicMock(return_value=fake_model_instance),
-                }
-            )
-        )
-        try:
-            with caplog.at_level(logging.ERROR, logger="backend.routes.support"):
-                await support_chat(ChatRequest(message="hi"), user_id="driver-user-1")
-        finally:
-            _stop(patches)
-
-        assert len(caplog.records) == 1
-        record = caplog.records[0]
-        assert record.levelno == logging.ERROR
-        assert record.exc_info is not None  # exc_info=True captured the traceback
-        assert record.domain == "ai"
-        assert record.surface == "backend"
-
-    @pytest.mark.anyio
-    async def test_scrub_pii_raising_is_also_caught_by_fallback(self, monkeypatch):
-        """scrub_pii runs inside the same try/except as the Gemini call, so
-        a scrubber bug does not leak an unhandled 500 to the client."""
-        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
-
-        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-
-        patches = _start(
-            _patches(
-                **{
-                    "backend.routes.support.scrub_pii": MagicMock(side_effect=ValueError("scrub failed")),
-                    "google.generativeai.configure": MagicMock(),
-                    "google.generativeai.GenerativeModel": MagicMock(),
-                }
-            )
-        )
-        try:
-            result = await support_chat(ChatRequest(message="hi"), user_id="driver-user-1")
-            assert result == {"reply": FALLBACK_REPLY}
-        finally:
-            _stop(patches)
-
-    @pytest.mark.anyio
-    async def test_default_driver_id_is_empty_string(self):
         from backend.routes.support import ChatRequest
 
-        req = ChatRequest(message="hi")
-        assert req.driver_id == ""
+        with pytest.raises(pydantic.ValidationError):
+            ChatRequest(message="x" * 1001)
+        with pytest.raises(pydantic.ValidationError):
+            ChatRequest(message="")
+
+    @pytest.mark.anyio
+    async def test_driver_id_is_accepted_and_ignored(self):
+        """It has never selected an identity here and must not start to."""
+        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
+
+        result = await support_chat(
+            ChatRequest(message="hi", driver_id="someone-elses-driver-id"),
+            request=MagicMock(),
+            current_user=dict(_RIDER),
+        )
+        assert result == {"reply": FALLBACK_REPLY}
 
 
 # ── support_escalate ───────────────────────────────────────────────────

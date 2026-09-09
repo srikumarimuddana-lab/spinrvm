@@ -75,6 +75,7 @@ def _patch_firebase_auth_and_db(user, driver_profile=None, client_type="driver")
         "uid": user["id"],
         "phone_number": user.get("phone", ""),
         "aud": _TEST_FIREBASE_APP_ID,
+        "firebase": {"sign_in_provider": "phone"},
     }
     return [
         patch("backend.routes.websocket.settings", _make_settings_mock(client_type)),

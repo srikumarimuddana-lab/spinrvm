@@ -11,12 +11,17 @@ try:
     from ..utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs
     from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from ..utils.location_integrity import check_location_integrity, evaluate_gps_plausibility
     from ..utils.session_revocation import is_session_revoked
 except ImportError:
     from utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs  # type: ignore
     from utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.firebase_identity import (  # type: ignore
+        FirebaseIdentityRejected,
+        enforce_customer_eligibility,
+    )
     from utils.location_integrity import check_location_integrity, evaluate_gps_plausibility  # type: ignore
     from utils.session_revocation import is_session_revoked  # type: ignore
 
@@ -528,6 +533,19 @@ async def websocket_endpoint(
                 return
             if payload.get("aud") != expected_aud:
                 await websocket.send_json({"type": "error", "message": "ERR_TOKEN_AUDIENCE"})
+                await websocket.close()
+                return
+
+            # F01: the third Firebase entry point, gated identically to
+            # /auth/firebase and get_current_user. A socket is protected
+            # access like any HTTP route, and this handshake duplicates the
+            # verification rather than delegating to get_current_user — so a
+            # gate applied only there would leave an anonymous identity able
+            # to open a socket for any uid that already has a users row.
+            try:
+                enforce_customer_eligibility(payload, surface="websocket")
+            except FirebaseIdentityRejected:
+                await websocket.send_json({"type": "error", "message": "ERR_IDENTITY_INELIGIBLE"})
                 await websocket.close()
                 return
 

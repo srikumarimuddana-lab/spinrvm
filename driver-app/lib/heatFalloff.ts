@@ -97,6 +97,23 @@ export function hexToRgba(hex: string, alpha: number): string {
 }
 
 /**
+ * Buckets a weight ratio into one of the 5 brand ramp steps. Moved here
+ * (2026-09-09) from HeatmapCells.tsx, its only caller at the time — the new
+ * Skia gradient overlay (HM-32) needs the identical bucketing so its colour
+ * choice never drifts from the flag-off iOS/Android renderers', matching
+ * this module's own "shared by all... renderers" purpose above.
+ */
+export function weightToRampIndex(weight: number, maxWeight: number): number {
+  if (maxWeight <= 0) return 0;
+  const ratio = weight / maxWeight;
+  if (ratio < 0.2) return 0;
+  if (ratio < 0.4) return 1;
+  if (ratio < 0.6) return 2;
+  if (ratio < 0.8) return 3;
+  return 4;
+}
+
+/**
  * Normalised density at which the ramp's first visible colour appears. Below
  * this the spreader interpolates down to fully transparent.
  */

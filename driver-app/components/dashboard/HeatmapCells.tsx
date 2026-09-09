@@ -1,54 +1,43 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Platform } from 'react-native';
 import { Circle, Heatmap } from 'react-native-maps';
 import { useTheme } from '@shared/theme/ThemeContext';
-import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import {
-  HEAT_BLOB_RADIUS_FACTOR,
   HEAT_NATIVE_LAYER_ALPHA,
   HEAT_RING_STOPS,
-  METERS_PER_LAT_DEG,
+  SOFT_HEAT_RENDER_ENABLED,
   cellCenter,
   hexToRgba,
   nativeGradient,
-  SOFT_HEAT_RENDER_ENABLED,
   ringAlphas,
+  weightToRampIndex,
 } from '../../lib/heatFalloff';
+import { useVisibleHeatmapCells } from '../../hooks/useVisibleHeatmapCells';
+import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 
-// Fallbacks only. The server sends the grid size it actually bucketed with
-// (cell_lat_deg / cell_lng_deg) because that size is tunable per service area;
-// these values are what an older backend that omits them used, so an app on a
-// new build talking to an old backend keeps its previous behaviour exactly.
-const DEFAULT_CELL_LAT = 0.004;
-const DEFAULT_CELL_LNG = 0.006;
-const MAX_POLYGONS = 200;
-// The soft-blob (Circle-ring) renderer draws 2 shapes per cell — cap tighter
-// than MAX_POLYGONS so iOS/non-Google-Maps builds don't push 400+ overlapping
-// translucent circles through the native bridge every poll.
+// The soft-blob (Circle-ring) renderer draws HEAT_RING_STOPS.length shapes
+// per cell instead of 2, so the cell cap comes down to keep the native view
+// count in the same order: 60x2 = 120 shapes today, 40x5 = 200 with the soft
+// path. The wider kernel also means more overdraw per shape. Nothing in this
+// repo can profile Apple Maps or an Auto head unit, so this is a
+// conservative budget, not a measured one.
 const MAX_BLOBS = 60;
-// The soft renderer draws HEAT_RING_STOPS.length shapes per cell instead of 2,
-// so the cell cap comes down to keep the native view count in the same order:
-// 60x2 = 120 shapes today, 40x5 = 200 with the soft path. The wider kernel also
-// means more overdraw per shape. Nothing in this repo can profile Apple Maps or
-// an Auto head unit, so this is a conservative budget, not a measured one.
 const MAX_SOFT_BLOBS = 40;
 
 interface HeatmapCellsProps {
   cells: HeatmapCell[];
   region?: { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number } | null;
-  /** Grid size from the server; null falls back to the constants above. */
+  /** Grid size from the server; null falls back to the shared hook's defaults. */
   cellLatDeg?: number | null;
   cellLngDeg?: number | null;
-}
-
-function weightToRampIndex(weight: number, maxWeight: number): number {
-  if (maxWeight <= 0) return 0;
-  const ratio = weight / maxWeight;
-  if (ratio < 0.2) return 0;
-  if (ratio < 0.4) return 1;
-  if (ratio < 0.6) return 2;
-  if (ratio < 0.8) return 3;
-  return 4;
+  /**
+   * The driver's own live position — passed straight through to
+   * useVisibleHeatmapCells (see its own doc comment for why a cell near the
+   * driver is dropped: live-testing report 2026-09-09, "concentric circles
+   * around the car icon"). Optional so a caller without a live fix yet (cold
+   * start) just renders every cell.
+   */
+  driverLocation?: { latitude: number; longitude: number } | null;
 }
 
 // react-native-maps' native <Heatmap> (true gradient density layer) is only
@@ -58,45 +47,21 @@ function weightToRampIndex(weight: number, maxWeight: number): number {
 // shipping the same hard-edged grid everywhere — Android gets the real thing,
 // iOS gets a softened stand-in (concentric translucent circles per cell
 // instead of one flat-edged rectangle) rather than the flat square-box look
-// this was reported as looking like.
+// this was reported as looking like. The shape/falloff math for both the
+// Android gradient and the iOS stand-in lives in lib/heatFalloff.ts, gated by
+// SOFT_HEAT_RENDER_ENABLED (ships dark pending native-device verification —
+// see that flag's own doc comment). HM-32 (ACTION_ITEMS.md) tracks a further,
+// separate iOS improvement (a true Skia raster-gradient overlay,
+// HeatmapGradientOverlay.tsx) that replaces this component's iOS render path
+// entirely rather than building on this flag.
 const USE_NATIVE_GRADIENT = Platform.OS === 'android';
 
 export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
-  ({ cells, region, cellLatDeg, cellLngDeg }) => {
+  ({ cells, region, cellLatDeg, cellLngDeg, driverLocation }) => {
   const { colors } = useTheme();
 
-  const cellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
-  const cellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
-
-  const visibleCells = useMemo(() => {
-    if (!cells.length) return [];
-
-    // Drop anything that would produce NaN/Infinity coordinates. react-native-maps
-    // hands coordinates straight to the native map, and a non-finite one is an
-    // app CRASH on Android, not a missing shape — so a single corrupted
-    // cache row or a partial payload must never reach the renderers below.
-    let filtered = cells.filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lng) && Number.isFinite(c.weight));
-
-    if (region) {
-      const latMin = region.latitude - region.latitudeDelta / 2;
-      const latMax = region.latitude + region.latitudeDelta / 2;
-      const lngMin = region.longitude - region.longitudeDelta / 2;
-      const lngMax = region.longitude + region.longitudeDelta / 2;
-      filtered = filtered.filter(
-        (c) => c.lat >= latMin && c.lat <= latMax && c.lng >= lngMin && c.lng <= lngMax,
-      );
-    }
-
-    // Sort a copy. When `region` is null the filter above is the only thing
-    // standing between this and `cells` itself — and before the isFinite
-    // filter existed, `filtered` WAS `cells`, so this sorted the hook's own
-    // state array in place, reordering what every other consumer sees.
-    return [...filtered].sort((a, b) => b.weight - a.weight).slice(0, MAX_POLYGONS);
-  }, [cells, region]);
-
-  const maxWeight = useMemo(
-    () => visibleCells.reduce((m, c) => Math.max(m, c.weight), 0),
-    [visibleCells],
+  const { visibleCells, maxWeight, cellLat, cellLng, outerRadiusM } = useVisibleHeatmapCells(
+    cells, region, cellLatDeg, cellLngDeg, driverLocation,
   );
 
   if (!visibleCells.length) return null;
@@ -136,13 +101,12 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
   }
 
   // iOS (Apple Maps) polish path — no native gradient layer available, so
-  // fake the same soft, edgeless "heat" read with two concentric,
-  // low-opacity circles per cell instead of one hard-edged Polygon square.
-  // Radii are derived from the server's own grid size so denser grids (small
-  // service areas) get proportionally smaller blobs rather than overlapping
-  // into one blob.
-  const outerRadiusM =
-    cellLat * METERS_PER_LAT_DEG * (SOFT_HEAT_RENDER_ENABLED ? HEAT_BLOB_RADIUS_FACTOR : 0.62);
+  // fake the same soft, edgeless "heat" read with either the legacy 2-circle
+  // stand-in or (once SOFT_HEAT_RENDER_ENABLED) nested Gaussian-falloff rings
+  // (see lib/heatFalloff.ts). Radii are derived from the server's own grid
+  // size so denser grids (small service areas) get proportionally smaller
+  // blobs rather than overlapping into one blob. outerRadiusM comes from the
+  // shared hook (also sizes the driver-position exclusion zone there).
   const innerRadiusM = outerRadiusM * 0.5;
   const blobCells = visibleCells.slice(0, SOFT_HEAT_RENDER_ENABLED ? MAX_SOFT_BLOBS : MAX_BLOBS);
 

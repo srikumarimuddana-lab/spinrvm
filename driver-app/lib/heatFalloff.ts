@@ -31,6 +31,9 @@ export const HEAT_PEAK_ALPHA = 0.65;
 /** Gaussian sigma, as a fraction of the outer radius. */
 const SIGMA = 0.45;
 
+/** Metres per degree of latitude, for sizing a blob off the server's grid. */
+export const METERS_PER_LAT_DEG = 111_320;
+
 /**
  * Blob outer radius as a fraction of one grid cell's latitude span. Cell
  * centres sit one full span apart, so 0.7 overlaps neighbours by ~40% of the
@@ -51,6 +54,19 @@ export const HEAT_BLOB_RADIUS_FACTOR = 0.7;
  * but is not needed to ship this dark.
  */
 export const SOFT_HEAT_RENDER_ENABLED = false;
+
+/**
+ * Centre of the grid cell a point falls in.
+ *
+ * Both renderers re-derive this from the server's centroid, and they must snap
+ * to the same square or the phone and the car will draw the same demand in
+ * slightly different places.
+ */
+export function cellCenter(lat: number, lng: number, cellLat: number, cellLng: number) {
+  const baseLat = Math.floor(lat / cellLat) * cellLat;
+  const baseLng = Math.floor(lng / cellLng) * cellLng;
+  return { latitude: baseLat + cellLat / 2, longitude: baseLng + cellLng / 2 };
+}
 
 /**
  * Per-ring alpha for one cell, outermost first.

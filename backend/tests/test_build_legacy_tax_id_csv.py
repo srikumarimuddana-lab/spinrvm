@@ -77,6 +77,29 @@ class TestBuildRows:
         assert stats["sin_fails_format"] == 1
         assert stats["gst_fails_format"] == 1
 
+    def test_duplicate_phone_keeps_the_row_with_the_latest_updated_at(self):
+        """Two banks.csv rows for the same driver_id (they updated their
+        bank/tax details twice in the old app) must collapse to one output
+        row -- the tool rejects a CSV with a repeated phone outright. The
+        newer record must win, not an arbitrary or merged one."""
+        older = _bank_row(
+            **{"_id": "bank-1", "sin": "111111111", "gst": "111111111RT0001", "updated_at": "2025-01-01T00:00:00.000"}
+        )
+        newer = _bank_row(
+            **{"_id": "bank-2", "sin": VALID_SIN, "gst": VALID_GST, "updated_at": "2026-01-01T00:00:00.000"}
+        )
+        out_rows, stats = mod.build_rows([older, newer], [_mongo_driver_row()])
+        assert out_rows == [{"phone": "+13065551234", "sin": VALID_SIN, "gst_bn": VALID_GST}]
+        assert stats["duplicate_phone_groups"] == 1
+        assert stats["duplicate_rows_dropped"] == 1
+        assert stats["rows_written"] == 1
+
+    def test_duplicate_phone_missing_updated_at_loses_to_a_dated_row(self):
+        undated = _bank_row(**{"_id": "bank-1", "sin": "111111111", "updated_at": ""})
+        dated = _bank_row(**{"_id": "bank-2", "sin": VALID_SIN, "updated_at": "2020-01-01T00:00:00.000"})
+        out_rows, _stats = mod.build_rows([undated, dated], [_mongo_driver_row()])
+        assert out_rows == [{"phone": "+13065551234", "sin": VALID_SIN, "gst_bn": VALID_GST}]
+
     def test_stats_never_carry_a_phone_sin_or_gst_value(self):
         """PIPEDA: this script's own summary output must be aggregate counts
         only -- assert no stat value is ever a string (a value that could

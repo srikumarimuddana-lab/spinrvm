@@ -58,7 +58,17 @@ _OUT_HEADER = ["phone", "sin", "gst_bn"]
 
 def build_rows(bank_rows: list[dict[str, str]], driver_rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict]:
     """Returns (output_rows, stats). Never includes a value in `stats` that
-    could identify a row (no phone/SIN/GST, no row indices) -- counts only."""
+    could identify a row (no phone/SIN/GST, no row indices) -- counts only.
+
+    A driver can have more than one banks.csv row (e.g. they updated their
+    bank/tax details in the old app more than once) -- all such rows resolve
+    to the same phone, and tax_id_import.py rejects a CSV with a repeated
+    phone outright ("duplicate phone in CSV") rather than picking one, so
+    this function must dedupe before writing. Keeps the row with the latest
+    `updated_at` per phone (banks.csv's own last-modified column) -- the most
+    recently updated bank/tax record for that person, not an arbitrary or
+    field-by-field merge across what could be two unrelated submissions.
+    """
     joined = join_legacy_bank_sin_dob(bank_rows, driver_rows)
     assert len(joined) == len(bank_rows)  # join preserves 1:1 order, see its own docstring
 
@@ -70,9 +80,12 @@ def build_rows(bank_rows: list[dict[str, str]], driver_rows: list[dict[str, str]
         "sin_fails_format": 0,
         "gst_present": 0,
         "gst_fails_format": 0,
+        "duplicate_phone_groups": 0,
+        "duplicate_rows_dropped": 0,
         "rows_written": 0,
     }
-    out_rows: list[dict[str, str]] = []
+    # phone -> [(updated_at, row), ...], one entry per banks.csv row for that phone.
+    candidates_by_phone: dict[str, list[tuple[str, dict[str, str]]]] = {}
 
     for joined_row, bank_row in zip(joined, bank_rows, strict=True):
         phone = joined_row["phone"]
@@ -102,8 +115,20 @@ def build_rows(bank_rows: list[dict[str, str]], driver_rows: list[dict[str, str]
             stats["skipped_no_sin_or_gst"] += 1
             continue
 
-        out_rows.append({"phone": phone, "sin": sin_raw, "gst_bn": gst_norm})
-        stats["rows_written"] += 1
+        updated_at = (bank_row.get("updated_at") or "").strip()
+        row = {"phone": phone, "sin": sin_raw, "gst_bn": gst_norm}
+        candidates_by_phone.setdefault(phone, []).append((updated_at, row))
+
+    out_rows: list[dict[str, str]] = []
+    for candidates in candidates_by_phone.values():
+        if len(candidates) > 1:
+            stats["duplicate_phone_groups"] += 1
+            stats["duplicate_rows_dropped"] += len(candidates) - 1
+        # ISO 8601 `updated_at` sorts correctly as a plain string; an empty
+        # value (missing column) sorts last, i.e. loses to any dated row.
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        out_rows.append(candidates[0][1])
+    stats["rows_written"] = len(out_rows)
 
     return out_rows, stats
 
@@ -126,9 +151,14 @@ def main() -> int:
         writer.writerows(out_rows)
 
     no_driver_match = stats["unmatched_no_phone"]
+    dup_groups = stats["duplicate_phone_groups"]
+    dup_dropped = stats["duplicate_rows_dropped"]
     print(f"banks.csv rows read:              {stats['banks_rows']}")
     print(f"  no matching driver record:      {no_driver_match}")
     print(f"  had neither SIN nor GST:        {stats['skipped_no_sin_or_gst']}")
+    print(
+        f"  same driver, multiple records:  {dup_groups} ({dup_dropped} older duplicate(s) dropped, kept latest by updated_at)"
+    )
     print(f"  written to output:              {stats['rows_written']}")
     print(f"SIN present:                      {stats['sin_present']} ({stats['sin_fails_format']} look format-invalid)")
     print(f"GST BN present:                   {stats['gst_present']} ({stats['gst_fails_format']} look format-invalid)")

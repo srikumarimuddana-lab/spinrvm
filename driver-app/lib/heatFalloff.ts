@@ -88,6 +88,50 @@ export const HEAT_NATIVE_LAYER_ALPHA = 0.42;
  */
 export const SOFT_HEAT_RENDER_ENABLED = false;
 
+/** `#RRGGBB` -> `rgba(r,g,b,a)`. Shared so both renderers build colour the same way. */
+export function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/**
+ * Normalised density at which the ramp's first visible colour appears. Below
+ * this the spreader interpolates down to fully transparent.
+ */
+const GRADIENT_LOW_CUT = 0.18;
+
+/**
+ * Colour lookup table for Android's native density spreader.
+ *
+ * How the native layer works: each point is convolved with a Gaussian kernel,
+ * the overlapping kernels are SUMMED into a density field, that field is
+ * normalised, and every pixel is then looked up once in this table. Colour is
+ * therefore mapped after summing, which is what makes a real heatmap continuous
+ * — and what a per-cell renderer structurally cannot do.
+ *
+ * The table is indexed by density, and ALPHA is part of it, not just hue. We
+ * were handing it five fully opaque colours, so the lowest density still
+ * painted solid ramp[0] and the layer terminated at a visible disc edge rather
+ * than fading out. Anchoring the table at alpha 0 in the same hue is what
+ * Google's own default gradient does, and it is what produces the reference's
+ * fade-to-nothing periphery.
+ */
+export function nativeGradient(ramp: readonly string[]): {
+  colors: string[];
+  startPoints: number[];
+} {
+  const span = ramp.length - 1;
+  return {
+    colors: [hexToRgba(ramp[0], 0), ...ramp],
+    startPoints: [
+      0,
+      ...ramp.map((_, i) => GRADIENT_LOW_CUT + (1 - GRADIENT_LOW_CUT) * (span ? i / span : 1)),
+    ],
+  };
+}
+
 /**
  * Centre of the grid cell a point falls in.
  *

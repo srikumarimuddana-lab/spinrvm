@@ -9,6 +9,8 @@ import {
   HEAT_RING_STOPS,
   METERS_PER_LAT_DEG,
   cellCenter,
+  hexToRgba,
+  nativeGradient,
   SOFT_HEAT_RENDER_ENABLED,
   ringAlphas,
 } from '../../lib/heatFalloff';
@@ -47,13 +49,6 @@ function weightToRampIndex(weight: number, maxWeight: number): number {
   if (ratio < 0.6) return 2;
   if (ratio < 0.8) return 3;
   return 4;
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 // react-native-maps' native <Heatmap> (true gradient density layer) is only
@@ -113,9 +108,15 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
     });
     // Even spacing across the 5-step brand ramp (quiet -> busy), same colors
     // the collapsed legend swatch uses, so the gradient and the legend never
-    // disagree about what a given shade means.
-    const gradientColors = colors.heatmapRamp;
-    const startPoints = gradientColors.map((_, i) => i / (gradientColors.length - 1));
+    // disagree about what a given shade means. The soft path additionally
+    // anchors the table at alpha 0 so low density fades out instead of ending
+    // at a disc edge — see nativeGradient().
+    const { colors: gradientColors, startPoints } = SOFT_HEAT_RENDER_ENABLED
+      ? nativeGradient(colors.heatmapRamp)
+      : {
+          colors: colors.heatmapRamp as unknown as string[],
+          startPoints: colors.heatmapRamp.map((_, i) => i / (colors.heatmapRamp.length - 1)),
+        };
     return (
       <Heatmap
         points={points}

@@ -5,6 +5,8 @@ import {
   HEAT_NATIVE_LAYER_ALPHA,
   SOFT_HEAT_RENDER_ENABLED,
   cellCenter,
+  hexToRgba,
+  nativeGradient,
   ringAlphas,
   paintedPeakAlpha,
 } from '../../lib/heatFalloff';
@@ -168,5 +170,43 @@ describe('kernel width and density build-up', () => {
   it('keeps the Android layer opacity aligned with the composited core', () => {
     const busy = composite([paintedAt(0), ...Array(4).fill(paintedAt(1))]);
     expect(HEAT_NATIVE_LAYER_ALPHA).toBeCloseTo(busy, 2);
+  });
+});
+
+describe('nativeGradient', () => {
+  const RAMP = ['#FFE3E0', '#FFB3AC', '#FF7A6E', '#FF3B30', '#B71C1C'];
+
+  it('anchors the lookup table at fully transparent', () => {
+    const { colors } = nativeGradient(RAMP);
+    // Without this the lowest density paints solid ramp[0] and the layer ends
+    // at a visible disc edge instead of fading out.
+    expect(colors[0]).toBe('rgba(255,227,224,0)');
+  });
+
+  it('keeps the transparent anchor in the same hue as the first band', () => {
+    const { colors } = nativeGradient(RAMP);
+    expect(colors[0]).toBe(hexToRgba(RAMP[0], 0));
+    expect(colors[1]).toBe(RAMP[0]);
+  });
+
+  it('emits one start point per colour, strictly increasing across [0, 1]', () => {
+    const { colors, startPoints } = nativeGradient(RAMP);
+    expect(startPoints).toHaveLength(colors.length);
+    expect(startPoints[0]).toBe(0);
+    expect(startPoints[startPoints.length - 1]).toBeCloseTo(1, 9);
+    for (let i = 1; i < startPoints.length; i++) {
+      expect(startPoints[i]).toBeGreaterThan(startPoints[i - 1]);
+    }
+  });
+
+  it('preserves the brand ramp verbatim above the anchor', () => {
+    expect(nativeGradient(RAMP).colors.slice(1)).toEqual(RAMP);
+  });
+
+  it('does not divide by zero on a single-colour ramp', () => {
+    const { colors, startPoints } = nativeGradient(['#FF3B30']);
+    expect(colors).toHaveLength(2);
+    expect(startPoints.every((p) => Number.isFinite(p))).toBe(true);
+    expect(startPoints[1]).toBeGreaterThan(startPoints[0]);
   });
 });

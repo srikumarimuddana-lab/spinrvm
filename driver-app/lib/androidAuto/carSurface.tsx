@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 import { darkColors } from '@shared/theme';
+import { selectCarHeatCells } from './carHeatSelection';
 import {
   HEAT_BLOB_RADIUS_FACTOR,
   HEAT_RING_STOPS,
@@ -329,17 +330,33 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     setDebugFact('map', 'TILES RENDERED');
   }, []);
 
+  const carCellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
+  const carCellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
+
   const carHeatCells = useMemo(() => {
     const usable = heatmapStatus === 'ready' || heatmapStatus === 'empty';
     if (!usable || !heatmapCells.length || rideState !== 'idle') return [];
-    return [...heatmapCells]
-      .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lng) && Number.isFinite(c.weight))
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, SOFT_HEAT_RENDER_ENABLED ? CAR_MAX_SOFT_BLOBS : CAR_MAX_POLYGONS);
-  }, [heatmapCells, heatmapStatus, rideState]);
-
-  const carCellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
-  const carCellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
+    // Camera state is in the deps on purpose: the shared payload is not
+    // viewport-filtered, so the selection has to re-run as the driver pans or
+    // the budget stays spent on wherever the map used to be.
+    return selectCarHeatCells(heatmapCells, {
+      centerLat,
+      centerLng,
+      delta,
+      cellLat: carCellLat,
+      cellLng: carCellLng,
+      cap: SOFT_HEAT_RENDER_ENABLED ? CAR_MAX_SOFT_BLOBS : CAR_MAX_POLYGONS,
+    });
+  }, [
+    heatmapCells,
+    heatmapStatus,
+    rideState,
+    centerLat,
+    centerLng,
+    delta,
+    carCellLat,
+    carCellLng,
+  ]);
 
   const carHeatMax = useMemo(
     () => carHeatCells.reduce((m, c) => Math.max(m, c.weight), 0),

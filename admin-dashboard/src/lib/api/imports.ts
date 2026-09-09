@@ -998,11 +998,20 @@ export interface SnapshotRegenerateResult {
 
 /** preview=true (added 2026-08-31) runs the same eligibility query and
  * returns the count that would be affected -- no renders, uploads, or
- * writes. Matches every other tool's dry-run-first pattern on this page. */
-export const adminRegenerateImportedSnapshots = (force: boolean, limit: number = 50, preview: boolean = false) =>
+ * writes. Matches every other tool's dry-run-first pattern on this page.
+ * `offset` (added 2026-09-09) pages past the backend's 500-row-per-call
+ * ceiling when force=true -- see RegenerateSnapshotsRequest.offset in
+ * backend/routes/admin/rides.py for why force=true needs it and force=false
+ * doesn't. */
+export const adminRegenerateImportedSnapshots = (
+    force: boolean,
+    limit: number = 50,
+    preview: boolean = false,
+    offset: number = 0,
+) =>
     request<SnapshotRegenerateResult>("/api/admin/rides/regenerate-imported-snapshots", {
         method: "POST",
-        body: JSON.stringify({ force, limit, preview }),
+        body: JSON.stringify({ force, limit, preview, offset }),
         headers: { "Content-Type": "application/json" },
     });
 
@@ -1023,11 +1032,18 @@ export interface RouteRegenerateResult {
 
 /** preview=true (added 2026-08-31) returns the count of rides that need a
  * route backfill (same _needs_route filter) with no OSRM/Google calls and
- * no writes. Matches every other tool's dry-run-first pattern on this page. */
-export const adminRegenerateImportedRoutes = (force: boolean, limit: number = 200, preview: boolean = false) =>
+ * no writes. Matches every other tool's dry-run-first pattern on this page.
+ * `offset` (added 2026-09-09) -- see adminRegenerateImportedSnapshots's own
+ * offset comment above; same reason, same force=true-only use. */
+export const adminRegenerateImportedRoutes = (
+    force: boolean,
+    limit: number = 200,
+    preview: boolean = false,
+    offset: number = 0,
+) =>
     request<RouteRegenerateResult>("/api/admin/rides/regenerate-imported-routes", {
         method: "POST",
-        body: JSON.stringify({ force, limit, preview }),
+        body: JSON.stringify({ force, limit, preview, offset }),
         headers: { "Content-Type": "application/json" },
     });
 

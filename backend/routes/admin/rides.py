@@ -3829,6 +3829,12 @@ class RegenerateSnapshotsRequest(BaseModel):
     # same eligibility query and returns the count that would be affected,
     # with zero renders/uploads/writes.
     preview: bool = False
+    # Paging (2026-09-09): force=true has no other way to advance past one
+    # 500-row window -- the eligibility filter matches the same rows again
+    # on every call, unlike force=false where already-written rows drop out
+    # on their own. The admin-dashboard's "Re-generate all" flow advances
+    # this by `limit` after each successful (non-preview) call.
+    offset: int = Field(0, ge=0)
 
 
 @router.post("/rides/regenerate-imported-snapshots")
@@ -3887,7 +3893,9 @@ async def admin_regenerate_imported_snapshots(
         "rides",
         filters,
         columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,planned_route_polyline",
+        order="id",
         limit=body.limit,
+        offset=body.offset,
     )
     if not rides:
         return {"total": 0, "success": 0, "failed": 0, "message": "No rides to process"}
@@ -4036,6 +4044,11 @@ class RegenerateRoutesRequest(BaseModel):
     # Dry-run mode (2026-08-31) -- see RegenerateSnapshotsRequest.preview's
     # comment above; same fix, same reason, applied to this route too.
     preview: bool = False
+    # Paging (2026-09-09) -- see RegenerateSnapshotsRequest.offset's comment
+    # above; same fix, same reason. Applies to the initial 500-row candidate
+    # fetch below (not the post-filter `limit` slice), so it's the only way
+    # to reach imported rides past the first 500 when force=true.
+    offset: int = Field(0, ge=0)
 
 
 @router.post("/rides/regenerate-imported-routes")
@@ -4078,7 +4091,9 @@ async def admin_regenerate_imported_routes(
         "rides",
         {"legacy_import_metadata": {"$notnull": True}},
         columns="id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,planned_route_polyline",
+        order="id",
         limit=500,
+        offset=body.offset,
     )
     if not rides:
         return {"total": 0, "success": 0, "failed": 0, "message": "No imported rides found"}

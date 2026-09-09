@@ -15,9 +15,10 @@ name: EAS Native Build (iOS/Android)
 # ─── Prerequisites ─────────────────────────────────────────────────────────
 #   • Repo secret EXPO_TOKEN (already used by the OTA workflow).
 #   • Repo secret PLAY_SERVICE_ACCOUNT_JSON (base64-encoded Google Cloud
-#     service account key) for any Android run with auto_submit — decoded
-#     at runtime into <app>/play-service-account.json, the path both apps'
-#     eas.json submit profiles point at.
+#     service account key) — OPTIONAL. Only the `android-auto` submit profile
+#     still sets `serviceAccountKeyPath`; the `production` profiles resolve
+#     the key from the EAS project's own stored credentials instead, so an
+#     Android auto_submit run works with this secret unset.
 #   • The target app must ALREADY exist in Google Play Console under its
 #     package name (com.spinr.user / com.spinr.driver). Google's Publishing
 #     API cannot create a new app entry, and the first release of a brand
@@ -89,13 +90,17 @@ jobs:
       - run: yarn install --frozen-lockfile
 
       - name: Decode Play service account key
-        # Required for ANY Android submission: both apps' eas.json submit
-        # profiles set `serviceAccountKeyPath: ./play-service-account.json`,
-        # and eas-cli reads that file locally when it registers the submission
-        # — so without this step `--auto-submit` on Android fails on a missing
-        # key. Only `deploy-driver-play-testing.yml` had it, which is why that
-        # workflow is the only path that has ever reached Play; a
-        # `--auto-submit` Android run from here could not have worked.
+        # Provides the Play key for submit profiles that ask for one by path.
+        # eas-cli reads `serviceAccountKeyPath` locally when it registers a
+        # submission, so a profile setting it needs the file to exist here;
+        # only `deploy-driver-play-testing.yml` ever created it, which is why
+        # that workflow is the only path that has ever reached Play.
+        #
+        # As of 2026-09-09 the `production` submit profiles no longer set that
+        # path — the EAS project carries its own stored Google Service Account
+        # key — so this step is a no-op for them and the secret is optional
+        # (see the `-z` branch below). `android-auto` still sets the path, so
+        # the step stays for that profile.
         #
         # Skipped when nothing will be submitted, and on an iOS-only build
         # (iOS credentials come from EAS, not from this file), so an iOS run
@@ -111,10 +116,22 @@ jobs:
         env:
           PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
+          # Not an error when unset. The EAS project has a Google Service
+          # Account key stored in its own credentials (confirmed 2026-09-09 by
+          # a submit API rejection naming `googleServiceAccountKeyId` as
+          # already present), and the `production` submit profiles no longer
+          # set `serviceAccountKeyPath` — so eas-cli resolves the key from EAS
+          # rather than from this file. Failing here would block a submission
+          # that is actually correctly configured.
+          #
+          # The file is still written when the secret IS set, for the
+          # `android-auto` profile, which deliberately keeps its
+          # `serviceAccountKeyPath` (see driver-app/eas.json) so the proven
+          # deploy-driver-play-testing.yml path is untouched.
           if [ -z "$PLAY_KEY_B64" ]; then
-            echo "::error::PLAY_SERVICE_ACCOUNT_JSON secret is empty or unset."
-            echo "Add it under Settings > Secrets and variables > Actions."
-            exit 1
+            echo "PLAY_SERVICE_ACCOUNT_JSON not set — using the Google Service"
+            echo "Account key stored in EAS project credentials instead."
+            exit 0
           fi
 
           printf '%s' "$PLAY_KEY_B64" | base64 -d > play-service-account.json

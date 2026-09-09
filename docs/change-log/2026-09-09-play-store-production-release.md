@@ -139,3 +139,47 @@ state, and reverting the config does not unpublish a live build.
 - No visual-regression tooling exists for rider-app or driver-app, so no
   screenshot comparison backs this change — it is config-only and renders
   nothing, but the disclosure is stated rather than left implied.
+
+---
+
+## Addendum — OTA reachability for the new production-channel Android installs
+
+**Issue/gap identified.** Cutting the first Play production AAB creates an
+Android population the OTA workflow cannot reach. Found while watching the
+first `production`-profile Android build report `channel: production`.
+
+**Root cause.** `eas-build.yml`'s push path published
+`--platform android --branch preview` only. That was correct while every
+Android store build used the `preview` channel — a fact that workflow's own
+comment relied on explicitly. The `production` build profile sets
+`channel: production`, so a Play-installed device resolves updates from branch
+`production`, which received only `--platform ios` publishes. An Android
+device there finds no applicable update: the OTA hotfix path silently does not
+exist for Play users.
+
+**Fix.** On push, android now publishes to **both** branches
+(`ios:production android:preview android:production`). Additive — `preview`
+receives exactly what it received before, so existing internal-distribution
+testers are unaffected.
+
+**Risk & impact.** One extra `eas update` invocation per push (3 instead of 2
+per app). `workflow_dispatch` is unchanged: an operator's explicit profile
+choice still applies uniformly to both platforms. No consumer reads the
+removed `CHANNEL_IOS`/`CHANNEL_ANDROID` variables — grep confirms the only
+remaining references were in a comment, which was rewritten.
+
+**Verification performed.** Both workflow files parse under `yaml.safe_load`.
+The channel-selection logic was re-implemented in a test script and asserted
+across all four trigger shapes (push, schedule, dispatch-preview,
+dispatch-production); on push it asserts android serves both channels and iOS
+publishes exactly once. The `for pair in $PAIRS` loop was executed in a real
+shell and emits exactly the three intended `eas update` commands with the
+correct `--environment` for each.
+
+**What was NOT verified.** No real `eas update` was run — no `EXPO_TOKEN` or
+`eas` CLI in this environment. That the `production` channel is actually
+linked to a branch named `production` for both projects is assumed from the
+existing comment's stated convention, not confirmed against the EAS dashboard;
+if it is not, the first push-triggered android production publish will fail
+with "Channel has no branches associated with it" and needs a one-time
+`eas channel:edit production --branch production`.

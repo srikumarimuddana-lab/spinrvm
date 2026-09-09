@@ -13,6 +13,10 @@ on:
   pull_request:
     branches: [staging]
 
+concurrency:
+  group: test-env-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: '3.12'
   # 22, not 20: build-mobile-test/ota-update-test below both run "Setup EAS"

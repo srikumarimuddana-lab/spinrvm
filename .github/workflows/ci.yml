@@ -14,6 +14,24 @@ on:
   # Auto-deploy on every push to main was hitting Vercel's deployment limit;
   # Vercel deploys now only happen when this workflow is run by hand.
   workflow_dispatch:
+  # 2026-09-09 CI smart-execution audit, Track D: a nightly consolidated
+  # safety-net run. This file carries the genuinely expensive full-matrix
+  # jobs (4x Playwright E2E, Docker build + Trivy image scan) that
+  # detect-changes already keeps off most single-surface PRs -- this just
+  # adds one more full run per day, on `main`, independent of PR volume.
+  # `schedule` is never the `pull_request` event, so every detect-changes-
+  # gated job below runs unfiltered here, same as push/merge_group already
+  # do -- no other change needed. Mirrors security-gates.yml's own
+  # `schedule: - cron: '0 2 * * *'`, a pattern already proven working in
+  # this repo, rather than a separate dispatcher workflow (the more
+  # obvious-looking alternative, rejected: triggering another workflow's
+  # workflow_dispatch via the API using the default GITHUB_TOKEN is
+  # documented as not reliably creating a new run -- GitHub's recursive-
+  # run guard -- which would have made that approach a silent no-op).
+  # 08:00 UTC = 2:00 AM in Saskatchewan, which runs CST year-round (no
+  # DST), so this offset doesn't drift across the year.
+  schedule:
+    - cron: '0 8 * * *'
 
 # C96 mitigation: this was the one heavy workflow in the repo with no
 # concurrency group at all -- security-gates.yml, pr-checks.yml, and

@@ -25,7 +25,13 @@ const path = require('path');
 // (verified by a build whose [ExpoRootProject] log line shows compileSdk: 36 with this
 // plugin DISABLED in app.config.ts). See docs/android-build-strategy.md.
 const COMPILE_SDK = '36';
-const TARGET_SDK = '35';
+// 36, not 35. Google Play rejects an upload targeting API 35 with "Target SDK
+// of artifact is too low: 15" — that "15" is the Android *version* name
+// (Android 15 = API 35), not an API level, which makes the message easy to
+// misread. driver-app has targeted 36 since before its Play submissions and
+// is accepted; rider-app sat at 35 and was rejected on its first ever Play
+// upload (2026-09-09). Keep the two apps in step.
+const TARGET_SDK = '36';
 
 const setOrAppend = (contents, key, value) => {
     const escaped = key.replace(/\./g, '\\.');

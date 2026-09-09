@@ -211,7 +211,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 36,
-                targetSdkVersion: 35,
+                // 36 to match driver-app. At 35, Google Play rejects the
+                // upload: "Target SDK of artifact is too low: 15" (that 15 is
+                // Android 15, the version name for API 35 — not an API level).
+                targetSdkVersion: 36,
                 kotlinVersion: '2.2.21',
             },
             // Voltra Live Activities require iOS 16.4+ (the activity APIs).

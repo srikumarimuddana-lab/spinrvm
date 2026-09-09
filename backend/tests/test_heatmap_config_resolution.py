@@ -97,8 +97,10 @@ def test_window_keys_are_area_and_default_only():
     "key,value,expected",
     [
         # k_floor 0 or negative would disable the privacy floor entirely.
-        ("k_floor", 0, 1),
-        ("k_floor", -5, 1),
+        ("k_floor", 0, 3),
+        ("k_floor", -5, 3),
+        ("k_floor", 1, 3),
+        ("k_floor", 2, 3),
         ("k_floor", 999, 50),
         # refresh_seconds 1 would turn the whole online fleet into 1s pollers.
         ("refresh_seconds", 1, 30),
@@ -126,7 +128,7 @@ def test_out_of_range_global_is_clamped_too():
     """A hostile global value must not escape by skipping the area layer."""
     cfg = resolve_heatmap_config(None, {"heatmap_refresh_seconds": 1, "heatmap_k_floor": 0})
     assert cfg["refresh_seconds"] == 30
-    assert cfg["k_floor"] == 1
+    assert cfg["k_floor"] == 3
 
 
 # ── Malformed input ─────────────────────────────────────────────────────
@@ -212,9 +214,59 @@ def test_describe_overrides_returns_only_explicit_keys():
 
 def test_describe_overrides_clamps_and_drops_junk():
     out = describe_overrides({"heatmap_config": {"k_floor": 0, "refresh_seconds": "abc", "bogus": 1}})
-    assert out == {"k_floor": 1}
+    # 3, not 1: k_floor clamps to the PIPEDA floor, not to the old spec minimum.
+    assert out == {"k_floor": 3}
 
 
 def test_describe_overrides_on_a_clean_area_is_empty():
     assert describe_overrides({"heatmap_config": {}}) == {}
     assert describe_overrides(None) == {}
+
+
+# ── PIPEDA k-anonymity floor ────────────────────────────────────────────
+#
+# Regression cover for a real gap, closed 2026-09-09. Migration 397 raised the
+# GLOBAL settings CHECK to `heatmap_k_floor BETWEEN 3 AND 50` and backfilled
+# rows, but HEATMAP_SPEC still allowed 1 — and a per-area override is resolved
+# BEFORE the global value, clamped only to that spec. So an area configured
+# with {"k_floor": 1} resolved to 1 and beat a global of 3, while the database
+# never saw it: service_areas.heatmap_config carries only a
+# `jsonb_typeof = 'object'` constraint (migration 312).
+#
+# A production check on 2026-09-09 found no area carrying a sub-3 override, so
+# nothing was ever emitted below the floor. The guard simply did not exist.
+
+
+@pytest.mark.parametrize("below", [0, 1, 2, -1])
+def test_area_override_cannot_lower_the_privacy_floor(below):
+    cfg = resolve_heatmap_config({"heatmap_config": {"k_floor": below}}, {})
+    assert cfg["k_floor"] >= 3
+
+
+def test_area_override_cannot_undercut_a_stricter_global():
+    """The exact shape of the gap: area wins over global, so it must be floored."""
+    cfg = resolve_heatmap_config({"heatmap_config": {"k_floor": 1}}, {"heatmap_k_floor": 3})
+    assert cfg["k_floor"] == 3
+
+
+def test_a_stricter_area_override_is_still_honoured():
+    """Flooring must not flatten an area that deliberately asked for more."""
+    cfg = resolve_heatmap_config({"heatmap_config": {"k_floor": 9}}, {"heatmap_k_floor": 3})
+    assert cfg["k_floor"] == 9
+
+
+def test_string_json_override_cannot_lower_the_floor_either():
+    """Some drivers hand JSONB back as text; that path clamps too."""
+    cfg = resolve_heatmap_config({"heatmap_config": '{"k_floor": 1}'}, {})
+    assert cfg["k_floor"] == 3
+
+
+def test_describe_overrides_reports_the_floored_value_not_the_raw_one():
+    """The admin UI must not show 1 as if it were in effect."""
+    assert describe_overrides({"heatmap_config": {"k_floor": 1}}) == {"k_floor": 3}
+
+
+def test_spec_lower_bound_matches_migration_397():
+    """Guards the three layers agreeing. They silently diverged once already."""
+    assert HEATMAP_SPEC["k_floor"].lo == 3
+    assert HEATMAP_SPEC["k_floor"].default >= HEATMAP_SPEC["k_floor"].lo

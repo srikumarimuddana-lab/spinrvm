@@ -990,6 +990,20 @@ jobs:
         # second, misleading "file not found" failure here instead of a clean
         # single point of failure.
         if: always() && hashFiles('trivy-results.sarif') != ''
+        # C94: this upload has been failing every run (main included, not just
+        # PR branches) with "Code scanning is not enabled for this repository"
+        # -- a repo-settings gap (Settings -> Code security and analysis ->
+        # Code scanning), not a workflow defect, and not fixable from a
+        # session with no repo-admin access. continue-on-error here restores
+        # the job's actual behavior before this started failing: the
+        # filesystem Trivy scan above has no exit-code set, so it was never
+        # the thing gating this job pass/fail in the first place -- this
+        # step is a best-effort publish to GitHub's Security tab, and its
+        # failure was blocking every PR's required check for a reason no PR
+        # diff can fix. See ACTION_ITEMS.md C94 for the more important
+        # finding this surfaced: with code scanning disabled, this scan's
+        # findings currently reach no enforcement path at all.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -1109,6 +1123,12 @@ jobs:
         # cascade into a second, misleading "file not found" failure here.
         if: always() && hashFiles('trivy-image.sarif') != ''
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+        # C94: same repo-wide "Code scanning is not enabled" failure as the
+        # other 3 upload-sarif call sites. This job's real enforcement is the
+        # separate "Scan image with Trivy" step above (`exit-code: '1'`,
+        # format: table) -- independent of this SARIF upload, so this
+        # mitigation doesn't weaken it.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-image.sarif'
 

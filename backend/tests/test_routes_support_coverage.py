@@ -38,8 +38,13 @@ _DRIVER_USER = {"id": "driver-user-1", "email": "driver1@example.com"}
 
 
 def _patches(**overrides):
-    # scrub_pii is no longer a name on routes.support (F04): scrubbing moved
-    # inside the central engine along with the rest of the AI path.
+    # F04 removed scrub_pii from routes.support along with the direct Gemini
+    # call on /support/chat -- but /support/escalate (a separate endpoint,
+    # untouched by F04) sends straight to Zoho Desk with no AI path involved
+    # at all, so "scrubbing moved to the central engine" never applied to it.
+    # scrub_pii was restored here specifically for that egress boundary --
+    # see support_escalate's own docstring and ScrubPolicy.STRICT's list of
+    # protected boundaries in ai/pii.py, which already named routes/support.py.
     defaults = {
         "backend.routes.support.create_support_ticket": AsyncMock(return_value={"ticketNumber": "TCK-1"}),
     }
@@ -148,6 +153,31 @@ class TestSupportEscalate:
             }
             create_ticket.assert_awaited_once_with(
                 user=_RIDER, message="I need help", transcript="user: hi\nbot: hello"
+            )
+        finally:
+            _stop(patches)
+
+    @pytest.mark.anyio
+    async def test_pii_in_message_and_transcript_is_scrubbed_before_reaching_zoho(self):
+        """The actual gap this fix closes: a rider's own phone number or
+        email typed into a support message/transcript must never reach Zoho
+        Desk (a third party) verbatim."""
+        from backend.routes.support import EscalateRequest, support_escalate
+
+        create_ticket = AsyncMock(return_value={"ticketNumber": "TCK-99"})
+        patches = _start(_patches(**{"backend.routes.support.create_support_ticket": create_ticket}))
+        try:
+            await support_escalate(
+                EscalateRequest(
+                    message="Call me at 306-555-1234, my email is rider@example.com",
+                    transcript="transcript line 1\nuser phone: 3065551234",
+                ),
+                current_user=_RIDER,
+            )
+            create_ticket.assert_awaited_once_with(
+                user=_RIDER,
+                message="Call me at [PHONE], my email is [EMAIL]",
+                transcript="transcript line 1\nuser phone: [PHONE]",
             )
         finally:
             _stop(patches)

@@ -297,14 +297,17 @@ class SettingsUpdateRequest(BaseModel):
     # undeclared field is dropped at validation while the endpoint still
     # returns 200 and writes an audit row with changed_keys: [] — which is
     # exactly how the heatmap config shipped as a silent no-op that reported
-    # success. Bounds mirror the DB CHECK in migration 311 and the runtime
-    # clamps in routes/drivers/profile.py (three layers, deliberately).
+    # success. Bounds mirror the DB CHECK in migration 397 and the runtime
+    # clamps in utils/heatmap_config.py (three layers, deliberately).
     driver_heatmap_enabled: Optional[bool] = None
     driver_heatmap_v2_enabled: Optional[bool] = None
     # Dark-launch allowlist of driver *user* IDs (users.id — not drivers.id).
     # Capped so an admin paste cannot park an unbounded list in the row.
     heatmap_internal_driver_ids: Optional[List[str]] = Field(default=None, max_length=500)
-    heatmap_k_floor: Optional[int] = Field(default=None, ge=1, le=50)
+    # ge=3, matching migration 397's CHECK and HEATMAP_SPEC. At ge=1 this model
+    # accepted 1 and 2 and then hit the DB constraint, so an operator got a 500
+    # instead of a 422 telling them the PIPEDA floor is 3.
+    heatmap_k_floor: Optional[int] = Field(default=None, ge=3, le=50)
     heatmap_cell_lat_deg: Optional[float] = Field(default=None, ge=0.0005, le=0.05)
     heatmap_cell_lng_deg: Optional[float] = Field(default=None, ge=0.0005, le=0.05)
     heatmap_decay_half_life_days: Optional[float] = Field(default=None, ge=0.5, le=30)

@@ -14,6 +14,15 @@ name: EAS Native Build (iOS/Android)
 #
 # ─── Prerequisites ─────────────────────────────────────────────────────────
 #   • Repo secret EXPO_TOKEN (already used by the OTA workflow).
+#   • Repo secret PLAY_SERVICE_ACCOUNT_JSON (base64-encoded Google Cloud
+#     service account key) — OPTIONAL. Only the `android-auto` submit profile
+#     still sets `serviceAccountKeyPath`; the `production` profiles resolve
+#     the key from the EAS project's own stored credentials instead, so an
+#     Android auto_submit run works with this secret unset.
+#   • The target app must ALREADY exist in Google Play Console under its
+#     package name (com.spinr.user / com.spinr.driver). Google's Publishing
+#     API cannot create a new app entry, and the first release of a brand
+#     new app has to be uploaded through the Play Console UI once by hand.
 #   • iOS build credentials must already exist on EAS (distribution cert +
 #     provisioning profile). --non-interactive cannot create them; if they're
 #     missing the run fails with a clear message — run `eas credentials` once
@@ -80,6 +89,62 @@ jobs:
 
       - run: yarn install --frozen-lockfile
 
+      - name: Decode Play service account key
+        # Provides the Play key for submit profiles that ask for one by path.
+        # eas-cli reads `serviceAccountKeyPath` locally when it registers a
+        # submission, so a profile setting it needs the file to exist here;
+        # only `deploy-driver-play-testing.yml` ever created it, which is why
+        # that workflow is the only path that has ever reached Play.
+        #
+        # As of 2026-09-09 the `production` submit profiles no longer set that
+        # path — the EAS project carries its own stored Google Service Account
+        # key — so this step is a no-op for them and the secret is optional
+        # (see the `-z` branch below). `android-auto` still sets the path, so
+        # the step stays for that profile.
+        #
+        # Skipped when nothing will be submitted, and on an iOS-only build
+        # (iOS credentials come from EAS, not from this file), so an iOS run
+        # is not newly gated on an Android-only secret.
+        if: >-
+          ${{ github.event.inputs.auto_submit == 'true' &&
+              github.event.inputs.platform != 'ios' }}
+        # Passed via env, never interpolated into the script body: a raw-JSON
+        # value (the obvious mistake for a secret named *_JSON) carries double
+        # quotes and would break shell quoting, letting $(...) in the key
+        # material execute on the runner. Same pattern as
+        # deploy-driver-play-testing.yml.
+        env:
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          # Not an error when unset. The EAS project has a Google Service
+          # Account key stored in its own credentials (confirmed 2026-09-09 by
+          # a submit API rejection naming `googleServiceAccountKeyId` as
+          # already present), and the `production` submit profiles no longer
+          # set `serviceAccountKeyPath` — so eas-cli resolves the key from EAS
+          # rather than from this file. Failing here would block a submission
+          # that is actually correctly configured.
+          #
+          # The file is still written when the secret IS set, for the
+          # `android-auto` profile, which deliberately keeps its
+          # `serviceAccountKeyPath` (see driver-app/eas.json) so the proven
+          # deploy-driver-play-testing.yml path is untouched.
+          if [ -z "$PLAY_KEY_B64" ]; then
+            echo "PLAY_SERVICE_ACCOUNT_JSON not set — using the Google Service"
+            echo "Account key stored in EAS project credentials instead."
+            exit 0
+          fi
+
+          printf '%s' "$PLAY_KEY_B64" | base64 -d > play-service-account.json
+
+          # An empty/garbage decode otherwise stays green here and fails deep
+          # inside EAS, where it is far harder to attribute.
+          if ! jq -e '.client_email and .private_key' play-service-account.json > /dev/null 2>&1; then
+            echo "::error::Decoded key is not valid service-account JSON (missing client_email/private_key)."
+            echo "The secret must hold the BASE64-encoded key file, not raw JSON."
+            exit 1
+          fi
+          echo "Service account key decoded and validated."
+
       - name: Trigger EAS native build
         run: |
           SUBMIT_FLAG=""
@@ -101,6 +166,10 @@ jobs:
             --non-interactive \
             --no-wait \
             $SUBMIT_FLAG
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json
 
       - name: Where to find the build
         run: |

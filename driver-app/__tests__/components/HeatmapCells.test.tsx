@@ -6,11 +6,11 @@ import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 
 // This app's jest-expo preset defaults Platform.OS to 'ios', so
 // USE_NATIVE_GRADIENT (computed once at HeatmapCells' module-load time) is
-// false here — the iOS soft-blob path (two <Circle> elements per surviving
-// cell) renders, not the Android native <Heatmap>. The region-filter logic
-// under test runs identically before either renderer branch, so counting
-// Circle pairs is exactly as valid a proxy for "which cells survived" as
-// counting Heatmap points would be on Android.
+// false here — the iOS soft-blob path (BLOB_LAYERS.length <Circle> elements
+// per surviving cell) renders, not the Android native <Heatmap>. The
+// region-filter logic under test runs identically before either renderer
+// branch, so counting Circle groups is exactly as valid a proxy for "which
+// cells survived" as counting Heatmap points would be on Android.
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   return {
@@ -20,8 +20,11 @@ jest.mock('react-native-maps', () => {
   };
 });
 
+// Real 6-digit hex values (the actual light-theme ramp, shared/theme/index.ts)
+// so rampColorForRatio's interpolation math is meaningfully assertable below
+// — a placeholder like '#a' isn't valid hex and would interpolate to NaN.
 jest.mock('@shared/theme/ThemeContext', () => ({
-  useTheme: () => ({ colors: { heatmapRamp: ['#a', '#b', '#c', '#d', '#e'] } }),
+  useTheme: () => ({ colors: { heatmapRamp: ['#ffe3e0', '#ffb3ac', '#ff7a6e', '#ff3b30', '#b71c1c'] } }),
 }));
 
 function surviving(
@@ -43,9 +46,9 @@ function surviving(
       />,
     );
   });
-  // 2 Circle elements per surviving cell (outer + inner blob) — divide back
+  // BLOB_LAYERS.length (3) Circle elements per surviving cell — divide back
   // down to a cell count so assertions read naturally.
-  return renderer.root.findAllByType(Circle as any).length / 2;
+  return renderer.root.findAllByType(Circle as any).length / 3;
 }
 
 describe('HeatmapCells — region viewport filter', () => {
@@ -90,7 +93,7 @@ describe('HeatmapCells — region viewport filter', () => {
 });
 
 describe('HeatmapCells — driver-position exclusion (2026-09-09, "concentric circles around the car icon")', () => {
-  // cellLatDeg/cellLngDeg = 0.01 -> outerRadiusM ≈ 690m -> excludeRadiusM ≈ 897m.
+  // cellLatDeg/cellLngDeg = 0.01 -> outerRadiusM ≈ 1002m -> excludeRadiusM ≈ 1302m.
   const AT_DRIVER: HeatmapCell = { lat: 52.1, lng: -106.6, weight: 5 };
   // ~2.2 km north — well outside the exclusion radius.
   const FAR: HeatmapCell = { lat: 52.12, lng: -106.6, weight: 5 };
@@ -105,5 +108,62 @@ describe('HeatmapCells — driver-position exclusion (2026-09-09, "concentric ci
 
   it('keeps every cell when driverLocation is not provided (back-compat)', () => {
     expect(surviving([AT_DRIVER, FAR], undefined, 0.01, 0.01, null)).toBe(2);
+  });
+});
+
+describe('HeatmapCells — layered blob + continuous color ramp (2026-09-09, "clean minimalistic" gradient style)', () => {
+  function renderCells(cells: HeatmapCell[]) {
+    let renderer!: TestRenderer.ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        <HeatmapCells cells={cells} cellLatDeg={0.01} cellLngDeg={0.01} />,
+      );
+    });
+    return renderer.root.findAllByType(Circle as any);
+  }
+
+  const alphaOf = (fillColor: string) => Number(fillColor.match(/,([\d.]+)\)$/)?.[1]);
+
+  it('renders BLOB_LAYERS.length circles per cell, widest/palest first, narrowest/densest last', () => {
+    const circles = renderCells([{ lat: 52.1, lng: -106.6, weight: 5 }]);
+    expect(circles).toHaveLength(3);
+
+    const radii = circles.map((c) => c.props.radius as number);
+    expect(radii[0]).toBeGreaterThan(radii[1]);
+    expect(radii[1]).toBeGreaterThan(radii[2]);
+
+    const alphas = circles.map((c) => alphaOf(c.props.fillColor as string));
+    expect(alphas[0]).toBeLessThan(alphas[1]);
+    expect(alphas[1]).toBeLessThan(alphas[2]);
+  });
+
+  it('interpolates color continuously with weight ratio instead of snapping to a fixed bucket', () => {
+    // ratio 0.1 vs ratio 1.0 relative to the max in this render — must land
+    // on genuinely different, non-bucketed colors. visibleCells sorts by
+    // weight DESCENDING, so the weight=10 cell renders first.
+    const circles = renderCells([
+      { lat: 52.1, lng: -106.6, weight: 1 },
+      { lat: 52.3, lng: -106.6, weight: 10 },
+    ]);
+    // 2 cells * 3 layers = 6 circles, in render order: weight=10 cell's
+    // layers, then weight=1 cell's.
+    expect(circles).toHaveLength(6);
+    const highInnerColor = circles[2].props.fillColor as string;
+    const lowInnerColor = circles[5].props.fillColor as string;
+    expect(lowInnerColor).not.toBe(highInnerColor);
+    // ratio=1.0 lands exactly on the ramp's last stop (#b71c1c = 183,28,28) —
+    // proof the interpolation, not just the boost, is driving the color.
+    expect(highInnerColor).toMatch(/^rgba\(183,28,28,/);
+  });
+
+  it('gives the busiest cells (top ramp tier) a stronger opacity than a mid-tier cell', () => {
+    // visibleCells sorts by weight descending, so weight=10 renders first.
+    const circles = renderCells([
+      { lat: 52.1, lng: -106.6, weight: 5 },
+      { lat: 52.3, lng: -106.6, weight: 10 }, // ratio 1.0 — past the 0.8 boost threshold
+    ]);
+    const hotInnerAlpha = alphaOf(circles[2].props.fillColor as string);
+    const midInnerAlpha = alphaOf(circles[5].props.fillColor as string);
+    expect(hotInnerAlpha).toBeGreaterThan(midInnerAlpha);
   });
 });

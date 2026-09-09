@@ -1,6 +1,8 @@
 import {
   HEAT_RING_STOPS,
   HEAT_PEAK_ALPHA,
+  HEAT_BLOB_RADIUS_FACTOR,
+  HEAT_NATIVE_LAYER_ALPHA,
   SOFT_HEAT_RENDER_ENABLED,
   cellCenter,
   ringAlphas,
@@ -88,10 +90,12 @@ describe('paintedPeakAlpha', () => {
     expect(paintedPeakAlpha()).toBeCloseTo(stacked[stacked.length - 1], 6);
   });
 
-  // Android sets this as its layer opacity, so it has to stay a usable
-  // translucency: opaque enough to read, transparent enough to see the road.
-  it('stays translucent and below the notional Gaussian peak', () => {
-    expect(paintedPeakAlpha()).toBeGreaterThan(0.4);
+  // A LONE cell must stay faint. The reference's hot core comes from many
+  // overlapping contributions, not from one saturated cell, and the base map
+  // has to stay readable underneath.
+  it('leaves a single cell faint enough to read the map through', () => {
+    expect(paintedPeakAlpha()).toBeGreaterThan(0.15);
+    expect(paintedPeakAlpha()).toBeLessThan(0.35);
     expect(paintedPeakAlpha()).toBeLessThan(HEAT_PEAK_ALPHA);
   });
 });
@@ -125,5 +129,44 @@ describe('cellCenter', () => {
     // Math.floor, not truncation — Saskatchewan is entirely west of Greenwich,
     // so a truncating implementation would shift every cell here by one square.
     expect(cellCenter(1, -0.001, 0.01, 0.01).longitude).toBeCloseTo(-0.005, 9);
+  });
+});
+
+/** Alpha this cell paints at `d` cell-spans from its centre. */
+function paintedAt(d: number): number {
+  const f = d / HEAT_BLOB_RADIUS_FACTOR;
+  if (f > 1) return 0;
+  const alphas = ringAlphas(1);
+  let acc = 0;
+  let painted = 0;
+  HEAT_RING_STOPS.forEach((stop, i) => {
+    acc = acc + alphas[i] * (1 - acc);
+    if (f <= stop) painted = acc;
+  });
+  return painted;
+}
+
+const composite = (xs: number[]) => 1 - xs.reduce((p, x) => p * (1 - x), 1);
+
+describe('kernel width and density build-up', () => {
+  // This is what separates "a field" from "tiled circles": one cell has to
+  // reach its neighbours so their contributions integrate.
+  it('reaches the four edge neighbours but not the diagonals', () => {
+    expect(paintedAt(1)).toBeGreaterThan(0);
+    expect(paintedAt(Math.SQRT2)).toBe(0);
+  });
+
+  it('builds a hot core from overlap rather than from one cell', () => {
+    const lone = paintedAt(0);
+    const busy = composite([lone, ...Array(4).fill(paintedAt(1))]);
+    expect(busy).toBeGreaterThan(lone * 1.4);
+    expect(busy).toBeLessThan(0.6); // still translucent; roads stay visible
+  });
+
+  // Android sums density itself, so it takes the composited value, not the
+  // per-cell one. If these drift apart the two phones stop matching.
+  it('keeps the Android layer opacity aligned with the composited core', () => {
+    const busy = composite([paintedAt(0), ...Array(4).fill(paintedAt(1))]);
+    expect(HEAT_NATIVE_LAYER_ALPHA).toBeCloseTo(busy, 2);
   });
 });

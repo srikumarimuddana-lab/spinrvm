@@ -14,6 +14,14 @@ name: EAS Native Build (iOS/Android)
 #
 # ─── Prerequisites ─────────────────────────────────────────────────────────
 #   • Repo secret EXPO_TOKEN (already used by the OTA workflow).
+#   • Repo secret PLAY_SERVICE_ACCOUNT_JSON (base64-encoded Google Cloud
+#     service account key) for any Android run with auto_submit — decoded
+#     at runtime into <app>/play-service-account.json, the path both apps'
+#     eas.json submit profiles point at.
+#   • The target app must ALREADY exist in Google Play Console under its
+#     package name (com.spinr.user / com.spinr.driver). Google's Publishing
+#     API cannot create a new app entry, and the first release of a brand
+#     new app has to be uploaded through the Play Console UI once by hand.
 #   • iOS build credentials must already exist on EAS (distribution cert +
 #     provisioning profile). --non-interactive cannot create them; if they're
 #     missing the run fails with a clear message — run `eas credentials` once
@@ -80,6 +88,46 @@ jobs:
 
       - run: yarn install --frozen-lockfile
 
+      - name: Decode Play service account key
+        # Required for ANY Android submission: both apps' eas.json submit
+        # profiles set `serviceAccountKeyPath: ./play-service-account.json`,
+        # and eas-cli reads that file locally when it registers the submission
+        # — so without this step `--auto-submit` on Android fails on a missing
+        # key. Only `deploy-driver-play-testing.yml` had it, which is why that
+        # workflow is the only path that has ever reached Play; a
+        # `--auto-submit` Android run from here could not have worked.
+        #
+        # Skipped when nothing will be submitted, and on an iOS-only build
+        # (iOS credentials come from EAS, not from this file), so an iOS run
+        # is not newly gated on an Android-only secret.
+        if: >-
+          ${{ github.event.inputs.auto_submit == 'true' &&
+              github.event.inputs.platform != 'ios' }}
+        # Passed via env, never interpolated into the script body: a raw-JSON
+        # value (the obvious mistake for a secret named *_JSON) carries double
+        # quotes and would break shell quoting, letting $(...) in the key
+        # material execute on the runner. Same pattern as
+        # deploy-driver-play-testing.yml.
+        env:
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_KEY_B64" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON secret is empty or unset."
+            echo "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          printf '%s' "$PLAY_KEY_B64" | base64 -d > play-service-account.json
+
+          # An empty/garbage decode otherwise stays green here and fails deep
+          # inside EAS, where it is far harder to attribute.
+          if ! jq -e '.client_email and .private_key' play-service-account.json > /dev/null 2>&1; then
+            echo "::error::Decoded key is not valid service-account JSON (missing client_email/private_key)."
+            echo "The secret must hold the BASE64-encoded key file, not raw JSON."
+            exit 1
+          fi
+          echo "Service account key decoded and validated."
+
       - name: Trigger EAS native build
         run: |
           SUBMIT_FLAG=""
@@ -101,6 +149,10 @@ jobs:
             --non-interactive \
             --no-wait \
             $SUBMIT_FLAG
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json
 
       - name: Where to find the build
         run: |

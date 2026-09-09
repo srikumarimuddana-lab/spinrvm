@@ -192,7 +192,7 @@ def render_prometheus() -> str:
         lines.append(f"# TYPE {name} histogram")
         for labels_tuple, cell in sorted(series.items()):
             labels_tuple = _with_worker_pid(labels_tuple, worker_pid)
-            for le, count in zip(cell["le"], cell["buckets"]):
+            for le, count in zip(cell["le"], cell["buckets"], strict=False):
                 le_labels = tuple(sorted(labels_tuple + (("le", _format_le(le)),)))
                 lines.append(f"{name}_bucket{_format_labels(le_labels)} {count}")
             inf_labels = tuple(sorted(labels_tuple + (("le", "+Inf"),)))

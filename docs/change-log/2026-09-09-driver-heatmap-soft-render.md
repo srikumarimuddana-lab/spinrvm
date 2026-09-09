@@ -8,7 +8,7 @@
 | Author | mkkreddy52@gmail.com (via Claude Code) |
 | Surface(s) | driver-app (phone iOS + Android, and the Android Auto car surface) |
 | Domain (Sentry tag) | drivers |
-| PR / commit link | branch `claude/pr-5142-review-5dagsf` — `3ce93a1`, `4cc353b`, `946fdd1`, `42df2b9` |
+| PR / commit link | branch `claude/pr-5142-review-5dagsf` — `3ce93a1`, `4cc353b`, `946fdd1`, `42df2b9`, `ee17474`, plus the retune consumers |
 | Related issue or gap ID | PR #5142 findings HM26-05 (iOS ring geometry) and HM26-06 (per-surface scale divergence) |
 
 ## 1. Issue / gap identified
@@ -39,7 +39,18 @@ candidate, but it has not been reproduced on a native build. Treated as candidat
 A shared `lib/heatFalloff.ts` defines one radial falloff, and all three renderers use it.
 N nested circles whose *stacked* opacity follows a Gaussian, solved through the
 painter's-algorithm relation `α_k = (T_k − T_k−1) / (1 − T_k−1)` so the stack lands on the
-target instead of compounding past it. Largest single alpha step drops **0.430 → 0.206**.
+target instead of compounding past it. Largest single alpha step drops **0.430 → 0.091**.
+
+Retuned against a supplied Uber reference screenshot (2026-09-09), which showed the first
+pass was both too opaque and too narrow. Final profile: 5 rings, radius **1.35 cell-spans**
+so each cell reaches its four edge neighbours (stopping short of the diagonals at 1.41),
+notional peak 0.40. A lone cell paints **0.277**; a busy area composites to **~0.42**; a
+weak isolated cell sits at ~0.08. The hot core therefore emerges from overlapping density
+rather than from one saturated cell, and the base map stays readable throughout — both
+properties visible in the reference.
+
+Android takes `HEAT_NATIVE_LAYER_ALPHA` (0.42, the composited value) rather than the
+per-cell peak, because its native layer sums density before applying opacity.
 
 Colour ramp is deliberately untouched on every surface — this changes shape only. Android Auto's
 `CAR_RAMP` was a hand-copied literal of `darkColors.heatmapRamp`; verified byte-identical and
@@ -65,9 +76,9 @@ money/wallet path, no insurance-period write is touched. The heatmap is read-onl
 downstream of `GET /drivers/demand-heatmap`; nothing here changes what is fetched, when it is
 fetched, or what is stored.
 
-Residual risk, flag-on only: native view count rises. Phone iOS 60×2 = 120 shapes → 45×4 = 180.
-Android Auto 80 squares → 30×4 = 120. Both caps were reduced to hold the count in the same
-order, but neither was profiled (see §9).
+Residual risk, flag-on only: native view count rises. Phone iOS 60×2 = 120 shapes → 40×5 = 200.
+Android Auto 80 squares → 26×5 = 130. Caps were reduced to hold the count in the same order,
+but neither the count nor the additional overdraw from the wider kernel was profiled (see §9).
 
 Untouched by design, still open from PR #5142: both renderers still normalise intensity by the
 *visible* maximum (HM26-06), so panning still changes what a given shade means. That is a data
@@ -80,7 +91,7 @@ driver — mid-shift, online, or on a car head unit — keeps the exact renderer
 
 When the flag is flipped (a separate commit + OTA), the affected party is drivers only: the
 demand overlay becomes a soft fade instead of rings/squares, Android's overlay becomes slightly
-more translucent (0.75 → ~0.557 peak), and fewer cells are drawn at once on each surface. No
+more translucent (0.75 → 0.42 layer opacity), and fewer cells are drawn at once on each surface. No
 copy changes, no notification changes, no change to going online/offline, ride offers, or
 navigation. Riders, corporate admins and internal admins see nothing.
 
@@ -89,9 +100,9 @@ navigation. Riders, corporate admins and internal admins see nothing.
 | File path | What changed | Why |
 |---|---|---|
 | `driver-app/lib/heatFalloff.ts` | New. Ring stops, Gaussian falloff solver, `cellCenter`, `METERS_PER_LAT_DEG`, `paintedPeakAlpha()`, the flag | One definition of the shape so three renderers cannot disagree |
-| `driver-app/components/dashboard/HeatmapCells.tsx` | iOS 4-ring soft path; Android opacity from `paintedPeakAlpha()`; `MAX_SOFT_BLOBS` 45; radius factor 0.62 → 0.70; local `cellCenter`/`METERS_PER_LAT_DEG` removed | Kill the bullseye; make the two phones agree on peak translucency |
-| `driver-app/lib/androidAuto/carSurface.tsx` | Soft circle path via `Maps.Circle`; `CAR_MAX_SOFT_BLOBS` 30; `CAR_RAMP` → `darkColors.heatmapRamp`; `rampIndex` extracted; shared `cellCenter` | Car stops looking like a different product; ramp cannot drift from the phone legend |
-| `driver-app/__tests__/lib/heatFalloff.test.ts` | New. 14 assertions on the falloff and grid snap | The maths is the part that is actually verifiable here |
+| `driver-app/components/dashboard/HeatmapCells.tsx` | iOS 5-ring soft path; Android opacity from `HEAT_NATIVE_LAYER_ALPHA`; `MAX_SOFT_BLOBS` 40; radius factor 0.62 → 1.35; local `cellCenter`/`METERS_PER_LAT_DEG` removed | Kill the bullseye; make the two phones agree on peak translucency |
+| `driver-app/lib/androidAuto/carSurface.tsx` | Soft circle path via `Maps.Circle`; `CAR_MAX_SOFT_BLOBS` 26; `CAR_RAMP` → `darkColors.heatmapRamp`; `rampIndex` extracted; shared `cellCenter` | Car stops looking like a different product; ramp cannot drift from the phone legend |
+| `driver-app/__tests__/lib/heatFalloff.test.ts` | New. 17 assertions on the falloff, kernel width, density build-up and grid snap | The maths is the part that is actually verifiable here |
 | `driver-app/__tests__/components/HeatmapCellsSoft.test.tsx` | New. Renderer assertions with the flag forced on | The soft path is unreachable in tests otherwise |
 
 ## 7. Before / after
@@ -101,7 +112,7 @@ navigation. Riders, corporate admins and internal admins see nothing.
 <Circle radius={outerRadiusM}     fillColor={hexToRgba(color, 0.14)} strokeWidth={0} />
 <Circle radius={outerRadiusM*0.5} fillColor={hexToRgba(color, idx === 4 ? 0.5 : 0.32)} strokeWidth={0} />
 
-// After — four rings solved so the STACK follows a Gaussian; max step 0.206.
+// After — five rings solved so the STACK follows a Gaussian; max step 0.091.
 // strokeColor set explicitly (candidate containment for the reported black outline).
 const alphas = ringAlphas(maxWeight > 0 ? cell.weight / maxWeight : 0);
 HEAT_RING_STOPS.map((stop, i) => (
@@ -135,7 +146,7 @@ No live data is touched, so `git revert` genuinely is sufficient at the code lev
 
 ## 9. Verification performed
 
-- [x] **Falloff module: 14/14 assertions pass.** Compiled `lib/heatFalloff.ts` with `tsc` and
+- [x] **Falloff module: 17/17 assertions pass.** Compiled `lib/heatFalloff.ts` with `tsc` and
       executed every assertion from `heatFalloff.test.ts` directly in node.
 - [x] **Syntax check**: `tsc --noEmit` over all changed files — zero `TS1xxx` syntax errors.
 - [x] **Blast-radius grep**: listed in §4.
@@ -166,9 +177,14 @@ No live data is touched, so `git revert` genuinely is sufficient at the code lev
   from the previous counts, not profiled. A head unit is the likeliest place for this to hurt.
 - **The black-outline symptom is not reproduced or fixed.** `strokeColor="transparent"` is a
   candidate containment on the new path only.
-- **This does not achieve Uber/Lyft parity.** Stacked translucent circles compound where
-  neighbouring blobs overlap; it is a closer approximation, not a continuous scalar field. The
-  genuine-parity path remains PR #5142's server-rendered raster tiles (B4–B6 / M0, M4).
+- **This does not achieve Uber/Lyft parity**, even after the reference-informed retune.
+  Two limits are structural, not tuning: (a) colour is chosen per cell and then composited,
+  whereas a real heatmap sums density first and maps colour once — widening the kernel to get
+  a field-like shape actually makes that error *more* visible where a hot cell abuts a cold
+  one; (b) overlay shapes draw above the base map's own street labels, so the reference's look
+  of heat sitting *under* road names and highway shields is not reproducible with
+  `react-native-maps` primitives. Both dissolve under PR #5142's server-rendered raster tiles
+  (B4–B6 / M0, M4), which is still the only route to the reference image.
 
 ## 11. Sign-off
 

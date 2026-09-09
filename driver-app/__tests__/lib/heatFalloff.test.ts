@@ -2,6 +2,7 @@ import {
   HEAT_RING_STOPS,
   HEAT_PEAK_ALPHA,
   SOFT_HEAT_RENDER_ENABLED,
+  cellCenter,
   ringAlphas,
   paintedPeakAlpha,
 } from '../../lib/heatFalloff';
@@ -100,5 +101,29 @@ describe('SOFT_HEAT_RENDER_ENABLED', () => {
   // on Apple Maps, Google Maps or an Auto head unit, so it must ship dark.
   it('is off until native screenshots exist for all three surfaces', () => {
     expect(SOFT_HEAT_RENDER_ENABLED).toBe(false);
+  });
+});
+
+describe('cellCenter', () => {
+  // Shared by the phone and the car renderer: if they snapped differently the
+  // same demand would draw in two slightly different places per surface.
+  it('snaps a point to the middle of its grid square', () => {
+    const c = cellCenter(52.131, -106.673, 0.004, 0.006);
+    expect(c.latitude).toBeCloseTo(52.13, 9);
+    expect(c.longitude).toBeCloseTo(-106.671, 9);
+  });
+
+  it('maps every point inside one square to the same centre', () => {
+    // Both points sit inside lat [52.128, 52.132) x lng [-106.674, -106.668).
+    const a = cellCenter(52.1285, -106.6735, 0.004, 0.006);
+    const b = cellCenter(52.1315, -106.6685, 0.004, 0.006);
+    expect(a.latitude).toBeCloseTo(b.latitude, 9);
+    expect(a.longitude).toBeCloseTo(b.longitude, 9);
+  });
+
+  it('keeps negative longitudes on the floor side, not toward zero', () => {
+    // Math.floor, not truncation — Saskatchewan is entirely west of Greenwich,
+    // so a truncating implementation would shift every cell here by one square.
+    expect(cellCenter(1, -0.001, 0.01, 0.01).longitude).toBeCloseTo(-0.005, 9);
   });
 });

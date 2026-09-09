@@ -257,7 +257,12 @@ class TestCardNumbers:
             "my card is 4111 1111 1111 1111",  # Visa, spaced
             "card 5500000000000004 declined",  # Mastercard (legacy range)
             "card 2223000048400011 declined",  # Mastercard (2-series range)
-            "amex 340000000000009 was charged twice",  # Amex, 15 digits
+            "amex 340000000000009 was charged twice",  # Amex, 15 digits, unseparated
+            # F06: Amex's real 4-6-5 print grouping. Only the unseparated and
+            # 4-4-4-3 forms were matched before, so a card written the way the
+            # card itself prints it reached the provider intact.
+            "amex 3782 822463 10005 was declined",  # Amex, spaced 4-6-5
+            "amex 3714-496353-98431 was declined",  # Amex, dashed 4-6-5
             "discover 6011000000000004 keeps failing",  # Discover
         ],
     )
@@ -265,6 +270,7 @@ class TestCardNumbers:
         scrubbed = scrub_pii(text)
         assert "[CARD]" in scrubbed
         assert "1111" not in scrubbed and "0004" not in scrubbed and "0009" not in scrubbed
+        assert "822463" not in scrubbed and "496353" not in scrubbed
 
     @pytest.mark.parametrize(
         "text",
@@ -272,6 +278,9 @@ class TestCardNumbers:
             "ride reference 9999888877776666",  # 16 digits, not a recognized IIN prefix
             "session token 1234567890123456",  # ditto — starts with 1, no brand starts there
             "spinr_dispatch_offer_to_accept_duration_ms=1234567890123",  # long metric value
+            # F06 guard: the new Amex 4-6-5 branch is prefix-gated on 34/37, so
+            # a same-SHAPED run with any other prefix must not match.
+            "batch 1234 567890 12345",
         ],
     )
     def test_unprefixed_long_digit_runs_are_not_mistaken_for_cards(self, text):
@@ -279,6 +288,97 @@ class TestCardNumbers:
         recognized card-network prefix, not digit count alone, or every long
         internal id becomes a false positive."""
         assert scrub_pii(text) == text
+
+
+class TestStructuredFieldRedaction:
+    """F06 (AI security assessment (PR #5138)) — the key-name denylist.
+
+    The pattern pass can only see string CONTENT. Two categories are invisible
+    to it however good the regex is: a coordinate stored as a float, and a bare
+    nine-digit SIN (for which a content regex is deliberately refused — see
+    TestGovernmentIds below and pii.py's "govid" comment). The field NAME is
+    the discriminator for both.
+    """
+
+    def test_strict_redacts_numeric_coordinates(self):
+        """The reported /mcp defect: 'STRICT serialization' scrubbed string
+        values recursively but walked past numeric lat/lng, so an external MCP
+        client received exact coordinates. The saved-place tool supplies
+        exactly these fields."""
+        saved_place = {"label": "Home", "address": "123 Main St", "lat": 52.1332, "lng": -106.67}
+        out = scrub_pii_deep(saved_place, policy=ScrubPolicy.STRICT)
+        assert out["lat"] == "[COORD]"
+        assert out["lng"] == "[COORD]"
+        assert out["label"] == "Home"
+
+    def test_strict_redacts_coordinates_nested_in_a_list(self):
+        out = scrub_pii_deep({"places": [{"latitude": 52.1, "longitude": -106.6}]}, policy=ScrubPolicy.STRICT)
+        assert out["places"][0] == {"latitude": "[COORD]", "longitude": "[COORD]"}
+
+    def test_ai_chat_keeps_numeric_trip_coordinates(self):
+        """The negative half. Trip-endpoint coordinates are the documented
+        AI_CHAT exception (ADR 012 / PIA S3) — the in-app assistant needs them
+        verbatim or the model re-geocodes and drifts. Redacting them here would
+        re-trip the 2026-09-04 regression from the other direction."""
+        place = {"label": "Home", "lat": 52.1332, "lng": -106.67}
+        assert scrub_pii_deep(place, policy=ScrubPolicy.AI_CHAT) == place
+
+    @pytest.mark.parametrize("key", ["sin", "social_insurance_number", "license_number"])
+    @pytest.mark.parametrize("policy", [ScrubPolicy.STRICT, ScrubPolicy.AI_CHAT])
+    def test_identity_document_fields_always_redacted(self, key, policy):
+        """Never policy-gated: unlike location, the assistant has no use for a
+        SIN or licence number under any policy, and CLAUDE.md forbids them."""
+        assert scrub_pii_deep({key: "046454286"}, policy=policy) == {key: "[REDACTED]"}
+
+    def test_denylist_does_not_exempt_any_key_from_the_pattern_pass(self):
+        """The denylist ADDS redaction; it must never act like the allowlist
+        scrub_pii_deep's docstring rejects. A 'name' key is exactly the case
+        that reasoning is about — it stays fully pattern-scrubbed."""
+        out = scrub_pii_deep({"name": "call +13065550001"}, policy=ScrubPolicy.STRICT)
+        assert out["name"] == "call [PHONE]"
+
+    @pytest.mark.parametrize(
+        "payload,expected",
+        [
+            ({"lat": [52.1332], "lng": [-106.67]}, {"lat": ["[COORD]"], "lng": ["[COORD]"]}),
+            ({"pickup": {"coords": [52.1332, -106.67]}}, {"pickup": {"coords": ["[COORD]", "[COORD]"]}}),
+            # GeoJSON's own [lng, lat] ordering, with no per-axis key at all.
+            ({"location": [-106.67, 52.1332]}, {"location": ["[COORD]", "[COORD]"]}),
+            ({"lat": {"value": 52.1}}, {"lat": {"value": "[COORD]"}}),
+        ],
+    )
+    def test_coordinates_inside_containers_are_redacted(self, payload, expected):
+        """Review follow-up. The first version replaced only SCALAR values and
+        recursed into containers on the reasoning that "its leaves get the same
+        treatment one level down anyway" — which is FALSE for the floats the
+        denylist exists to catch: the string pattern pass cannot see a number.
+        So `{"lat": [52.13]}` and GeoJSON `{"location": [lng, lat]}` still
+        shipped exact coordinates to /mcp, one container deep."""
+        assert scrub_pii_deep(payload, policy=ScrubPolicy.STRICT) == expected
+
+    def test_container_structure_is_preserved_not_collapsed(self):
+        """Only the numeric leaves change — a caller may depend on the shape,
+        and strings inside still get the ordinary pattern scrub."""
+        out = scrub_pii_deep({"coords": {"lat": 52.1, "label": "call 306-555-1234"}}, policy=ScrubPolicy.STRICT)
+        assert out == {"coords": {"lat": "[COORD]", "label": "call [PHONE]"}}
+
+    def test_booleans_are_not_mistaken_for_coordinates(self):
+        """bool is an int subclass; redacting it would corrupt a flag."""
+        out = scrub_pii_deep({"location": {"active": True}}, policy=ScrubPolicy.STRICT)
+        assert out == {"location": {"active": True}}
+
+    def test_ai_chat_keeps_container_coordinates_too(self):
+        """The ADR 012 trip-endpoint exception applies at every depth, or the
+        in-app assistant loses pins it needs verbatim."""
+        payload = {"location": [-106.67, 52.1332]}
+        assert scrub_pii_deep(payload, policy=ScrubPolicy.AI_CHAT) == payload
+
+    def test_unrelated_numeric_fields_are_untouched(self):
+        payload = {"fare": 24.50, "latency_ms": 120, "distance_km": 12.12}
+        assert scrub_pii_deep(payload, policy=ScrubPolicy.STRICT) == payload
+
+    def test_non_string_keys_do_not_break_the_walk(self):
+        assert scrub_pii_deep({1: "a@b.ca"}, policy=ScrubPolicy.STRICT) == {1: "[EMAIL]"}
 
 
 class TestGovernmentIds:
@@ -294,6 +394,13 @@ class TestGovernmentIds:
         matching on digit count alone would repeat the timestamp-collision
         regression. Only the separated 3-3-3 form is covered."""
         assert scrub_pii("order number 123456789") == "order number 123456789"
+
+    def test_bare_sin_is_covered_by_field_name_instead(self):
+        """F06 flagged bare nine-digit SIN-shaped values surviving scrub_pii.
+        The fix is NOT a content regex — that is the collision the test above
+        exists to prevent. A value under a SIN-named field is redacted by
+        TestStructuredFieldRedaction instead, which has no such ambiguity."""
+        assert scrub_pii_deep({"sin": "123456789"}) == {"sin": "[REDACTED]"}
 
     def test_extra_leading_digit_is_not_mistaken_for_a_sin(self):
         # A 3-3-3 shape immediately preceded by another digit (no separator)

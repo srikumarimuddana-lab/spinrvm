@@ -12,10 +12,41 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import api from '@shared/api/client';
+import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import type { AiAction, AiChatMessage, AiSseEvent } from '@shared/types/ai';
 import { streamChat } from '../utils/aiChat';
 
-const CONVERSATION_KEY = 'spinr_ai_conversation_id';
+/**
+ * Conversation-pointer key, namespaced per authenticated user (F03).
+ *
+ * It used to be one unscoped key, `spinr_ai_conversation_id`. On an
+ * account switch the new account's screen read the previous account's
+ * pointer and issued GET /ai/conversations/{that id}/messages. The backend
+ * correctly refuses a foreign conversation, but the rejection is
+ * asynchronous — the screen renders the existing store first — so account B
+ * could see account A's messages while that request was in flight.
+ *
+ * Namespacing removes the cross-account read entirely rather than relying on
+ * the server's rejection arriving before the first paint. The legacy
+ * unscoped key is deleted on the first clear so it cannot be resurrected.
+ */
+const LEGACY_CONVERSATION_KEY = 'spinr_ai_conversation_id';
+const conversationKeyFor = (userId: string | null | undefined) =>
+  userId ? `spinr_ai_conversation_id:${userId}` : LEGACY_CONVERSATION_KEY;
+
+const currentUserId = (): string | null => useAuthStore.getState().user?.id ?? null;
+
+/**
+ * Session generation. Incremented on every logout/account switch; every
+ * async callback captures the value current when it started and drops its
+ * result if the generation has moved on.
+ *
+ * An AbortController alone is not enough: `streamChat`'s already-queued
+ * `onEvent` callbacks and the `finally` block can still run after abort, and
+ * they call `set(...)` — which would repopulate a store that logout just
+ * cleared, with the previous account's tokens.
+ */
+let sessionGeneration = 0;
 
 /** Friendly status line per tool while it runs. */
 const TOOL_STATUS: Record<string, string> = {
@@ -119,6 +150,9 @@ interface AiChatState {
   ) => Promise<void>;
   stopStreaming: () => void;
   startNewConversation: () => Promise<void>;
+  /** Wipe every per-session field and disarm in-flight callbacks. Called
+   * from the auth store's logout callback; see F03. */
+  clearForSession: () => void;
 }
 
 export const useAiChatStore = create<AiChatState>((set, get) => ({
@@ -145,8 +179,13 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
   },
 
   loadHistory: async () => {
+    const generation = sessionGeneration;
+    // Captured once: if the session ends mid-request, currentUserId() becomes
+    // null and the catch branch below would otherwise clear the LEGACY key
+    // instead of this user's.
+    const storageKey = conversationKeyFor(currentUserId());
     try {
-      const stored = await AsyncStorage.getItem(CONVERSATION_KEY);
+      const stored = await AsyncStorage.getItem(storageKey);
       if (!stored) return;
       const res = await api.get<{
         messages?: { id: string; role: 'user' | 'assistant'; content: string; created_at: string }[];
@@ -160,10 +199,15 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
           createdAt: Date.parse(m.created_at) || Date.now(),
         }),
       );
+      // Drop the result if the session ended while this request was in
+      // flight — otherwise the previous account's history lands in the new
+      // account's store (F03).
+      if (generation !== sessionGeneration) return;
       set({ conversationId: stored, messages });
     } catch {
       // 404 = purged/foreign conversation — start fresh rather than error.
-      await AsyncStorage.removeItem(CONVERSATION_KEY).catch(() => undefined);
+      await AsyncStorage.removeItem(storageKey).catch(() => undefined);
+      if (generation !== sessionGeneration) return;
       set({ conversationId: null, messages: [] });
     }
   },
@@ -181,6 +225,10 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
     };
     const assistantId = newId();
     const abortController = new AbortController();
+    // F03: every callback below is gated on this. streamChat's queued
+    // onEvent calls and the finally block can outlive an abort, and they
+    // write to the store — which would repopulate state logout just cleared.
+    const generation = sessionGeneration;
     set((state) => ({
       messages: [
         ...state.messages,
@@ -200,10 +248,14 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
       }));
 
     const onEvent = (event: AiSseEvent) => {
+      if (generation !== sessionGeneration) return;
       switch (event.event) {
         case 'meta':
           set({ conversationId: event.data.conversation_id });
-          AsyncStorage.setItem(CONVERSATION_KEY, event.data.conversation_id).catch(() => undefined);
+          AsyncStorage.setItem(
+            conversationKeyFor(currentUserId()),
+            event.data.conversation_id,
+          ).catch(() => undefined);
           break;
         case 'token':
           appendToAssistant(event.data.text);
@@ -265,23 +317,32 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
       // rendered to the user directly — safe to read raw.
       // eslint-disable-next-line no-restricted-syntax
       const code = error instanceof Error ? error.message : 'default';
-      appendToAssistant(ERROR_MESSAGES[code] ?? ERROR_MESSAGES.default);
+      if (generation === sessionGeneration) {
+        appendToAssistant(ERROR_MESSAGES[code] ?? ERROR_MESSAGES.default);
+      }
     } finally {
-      // Drop the assistant bubble if nothing ever arrived for it.
-      set((state) => ({
-        isStreaming: false,
-        toolStatus: null,
-        abortController: null,
-        messages: state.messages.filter((m) => !(m.id === assistantId && m.kind === 'text' && !m.content)),
-      }));
-      // Flush a pin confirmed while this turn was streaming — it queued
-      // instead of being dropped by the isStreaming guard. Skip aborted
-      // turns: stopStreaming flushes explicitly, and startNewConversation is
-      // discarding this conversation (its clear may not have landed yet).
-      const queued = get().pendingMapPin;
-      if (queued && !abortController.signal.aborted) {
-        set({ pendingMapPin: null });
-        void get().submitMapPin(queued.role, queued.pin);
+      // Guarded rather than an early `return`: a control-flow statement in a
+      // finally block would discard any in-flight exception (and trips
+      // eslint's no-unsafe-finally). A logout during the turn already cleared
+      // the store, and re-running this cleanup would resurrect
+      // isStreaming/messages for the next user.
+      if (generation === sessionGeneration) {
+        // Drop the assistant bubble if nothing ever arrived for it.
+        set((state) => ({
+          isStreaming: false,
+          toolStatus: null,
+          abortController: null,
+          messages: state.messages.filter((m) => !(m.id === assistantId && m.kind === 'text' && !m.content)),
+        }));
+        // Flush a pin confirmed while this turn was streaming — it queued
+        // instead of being dropped by the isStreaming guard. Skip aborted
+        // turns: stopStreaming flushes explicitly, and startNewConversation is
+        // discarding this conversation (its clear may not have landed yet).
+        const queued = get().pendingMapPin;
+        if (queued && !abortController.signal.aborted) {
+          set({ pendingMapPin: null });
+          void get().submitMapPin(queued.role, queued.pin);
+        }
       }
     }
   },
@@ -315,7 +376,7 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
 
   startNewConversation: async () => {
     get().abortController?.abort();
-    await AsyncStorage.removeItem(CONVERSATION_KEY).catch(() => undefined);
+    await AsyncStorage.removeItem(conversationKeyFor(currentUserId())).catch(() => undefined);
     set({
       messages: [],
       conversationId: null,
@@ -327,4 +388,44 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
       pendingMapPin: null,
     });
   },
+
+  clearForSession: () => {
+    // F03. Deliberately NOT stopStreaming(): that flushes a queued map pin
+    // into a fresh submitMapPin, which on logout would fire an authenticated
+    // request after sign-out — and, if an account switch is in progress,
+    // send the previous rider's confirmed coordinates as the NEW account's
+    // message. The pin is dropped here instead.
+    //
+    // Bumping the generation first is what makes this safe: every in-flight
+    // onEvent/finally callback from the outgoing session is disarmed before
+    // the state is cleared, so none of them can write back into the store
+    // afterwards. abort() alone does not guarantee that — callbacks already
+    // queued on the microtask queue still run.
+    sessionGeneration += 1;
+    get().abortController?.abort();
+    set({
+      messages: [],
+      conversationId: null,
+      isStreaming: false,
+      toolStatus: null,
+      abortController: null,
+      pendingMapPin: null,
+      // enabled/mode/disclaimer are global feature config, not per-session
+      // data, and are refreshed by loadConfig on the next launch. Clearing
+      // them here would flash the "coming soon" placeholder at the next
+      // rider before their config call returns.
+    });
+  },
 }));
+
+// Wipe AI chat state whenever a session ends, so the next account on this
+// device never renders the previous rider's conversation. The AI store was
+// the one per-session store that never registered here (F03) — every other
+// one (rideStore, driverStore) already did.
+registerLogoutCallback(() => {
+  useAiChatStore.getState().clearForSession();
+  // The pointer is per-user now, but a pre-F03 install still has the old
+  // unscoped key on disk holding the previous account's conversation id.
+  // Delete it on the first sign-out after upgrade so it can never be read.
+  void AsyncStorage.removeItem(LEGACY_CONVERSATION_KEY).catch(() => undefined);
+});

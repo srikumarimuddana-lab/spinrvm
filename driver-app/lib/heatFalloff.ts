@@ -19,28 +19,61 @@
  */
 
 /** Ring boundaries as a fraction of the blob's outer radius, outermost first. */
-export const HEAT_RING_STOPS = [1, 0.75, 0.5, 0.25] as const;
+export const HEAT_RING_STOPS = [1, 0.84, 0.68, 0.52, 0.36] as const;
 
 /**
- * Notional Gaussian peak at r=0. The innermost ring is drawn at 0.25R rather
- * than 0, so the alpha actually painted at the centre is lower than this —
- * use `paintedPeakAlpha()` when you need the real number.
+ * Notional Gaussian peak at r=0, for ONE cell on its own.
+ *
+ * Deliberately low. In the reference the hot core is not one saturated cell —
+ * it is many overlapping contributions summing, while the base map stays
+ * readable throughout. So a single cell contributes little and density does
+ * the rest; see HEAT_NATIVE_LAYER_ALPHA for what a busy area actually reaches.
+ *
+ * The innermost ring is drawn at 0.36R rather than 0, so the alpha actually
+ * painted at a lone cell's centre is lower still — `paintedPeakAlpha()`.
  */
-export const HEAT_PEAK_ALPHA = 0.65;
+export const HEAT_PEAK_ALPHA = 0.4;
 
 /** Gaussian sigma, as a fraction of the outer radius. */
-const SIGMA = 0.45;
+const SIGMA = 0.42;
 
 /** Metres per degree of latitude, for sizing a blob off the server's grid. */
 export const METERS_PER_LAT_DEG = 111_320;
 
 /**
- * Blob outer radius as a fraction of one grid cell's latitude span. Cell
- * centres sit one full span apart, so 0.7 overlaps neighbours by ~40% of the
- * spacing — enough to close the gaps between cells without smearing distinct
- * zones into one mass. (The old value was 0.62, which left visible seams.)
+ * Blob outer radius as a fraction of one grid cell's latitude span.
+ *
+ * This is the single lever that decides whether the layer reads as separate
+ * blobs or as a continuous field. Cell centres sit one span apart, so a radius
+ * below 1 leaves each cell essentially standing alone. At 1.35 every cell
+ * reaches its four edge neighbours (and stops short of the diagonals at 1.41),
+ * so neighbouring contributions integrate into a wash the way a real density
+ * kernel does, instead of tiling visible circles.
+ *
+ * Trade-off, stated plainly: colour is still chosen per cell and composited,
+ * whereas a true heatmap sums density FIRST and then maps one colour. Widening
+ * the kernel improves the shape and makes that colour error more visible where
+ * a hot cell abuts a cold one. It is tolerable only because the whole ramp
+ * lives in one hue family. Fixing it properly needs the server-rendered raster
+ * tiles (PR #5142 B4-B6), not a bigger radius.
  */
-export const HEAT_BLOB_RADIUS_FACTOR = 0.7;
+export const HEAT_BLOB_RADIUS_FACTOR = 1.35;
+
+/**
+ * Layer opacity for Android's native <Heatmap>.
+ *
+ * Android sums density internally and hands back one composited layer, so it
+ * must NOT use the single-cell `paintedPeakAlpha()` — that would render Android
+ * far fainter than iOS, where overlapping neighbours build the core.
+ *
+ * Derived from the iOS stack rather than guessed: a cell surrounded by four
+ * equally busy edge neighbours composites to
+ *   1 - (1 - 0.277)(1 - 0.054)^4 = 0.421
+ * using the discrete ring cumulatives (not the continuous Gaussian — the rings
+ * are what actually get drawn). Still only a first-order match; the two need a
+ * side-by-side look on real devices before anyone calls them equal.
+ */
+export const HEAT_NATIVE_LAYER_ALPHA = 0.42;
 
 /**
  * Ships dark. The soft path changes how an already-shipped driver-facing map

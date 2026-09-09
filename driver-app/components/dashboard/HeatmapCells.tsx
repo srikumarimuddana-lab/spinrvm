@@ -3,6 +3,17 @@ import { Platform } from 'react-native';
 import { Circle, Heatmap } from 'react-native-maps';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
+import {
+  HEAT_BLOB_RADIUS_FACTOR,
+  HEAT_NATIVE_LAYER_ALPHA,
+  HEAT_RING_STOPS,
+  METERS_PER_LAT_DEG,
+  cellCenter,
+  hexToRgba,
+  nativeGradient,
+  SOFT_HEAT_RENDER_ENABLED,
+  ringAlphas,
+} from '../../lib/heatFalloff';
 
 // Fallbacks only. The server sends the grid size it actually bucketed with
 // (cell_lat_deg / cell_lng_deg) because that size is tunable per service area;
@@ -15,10 +26,12 @@ const MAX_POLYGONS = 200;
 // than MAX_POLYGONS so iOS/non-Google-Maps builds don't push 400+ overlapping
 // translucent circles through the native bridge every poll.
 const MAX_BLOBS = 60;
-// Metres per degree of latitude — used to size blob radii off the server's
-// own grid cell size rather than a hardcoded metre value, so denser grids
-// (smaller service areas) automatically get smaller, tighter blobs.
-const METERS_PER_LAT_DEG = 111_320;
+// The soft renderer draws HEAT_RING_STOPS.length shapes per cell instead of 2,
+// so the cell cap comes down to keep the native view count in the same order:
+// 60x2 = 120 shapes today, 40x5 = 200 with the soft path. The wider kernel also
+// means more overdraw per shape. Nothing in this repo can profile Apple Maps or
+// an Auto head unit, so this is a conservative budget, not a measured one.
+const MAX_SOFT_BLOBS = 40;
 
 interface HeatmapCellsProps {
   cells: HeatmapCell[];
@@ -26,12 +39,6 @@ interface HeatmapCellsProps {
   /** Grid size from the server; null falls back to the constants above. */
   cellLatDeg?: number | null;
   cellLngDeg?: number | null;
-}
-
-function cellCenter(lat: number, lng: number, cellLat: number, cellLng: number) {
-  const baseLat = Math.floor(lat / cellLat) * cellLat;
-  const baseLng = Math.floor(lng / cellLng) * cellLng;
-  return { latitude: baseLat + cellLat / 2, longitude: baseLng + cellLng / 2 };
 }
 
 function weightToRampIndex(weight: number, maxWeight: number): number {
@@ -42,13 +49,6 @@ function weightToRampIndex(weight: number, maxWeight: number): number {
   if (ratio < 0.6) return 2;
   if (ratio < 0.8) return 3;
   return 4;
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 // react-native-maps' native <Heatmap> (true gradient density layer) is only
@@ -108,14 +108,24 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
     });
     // Even spacing across the 5-step brand ramp (quiet -> busy), same colors
     // the collapsed legend swatch uses, so the gradient and the legend never
-    // disagree about what a given shade means.
-    const gradientColors = colors.heatmapRamp;
-    const startPoints = gradientColors.map((_, i) => i / (gradientColors.length - 1));
+    // disagree about what a given shade means. The soft path additionally
+    // anchors the table at alpha 0 so low density fades out instead of ending
+    // at a disc edge — see nativeGradient().
+    const { colors: gradientColors, startPoints } = SOFT_HEAT_RENDER_ENABLED
+      ? nativeGradient(colors.heatmapRamp)
+      : {
+          colors: colors.heatmapRamp as unknown as string[],
+          startPoints: colors.heatmapRamp.map((_, i) => i / (colors.heatmapRamp.length - 1)),
+        };
     return (
       <Heatmap
         points={points}
         radius={45}
-        opacity={0.75}
+        // Android sums density internally, so this takes the COMPOSITED alpha
+        // a busy area reaches on the iOS stack, not the per-cell peak — the
+        // latter would render Android markedly fainter than iOS. Still only a
+        // first-order match: the native layer maps colour its own way.
+        opacity={SOFT_HEAT_RENDER_ENABLED ? HEAT_NATIVE_LAYER_ALPHA : 0.75}
         gradient={{
           colors: gradientColors,
           startPoints,
@@ -131,9 +141,10 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
   // Radii are derived from the server's own grid size so denser grids (small
   // service areas) get proportionally smaller blobs rather than overlapping
   // into one blob.
-  const outerRadiusM = cellLat * METERS_PER_LAT_DEG * 0.62;
+  const outerRadiusM =
+    cellLat * METERS_PER_LAT_DEG * (SOFT_HEAT_RENDER_ENABLED ? HEAT_BLOB_RADIUS_FACTOR : 0.62);
   const innerRadiusM = outerRadiusM * 0.5;
-  const blobCells = visibleCells.slice(0, MAX_BLOBS);
+  const blobCells = visibleCells.slice(0, SOFT_HEAT_RENDER_ENABLED ? MAX_SOFT_BLOBS : MAX_BLOBS);
 
   return (
     <>
@@ -141,6 +152,31 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
         const idx = weightToRampIndex(cell.weight, maxWeight);
         const color = colors.heatmapRamp[idx];
         const center = cellCenter(cell.lat, cell.lng, cellLat, cellLng);
+
+        if (SOFT_HEAT_RENDER_ENABLED) {
+          // Nested rings whose STACKED opacity follows a Gaussian, so the blob
+          // fades instead of stepping. strokeColor is set explicitly here: the
+          // two-circle path below sets only strokeWidth={0} and leaves the
+          // colour undefined, which is the leading candidate for the black
+          // outlines reported on iOS (HM26-05 — candidate containment, not a
+          // confirmed cause; it still needs reproducing on a native build).
+          const alphas = ringAlphas(maxWeight > 0 ? cell.weight / maxWeight : 0);
+          return (
+            <React.Fragment key={`hm-${cell.lat}-${cell.lng}`}>
+              {HEAT_RING_STOPS.map((stop, i) => (
+                <Circle
+                  key={stop}
+                  center={center}
+                  radius={outerRadiusM * stop}
+                  fillColor={hexToRgba(color, alphas[i])}
+                  strokeColor="transparent"
+                  strokeWidth={0}
+                />
+              ))}
+            </React.Fragment>
+          );
+        }
+
         return (
           // Keyed on the cell's own coordinates, not array index — the list
           // is re-sorted by weight on every poll, so an index-prefixed key

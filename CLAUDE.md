@@ -93,6 +93,7 @@ Do not rely on "commit, observe, roll back if broken" for anything touching a li
   4. Commit + push fixes to the PR's feature branch; the PR updates automatically.
 - Treat a verified Codex finding the same as any task: write/extend a regression test for it, run the affected tests, and keep the commit scoped to one logical change.
 - Only escalate via `AskUserQuestion` when a fix is architecturally significant or genuinely ambiguous; otherwise just do it.
+- **Same discipline applies to any other automated-fix source** — notably Sentry's Seer, piloted 2026-09-08 (`.claude/context/connector-scoping.md`'s Sentry row, `docs/audit/2026-09-08-agentic-tooling-atlas.md`): a Seer-suggested fix gets the same verify-then-fix-or-explain treatment as a Codex comment, and is never applied or merged without going through the normal Change Impact Log gate. Automation drafting a fix does not waive review.
 
 ## Context Imports
 
@@ -372,6 +373,7 @@ Test tiers:
   pytest tests/rls -c /dev/null --confcutdir=tests/rls
   ```
   `-c /dev/null --confcutdir=tests/rls` stops pytest from also loading `backend/tests/conftest.py` (and `pytest.ini`'s coverage gate), which these tests don't use. Currently covers 5 of the ~127 tracked `CREATE POLICY` statements (`users`, `drivers`, `rides`, `financial_events`, `driver_insurance_periods`) — a start, not full coverage. See `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`.
+- **Property-based fuzz (pilot, `test_schemathesis_fuzz.py`)**: Schemathesis generates adversarial inputs against the app's own OpenAPI schema, GET-only for now (532 operations), checking only for 5xx responses. On-demand, not wired into CI's main step — see `docs/audit/2026-09-08-agentic-tooling-atlas.md` for scope, findings, and why. Run via `pytest -m slow tests/test_schemathesis_fuzz.py`.
 
 Coverage minimums (per domain):
 - `routes/payments.py`, `services/fare_service.py`, `utils/crypto.py`: ≥ 90%

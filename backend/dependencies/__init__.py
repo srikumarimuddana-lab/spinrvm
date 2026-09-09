@@ -21,14 +21,18 @@ try:
     from . import db_supabase
     from .core.config import settings
     from .utils.error_handling import DatabaseError, ServiceUnavailableException
+    from .utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from .utils.pii import redact_error_detail
     from .utils.redis_client import redis_get
+    from .utils.session_revocation import is_session_revoked
 except ImportError:
     import db_supabase
     from core.config import settings
     from utils.error_handling import DatabaseError, ServiceUnavailableException
+    from utils.firebase_identity import FirebaseIdentityRejected, enforce_customer_eligibility
     from utils.pii import redact_error_detail
     from utils.redis_client import redis_get
+    from utils.session_revocation import is_session_revoked
 
 db = db_supabase  # legacy alias
 
@@ -241,6 +245,15 @@ def _firebase_session_revoked(payload: dict, invalid_before) -> bool:
         return True
 
 
+# Every role the verified staff token pipeline can return. Module-level so
+# consumers that must EXCLUDE staff principals (ai/mcp_server.py, F07) share one
+# list with the pipeline that admits them — a private copy in each is how /mcp
+# came to reject only "admin" while five other verified staff roles passed.
+# Deny-side consumers should still prefer the `_admin_verified` marker, which is
+# the authoritative signal; this set is the fail-closed backstop.
+ADMIN_STAFF_ROLES = frozenset({"admin", "super_admin", "operations", "support", "finance", "custom"})
+
+
 async def _verify_admin_payload(payload: dict) -> "dict | None":
     """Full admin verification: aud, JTI revocation, staff active, token_version, idle timeout.
 
@@ -249,7 +262,7 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
     Shared by the HTTP path (get_current_user) and the WebSocket auth path so the two
     can never diverge.
     """
-    _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+    _admin_roles = ADMIN_STAFF_ROLES
     _token_aud = payload.get("aud")
     # Admin token: aud MUST equal JWT_AUD_ADMIN. The former legacy branch that
     # accepted a no-aud token with role+email claims let a crafted admin-001
@@ -396,6 +409,18 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 raise HTTPException(status_code=503, detail="Rider Firebase audience not configured")
             if payload.get("aud") != rider_app_id:
                 raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
+
+            # F01: same customer-eligibility policy as the /auth/firebase
+            # exchange. Applied here too because this path authenticates a
+            # RAW Firebase ID token on every request — it does not go through
+            # that exchange, so a gate that lived only there would leave the
+            # rider app's primary auth path ungated for any UID that already
+            # has a row. Runs before the user lookup so an ineligible token
+            # costs no DB read.
+            try:
+                enforce_customer_eligibility(payload, surface="get_current_user")
+            except FirebaseIdentityRejected as e:
+                raise HTTPException(status_code=401, detail="ERR_IDENTITY_INELIGIBLE") from e
 
             uid = payload.get("uid") or payload.get("user_id")
             # Try to find user by Firebase UID
@@ -592,6 +617,42 @@ async def get_token_session_id(
         return None
     session_id = payload.get("session_id")
     return str(session_id) if session_id else None
+
+
+async def get_current_user_active_session(
+    current_user: dict = Depends(get_current_user),
+    token_session_id: Optional[str] = Depends(get_token_session_id),
+) -> dict:
+    """``get_current_user`` plus a session-revocation tombstone check.
+
+    F02 (AI security assessment (PR #5138)): ordinary ``/auth/logout``
+    deliberately leaves the access token valid until its ``exp`` (15 min by
+    default) and only writes a tombstone. ``get_current_user`` does not consult
+    that tombstone, so a signed-out session could keep driving AI turns —
+    sending the customer's data to a third-party provider and spending their
+    quota — for the rest of the token's life.
+
+    Why this is a separate dependency rather than a check inside
+    ``get_current_user``: that function runs on EVERY authenticated request,
+    and ``utils/session_revocation`` documents the deliberate decision to keep
+    a Redis round-trip out of it — the auth-refresh (<200 ms) and dispatch
+    (<2 s) P95 SLAs do not have room for one. Callers opt in at the specific
+    ingest points where a zombie writer actually causes harm. An AI turn is
+    such a point: it is a low-QPS, human-paced, high-consequence call, so one
+    Redis GET is affordable here in a way it is not on the location-update or
+    dispatch path.
+
+    Inherits ``is_session_revoked``'s fail-open posture on every ambiguous
+    input — no ``session_id`` claim (Firebase-authenticated sessions carry
+    none), no tombstone, or Redis unreachable all resolve to "allow". That is
+    deliberate and documented in that module: this is defence in depth behind
+    the client-side teardown, and ``logout-all`` /
+    ``sessions_invalid_before`` remains the hard revocation path for Firebase
+    sessions.
+    """
+    if await is_session_revoked(token_session_id):
+        raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+    return current_user
 
 
 # Safety-critical grace window: an SOS tap mid-trip must not bounce off a

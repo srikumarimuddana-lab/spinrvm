@@ -57,14 +57,27 @@ class _Key:
         self.global_key = global_key
 
 
-# Bounds are enforced identically here, in the admin API's Pydantic model, and
-# (for the global keys) in migration 311's CHECK constraint. Three layers is
-# intentional — each covers a path the others do not.
+# Bounds are enforced here, in the admin API's Pydantic models, and (for the
+# global keys) in migration 397's CHECK constraint. Three layers is intentional
+# — each covers a path the others do not.
+#
+# They must agree. They did not: migration 397 raised the GLOBAL floor to
+# `heatmap_k_floor BETWEEN 3 AND 50` and backfilled existing rows, but this spec
+# still allowed 1. Since a per-area override is resolved BEFORE the global value
+# and clamped only to this spec, `service_areas.heatmap_config = {"k_floor": 1}`
+# resolved to 1 and beat a global of 3 — and that column's only constraint is
+# `jsonb_typeof = 'object'` (migration 312), so the database never saw it.
+# Verified 2026-09-09: no production area carried a sub-3 override, so nothing
+# was actually emitted below the floor. The guard simply did not exist.
 HEATMAP_SPEC: Dict[str, _Key] = {
     k.name: k
     for k in [
         # ── Privacy and grid ────────────────────────────────────────────
-        _Key("k_floor", "int", 1, 50, 3, "heatmap_k_floor"),
+        # Lower bound is 3, not 1: this is the PIPEDA k-anonymity floor, and a
+        # cell built from fewer than 3 distinct riders can expose one rider's
+        # pickup area to every driver online. 3 is the documented minimum, so
+        # it is the minimum the spec accepts — matching migration 397's CHECK.
+        _Key("k_floor", "int", 3, 50, 3, "heatmap_k_floor"),
         _Key("cell_lat_deg", "float", 0.0005, 0.05, 0.004, "heatmap_cell_lat_deg"),
         _Key("cell_lng_deg", "float", 0.0005, 0.05, 0.006, "heatmap_cell_lng_deg"),
         _Key("decay_half_life_days", "float", 0.5, 30.0, 3.0, "heatmap_decay_half_life_days"),

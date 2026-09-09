@@ -15,6 +15,32 @@ on:
   # Vercel deploys now only happen when this workflow is run by hand.
   workflow_dispatch:
 
+# C96 mitigation: this was the one heavy workflow in the repo with no
+# concurrency group at all -- security-gates.yml, pr-checks.yml, and
+# ci-guardrails.yml all already cancel superseded runs; this file (16 jobs:
+# 4 test suites, 3 Playwright E2E suites, security-scan, docker-image-scan,
+# mobile-build, deploy-admin, smoke test, detect-changes,
+# python-dependency-audit) did not. Every push to a PR queued a brand new
+# full run stacked on top of any still in flight for the same PR, instead
+# of superseding it -- on a PR pushed to repeatedly in a short window (this
+# repo saw several today), that multiplies Actions-minute consumption for
+# no benefit, since only the latest commit's result matters. Combined with
+# detect-changes' own pull-requests:read gap (C93, fixed today) having
+# fail-open'd every job unfiltered on every PR for an unknown prior period,
+# this is a plausible contributor to whatever tripped the C96 outage
+# (GitHub Actions rejecting jobs at queue time, consistent with a spend
+# limit or included-minutes cap) -- not root-cause-confirmed (that needs
+# GitHub billing/usage access this session doesn't have), but a real,
+# verifiable inefficiency worth closing regardless of whether it was the
+# actual trigger. `cancel-in-progress` is gated to `pull_request` only --
+# never cancel a `push`-triggered run to main/staging, since that path
+# includes deploy-admin and mobile-build; cancelling a deploy mid-flight
+# because a second commit landed seconds later is a worse failure mode
+# than a few extra minutes of redundant CI.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: '3.12'
   NODE_VERSION: '22'
@@ -145,10 +171,21 @@ jobs:
           # real-Postgres step immediately below provides. Keep those steps in
           # sync with these --ignore flags -- an --ignore added here without a
           # matching step silently drops that suite from CI.
+          #
+          # tests/test_schemathesis_fuzz.py is excluded for a different reason:
+          # not an invocation mismatch, but runtime cost. It's a pilot
+          # (docs/audit/2026-09-08-agentic-tooling-atlas.md) that fuzzes all
+          # 532 of the app's GET operations -- @pytest.mark.slow alone doesn't
+          # keep it out, since this step never passes `-m "not slow"`. Run it
+          # on demand locally (`pytest -m slow tests/test_schemathesis_fuzz.py`)
+          # until its stability/runtime is proven; wiring it into CI as its own
+          # step (blocking or scheduled) is a separate follow-up decision, not
+          # something to default into via this ignore staying here forever.
           CI_PG_DSN="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
           export DATABASE_URL="$CI_PG_DSN"
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
-            --ignore=tests/direct_pool --ignore=tests/rls -v
+            --ignore=tests/direct_pool --ignore=tests/rls \
+            --ignore=tests/test_schemathesis_fuzz.py -v
 
       # C50 Phase 1 (T11, docs/audit/2026-09-02-pgbouncer-direct-pool-
       # migration-plan.md): real-Postgres tests for the (currently unused --
@@ -929,6 +966,12 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: codeql-action/upload-sarif's wait-for-processing: true polls
+      # GET /repos/.../actions/runs/{run_id} to confirm the SARIF finished
+      # processing -- a different scope than the security-events:write
+      # that authorizes the upload itself. Without this the poll 403s and
+      # fails the whole job even though the SARIF upload already succeeded.
+      actions: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -973,6 +1016,20 @@ jobs:
         # second, misleading "file not found" failure here instead of a clean
         # single point of failure.
         if: always() && hashFiles('trivy-results.sarif') != ''
+        # C94: this upload has been failing every run (main included, not just
+        # PR branches) with "Code scanning is not enabled for this repository"
+        # -- a repo-settings gap (Settings -> Code security and analysis ->
+        # Code scanning), not a workflow defect, and not fixable from a
+        # session with no repo-admin access. continue-on-error here restores
+        # the job's actual behavior before this started failing: the
+        # filesystem Trivy scan above has no exit-code set, so it was never
+        # the thing gating this job pass/fail in the first place -- this
+        # step is a best-effort publish to GitHub's Security tab, and its
+        # failure was blocking every PR's required check for a reason no PR
+        # diff can fix. See ACTION_ITEMS.md C94 for the more important
+        # finding this surfaced: with code scanning disabled, this scan's
+        # findings currently reach no enforcement path at all.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -991,6 +1048,9 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: same wait-for-processing gap as security-scan above -- see
+      # its comment for why this is a separate scope from security-events.
+      actions: read
       packages: write    # GHCR push (main only, see "Push image to GHCR" step)
       id-token: write    # cosign keyless OIDC signing (main only)
 
@@ -1089,6 +1149,12 @@ jobs:
         # cascade into a second, misleading "file not found" failure here.
         if: always() && hashFiles('trivy-image.sarif') != ''
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+        # C94: same repo-wide "Code scanning is not enabled" failure as the
+        # other 3 upload-sarif call sites. This job's real enforcement is the
+        # separate "Scan image with Trivy" step above (`exit-code: '1'`,
+        # format: table) -- independent of this SARIF upload, so this
+        # mitigation doesn't weaken it.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-image.sarif'
 

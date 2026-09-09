@@ -1,0 +1,250 @@
+name: Submit to Play Store
+
+# ─── What this does ────────────────────────────────────────────────────────
+# Submits an ALREADY-BUILT EAS Android build to Google Play. It does NOT
+# build — that is what eas-native-build.yml is for. Use this when a finished
+# AAB already exists and only the store upload is left, which is exactly the
+# case after a build ran but its submission failed or was skipped.
+#
+# Why this workflow exists: submitting through the Expo MCP connector fails
+# with "contains a conflict between exclusive peers [googleServiceAccountKeyId,
+# googleServiceAccountKeyJson]" (reproduced 2026-09-09 across both apps, before
+# and after removing serviceAccountKeyPath from eas.json, so the duplicate key
+# is contributed by that submit path and not by this repo's config). The
+# eas-cli picks a single credential source and is unaffected.
+#
+# ─── Prerequisites ─────────────────────────────────────────────────────────
+#   • Repo secret EXPO_TOKEN.
+#   • Repo secret PLAY_SERVICE_ACCOUNT_JSON (base64-encoded Google Cloud
+#     service account key), decoded at runtime into
+#     <app>/play-service-account.json — the path both apps' `production`
+#     submit profiles point at. The EAS project holds NO stored service
+#     account key, so this file is the only credential source; without it
+#     eas-cli fails with "Google Service Account Keys cannot be set up in
+#     --non-interactive mode".
+#   • The app must already exist in Play Console under its package name.
+#     Google's Publishing API cannot create a new app entry.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Which app to submit"
+        required: true
+        default: "both"
+        type: choice
+        options: [rider-app, driver-app, both]
+      track:
+        description: "Play track"
+        required: true
+        default: "internal"
+        type: choice
+        options: [internal, alpha, beta, production]
+      rider_build_id:
+        description: "Rider EAS build ID (blank = latest finished Android build)"
+        required: false
+        type: string
+      driver_build_id:
+        description: "Driver EAS build ID (blank = latest finished Android build)"
+        required: false
+        type: string
+      rollout:
+        description: "Staged rollout fraction, production track only (e.g. 0.1 = 10%). Blank = full release."
+        required: false
+        type: string
+
+# Never let two submissions of the same app race each other onto the store.
+concurrency:
+  group: submit-play-store-${{ github.event.inputs.app }}
+  cancel-in-progress: false
+
+jobs:
+  # `matrix` is not available in `jobs.<id>.if`, so the app list is computed
+  # here and consumed via fromJSON — the same shape maestro-e2e.yml uses.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          APP: ${{ github.event.inputs.app }}
+        run: |
+          case "$APP" in
+            both)       echo 'matrix=["rider-app","driver-app"]' >> "$GITHUB_OUTPUT" ;;
+            rider-app)  echo 'matrix=["rider-app"]'              >> "$GITHUB_OUTPUT" ;;
+            driver-app) echo 'matrix=["driver-app"]'             >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Unrecognised app '$APP'."; exit 1 ;;
+          esac
+
+  submit:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      # One app failing must not cancel the other's submission — they are
+      # independent store uploads, not two halves of one release.
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Node 22, not 20 — see eas-build.yml's rider job for the root cause
+      # (@oclif/plugin-autocomplete's engines.node >=22, which yarn classic
+      # hard-fails on under Node 20).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+
+      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      # Required, not optional. eas submit resolves the EAS project ID by
+      # evaluating app.config.ts, which loads this app's local config plugins
+      # (e.g. plugins/withGradleWrapper.js). Those `require('@expo/config-plugins')`,
+      # which is not a declared dependency in either app — it resolves
+      # transitively through `expo`. Without node_modules the config eval fails
+      # with "Cannot find module '@expo/config-plugins'".
+      - run: yarn install --frozen-lockfile
+
+      # Required. Run 1 of this workflow failed here-ish with "Google Service
+      # Account Keys cannot be set up in --non-interactive mode" because the
+      # step did not exist: eas-cli found no credential for com.spinr.user /
+      # com.spinr.driver and wanted to create one interactively.
+      #
+      # The EAS project does NOT hold a stored Google Service Account key —
+      # this file is the only working credential source, proven by
+      # deploy-driver-play-testing.yml's 7 successful runs, which all decode
+      # this same secret. (An earlier reading of the Expo connector's
+      # "conflict between exclusive peers [googleServiceAccountKeyId,
+      # googleServiceAccountKeyJson]" error suggested a stored key existed;
+      # that was wrong — the connector contributes the duplicate itself.)
+      #
+      # Passed via env, never interpolated into the script body: a raw-JSON
+      # value (the obvious mistake for a secret named *_JSON) carries double
+      # quotes and would break shell quoting, letting $(...) in the key
+      # material execute on the runner.
+      - name: Decode Play service account key
+        env:
+          PLAY_KEY_B64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_KEY_B64" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON secret is empty or unset."
+            echo "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          printf '%s' "$PLAY_KEY_B64" | base64 -d > play-service-account.json
+
+          # An empty/garbage decode otherwise stays green here and fails deep
+          # inside EAS, where it is far harder to attribute.
+          if ! jq -e '.client_email and .private_key' play-service-account.json > /dev/null 2>&1; then
+            echo "::error::Decoded key is not valid service-account JSON (missing client_email/private_key)."
+            echo "The secret must hold the BASE64-encoded key file, not raw JSON."
+            exit 1
+          fi
+          echo "Service account key decoded and validated."
+
+      # Validate before touching anything: a malformed build ID otherwise
+      # fails deep inside eas-cli where it is harder to attribute, and these
+      # inputs are interpolated into a shell below.
+      - name: Validate inputs
+        env:
+          RIDER_ID: ${{ github.event.inputs.rider_build_id }}
+          DRIVER_ID: ${{ github.event.inputs.driver_build_id }}
+          ROLLOUT: ${{ github.event.inputs.rollout }}
+          TRACK: ${{ github.event.inputs.track }}
+        run: |
+          for id in "$RIDER_ID" "$DRIVER_ID"; do
+            if [ -n "$id" ] && ! printf '%s' "$id" | grep -Eq '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'; then
+              echo "::error::'$id' is not a valid EAS build ID (expected a UUID)."
+              exit 1
+            fi
+          done
+
+          if [ -n "$ROLLOUT" ]; then
+            if [ "$TRACK" != "production" ]; then
+              echo "::error::rollout only applies to the production track (got '$TRACK')."
+              exit 1
+            fi
+            if ! printf '%s' "$ROLLOUT" | grep -Eq '^(0(\.[0-9]+)?|1(\.0+)?)$'; then
+              echo "::error::rollout must be a number between 0 and 1 (e.g. 0.1 for 10%)."
+              exit 1
+            fi
+          fi
+
+      # eas-cli has no --track flag; the track lives in the submit profile.
+      # Patch the runner's working copy rather than committing a track change,
+      # so the repo keeps one canonical default and this stays a per-run choice.
+      - name: Point the submit profile at the requested track
+        env:
+          TRACK: ${{ github.event.inputs.track }}
+          ROLLOUT: ${{ github.event.inputs.rollout }}
+        run: |
+          jq --arg t "$TRACK" \
+            '.submit.production.android.track = $t' eas.json > eas.json.tmp
+          mv eas.json.tmp eas.json
+
+          # A staged rollout needs releaseStatus inProgress; `completed` means
+          # an immediate 100% release and silently ignores any rollout value.
+          if [ -n "$ROLLOUT" ]; then
+            jq --argjson r "$ROLLOUT" \
+              '.submit.production.android.releaseStatus = "inProgress"
+               | .submit.production.android.rollout = $r' eas.json > eas.json.tmp
+            mv eas.json.tmp eas.json
+          fi
+
+          echo "Submit config for ${{ matrix.app }}:"
+          jq '.submit.production.android' eas.json
+
+      - name: Submit to Play
+        env:
+          RIDER_ID: ${{ github.event.inputs.rider_build_id }}
+          DRIVER_ID: ${{ github.event.inputs.driver_build_id }}
+        # No --no-wait: waiting is what makes a rejected upload (wrong signing
+        # key, duplicate version code, unknown track) turn this check red
+        # instead of passing while the store quietly refuses the build.
+        timeout-minutes: 30
+        run: |
+          case "${{ matrix.app }}" in
+            rider-app)  BUILD_ID="$RIDER_ID" ;;
+            driver-app) BUILD_ID="$DRIVER_ID" ;;
+          esac
+
+          if [ -n "$BUILD_ID" ]; then
+            echo "Submitting build $BUILD_ID"
+            eas submit --platform android --profile production \
+              --id "$BUILD_ID" --non-interactive
+          else
+            echo "No build ID given — submitting the latest finished Android build."
+            eas submit --platform android --profile production \
+              --latest --non-interactive
+          fi
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f play-service-account.json
+
+      # Only runs when the submit above succeeded — a failed step halts the
+      # job, so this never claims a release that did not happen.
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "## ${{ matrix.app }} → Play Console"
+            echo ""
+            echo "- **Track:** ${{ github.event.inputs.track }}"
+            echo "- **Rollout:** ${{ github.event.inputs.rollout || 'full release' }}"
+            echo "- **Build:** ${{ github.event.inputs.rider_build_id || github.event.inputs.driver_build_id || 'latest' }}"
+            echo ""
+            echo "### Verify before promoting"
+            echo "Install from the track above and confirm the app gets past login"
+            echo "and loads data. App Check returns 401 on every \`/api/*\` route when"
+            echo "attestation fails, and the client degrades silently to no token —"
+            echo "so a broken Play Integrity link looks like an app that just hangs."
+          } >> $GITHUB_STEP_SUMMARY

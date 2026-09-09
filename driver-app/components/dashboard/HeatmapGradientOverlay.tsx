@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { useTheme } from '@shared/theme/ThemeContext';
-import { rampColorForRatio, rgbaString } from '../../utils/heatmapColor';
-import { cellCenter, useVisibleHeatmapCells, type HeatmapRegion, type LatLng } from '../../hooks/useVisibleHeatmapCells';
+import { cellCenter, hexToRgba, weightToRampIndex } from '../../lib/heatFalloff';
+import { useVisibleHeatmapCells, type HeatmapRegion, type LatLng } from '../../hooks/useVisibleHeatmapCells';
 import { projectToScreen, type Viewport } from '../../utils/heatmapProjection';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 
@@ -26,8 +26,10 @@ import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 // Cell radius (BLOB_RADIUS_PX) is a fixed screen-pixel value, matching how
 // react-native-maps' own native Android <Heatmap radius={45}> works (a
 // constant per-point radius; density comes from overlapping points, not
-// point size) — intensity is conveyed by color/opacity (rampColorForRatio),
-// not by varying circle size.
+// point size) — intensity is conveyed by color/opacity, not by varying
+// circle size. Color bucketing (weightToRampIndex) is shared with
+// HeatmapCells.tsx via lib/heatFalloff.ts so this renderer and the fallback
+// it replaces on iOS never disagree about what shade a given cell should be.
 const BLOB_RADIUS_PX = 45;
 // Image-space blur radius, in pixels — the Skia equivalent of the native
 // <Heatmap>'s own internal blur kernel. Tuned to merge adjacent cells'
@@ -111,8 +113,8 @@ export const HeatmapGradientOverlay: React.FC<HeatmapGradientOverlayProps> = Rea
       >
         <Group layer={blurLayer}>
           {visibleCells.map((cell) => {
-            const ratio = maxWeight > 0 ? cell.weight / maxWeight : 0;
-            const rgb = rampColorForRatio(ratio, colors.heatmapRamp);
+            const idx = weightToRampIndex(cell.weight, maxWeight);
+            const color = colors.heatmapRamp[idx];
             const center = cellCenter(cell.lat, cell.lng, cellLat, cellLng);
             const point = projectToScreen(center.latitude, center.longitude, region, viewport);
             // Fully opaque per-circle fill — the SOFTNESS comes entirely
@@ -126,7 +128,7 @@ export const HeatmapGradientOverlay: React.FC<HeatmapGradientOverlayProps> = Rea
                 cx={point.x}
                 cy={point.y}
                 r={BLOB_RADIUS_PX}
-                color={rgbaString(rgb, 1)}
+                color={hexToRgba(color, 1)}
               />
             );
           })}

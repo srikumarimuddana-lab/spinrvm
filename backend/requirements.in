@@ -142,6 +142,10 @@ pytest-mock>=3.14.0
 # pytest-timeout is used by CI's `pytest --timeout=30` flag (ci.yml backend-test job).
 # Without it in the lockfile, CI fails with "unrecognized arguments: --timeout=30".
 pytest-timeout>=0.4.0
+# schemathesis: property-based API fuzz testing against our own OpenAPI schema
+# (backend/tests/test_schemathesis_fuzz.py). Pilot, GET-only for now — see
+# docs/audit/2026-09-08-agentic-tooling-atlas.md for scope and rationale.
+schemathesis>=4.26.0
 
 # Development tools — ruff supersedes both black and flake8; those are removed.
 

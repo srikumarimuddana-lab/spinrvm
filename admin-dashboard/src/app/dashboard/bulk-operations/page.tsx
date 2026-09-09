@@ -943,12 +943,22 @@ function SnapshotRegenerateSection() {
     const [running, setRunning] = useState(false);
     const [force, setForce] = useState(true);
     const [result, setResult] = useState<SnapshotRegenerateResult | null>(null);
+    // Paging (2026-09-09): only meaningful when force is checked -- with
+    // force unchecked, already-written rows drop out of the backend's own
+    // eligibility filter, so every click naturally advances on its own.
+    // force=true has no such filter (it matches the same rows every time),
+    // so this tracks how far "Regenerate" has advanced across clicks.
+    const [offset, setOffset] = useState(0);
 
     const handlePreview = async () => {
         setPreviewing(true);
         setResult(null);
         try {
-            const res = await adminRegenerateImportedSnapshots(force, 200, true);
+            // 500 matches the backend's own ceiling (RegenerateSnapshotsRequest.limit,
+            // le=500), so the preview count is the true eligible total for this
+            // window rather than an arbitrary smaller page size -- Regenerate
+            // below then reuses that total directly instead of guessing a limit.
+            const res = await adminRegenerateImportedSnapshots(force, 500, true, force ? offset : 0);
             setResult(res);
         } catch (err: unknown) {
             toast({
@@ -962,11 +972,16 @@ function SnapshotRegenerateSection() {
     };
 
     const handleRegenerate = async () => {
+        const limit = Math.min(result?.total ?? 500, 500);
+        const currentOffset = force ? offset : 0;
         setRunning(true);
         setResult(null);
         try {
-            const res = await adminRegenerateImportedSnapshots(force, 200);
+            const res = await adminRegenerateImportedSnapshots(force, limit, false, currentOffset);
             setResult(res);
+            if (force) {
+                setOffset(currentOffset + limit);
+            }
             toast({
                 title: `Snapshots regenerated`,
                 description: `${res.success} succeeded, ${res.failed} failed (${res.renderer} renderer)`,
@@ -1002,12 +1017,28 @@ function SnapshotRegenerateSection() {
                             onChange={(e) => {
                                 setForce(e.target.checked);
                                 setResult(null);
+                                setOffset(0);
                             }}
                             className="rounded border-input"
                         />
                         Re-generate all (including rides that already have a snapshot)
                     </label>
                 </div>
+                {force && offset > 0 && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <span>Next batch starts at row {offset + 1}.</span>
+                        <button
+                            type="button"
+                            className="underline"
+                            onClick={() => {
+                                setOffset(0);
+                                setResult(null);
+                            }}
+                        >
+                            Start over from the beginning
+                        </button>
+                    </div>
+                )}
                 <div className="flex items-center gap-3">
                     <Button variant="outline" onClick={handlePreview} disabled={previewing || running}>
                         {previewing ? (
@@ -1086,12 +1117,17 @@ function RouteRegenerateSection() {
     const [running, setRunning] = useState(false);
     const [force, setForce] = useState(false);
     const [result, setResult] = useState<RouteRegenerateResult | null>(null);
+    // Paging (2026-09-09) -- see SnapshotRegenerateSection's own offset
+    // comment above; same reason, same force=true-only use.
+    const [offset, setOffset] = useState(0);
 
     const handlePreview = async () => {
         setPreviewing(true);
         setResult(null);
         try {
-            const res = await adminRegenerateImportedRoutes(force, 200, true);
+            // 500 matches the backend's own ceiling (RegenerateRoutesRequest.limit,
+            // le=500) -- see SnapshotRegenerateSection's own handlePreview comment.
+            const res = await adminRegenerateImportedRoutes(force, 500, true, force ? offset : 0);
             setResult(res);
         } catch (err: unknown) {
             toast({
@@ -1105,11 +1141,16 @@ function RouteRegenerateSection() {
     };
 
     const handleRegenerate = async () => {
+        const limit = Math.min(result?.total ?? 500, 500);
+        const currentOffset = force ? offset : 0;
         setRunning(true);
         setResult(null);
         try {
-            const res = await adminRegenerateImportedRoutes(force, 200);
+            const res = await adminRegenerateImportedRoutes(force, limit, false, currentOffset);
             setResult(res);
+            if (force) {
+                setOffset(currentOffset + limit);
+            }
             toast({
                 title: `Routes regenerated`,
                 description: `${res.success} succeeded, ${res.failed} failed`,
@@ -1145,12 +1186,28 @@ function RouteRegenerateSection() {
                             onChange={(e) => {
                                 setForce(e.target.checked);
                                 setResult(null);
+                                setOffset(0);
                             }}
                             className="rounded border-input"
                         />
                         Re-generate all (including rides that already have a route)
                     </label>
                 </div>
+                {force && offset > 0 && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <span>Next batch starts at row {offset + 1}.</span>
+                        <button
+                            type="button"
+                            className="underline"
+                            onClick={() => {
+                                setOffset(0);
+                                setResult(null);
+                            }}
+                        >
+                            Start over from the beginning
+                        </button>
+                    </div>
+                )}
                 <div className="flex items-center gap-3">
                     <Button variant="outline" onClick={handlePreview} disabled={previewing || running}>
                         {previewing ? (

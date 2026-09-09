@@ -1,5 +1,6 @@
 import { renderHook } from '@testing-library/react-native';
-import { cellCenter, useVisibleHeatmapCells } from '../useVisibleHeatmapCells';
+import { cellCenter } from '../../lib/heatFalloff';
+import { useVisibleHeatmapCells } from '../useVisibleHeatmapCells';
 import type { HeatmapCell } from '../useDemandHeatmap';
 
 describe('cellCenter', () => {
@@ -49,7 +50,8 @@ describe('useVisibleHeatmapCells — region viewport filter', () => {
 });
 
 describe('useVisibleHeatmapCells — driver-position exclusion', () => {
-  // cellLatDeg/cellLngDeg = 0.01 -> outerRadiusM ≈ 1002m -> excludeRadiusM ≈ 1302m.
+  // cellLatDeg/cellLngDeg = 0.01 -> outerRadiusM ≈ 690m (SOFT_HEAT_RENDER_ENABLED
+  // is false, so the legacy 0.62 factor applies) -> excludeRadiusM ≈ 897m.
   const AT_DRIVER: HeatmapCell = { lat: 52.1, lng: -106.6, weight: 5 };
   // ~2.2 km north — well outside the exclusion radius.
   const FAR: HeatmapCell = { lat: 52.12, lng: -106.6, weight: 5 };
@@ -72,7 +74,7 @@ describe('useVisibleHeatmapCells — driver-position exclusion', () => {
 
   it('exposes outerRadiusM sized off the given cell grid, for renderers to share', () => {
     const { result } = renderHook(() => useVisibleHeatmapCells([], null, 0.01, 0.01, null));
-    // 0.01 deg * 111_320 m/deg * 0.9 (BLOB_RADIUS_FACTOR)
-    expect(result.current.outerRadiusM).toBeCloseTo(1001.88, 1);
+    // 0.01 deg * 111_320 m/deg * 0.62 (legacy factor — SOFT_HEAT_RENDER_ENABLED is false)
+    expect(result.current.outerRadiusM).toBeCloseTo(690.18, 1);
   });
 });

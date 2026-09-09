@@ -105,6 +105,32 @@ class Settings(BaseSettings):
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
     FIREBASE_DRIVER_APP_ID: str = ""
     FIREBASE_RIDER_APP_ID: str = ""
+    # F01 (AI security assessment (PR #5138)): which Firebase sign-in providers
+    # may be exchanged for a Spinr customer token. A cryptographically valid
+    # Firebase ID token is NOT the same policy as "a verified phone/email
+    # customer" — Firebase issues perfectly valid tokens for anonymous sign-in.
+    # Comma-separated `firebase.sign_in_provider` values; the anonymous provider
+    # can never be added (utils/firebase_identity.py rejects it before this
+    # allowlist is consulted, so widening this knob cannot re-open F01).
+    # Exists as config so ops can admit a legitimate provider without a code
+    # deploy if onboarding adds one — that is the rollback lever for this gate.
+    # Default is "phone" ALONE because that is the only provider the rider and
+    # driver apps actually use (signInWithCredential over a phone credential).
+    # Listing password/google.com/apple.com looked harmless but was not: a
+    # password account whose email is unverified passes the provider check and
+    # then fails the verified-contact check, which is a silent, permanent 401
+    # with no self-service recovery. A provider that is not on this list is
+    # rejected at sign-in BEFORE any account exists, which is the far better
+    # failure mode. Add a provider here only alongside the onboarding that
+    # actually issues it, and check it carries a verified contact.
+    FIREBASE_ALLOWED_SIGN_IN_PROVIDERS: str = "phone"
+    # Emergency rollback lever for the whole F01 gate (CLAUDE.md pre-merge gate
+    # 7: a rollback plan is required before merge, and `git revert` is not one
+    # for an auth change that is already rejecting live sign-ins). Setting this
+    # false restores the pre-F01 behaviour with a restart and no redeploy.
+    # Default true — the gate fails closed, and turning it off is an explicit,
+    # logged operator decision, not a silent default.
+    FIREBASE_IDENTITY_POLICY_ENFORCED: bool = True
 
     # Security settings — no defaults; app refuses to start if unset in production
     JWT_SECRET: str

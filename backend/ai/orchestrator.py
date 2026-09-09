@@ -19,6 +19,7 @@ routes/support.py).
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -29,6 +30,7 @@ try:
     from .prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
+    from .stream_filter import StreamingOutputFilter
     from .threat import record_security_event, scan_message
     from .tools import execute_tool, tool_defs_for
 except ImportError:
@@ -38,17 +40,34 @@ except ImportError:
     from ai.prompts import FARE_CHECK_BLOCK_HEADER, build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
+    from ai.stream_filter import StreamingOutputFilter
     from ai.threat import record_security_event, scan_message
     from ai.tools import execute_tool, tool_defs_for
 
 try:
+    from ..core.config import settings
     from ..settings_loader import get_app_settings
     from ..utils.metrics import inc as _metric_inc
-    from ..utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
+    from ..utils.redis_client import (
+        redis_delete,
+        redis_eval,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set_nx,
+    )
 except ImportError:
+    from core.config import settings
     from settings_loader import get_app_settings
     from utils.metrics import inc as _metric_inc
-    from utils.redis_client import redis_delete, redis_expire, redis_incr, redis_set_nx
+    from utils.redis_client import (
+        redis_delete,
+        redis_eval,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set_nx,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +181,70 @@ async def _over_daily_cap(user_id: str, cap: int) -> bool:
 _CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-calling turn
 
 
+# Release the conversation lock ONLY if we still own it (F09).
+#
+# The lock used to be released with an unconditional DELETE, which is unsafe
+# whenever a turn outlives the TTL: turn A's release then deletes turn B's
+# freshly-acquired lock, and turn C can start alongside B — the release makes
+# the concurrency it is meant to prevent MORE likely, not less. Storing a
+# per-turn token and deleting only on a match closes that.
+#
+# Compare-and-delete has to be atomic, hence Lua: a GET-then-DELETE can still
+# delete B's lock if B acquires in the gap between the two calls.
+def _redis_configured() -> bool:
+    """Whether a real Redis is configured, as opposed to redis_client's
+    in-process dict fallback. Decides which release path is sound — see
+    _release_conversation_lock."""
+    return bool(getattr(settings, "REDIS_URL", None))
+
+
+_RELEASE_IF_OWNER_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+
+async def _release_conversation_lock(lock_key: str, token: str) -> None:
+    """Best-effort ownership-checked release. Never raises.
+
+    A failed release is not an error worth propagating: the lock carries a TTL,
+    so the worst case is that the conversation stays locked for the remainder
+    of it. Raising here would turn a Redis blip into a failed chat turn whose
+    reply the rider has already seen streamed.
+    """
+    if _redis_configured():
+        try:
+            await redis_eval(_RELEASE_IF_OWNER_LUA, 1, lock_key, token)
+        except Exception:
+            # Includes RuntimeError. redis_eval re-raises RuntimeErrors coming
+            # from a LIVE connection as well as its own "unconfigured" one
+            # (see its `except RuntimeError: raise`), so catching RuntimeError
+            # here to mean "no Lua available" would silently drop a real Redis
+            # error onto the non-atomic path below — against a cluster-shared
+            # key, which is exactly the clobber the token exists to prevent.
+            # Configured Redis therefore gets the atomic path or nothing.
+            logger.error(
+                "ai conversation-lock release failed — lock will expire on its TTL",
+                exc_info=True,
+                extra={"lock_key": lock_key},
+            )
+        return
+
+    # REDIS_URL unset — redis_client is a single in-process dict and there is
+    # no Lua interpreter (see redis_eval's docstring). No other replica can
+    # hold this key, so a non-atomic compare-and-delete is exact here.
+    try:
+        if await redis_get(lock_key) == token:
+            await redis_delete(lock_key)
+    except Exception:
+        logger.error(
+            "ai conversation-lock in-process release failed — lock will expire on its TTL",
+            exc_info=True,
+        )
+
+
 async def run_chat_turn(
     *,
     user: Dict[str, Any],
@@ -196,8 +279,14 @@ async def run_chat_turn(
         return
 
     lock_key = f"ai:conv_lock:{conversation_id}"
+    # Unique per turn, so the release below can prove ownership (F09).
+    lock_token = uuid.uuid4().hex
+    # Distinct from `acquired`: on the fail-open path we proceed WITHOUT owning
+    # the lock, and must not then release one we never took.
+    lock_held = False
     try:
-        acquired = await redis_set_nx(lock_key, "1", _CONV_LOCK_TTL_SECONDS)
+        acquired = await redis_set_nx(lock_key, lock_token, _CONV_LOCK_TTL_SECONDS)
+        lock_held = acquired
     except Exception:
         # redis_set_nx now raises on a real (Redis-configured-but-
         # unavailable) error instead of silently falling back per-replica
@@ -230,7 +319,8 @@ async def run_chat_turn(
         ):
             yield frame
     finally:
-        await redis_delete(lock_key)
+        if lock_held:
+            await _release_conversation_lock(lock_key, lock_token)
 
 
 async def _run_chat_turn(
@@ -362,6 +452,7 @@ async def _run_chat_turn(
 
     max_iterations = int(settings.get("ai_max_tool_iterations") or 6)
     all_text: List[str] = []
+    emitted_text: List[str] = []
     used_tool_names: List[str] = []
     emitted_client_action = False
     cache_disqualified = False
@@ -371,15 +462,37 @@ async def _run_chat_turn(
         for _iteration in range(max_iterations):
             turn_text: List[str] = []
             turn_end = None
+            # F08 (AI security assessment (PR #5138)): provider text used to be
+            # yielded raw and filtered only at the end, for the STORED copy —
+            # so a clean ai_messages transcript did not prove the rider saw a
+            # clean answer. Filter before delivery instead, through a buffer
+            # that can see across chunk boundaries (a phone number arriving as
+            # "306-" + "555-1234" matches neither half on its own).
+            #
+            # One filter per provider stream, not per turn: holding text back
+            # across a tool call would stall the rider's visible reply behind
+            # the tool's latency for no safety gain — a value cannot span two
+            # separate provider responses.
+            out_filter = StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT)
             async for event in adapter.stream_turn(system=system, messages=messages, tools=tools):
                 if event.type == "text" and event.text:
                     turn_text.append(event.text)
-                    yield "token", {"text": event.text}
+                    safe = out_filter.feed(event.text)
+                    if safe:
+                        yield "token", {"text": safe}
                 elif event.type == "turn_end":
                     turn_end = event
+            tail = out_filter.flush()
+            if tail:
+                yield "token", {"text": tail}
             if turn_end is None:  # adapter contract violation — surface loudly
                 raise RuntimeError(f"adapter {adapter.provider} ended stream without turn_end")
 
+            # What the rider actually saw, kept alongside the raw text. The
+            # model context below must keep the RAW assistant text (redacting
+            # the model's own prior turn would corrupt its context), while the
+            # persisted/cached copy is derived from the emitted text.
+            emitted_text.append(out_filter.emitted_text)
             all_text.extend(turn_text)
             for k in total_usage:
                 total_usage[k] += int((turn_end.usage or {}).get(k, 0) or 0)
@@ -476,23 +589,36 @@ async def _run_chat_turn(
         return
 
     final_text = "".join(all_text).strip()
+    # What the rider actually saw this turn, after the streaming filter. Used
+    # for the persisted/cached copy so the transcript matches the delivered
+    # answer — before F08 the two could differ, and the stored one was the
+    # only filtered one.
+    delivered_text = "".join(emitted_text).strip()
     produced_real_text = bool(final_text)  # False → the generic fallback below
     if not final_text:
         final_text = "I couldn't finish that one — could you rephrase, or tap Contact Support?"
+        delivered_text = final_text
+        # Our own literal — nothing to filter.
         yield "token", {"text": final_text}
 
-    # AI2 / PIPEDA: the user's message is scrubbed before persistence (line
-    # ~186 above); the assistant's was not, despite the model being able to
-    # echo tool-result data verbatim (e.g. a driver's phone number from a
-    # dispatch tool result). Scrub only what's written to ai_messages / the
-    # FAQ cache — the raw text has already streamed to the client this turn,
-    # so the rider still sees the real reply; only stored/replayed copies
-    # change. ScrubPolicy.AI_CHAT mirrors the user-side call in case the
-    # model echoes a bracketed trip-endpoint pair or a postal code back.
-    # AI13: also strip snake_case-shaped tool-name/internal-jargon leakage
-    # from the persisted/replayed copy -- same live-stream-unchanged
-    # convention as the PII scrub immediately above.
-    stored_text = filter_tool_leakage(scrub_pii(final_text, policy=ScrubPolicy.AI_CHAT))
+    # AI2 / PIPEDA (persisted copy) + AI13 (tool-name leakage). The user's
+    # message is scrubbed before persistence above; the assistant's is
+    # scrubbed here, because the model can echo tool-result data verbatim.
+    #
+    # This comment used to end "the raw text has already streamed to the
+    # client this turn, so the rider still sees the real reply; only
+    # stored/replayed copies change." That was a deliberate choice and F08
+    # (AI security assessment (PR #5138)) found it wrong: a clean ai_messages
+    # row proved nothing about what the rider actually received, and a
+    # scripted provider reply containing a synthetic email reached the client
+    # unchanged. The stream is filtered too now (StreamingOutputFilter above).
+    #
+    # Filtering here a second time is deliberate and idempotent — redaction
+    # tokens never re-match a pattern. The persistence path must not depend on
+    # the streaming path having been correct; if the stream filter ever
+    # regresses, the stored copy still gets scrubbed rather than both failing
+    # together.
+    stored_text = filter_tool_leakage(scrub_pii(delivered_text, policy=ScrubPolicy.AI_CHAT))
 
     assistant_row = await conversations.append_message(
         conversation,
@@ -512,7 +638,7 @@ async def _run_chat_turn(
             prior_turns=prior_turns,
             used_tool_names=used_tool_names,
             had_client_action=emitted_client_action,
-            text=final_text,
+            text=delivered_text,
         )
     ):
         await response_cache.store_cached(audience, scrubbed, stored_text, faq_cache_ttl)

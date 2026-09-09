@@ -1,5 +1,11 @@
 import { useMemo } from 'react';
 import { distanceMeters } from '@shared/utils/vehicleTracking';
+import {
+  HEAT_BLOB_RADIUS_FACTOR,
+  METERS_PER_LAT_DEG,
+  SOFT_HEAT_RENDER_ENABLED,
+  cellCenter,
+} from '../lib/heatFalloff';
 import type { HeatmapCell } from './useDemandHeatmap';
 
 // Fallbacks only. The server sends the grid size it actually bucketed with
@@ -9,15 +15,11 @@ import type { HeatmapCell } from './useDemandHeatmap';
 const DEFAULT_CELL_LAT = 0.004;
 const DEFAULT_CELL_LNG = 0.006;
 const MAX_POLYGONS = 200;
-// Metres per degree of latitude — used to size a cell's nominal blob radius
-// off the server's own grid cell size rather than a hardcoded metre value,
-// so denser grids (smaller service areas) automatically get smaller, tighter
-// blobs. Shared across renderers so "how big is one cell's blob" (used for
-// the driver-exclusion zone below) means the same thing everywhere, even
-// though each renderer then draws that blob in its own way (geo-radius
-// Circles on the iOS fallback, screen-pixel Circles on the Skia overlay).
-const METERS_PER_LAT_DEG = 111_320;
-const BLOB_RADIUS_FACTOR = 0.9;
+// The pre-HEAT_BLOB_RADIUS_FACTOR radius factor, used only while
+// SOFT_HEAT_RENDER_ENABLED is false — matches HeatmapCells.tsx's own
+// flag-off geometry exactly (see its outerRadiusM computation) so the
+// driver-exclusion zone is always sized to whichever blob is actually drawn.
+const LEGACY_BLOB_RADIUS_FACTOR = 0.62;
 // 1.3x the blob's own radius: covers the driver's own grid cell plus a small
 // margin so a blob's edge doesn't visibly clip right at the car icon's
 // boundary.
@@ -33,12 +35,6 @@ export interface HeatmapRegion {
 export interface LatLng {
   latitude: number;
   longitude: number;
-}
-
-export function cellCenter(lat: number, lng: number, cellLat: number, cellLng: number): LatLng {
-  const baseLat = Math.floor(lat / cellLat) * cellLat;
-  const baseLng = Math.floor(lng / cellLng) * cellLng;
-  return { latitude: baseLat + cellLat / 2, longitude: baseLng + cellLng / 2 };
 }
 
 /**
@@ -64,9 +60,10 @@ export function useVisibleHeatmapCells(
   const cellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
 
   // Nominal radius (metres) one cell's blob visually occupies — sizes the
-  // driver-exclusion zone below, and reused verbatim by the iOS
-  // layered-Circle fallback for its own blob geometry.
-  const outerRadiusM = cellLat * METERS_PER_LAT_DEG * BLOB_RADIUS_FACTOR;
+  // driver-exclusion zone below. Mirrors HeatmapCells.tsx's own outerRadiusM
+  // exactly (same flag, same factor pair) so exclusion always matches
+  // whichever geometry is actually live.
+  const outerRadiusM = cellLat * METERS_PER_LAT_DEG * (SOFT_HEAT_RENDER_ENABLED ? HEAT_BLOB_RADIUS_FACTOR : LEGACY_BLOB_RADIUS_FACTOR);
   const excludeRadiusM = outerRadiusM * DRIVER_EXCLUDE_MARGIN;
 
   const visibleCells = useMemo(() => {

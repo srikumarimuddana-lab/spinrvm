@@ -1,7 +1,7 @@
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 import { HeatmapGradientOverlay } from '../../components/dashboard/HeatmapGradientOverlay';
-import { cellCenter } from '../../hooks/useVisibleHeatmapCells';
+import { cellCenter } from '../../lib/heatFalloff';
 import { projectToScreen } from '../../utils/heatmapProjection';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 

@@ -15,6 +15,32 @@ on:
   # Vercel deploys now only happen when this workflow is run by hand.
   workflow_dispatch:
 
+# C96 mitigation: this was the one heavy workflow in the repo with no
+# concurrency group at all -- security-gates.yml, pr-checks.yml, and
+# ci-guardrails.yml all already cancel superseded runs; this file (16 jobs:
+# 4 test suites, 3 Playwright E2E suites, security-scan, docker-image-scan,
+# mobile-build, deploy-admin, smoke test, detect-changes,
+# python-dependency-audit) did not. Every push to a PR queued a brand new
+# full run stacked on top of any still in flight for the same PR, instead
+# of superseding it -- on a PR pushed to repeatedly in a short window (this
+# repo saw several today), that multiplies Actions-minute consumption for
+# no benefit, since only the latest commit's result matters. Combined with
+# detect-changes' own pull-requests:read gap (C93, fixed today) having
+# fail-open'd every job unfiltered on every PR for an unknown prior period,
+# this is a plausible contributor to whatever tripped the C96 outage
+# (GitHub Actions rejecting jobs at queue time, consistent with a spend
+# limit or included-minutes cap) -- not root-cause-confirmed (that needs
+# GitHub billing/usage access this session doesn't have), but a real,
+# verifiable inefficiency worth closing regardless of whether it was the
+# actual trigger. `cancel-in-progress` is gated to `pull_request` only --
+# never cancel a `push`-triggered run to main/staging, since that path
+# includes deploy-admin and mobile-build; cancelling a deploy mid-flight
+# because a second commit landed seconds later is a worse failure mode
+# than a few extra minutes of redundant CI.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: '3.12'
   NODE_VERSION: '22'

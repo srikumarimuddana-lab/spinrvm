@@ -91,10 +91,10 @@ const DEFAULT_CELL_LAT = 0.004;
 const DEFAULT_CELL_LNG = 0.006;
 const CAR_MAX_POLYGONS = 80;
 // The soft path draws HEAT_RING_STOPS.length circles per cell rather than one
-// square, so the cap comes down hard here: 80 squares -> 30x4 = 120 shapes. A
+// square, so the cap comes down hard here: 80 squares -> 26x5 = 130 shapes. A
 // head unit is weaker than a phone and nothing in this repo can profile one,
 // so this is deliberately more conservative than the phone's budget.
-const CAR_MAX_SOFT_BLOBS = 30;
+const CAR_MAX_SOFT_BLOBS = 26;
 // Dark-theme ramp (car surface is always dark). This was a hand-copied literal
 // of darkColors.heatmapRamp; same five values, just duplicated. Point it at the
 // shared token so the car cannot drift from the phone legend on a retune.

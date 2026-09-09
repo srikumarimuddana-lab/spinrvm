@@ -5,11 +5,11 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 import {
   HEAT_BLOB_RADIUS_FACTOR,
+  HEAT_NATIVE_LAYER_ALPHA,
   HEAT_RING_STOPS,
   METERS_PER_LAT_DEG,
   cellCenter,
   SOFT_HEAT_RENDER_ENABLED,
-  paintedPeakAlpha,
   ringAlphas,
 } from '../../lib/heatFalloff';
 
@@ -26,10 +26,10 @@ const MAX_POLYGONS = 200;
 const MAX_BLOBS = 60;
 // The soft renderer draws HEAT_RING_STOPS.length shapes per cell instead of 2,
 // so the cell cap comes down to keep the native view count in the same order:
-// 60x2 = 120 shapes today, 45x4 = 180 with the soft path. Nothing in this repo
-// can profile Apple Maps or an Auto head unit, so this is a deliberately
-// conservative budget rather than a measured one.
-const MAX_SOFT_BLOBS = 45;
+// 60x2 = 120 shapes today, 40x5 = 200 with the soft path. The wider kernel also
+// means more overdraw per shape. Nothing in this repo can profile Apple Maps or
+// an Auto head unit, so this is a conservative budget, not a measured one.
+const MAX_SOFT_BLOBS = 40;
 
 interface HeatmapCellsProps {
   cells: HeatmapCell[];
@@ -120,10 +120,11 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
       <Heatmap
         points={points}
         radius={45}
-        // Match the peak translucency the iOS/Auto ring stacks reach, so the
-        // same demand does not read as heavier on Android than on iOS. Only a
-        // first-order match: the native layer still maps colour its own way.
-        opacity={SOFT_HEAT_RENDER_ENABLED ? paintedPeakAlpha() : 0.75}
+        // Android sums density internally, so this takes the COMPOSITED alpha
+        // a busy area reaches on the iOS stack, not the per-cell peak — the
+        // latter would render Android markedly fainter than iOS. Still only a
+        // first-order match: the native layer maps colour its own way.
+        opacity={SOFT_HEAT_RENDER_ENABLED ? HEAT_NATIVE_LAYER_ALPHA : 0.75}
         gradient={{
           colors: gradientColors,
           startPoints,

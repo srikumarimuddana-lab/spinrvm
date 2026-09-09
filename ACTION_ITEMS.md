@@ -23604,6 +23604,21 @@ how much they de-risk a public launch._
 
 ### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session
 
+- **Update 2026-09-09 ~03:00 UTC:** still OPEN — re-confirmed on `main`'s
+  newest pushes (commits `8faa99b`, `e30fed9`, ~02:52-02:53 UTC), same
+  instant-fail (2-10s), no-logs signature, now **~6.5 hours** of continuous
+  outage. In the meantime the repo owner directly merged 3 PRs (#5134,
+  #5136, #5137) with CI still fully red the whole time — a deliberate,
+  reasonable call given each was independently reviewed as low-risk/
+  docs-or-additive and unrelated to the outage, but it means **none of the
+  fixes/changes in those 3 PRs have any real CI evidence behind them** —
+  including C95's `contents: read` fix (#5133, merged earlier at 21:20 UTC,
+  also during the outage) — treat their correctness as "reasoned, not
+  CI-verified" until a clean run is observed. 3 separate sessions were
+  independently polling GitHub for this same fact on staggered schedules;
+  consolidated into one shared check 2026-09-08 ~22:00 UTC (one session
+  checks, wakes the others only if the fact changes) to stop the redundant
+  polling — see that session's own trigger history if resuming this thread.
 - [ ] **Status:** OPEN — escalated to the user; needs a human with GitHub
   org/repo billing or Actions-admin access. Found while investigating a CI
   failure wake on PR #5134 (a docs-only B11/R-G recording PR, whose only

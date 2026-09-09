@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Platform } from 'react-native';
 import { Circle, Heatmap } from 'react-native-maps';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { distanceMeters } from '@shared/utils/vehicleTracking';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 
 // Fallbacks only. The server sends the grid size it actually bucketed with
@@ -26,6 +27,19 @@ interface HeatmapCellsProps {
   /** Grid size from the server; null falls back to the constants above. */
   cellLatDeg?: number | null;
   cellLngDeg?: number | null;
+  /**
+   * The driver's own live position. A cell whose center falls within
+   * DRIVER_EXCLUDE_RADIUS_M of it is dropped so a demand blob never renders
+   * directly on top of / around the driver's own CarMarker — live-testing
+   * report 2026-09-09: "concentric circles around the car icon" (iOS). The
+   * iOS soft-blob renderer below draws 2 translucent Circle overlays per
+   * cell; a driver idling inside (or bordering) a busy cell was seeing those
+   * circles stack visually with the car's own colored presence ring
+   * (CarMarker's `ring` prop) with no way to tell them apart. Optional so a
+   * caller without a live fix yet (cold start) just renders every cell, same
+   * as before this prop existed.
+   */
+  driverLocation?: { latitude: number; longitude: number } | null;
 }
 
 function cellCenter(lat: number, lng: number, cellLat: number, cellLng: number) {
@@ -62,11 +76,20 @@ function hexToRgba(hex: string, alpha: number): string {
 const USE_NATIVE_GRADIENT = Platform.OS === 'android';
 
 export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
-  ({ cells, region, cellLatDeg, cellLngDeg }) => {
+  ({ cells, region, cellLatDeg, cellLngDeg, driverLocation }) => {
   const { colors } = useTheme();
 
   const cellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
   const cellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
+
+  // Radius a cell's blob visually occupies (see the two-Circle iOS path
+  // below) — computed here, ahead of the early return, because it also sizes
+  // the driver-position exclusion zone regardless of which render path runs.
+  const outerRadiusM = cellLat * METERS_PER_LAT_DEG * 0.62;
+  // 1.3x the blob's own radius: covers the driver's own grid cell plus a
+  // small margin so the blob's edge doesn't visibly clip right at the car
+  // icon's boundary.
+  const excludeRadiusM = outerRadiusM * 1.3;
 
   const visibleCells = useMemo(() => {
     if (!cells.length) return [];
@@ -87,12 +110,21 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
       );
     }
 
+    if (driverLocation && Number.isFinite(driverLocation.latitude) && Number.isFinite(driverLocation.longitude)) {
+      filtered = filtered.filter((c) => {
+        const center = cellCenter(c.lat, c.lng, cellLat, cellLng);
+        return distanceMeters(
+          driverLocation.latitude, driverLocation.longitude, center.latitude, center.longitude,
+        ) > excludeRadiusM;
+      });
+    }
+
     // Sort a copy. When `region` is null the filter above is the only thing
     // standing between this and `cells` itself — and before the isFinite
     // filter existed, `filtered` WAS `cells`, so this sorted the hook's own
     // state array in place, reordering what every other consumer sees.
     return [...filtered].sort((a, b) => b.weight - a.weight).slice(0, MAX_POLYGONS);
-  }, [cells, region]);
+  }, [cells, region, driverLocation, cellLat, cellLng, excludeRadiusM]);
 
   const maxWeight = useMemo(
     () => visibleCells.reduce((m, c) => Math.max(m, c.weight), 0),
@@ -130,8 +162,8 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
   // low-opacity circles per cell instead of one hard-edged Polygon square.
   // Radii are derived from the server's own grid size so denser grids (small
   // service areas) get proportionally smaller blobs rather than overlapping
-  // into one blob.
-  const outerRadiusM = cellLat * METERS_PER_LAT_DEG * 0.62;
+  // into one blob. outerRadiusM itself is computed above (also sizes the
+  // driver-position exclusion zone).
   const innerRadiusM = outerRadiusM * 0.5;
   const blobCells = visibleCells.slice(0, MAX_BLOBS);
 

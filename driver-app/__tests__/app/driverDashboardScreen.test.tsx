@@ -571,14 +571,8 @@ describe('demand heatmap overlay (idle only)', () => {
     expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
   });
 
-  it('renders the DemandLegend only when visible', async () => {
+  it('never renders the DemandLegend pill — removed entirely (was overlapping the SOS button)', async () => {
     mockHeatmapState.visible = true;
-    const r = await renderScreen();
-    expect(r.root.findByProps({ accessibilityLabel: 'demand-legend' })).toBeTruthy();
-  });
-
-  it('omits the DemandLegend when not visible', async () => {
-    mockHeatmapState.visible = false;
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
   });
@@ -616,6 +610,13 @@ describe('demand heatmap overlay (idle only)', () => {
     mockHeatmapState.isV2 = true;
     mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
     const r = await renderScreen();
+    // HeatmapCells is asserted here too, not just its sibling widgets: the
+    // render site itself must gate on rideState === 'idle' rather than
+    // relying only on useDemandHeatmap clearing `cells` internally — see the
+    // driver dashboard screen's comment at this render site for why (this
+    // exact test previously mocked non-empty cells during an active ride
+    // without ever checking heatmap-cells stayed absent).
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'hotspot-chip' })).toHaveLength(0);
   });

@@ -18,7 +18,6 @@ import {
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
-  DemandLegend,
   ForecastStrip,
   HeatmapCells,
   HotspotChips,
@@ -337,12 +336,8 @@ function DriverDashboard() {
   // v2 adds layer selection (HM-12) and surge mirror (HM-11)
   const {
     cells: heatmapCells,
-    status: heatmapStatus,
-    visible: heatmapVisible,
     surge: heatmapSurge,
     isV2: heatmapIsV2,
-    layer: heatmapLayer,
-    setLayer: setHeatmapLayer,
     forecast: heatmapForecast,
     hotspots: heatmapHotspots,
     cellLatDeg: heatmapCellLat,
@@ -1203,13 +1198,23 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Demand heatmap — cross-platform cell polygons (HM-05) */}
-        {heatmapCells.length > 0 && Platform.OS !== 'web' && (
+        {/* Demand heatmap — cross-platform cell polygons (HM-05). Explicitly
+            gated on rideState === 'idle' (not just heatmapCells.length),
+            matching every sibling heatmap widget below: useDemandHeatmap
+            already clears `cells` to [] outside idle, but that gate lived
+            only in the hook, not here — this render had no guard of its
+            own, so the "idle only" invariant held incidentally rather than
+            by construction. driverLocation lets HeatmapCells drop any cell
+            centered close enough to overlap the driver's own CarMarker (see
+            its prop doc — root cause of the "concentric circles around the
+            car icon" report on iOS). */}
+        {rideState === 'idle' && heatmapCells.length > 0 && Platform.OS !== 'web' && (
           <HeatmapCells
             cells={heatmapCells}
             region={heatmapRegion}
             cellLatDeg={heatmapCellLat}
             cellLngDeg={heatmapCellLng}
+            driverLocation={location?.coords ?? null}
           />
         )}
 
@@ -1241,25 +1246,6 @@ function DriverDashboard() {
       {rideState === 'idle' && surgeMultiplier > 1.0 && (
         <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
           <Text style={{ color: colors.surface, fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
-        </View>
-      )}
-
-      {/* Demand legend toggle (HM-04 + HM-12 layer selector) — a small
-          top-right icon the driver taps to reveal the legend/layer picker,
-          not a pill sitting open over the map. Top-right is free during
-          `idle` (the only state this renders in): the SOS shield/button use
-          the same corner but only during navigating_to_pickup /
-          arrived_at_pickup / trip_in_progress, which are mutually exclusive
-          with idle. */}
-      {rideState === 'idle' && heatmapVisible && (
-        <View style={{ position: 'absolute', top: insets.top + 4, right: 16, zIndex: 60 }}>
-          <DemandLegend
-            status={heatmapStatus}
-            visible={heatmapVisible}
-            isV2={heatmapIsV2}
-            layer={heatmapLayer}
-            onLayerChange={setHeatmapLayer}
-          />
         </View>
       )}
 

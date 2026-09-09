@@ -24,11 +24,23 @@ jest.mock('@shared/theme/ThemeContext', () => ({
   useTheme: () => ({ colors: { heatmapRamp: ['#a', '#b', '#c', '#d', '#e'] } }),
 }));
 
-function surviving(cells: HeatmapCell[], region?: any, cellLatDeg = 0.01, cellLngDeg = 0.01) {
+function surviving(
+  cells: HeatmapCell[],
+  region?: any,
+  cellLatDeg = 0.01,
+  cellLngDeg = 0.01,
+  driverLocation?: { latitude: number; longitude: number } | null,
+) {
   let renderer!: TestRenderer.ReactTestRenderer;
   act(() => {
     renderer = TestRenderer.create(
-      <HeatmapCells cells={cells} region={region} cellLatDeg={cellLatDeg} cellLngDeg={cellLngDeg} />,
+      <HeatmapCells
+        cells={cells}
+        region={region}
+        cellLatDeg={cellLatDeg}
+        cellLngDeg={cellLngDeg}
+        driverLocation={driverLocation}
+      />,
     );
   });
   // 2 Circle elements per surviving cell (outer + inner blob) — divide back
@@ -74,5 +86,24 @@ describe('HeatmapCells — region viewport filter', () => {
       );
     });
     expect(renderer.root.findAllByType(Circle as any)).toHaveLength(0);
+  });
+});
+
+describe('HeatmapCells — driver-position exclusion (2026-09-09, "concentric circles around the car icon")', () => {
+  // cellLatDeg/cellLngDeg = 0.01 -> outerRadiusM ≈ 690m -> excludeRadiusM ≈ 897m.
+  const AT_DRIVER: HeatmapCell = { lat: 52.1, lng: -106.6, weight: 5 };
+  // ~2.2 km north — well outside the exclusion radius.
+  const FAR: HeatmapCell = { lat: 52.12, lng: -106.6, weight: 5 };
+
+  it('drops a cell centered on the driver so its blob never rings the car icon', () => {
+    expect(surviving([AT_DRIVER], undefined, 0.01, 0.01, { latitude: 52.1, longitude: -106.6 })).toBe(0);
+  });
+
+  it('keeps a cell that is far enough from the driver', () => {
+    expect(surviving([FAR], undefined, 0.01, 0.01, { latitude: 52.1, longitude: -106.6 })).toBe(1);
+  });
+
+  it('keeps every cell when driverLocation is not provided (back-compat)', () => {
+    expect(surviving([AT_DRIVER, FAR], undefined, 0.01, 0.01, null)).toBe(2);
   });
 });

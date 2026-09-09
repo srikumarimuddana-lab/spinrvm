@@ -20,6 +20,7 @@ from services.demand_tiles import (
     TileSnapshot,
     build_color_lut,
     kernel_px,
+    kernel_value,
     lnglat_to_world_px,
     meters_per_pixel,
     tile_center_latlng,
@@ -65,7 +66,7 @@ def _reference_rgba(snap: TileSnapshot, z: int, x: int, y: int):
             for px, py, w in local:
                 d2 = (col + 0.5 - px) ** 2 + (row + 0.5 - py) ** 2
                 if d2 <= support * support:
-                    total += w * math.exp(-d2 / (2.0 * sigma * sigma))
+                    total += w * kernel_value(math.sqrt(d2), sigma, support)
             norm = min(1.0, max(0.0, total / snap.scale))
             out[row][col] = lut[round(norm * (COLOR_LUT_SIZE - 1))]
     return out
@@ -162,3 +163,47 @@ def test_blank_tile_is_a_transparent_256px_png():
     img = _decode(blank_tile_png())
     assert img.shape == (TILE_SIZE, TILE_SIZE, 4)
     assert img[:, :, 3].max() == 0
+
+
+class TestDenseKernelBoundary:
+    """Regression: a bare 3-sigma truncation made dense demand a hard disk.
+
+    The residue at the cut is ~1.11% of peak, which sounds ignorable but is
+    multiplied by weight and divided by scale before it becomes alpha. At
+    weight 500 against scale 5 it normalised past 1.0, clipped to the ceiling,
+    and fell to 0 one pixel further out — an 82-step cliff. The alpha-ceiling
+    test misses this entirely because it only checks the maximum.
+    """
+
+    def _dense_tile(self):
+        z, x, y = 13, 2048, 2800
+        lat, lng = tile_center_latlng(z, x, y)
+        snap = TileSnapshot(cells=((lat, lng, 500.0),), scale=5.0, palette=RAMP)
+        return _decode(render_demand_tile(snap, z=z, x=x, y=y))
+
+    def test_dense_cell_edge_spans_several_pixels(self):
+        alpha = self._dense_tile()[:, :, 3].astype(int)
+        row = alpha[TILE_SIZE // 2]
+        ceiling = round(255 * MAX_ALPHA)
+        between = [int(a) for a in row if 0 < int(a) < ceiling]
+        assert len(between) >= 3, "edge collapses from ceiling to zero with nothing between"
+
+    def test_dense_cell_has_no_cliff_at_its_boundary(self):
+        alpha = self._dense_tile()[:, :, 3].astype(int)
+        row = alpha[TILE_SIZE // 2]
+        worst = max(abs(int(b) - int(a)) for a, b in zip(row, row[1:]))
+        ceiling = round(255 * MAX_ALPHA)
+        # Untapered this was a full-ceiling jump. Threshold is half the range,
+        # measured against the scalar profile in test_demand_tiles.py: the
+        # tapered edge steps ~28 of 82 and the untapered one stepped the lot.
+        assert worst < ceiling // 2, f"adjacent alpha jump of {worst} on the centre row"
+
+    def test_dense_cell_still_reaches_the_ceiling_in_the_middle(self):
+        # The taper must not cost peak intensity — only the edge behaviour.
+        assert self._dense_tile()[:, :, 3].max() == round(255 * MAX_ALPHA)
+
+    def test_boundary_is_smooth_along_a_column_too(self):
+        alpha = self._dense_tile()[:, :, 3].astype(int)
+        col = alpha[:, TILE_SIZE // 2]
+        worst = max(abs(int(b) - int(a)) for a, b in zip(col, col[1:]))
+        assert worst < round(255 * MAX_ALPHA) // 2

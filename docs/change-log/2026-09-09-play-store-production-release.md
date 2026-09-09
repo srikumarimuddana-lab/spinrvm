@@ -183,3 +183,78 @@ existing comment's stated convention, not confirmed against the EAS dashboard;
 if it is not, the first push-triggered android production publish will fail
 with "Channel has no branches associated with it" and needs a one-time
 `eas channel:edit production --branch production`.
+
+---
+
+## Addendum 2 — internal-track-first, and the App Check finding that drove it
+
+**Decision changed mid-session.** The initial product-owner choice was
+`track: production` / `releaseStatus: completed` (immediate 100% rollout).
+After the finding below, that was revised to **submit to `internal` first,
+verify on a Play-signed install, then promote to production in Play Console**
+— a one-click promotion of the *same* AAB, no rebuild. Both apps'
+`submit.production.android` therefore now read `track: internal`,
+`releaseStatus: completed` (`completed`, not `draft`, so internal testers can
+install immediately for the verification).
+
+### The finding: App Check fails closed and the client degrades silently
+
+`backend/core/middleware.py` mounts
+`FirebaseAppCheckMiddleware(enforcement_enabled=is_production)`. Under
+enforcement, a missing or invalid `X-Firebase-AppCheck` header returns **401 on
+every `/api/*` route** — the app is entirely non-functional, not degraded.
+
+On the client, `shared/services/firebase.ts`'s `getAppCheckToken()` returns
+`null` on *any* failure and only `console.log`s the cause. So a device that
+cannot attest produces no header, gets 401 on every call, and surfaces no
+diagnostic beyond a dev-console line.
+
+Why that mattered specifically here: **Play Integrity had never been exercised
+for `com.spinr.user` from a Play-signed build** — this is its first Play
+distribution ever. Play-distributed installs are signed with Google's *app
+signing key*, not the upload key, so attestation depends on the Firebase/Play
+Integrity linkage for that package, which no prior build had proven. Both
+`google-services.json` files additionally carry `"oauth_client": []` for both
+packages, i.e. no SHA-1 registered against either Firebase Android app
+(runbook §4b) — that field governs Google Sign-In rather than App Check
+directly, but it is consistent with the linkage never having been set up.
+
+Combined with **317 active installs on the pre-rewrite 1.0.2** (Play Console,
+supplied by the product owner), a 100% rollout risked locking every existing
+rider out of a working app, with recovery requiring a halt plus a reinstall.
+
+The driver app is the contrasting case: it has been Play-distributed on the
+internal track since 2026-08 against the same Firebase project
+(`spinrapp-6e464`), so its attestation path has real-world evidence behind it.
+
+### Upload key — resolved
+
+The rider signing blocker recorded in "What was NOT verified" above is
+**closed**. The product owner performed the §3b upload-key reset; Play now
+registers SHA-1 `26:39:10:88:F5:85:BB:62:E0:70:DD:10:32:DC:09:C2:A0:28:7C:DB`,
+which is the keystore EAS already holds — the cheap path the runbook
+recommends, with no new key minted and no EAS change needed.
+
+### Version code — no collision
+
+Play's highest existing versionCode for `com.spinr.user` is **3** (v1.0.2,
+2026-03-30). The new build is **15**, and the driver's is **25**. Both clear.
+
+### Verification performed
+
+- Middleware enforcement and its 401 paths read directly from
+  `backend/core/middleware.py`; the `enforcement_enabled=is_production` mount
+  confirmed at its `add_middleware` call site.
+- Client degrade-to-`null` behaviour read directly from `getAppCheckToken()`.
+- Firebase registration state read from both committed `google-services.json`
+  files (parsed, `oauth_client` empty for both packages).
+- Version codes cross-checked against the Play Console listing.
+
+### What was NOT verified
+
+- **Whether Play Integrity actually works for `com.spinr.user`.** That is
+  precisely what the internal-track step exists to establish; it cannot be
+  determined from the repo. If the internal install 401s on every request,
+  the fix is registering the app signing SHA-1 in Firebase and enabling the
+  Play Integrity link for that package — not a code change.
+- No App Check token was minted or verified from this environment.

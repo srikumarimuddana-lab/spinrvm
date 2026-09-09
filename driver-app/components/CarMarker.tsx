@@ -375,12 +375,69 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // Marker here.
     const isAndroid = Platform.OS === 'android';
     const [androidCoord, setAndroidCoord] = useState(coordinate);
-    // Android rotation steps per tick (the rotation prop is not animatable on
-    // a plain Marker). The spline bearing is C¹-continuous, so consecutive
-    // steps are a few degrees — visually smooth at 2 steps/second.
+    // Android's rotation is a plain native prop (not an Animated.Value — see
+    // the Marker.Animated/animateMarkerToCoordinate conflict noted above), so
+    // it can't be tweened via Animated.timing the way iOS's rotationAnim is.
+    // On a straight road that's fine (the spline bearing is C¹-continuous, so
+    // consecutive TARGETS a tick apart are close), but a turn's angular RATE
+    // can still exceed 30–90° within one 500ms tick — a rotation prop that
+    // jumps straight to that step, with nothing tweening the frames in
+    // between, reads as a visible snap through the corner even though
+    // position (animated natively via animateMarkerToCoordinate) stays
+    // smooth: live-testing report 2026-09-09, "no smooth animation." This
+    // requestAnimationFrame loop below interpolates androidRotation along the
+    // shortest arc from wherever it currently is toward the newest target,
+    // over the same duration position animates over, so rotation keeps pace
+    // with position instead of jumping ahead of it.
     const [androidRotation, setAndroidRotation] = useState(
         heading != null && Number.isFinite(heading) && heading >= 0 ? heading : 0,
     );
+    const androidRotationCurrentRef = useRef(rotationValueRef.current);
+    const androidRotationFromRef = useRef(rotationValueRef.current);
+    const androidRotationTargetRef = useRef(rotationValueRef.current);
+    const androidRotationStartRef = useRef(0);
+    const androidRotationDurationRef = useRef(TICK_MS);
+    const androidRotationRafRef = useRef<number | null>(null);
+    const stepAndroidRotation = useCallback(() => {
+        const elapsed = Date.now() - androidRotationStartRef.current;
+        const duration = androidRotationDurationRef.current;
+        const t = duration > 0 ? Math.min(1, elapsed / duration) : 1;
+        const from = androidRotationFromRef.current;
+        const to = androidRotationTargetRef.current;
+        const value = from + (to - from) * t;
+        androidRotationCurrentRef.current = value;
+        setAndroidRotation(((value % 360) + 360) % 360);
+        if (t < 1) {
+            androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
+        } else {
+            androidRotationRafRef.current = null;
+        }
+    }, []);
+    // Stable by construction — reads/writes only refs and the stable
+    // stepAndroidRotation callback.
+    const animateAndroidRotationTo = useCallback(
+        (bearing: number, duration: number) => {
+            const target = shortestArcRotationTarget(rotationValueRef.current, bearing);
+            if (target === rotationValueRef.current) return;
+            rotationValueRef.current = target;
+            hasBearingRef.current = true;
+            // Start the new tween from wherever the current tween actually
+            // is right now (not its old target) — else an in-flight tween
+            // would visibly jump to its previous target before starting the
+            // next leg.
+            androidRotationFromRef.current = androidRotationCurrentRef.current;
+            androidRotationTargetRef.current = target;
+            androidRotationStartRef.current = Date.now();
+            androidRotationDurationRef.current = Math.min(duration, MAX_ROTATE_MS);
+            if (androidRotationRafRef.current == null) {
+                androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
+            }
+        },
+        [stepAndroidRotation],
+    );
+    useEffect(() => () => {
+        if (androidRotationRafRef.current != null) cancelAnimationFrame(androidRotationRafRef.current);
+    }, []);
     const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
@@ -525,7 +582,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 }
                 onBearingChangeRef.current?.(bearing);
                 if (isAndroid) {
-                    setAndroidRotation(((bearing % 360) + 360) % 360);
+                    animateAndroidRotationTo(bearing, TICK_MS);
                 } else {
                     animateRotationTo(bearing, TICK_MS);
                 }

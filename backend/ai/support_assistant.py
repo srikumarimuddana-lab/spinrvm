@@ -129,7 +129,7 @@ def build_ticket_context(
     ``instruction`` is the support agent's own guidance for this reply (what to
     say, the decision to convey). It is scrubbed like every other field here.
 
-    F06 (2026-09-08 AI security assessment) reversed the previous behaviour,
+    F06 (AI security assessment (PR #5138)) reversed the previous behaviour,
     which passed it through verbatim on the reasoning that staff input is
     "first-party — not customer PII". That confuses the AUTHOR of the text with
     its SUBJECT. The boundary this function protects is egress to a third-party

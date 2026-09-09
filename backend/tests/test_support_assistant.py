@@ -170,7 +170,7 @@ async def test_no_instruction_omits_guidance_block(monkeypatch):
 
 
 async def test_agent_instruction_is_pii_scrubbed(monkeypatch):
-    """F06 (2026-09-08 AI security assessment).
+    """F06 (AI security assessment (PR #5138)).
 
     The instruction field used to be appended verbatim, on the reasoning that
     staff input is "first-party — not customer PII". That confuses the AUTHOR

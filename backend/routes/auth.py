@@ -1428,7 +1428,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
         )
 
-    # F01 (2026-09-08 AI security assessment): a signed, correctly-audienced
+    # F01 (AI security assessment (PR #5138)): a signed, correctly-audienced
     # Firebase token is not by itself a verified phone/email customer —
     # Firebase issues exactly such a token for anonymous sign-in. Gate BEFORE
     # provisioning and before minting any Spinr token, so an ineligible

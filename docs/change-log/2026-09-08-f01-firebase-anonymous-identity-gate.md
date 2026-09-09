@@ -9,7 +9,7 @@
 | Surface(s) | backend |
 | Domain (Sentry tag) | auth |
 | PR / commit link | branch `claude/pr-5138-implementation-27zn2l` |
-| Related issue or gap ID | F01, `docs/security/2026-09-08-ai-security-assessment.md` (PR #5138), remediation order 1 |
+| Related issue or gap ID | F01, the AI security assessment on PR #5138, remediation order 1 |
 
 ## 1. Issue / gap identified
 
@@ -18,7 +18,7 @@ proof of a verified phone/email customer. It is not: Firebase issues exactly suc
 a token for **anonymous** sign-in. `/auth/firebase` accepted an anonymous payload,
 created a rider row with an empty phone, and issued Spinr access/refresh tokens
 that the shared AI authentication dependency then accepted. Found by the
-2026-09-08 AI security assessment, which reproduced it with an offline probe.
+AI security assessment (PR #5138), which reproduced it with an offline probe.
 
 ## 2. Root cause
 
@@ -188,3 +188,21 @@ provisioned by an anonymous identity are *not* deleted by this change — see
 - No load/latency measurement. The gate is pure dict reads with no I/O, added
   before an existing Supabase round-trip, so the auth-refresh P95 (<200 ms)
   should be unaffected — reasoned, not measured.
+
+---
+
+## Review follow-up (2026-09-09)
+
+**The default provider allowlist was wrong and §5 above overstated the safety.**
+It listed `phone,password,google.com,apple.com`. Only phone sign-in is actually
+implemented (`signInWithCredential` over a phone credential) — and `password` in
+particular was a trap: an account whose email is unverified passes the provider
+check, then fails the verified-contact check, producing a **silent, permanent
+401 on every request and socket, after the account already exists**, with no
+self-service recovery. §5's claim of "no visible change for any account that
+signed in with phone, password, Google or Apple" was wrong for that case.
+
+The default is now `phone` alone, and the empty-setting fallback matches. An
+unlisted provider is rejected at sign-in *before* any account exists, which is
+the far better failure mode. Pinned by
+`test_default_allowlist_admits_only_what_the_apps_use`.

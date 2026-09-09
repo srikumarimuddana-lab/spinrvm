@@ -9,7 +9,7 @@
 | Surface(s) | backend |
 | Domain (Sentry tag) | ai |
 | PR / commit link | branch `claude/pr-5138-implementation-27zn2l` |
-| Related issue or gap ID | F06, `docs/security/2026-09-08-ai-security-assessment.md` (PR #5138), remediation order 2 |
+| Related issue or gap ID | F06, the AI security assessment on PR #5138, remediation order 2 |
 
 ## 1. Issue / gap identified
 
@@ -235,3 +235,27 @@ preferred long-term shape) rather than restoring the verbatim passthrough.
   regex pass, not benchmarked.
 - **Support staff have not been told** about the instruction-field change in §5.
   That communication is owed before this reaches production.
+
+---
+
+## Review follow-up (2026-09-09)
+
+**The key denylist only covered SCALAR values, and §4's justification for
+recursing into containers was false.** It read "its leaves get the same
+treatment one level down anyway" — untrue for exactly the data the denylist
+exists to catch, because the leaves are floats and the string pattern pass
+cannot see a number. So `{"lat": [52.13]}`, `{"pickup": {"coords": [...]}}` and
+GeoJSON `{"location": [lng, lat]}` all still shipped exact coordinates to /mcp,
+one container deep — the same leak, unfixed.
+
+`_redact_numeric_leaves` now redacts every numeric leaf inside a denylisted
+key's container while preserving structure and still pattern-scrubbing strings
+inside it. `_LOCATION_CONTAINER_KEYS` adds the container spellings that carry no
+per-axis key (`location`, `coordinates`, `coords`, `latlng`, `position`).
+Booleans are excluded (bool is an int subclass). The AI_CHAT trip-endpoint
+exception applies at every depth.
+
+The parallel `_KEY_REDACTIONS` map is also gone: it duplicated `_LOCATION_KEYS`
+with every entry mapping to the same constant, and a key added to one but not
+the other raised `KeyError` inside `_scrub_deep`'s broad `except`, which returns
+the value **unscrubbed** — a silent privacy regression dressed as resilience.

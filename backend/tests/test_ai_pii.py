@@ -291,7 +291,7 @@ class TestCardNumbers:
 
 
 class TestStructuredFieldRedaction:
-    """F06 (2026-09-08 AI security assessment) — the key-name denylist.
+    """F06 (AI security assessment (PR #5138)) — the key-name denylist.
 
     The pattern pass can only see string CONTENT. Two categories are invisible
     to it however good the regex is: a coordinate stored as a float, and a bare
@@ -337,11 +337,41 @@ class TestStructuredFieldRedaction:
         out = scrub_pii_deep({"name": "call +13065550001"}, policy=ScrubPolicy.STRICT)
         assert out["name"] == "call [PHONE]"
 
-    def test_denylisted_key_holding_a_container_is_recursed_not_replaced(self):
-        """Replacing a container wholesale would silently drop structure the
-        caller depends on; its leaves get the same treatment one level down."""
-        out = scrub_pii_deep({"lat": {"value": 52.1}}, policy=ScrubPolicy.STRICT)
-        assert out == {"lat": {"value": 52.1}}
+    @pytest.mark.parametrize(
+        "payload,expected",
+        [
+            ({"lat": [52.1332], "lng": [-106.67]}, {"lat": ["[COORD]"], "lng": ["[COORD]"]}),
+            ({"pickup": {"coords": [52.1332, -106.67]}}, {"pickup": {"coords": ["[COORD]", "[COORD]"]}}),
+            # GeoJSON's own [lng, lat] ordering, with no per-axis key at all.
+            ({"location": [-106.67, 52.1332]}, {"location": ["[COORD]", "[COORD]"]}),
+            ({"lat": {"value": 52.1}}, {"lat": {"value": "[COORD]"}}),
+        ],
+    )
+    def test_coordinates_inside_containers_are_redacted(self, payload, expected):
+        """Review follow-up. The first version replaced only SCALAR values and
+        recursed into containers on the reasoning that "its leaves get the same
+        treatment one level down anyway" — which is FALSE for the floats the
+        denylist exists to catch: the string pattern pass cannot see a number.
+        So `{"lat": [52.13]}` and GeoJSON `{"location": [lng, lat]}` still
+        shipped exact coordinates to /mcp, one container deep."""
+        assert scrub_pii_deep(payload, policy=ScrubPolicy.STRICT) == expected
+
+    def test_container_structure_is_preserved_not_collapsed(self):
+        """Only the numeric leaves change — a caller may depend on the shape,
+        and strings inside still get the ordinary pattern scrub."""
+        out = scrub_pii_deep({"coords": {"lat": 52.1, "label": "call 306-555-1234"}}, policy=ScrubPolicy.STRICT)
+        assert out == {"coords": {"lat": "[COORD]", "label": "call [PHONE]"}}
+
+    def test_booleans_are_not_mistaken_for_coordinates(self):
+        """bool is an int subclass; redacting it would corrupt a flag."""
+        out = scrub_pii_deep({"location": {"active": True}}, policy=ScrubPolicy.STRICT)
+        assert out == {"location": {"active": True}}
+
+    def test_ai_chat_keeps_container_coordinates_too(self):
+        """The ADR 012 trip-endpoint exception applies at every depth, or the
+        in-app assistant loses pins it needs verbatim."""
+        payload = {"location": [-106.67, 52.1332]}
+        assert scrub_pii_deep(payload, policy=ScrubPolicy.AI_CHAT) == payload
 
     def test_unrelated_numeric_fields_are_untouched(self):
         payload = {"fare": 24.50, "latency_ms": 120, "distance_km": 12.12}

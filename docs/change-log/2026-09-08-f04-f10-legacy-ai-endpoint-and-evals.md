@@ -9,7 +9,7 @@
 | Surface(s) | backend |
 | Domain (Sentry tag) | ai |
 | PR / commit link | branch `claude/pr-5138-implementation-27zn2l` |
-| Related issue or gap ID | F04 (order 2) + F10 (order 5), `docs/security/2026-09-08-ai-security-assessment.md` (PR #5138) |
+| Related issue or gap ID | F04 (order 2) + F10 (order 5), the AI security assessment on PR #5138 |
 
 ## 1. Issue / gap identified
 
@@ -244,3 +244,31 @@ The harness is not in CI, so a bad config cannot block a merge.
   longer touches it, but the adapter does. That is separate, larger work and is
   **not** in this change.
 - No load or latency measurement of the shim.
+
+---
+
+## Review follow-up (2026-09-09) — the shim is now a stub
+
+**Delegating `/support/chat` to the central engine quietly WIDENED it**, which
+§4 did not account for. The pre-F04 route was a prompt-only FAQ bot with no
+tools, no stored conversation and no cache participation. Routing it through
+`run_chat_turn` handed a legacy client:
+
+- **the full authenticated rider/driver tool set**, including
+  `propose_ride_booking` and `escalate_to_support` — whose side effect is a real
+  Zoho ticket — while the resulting `action` frame was silently dropped, because
+  this response shape has nowhere to put a card. The model would say it had
+  prepared something the caller never receives;
+- **cross-user FAQ-cache eligibility on every call**: `conversation_id=None`
+  meant every turn looked like a first turn (`prior_turns == 0`), so a
+  legacy-client answer could be stored and replayed to `/api/v1/ai/chat` riders;
+- a fresh `ai_conversations` row per request.
+
+The route is now a **stub**: authenticated, rate-limited, and returning
+`FALLBACK_REPLY` with no provider call at all. That closes the F04 bypass by
+construction — there is no AI call on this path for a control to be bypassed on
+— without granting the legacy surface anything it never had, and without
+404-ing an old build. `FALLBACK_REPLY` is the string this endpoint already
+returned whenever `GEMINI_API_KEY` was unset, so an old client is on a path it
+has always handled. Confirmed zero live callers; a 2026-04 audit records the
+driver app having used it historically.

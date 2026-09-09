@@ -9,7 +9,7 @@
 | Surface(s) | backend |
 | Domain (Sentry tag) | ai |
 | PR / commit link | branch `claude/pr-5138-implementation-27zn2l` |
-| Related issue or gap ID | F05 + F07, `docs/security/2026-09-08-ai-security-assessment.md` (PR #5138), remediation order 3 |
+| Related issue or gap ID | F05 + F07, the AI security assessment on PR #5138, remediation order 3 |
 
 Two findings in one entry because the assessment groups them as the same gate:
 *"fix cache metadata and MCP principal policy **before enabling those

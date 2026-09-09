@@ -9,9 +9,8 @@ not answer the question Spinr's customer-only guarantee actually depends on:
 
 Those are different policies. Firebase supports anonymous authentication, which
 mints a real UID and a perfectly valid, correctly-audienced ID token for a
-caller who never proved ownership of a phone number or email address. The
-2026-09-08 AI security assessment (F01,
-``docs/security/2026-09-08-ai-security-assessment.md``) reproduced the gap
+caller who never proved ownership of a phone number or email address. F01 of
+the AI security assessment on PR #5138 reproduced the gap
 offline: an anonymous payload was accepted by ``/auth/firebase``, provisioned a
 rider row with an empty phone, and the resulting Spinr JWT authenticated
 against the shared AI dependency.
@@ -74,6 +73,11 @@ def allowed_sign_in_providers() -> frozenset:
     the check. An empty/whitespace-only setting falls back to the field default
     rather than admitting everything — failing open here would be the whole
     finding again.
+
+    The fallback is "phone" only, matching the config default: it is the sole
+    provider the apps use, and admitting a provider that cannot satisfy the
+    verified-contact check below just converts a clean sign-in rejection into
+    a permanent post-provisioning 401.
     """
     raw = getattr(settings, "FIREBASE_ALLOWED_SIGN_IN_PROVIDERS", "") or ""
     parsed = {p.strip().lower() for p in raw.split(",") if p.strip()}
@@ -83,7 +87,7 @@ def allowed_sign_in_providers() -> frozenset:
             "FIREBASE_ALLOWED_SIGN_IN_PROVIDERS is empty or anonymous-only — "
             "falling back to the secure default allowlist"
         )
-        parsed = {"phone", "password", "google.com", "apple.com"}
+        parsed = {"phone"}
     return frozenset(parsed)
 
 

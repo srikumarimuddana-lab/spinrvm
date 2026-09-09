@@ -82,7 +82,7 @@ def _is_customer_principal(user: Dict[str, Any]) -> bool:
     /mcp exposes rider/driver tools scoped to the supplied identity. A staff
     principal is not such an identity and has no business on this surface.
 
-    F07 (2026-09-08 AI security assessment): this used to be
+    F07 (AI security assessment (PR #5138)): this used to be
     ``user.get("role") == "admin"``, which rejected exactly one of the six
     roles the verified staff pipeline returns — ``super_admin``,
     ``operations``, ``support``, ``finance`` and ``custom`` all reached the

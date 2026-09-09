@@ -625,7 +625,7 @@ async def get_current_user_active_session(
 ) -> dict:
     """``get_current_user`` plus a session-revocation tombstone check.
 
-    F02 (2026-09-08 AI security assessment): ordinary ``/auth/logout``
+    F02 (AI security assessment (PR #5138)): ordinary ``/auth/logout``
     deliberately leaves the access token valid until its ``exp`` (15 min by
     default) and only writes a tombstone. ``get_current_user`` does not consult
     that tombstone, so a signed-out session could keep driving AI turns —

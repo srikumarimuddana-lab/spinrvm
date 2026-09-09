@@ -250,7 +250,7 @@ class TestExecuteTool:
 
     @pytest.mark.anyio
     async def test_no_cache_flag_survives_truncation(self):
-        """F05 (2026-09-08 AI security assessment).
+        """F05 (AI security assessment (PR #5138)).
 
         `_no_cache` marks a turn as non-replayable across users — an
         area-scoped FAQ answer must never be served from the shared

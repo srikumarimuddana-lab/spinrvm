@@ -9,7 +9,7 @@
 | Surface(s) | backend, rider-app, shared |
 | Domain (Sentry tag) | auth (F02) / ai (F03) |
 | PR / commit link | branch `claude/pr-5138-implementation-27zn2l` |
-| Related issue or gap ID | F02 + F03, `docs/security/2026-09-08-ai-security-assessment.md` (PR #5138), remediation order 1 |
+| Related issue or gap ID | F02 + F03, the AI security assessment on PR #5138, remediation order 1 |
 
 Two findings in one entry: the assessment groups them as one acceptance
 criterion — *"logout blocks retained credentials for that session; another

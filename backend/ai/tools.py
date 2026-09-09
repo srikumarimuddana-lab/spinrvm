@@ -243,7 +243,7 @@ _GUARDRAIL_KEYS = ("note", "needs_confirmation", "needs_correction", "imprecise_
 # model context (orchestrator.py's tool loop, public_assistant.py::_strip_meta),
 # so it is not model-facing content at all.
 #
-# F05 (2026-09-08 AI security assessment): these MUST survive _cap_result. They
+# F05 (AI security assessment (PR #5138)): these MUST survive _cap_result. They
 # used to be ordinary keys, so a result over TOOL_RESULT_MAX_CHARS was rebuilt
 # as {_truncated, preview, **_GUARDRAIL_KEYS} and the flag vanished with
 # everything else not on that list. The orchestrator then saw an ordinary

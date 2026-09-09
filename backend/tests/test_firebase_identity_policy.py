@@ -1,6 +1,6 @@
 """F01 — Firebase customer-eligibility policy.
 
-Source finding: docs/security/2026-09-08-ai-security-assessment.md, F01
+Source finding: the AI security assessment on PR #5138, F01
 ("anonymous Firebase identities are not explicitly prohibited"). The
 assessment's own offline probe supplied an already-verified anonymous
 Firebase payload and observed both token issuance at /auth/firebase and
@@ -73,9 +73,10 @@ class TestEligibilityPolicy:
         assert exc.value.reason == "provider_not_allowed"
 
     def test_unlisted_provider_is_rejected(self):
-        with pytest.raises(FirebaseIdentityRejected) as exc:
-            enforce_customer_eligibility(_payload("custom"), surface="t")
-        assert exc.value.reason == "provider_not_allowed"
+        for provider in ("custom", "google.com", "apple.com", "password"):
+            with pytest.raises(FirebaseIdentityRejected) as exc:
+                enforce_customer_eligibility(_payload(provider), surface="t")
+            assert exc.value.reason == "provider_not_allowed", provider
 
     def test_allowed_provider_without_any_contact_claim_is_rejected(self):
         p = _payload()
@@ -85,16 +86,42 @@ class TestEligibilityPolicy:
         assert exc.value.reason == "no_verified_contact"
 
     def test_unverified_email_does_not_count_as_a_contact(self):
-        p = _payload("password", email="rider@example.ca", email_verified=False)
-        del p["phone_number"]
-        with pytest.raises(FirebaseIdentityRejected) as exc:
-            enforce_customer_eligibility(p, surface="t")
-        assert exc.value.reason == "no_verified_contact"
+        with patch(
+            "backend.utils.firebase_identity.settings.FIREBASE_ALLOWED_SIGN_IN_PROVIDERS",
+            "phone,password",
+        ):
+            p = _payload("password", email="rider@example.ca", email_verified=False)
+            del p["phone_number"]
+            with pytest.raises(FirebaseIdentityRejected) as exc:
+                enforce_customer_eligibility(p, surface="t")
+            assert exc.value.reason == "no_verified_contact"
 
     def test_verified_email_counts_as_a_contact(self):
-        p = _payload("password", email="rider@example.ca", email_verified=True)
-        del p["phone_number"]
-        enforce_customer_eligibility(p, surface="t")  # must not raise
+        """The contact rule itself accepts a verified email — asserted with the
+        allowlist widened, since `password` is deliberately NOT on the default
+        (see test_default_allowlist_admits_only_what_the_apps_use)."""
+        with patch(
+            "backend.utils.firebase_identity.settings.FIREBASE_ALLOWED_SIGN_IN_PROVIDERS",
+            "phone,password",
+        ):
+            p = _payload("password", email="rider@example.ca", email_verified=True)
+            del p["phone_number"]
+            enforce_customer_eligibility(p, surface="t")  # must not raise
+
+    def test_default_allowlist_admits_only_what_the_apps_use(self):
+        """A provider on the allowlist that cannot satisfy the verified-contact
+        rule turns a clean sign-in rejection into a silent, permanent 401 with
+        no self-service recovery: `password` with an unverified email passes the
+        provider check and then fails the contact check, on every request and
+        every socket, after the account already exists. Only phone sign-in is
+        implemented (signInWithCredential over a phone credential), so that is
+        the whole default."""
+        assert allowed_sign_in_providers() == frozenset({"phone"})
+        with pytest.raises(FirebaseIdentityRejected) as exc:
+            enforce_customer_eligibility(_payload("password", email="a@b.ca", email_verified=False), surface="t")
+        # Rejected as an unlisted PROVIDER, not as a missing contact — so the
+        # rejection happens before provisioning, not after.
+        assert exc.value.reason == "provider_not_allowed"
 
     def test_phone_provider_with_phone_claim_is_accepted(self):
         enforce_customer_eligibility(_payload("phone"), surface="t")

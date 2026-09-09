@@ -3,6 +3,13 @@ import { Platform } from 'react-native';
 import { Circle, Heatmap } from 'react-native-maps';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
+import {
+  HEAT_BLOB_RADIUS_FACTOR,
+  HEAT_RING_STOPS,
+  SOFT_HEAT_RENDER_ENABLED,
+  paintedPeakAlpha,
+  ringAlphas,
+} from '../../lib/heatFalloff';
 
 // Fallbacks only. The server sends the grid size it actually bucketed with
 // (cell_lat_deg / cell_lng_deg) because that size is tunable per service area;
@@ -15,6 +22,12 @@ const MAX_POLYGONS = 200;
 // than MAX_POLYGONS so iOS/non-Google-Maps builds don't push 400+ overlapping
 // translucent circles through the native bridge every poll.
 const MAX_BLOBS = 60;
+// The soft renderer draws HEAT_RING_STOPS.length shapes per cell instead of 2,
+// so the cell cap comes down to keep the native view count in the same order:
+// 60x2 = 120 shapes today, 45x4 = 180 with the soft path. Nothing in this repo
+// can profile Apple Maps or an Auto head unit, so this is a deliberately
+// conservative budget rather than a measured one.
+const MAX_SOFT_BLOBS = 45;
 // Metres per degree of latitude — used to size blob radii off the server's
 // own grid cell size rather than a hardcoded metre value, so denser grids
 // (smaller service areas) automatically get smaller, tighter blobs.
@@ -115,7 +128,10 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
       <Heatmap
         points={points}
         radius={45}
-        opacity={0.75}
+        // Match the peak translucency the iOS/Auto ring stacks reach, so the
+        // same demand does not read as heavier on Android than on iOS. Only a
+        // first-order match: the native layer still maps colour its own way.
+        opacity={SOFT_HEAT_RENDER_ENABLED ? paintedPeakAlpha() : 0.75}
         gradient={{
           colors: gradientColors,
           startPoints,
@@ -131,9 +147,10 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
   // Radii are derived from the server's own grid size so denser grids (small
   // service areas) get proportionally smaller blobs rather than overlapping
   // into one blob.
-  const outerRadiusM = cellLat * METERS_PER_LAT_DEG * 0.62;
+  const outerRadiusM =
+    cellLat * METERS_PER_LAT_DEG * (SOFT_HEAT_RENDER_ENABLED ? HEAT_BLOB_RADIUS_FACTOR : 0.62);
   const innerRadiusM = outerRadiusM * 0.5;
-  const blobCells = visibleCells.slice(0, MAX_BLOBS);
+  const blobCells = visibleCells.slice(0, SOFT_HEAT_RENDER_ENABLED ? MAX_SOFT_BLOBS : MAX_BLOBS);
 
   return (
     <>
@@ -141,6 +158,31 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
         const idx = weightToRampIndex(cell.weight, maxWeight);
         const color = colors.heatmapRamp[idx];
         const center = cellCenter(cell.lat, cell.lng, cellLat, cellLng);
+
+        if (SOFT_HEAT_RENDER_ENABLED) {
+          // Nested rings whose STACKED opacity follows a Gaussian, so the blob
+          // fades instead of stepping. strokeColor is set explicitly here: the
+          // two-circle path below sets only strokeWidth={0} and leaves the
+          // colour undefined, which is the leading candidate for the black
+          // outlines reported on iOS (HM26-05 — candidate containment, not a
+          // confirmed cause; it still needs reproducing on a native build).
+          const alphas = ringAlphas(maxWeight > 0 ? cell.weight / maxWeight : 0);
+          return (
+            <React.Fragment key={`hm-${cell.lat}-${cell.lng}`}>
+              {HEAT_RING_STOPS.map((stop, i) => (
+                <Circle
+                  key={stop}
+                  center={center}
+                  radius={outerRadiusM * stop}
+                  fillColor={hexToRgba(color, alphas[i])}
+                  strokeColor="transparent"
+                  strokeWidth={0}
+                />
+              ))}
+            </React.Fragment>
+          );
+        }
+
         return (
           // Keyed on the cell's own coordinates, not array index — the list
           // is re-sorted by weight on every poll, so an index-prefixed key

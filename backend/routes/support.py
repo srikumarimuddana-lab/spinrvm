@@ -1,11 +1,11 @@
 """
-support.py — legacy support-chat compatibility shim + Zoho escalation.
+support.py — retired support-chat stub + Zoho escalation.
 
 POST /support/chat
   Body: {"message": str, "driver_id": str}
-  Returns: {"reply": str}
+  Returns: {"reply": str}  — always the support-line fallback.
 
-F04 (2026-09-08 AI security assessment): this route used to call Gemini
+F04 (AI security assessment, PR #5138): this route used to call Gemini
 directly. It was mounted, authenticated, and completely outside every AI
 control added since: it never consulted ``ai_assistant_enabled`` (the "stop
 sending user data to the third-party LLM provider" incident lever), never went
@@ -14,16 +14,10 @@ quota, had no chat-length bound, and called the synchronous
 ``generate_content`` inside an async route — so a slow provider blocked that
 worker's event loop.
 
-It now delegates to the same central engine as ``/api/v1/ai/chat``
-(``ai.orchestrator.run_chat_turn``), which applies all of the above. The route
-is kept rather than deleted purely for compatibility: no client in this repo
-calls it (the shared help-centre UI uses ``/ai/chat`` —
-``shared/components/SupportScreen.tsx``), but an older installed build in the
-field might, and a 404 there would strand a driver mid-conversation. New
-clients must use ``/api/v1/ai/chat``.
-
-PII scrubbing, conversation persistence and tool authorization now all happen
-inside the central engine, on the same terms as every other AI surface.
+It is now a stub that makes no provider call at all, so none of those controls
+can be circumvented on this path by construction. See ``support_chat`` for why
+a stub rather than a delegation to the central engine. POST /support/escalate
+below is unaffected and still live.
 """
 
 import logging
@@ -32,13 +26,11 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 try:
-    from ai.orchestrator import run_chat_turn
     from dependencies import get_current_user, get_current_user_active_session
     from services.zoho_desk_integration import create_support_ticket
     from services.zoho_desk_service import ZohoDeskError
     from utils.rate_limiter import ai_chat_limit
 except ImportError:
-    from ..ai.orchestrator import run_chat_turn  # type: ignore
     from ..utils.rate_limiter import ai_chat_limit  # type: ignore
     from .dependencies import (  # type: ignore
         get_current_user,
@@ -79,60 +71,41 @@ class ChatRequest(BaseModel):
 async def support_chat(
     req: ChatRequest,
     request: Request,
-    # F02: same session-revocation gate as /api/v1/ai/chat. This is an AI turn
-    # now, so it must not outlive a signed-out session either.
     current_user: dict = Depends(get_current_user_active_session),
 ):
-    """Legacy support-chat endpoint. Delegates to the central AI engine.
+    """Deprecated. Retired stub — returns the support-line fallback.
 
-    Deprecated — new clients use ``POST /api/v1/ai/chat``. Kept only so an
-    older installed build does not 404. See the module docstring for the F04
-    finding this rewrite closes.
+    New clients use ``POST /api/v1/ai/chat``. Nothing in this repo calls this
+    route (the shared help-centre UI uses ``/ai/chat`` —
+    ``shared/components/SupportScreen.tsx``); it is kept mounted only so an
+    older installed build gets its familiar ``{"reply": ...}`` shape instead of
+    a 404 mid-conversation.
 
-    Returns the legacy ``{"reply": str}`` shape unchanged, so an old client
-    parses the response exactly as before.
+    Why a stub rather than a delegation to the central engine: delegating was
+    tried first and quietly WIDENED this endpoint. The pre-F04 route was a
+    prompt-only FAQ bot with no tools, no stored conversation and no cache
+    participation. Routing it through ``run_chat_turn`` handed a legacy client
+    the full authenticated rider/driver tool set — including
+    ``propose_ride_booking`` and ``escalate_to_support``, whose side effects
+    (a real Zoho ticket) would fire while the resulting ``action`` frame was
+    dropped, because this response shape has nowhere to put a card. It also
+    passed ``conversation_id=None`` on every call, so every turn looked like a
+    first turn (``prior_turns == 0``) and became eligible for the CROSS-USER
+    FAQ response cache, letting a legacy-client answer be replayed to
+    ``/api/v1/ai/chat`` riders.
+
+    Returning the fallback closes the F04 bypass completely — there is no
+    provider call on this path at all, so the global AI switch, the quota and
+    the provider factory cannot be circumvented by definition — without
+    granting the legacy surface anything it never had. ``FALLBACK_REPLY`` is
+    the string this endpoint already returned whenever ``GEMINI_API_KEY`` was
+    unset, so an old client is on a path it has always handled.
     """
-    # Audience mirrors routes/ai.py::_audience_for — the user row decides the
-    # tool set; the request body never does.
-    audience = "driver" if current_user.get("is_driver") else "rider"
-
-    reply_parts: list[str] = []
-    try:
-        async for name, payload in run_chat_turn(
-            user=current_user,
-            conversation_id=None,
-            user_message=req.message,
-            audience=audience,
-        ):
-            if name == "token":
-                reply_parts.append(payload.get("text", ""))
-            elif name == "error":
-                # The engine's own refusal (AI disabled, quota exceeded,
-                # provider misconfigured). Log it and fall back rather than
-                # 500 — an old client has no handler for a structured error
-                # body, and this endpoint must never strand a driver
-                # mid-conversation.
-                logger.error(
-                    "legacy support chat refused by the AI engine",
-                    extra={
-                        "domain": "ai",
-                        "surface": "backend",
-                        "code": payload.get("code"),
-                    },
-                )
-                return {"reply": FALLBACK_REPLY}
-    except Exception:
-        # The failure still surfaces loudly (CLAUDE.md: never swallow an error
-        # into an unlevelled warning), but the response stays human-readable.
-        logger.error(
-            "legacy support chat failed",
-            exc_info=True,
-            extra={"domain": "ai", "surface": "backend"},
-        )
-        return {"reply": FALLBACK_REPLY}
-
-    reply = "".join(reply_parts).strip()
-    return {"reply": reply or FALLBACK_REPLY}
+    logger.info(
+        "deprecated /support/chat called — returning the support-line fallback",
+        extra={"domain": "ai", "surface": "backend", "user_id": current_user.get("id")},
+    )
+    return {"reply": FALLBACK_REPLY}
 
 
 class EscalateRequest(BaseModel):

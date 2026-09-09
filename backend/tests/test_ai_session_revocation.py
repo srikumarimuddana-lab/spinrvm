@@ -1,6 +1,6 @@
 """F02 — session revocation on protected AI requests.
 
-Source finding: docs/security/2026-09-08-ai-security-assessment.md, F02.
+Source finding: the AI security assessment on PR #5138, F02.
 Ordinary /auth/logout deliberately leaves the access token valid until its
 exp (15 min) and only writes a tombstone; get_current_user does not consult
 that tombstone. So a signed-out session could keep driving AI turns — sending

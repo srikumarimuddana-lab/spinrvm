@@ -296,7 +296,7 @@ def scrub_pii_deep(value: Any, depth: int = 0, *, policy: ScrubPolicy = ScrubPol
 #     string leaf, so the recursive scrubber walked straight past it. /mcp's
 #     "STRICT serialization" therefore shipped exact pickup/dropoff coordinates
 #     to an external MCP client, and the saved-place tool supplies exactly those
-#     fields. (2026-09-08 AI security assessment, F06.)
+#     fields. (AI security assessment (PR #5138), F06.)
 #   * a bare nine-digit SIN. A content regex for it is deliberately NOT added --
 #     see the "govid" pattern's own comment: nine bare digits collide with this
 #     codebase's own id/timestamp shapes, and matching on digit count alone
@@ -337,14 +337,10 @@ _ALWAYS_SENSITIVE_KEYS = frozenset(
     }
 )
 
-_KEY_REDACTIONS = {
-    "lat": "[COORD]",
-    "latitude": "[COORD]",
-    "lng": "[COORD]",
-    "lon": "[COORD]",
-    "long": "[COORD]",
-    "longitude": "[COORD]",
-}
+# Keys whose value is a coordinate PAIR/LIST rather than a single number, so
+# the denylist has to reach inside the container. "location" and "coordinates"
+# are GeoJSON's own spelling ([lng, lat]) and carry no per-axis key at all.
+_LOCATION_CONTAINER_KEYS = frozenset({"location", "coordinates", "coords", "latlng", "lat_lng", "position"})
 
 
 def _redaction_for_key(key: Any, policy: ScrubPolicy) -> Optional[str]:
@@ -354,15 +350,46 @@ def _redaction_for_key(key: Any, policy: ScrubPolicy) -> Optional[str]:
     normalized = key.strip().lower()
     if normalized in _ALWAYS_SENSITIVE_KEYS:
         return "[REDACTED]"
-    if normalized in _LOCATION_KEYS:
+    if normalized in _LOCATION_KEYS or normalized in _LOCATION_CONTAINER_KEYS:
         # Not expressed via _POLICY_SKIPS: that table gates the string PATTERN
         # pass, where AI_CHAT skips only "postal" and free-text coordinates are
         # still scrubbed. Structured trip-endpoint floats are the opposite case
         # — they are the data AI_CHAT deliberately keeps (ADR 012, PIA S3), so
         # the condition is stated directly rather than borrowed from a table
         # that means something else.
-        return None if policy is ScrubPolicy.AI_CHAT else _KEY_REDACTIONS[normalized]
+        #
+        # One token for every location key rather than a parallel
+        # key -> token map: a second structure to keep in sync bought nothing,
+        # and a key present in one but not the other raised KeyError inside
+        # _scrub_deep's broad `except`, which returns the value UNSCRUBBED —
+        # a silent privacy regression dressed as resilience.
+        return None if policy is ScrubPolicy.AI_CHAT else "[COORD]"
     return None
+
+
+def _redact_numeric_leaves(value: Any, depth: int, token: str) -> Any:
+    """Replace every numeric leaf inside a container with ``token``.
+
+    The denylist replaces a SCALAR wholesale, but a coordinate is just as often
+    ``{"lat": [52.13]}``, ``{"pickup": {"coords": [52.13, -106.67]}}`` or
+    GeoJSON's ``{"location": [-106.67, 52.13]}``. The original code recursed
+    into those containers on the premise that "its leaves get the same
+    treatment one level down anyway" — false, because the leaves are floats and
+    the string pattern pass cannot see them, so exact coordinates shipped to
+    /mcp unredacted. Strings inside the container are still pattern-scrubbed by
+    the caller's normal recursion; only numbers need this.
+    """
+    if isinstance(value, bool):  # bool is an int subclass — not a coordinate
+        return value
+    if isinstance(value, (int, float)):
+        return token
+    if depth >= _MAX_SCRUB_DEPTH:
+        return value
+    if isinstance(value, dict):
+        return {k: _redact_numeric_leaves(v, depth + 1, token) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_redact_numeric_leaves(v, depth + 1, token) for v in value)
+    return value
 
 
 def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
@@ -375,14 +402,18 @@ def _scrub_deep(value: Any, depth: int, policy: ScrubPolicy) -> Any:
             out = {}
             for k, v in value.items():
                 token = _redaction_for_key(k, policy)
-                # Only a scalar is replaced wholesale. A denylisted key holding
-                # a dict/list is still recursed into: replacing the container
-                # would silently drop structure the caller may depend on, and
-                # its leaves get the same treatment one level down anyway.
-                if token is not None and not isinstance(v, (dict, list, tuple)):
-                    out[k] = token
-                else:
+                if token is None:
                     out[k] = _scrub_deep(v, depth + 1, policy)
+                elif isinstance(v, (dict, list, tuple)):
+                    # Structure is preserved (a caller may depend on the shape)
+                    # but every NUMERIC leaf inside is redacted — floats are
+                    # invisible to the string pattern pass, which is how
+                    # {"lat": [52.13]} and GeoJSON {"location": [lng, lat]}
+                    # previously shipped raw to /mcp. Strings inside still get
+                    # the normal pattern scrub.
+                    out[k] = _scrub_deep(_redact_numeric_leaves(v, depth + 1, token), depth + 1, policy)
+                else:
+                    out[k] = token
             return out
         if isinstance(value, (list, tuple)):
             return type(value)(_scrub_deep(v, depth + 1, policy) for v in value)

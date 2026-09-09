@@ -44,7 +44,7 @@ control (`_require_ride_in_state`-style guards apply there, not here).
    `/api/v1`, so every request 404'd, `json.reply` came back undefined, and
    every `not-icontains` assertion passed against an empty string — the suite
    reported green while testing nothing (F10,
-   `docs/security/2026-09-08-ai-security-assessment.md`). The two
+   the AI security assessment on PR #5138). The two
    `SPINR_EVAL_NO_REPLY` / non-empty-output guards now in `defaultTest` fail
    loudly on that class of transport error, but a run whose *only* passing
    evidence is negative assertions still proves less than one where the

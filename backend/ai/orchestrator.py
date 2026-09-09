@@ -45,6 +45,7 @@ except ImportError:
     from ai.tools import execute_tool, tool_defs_for
 
 try:
+    from ..core.config import settings
     from ..settings_loader import get_app_settings
     from ..utils.metrics import inc as _metric_inc
     from ..utils.redis_client import (
@@ -56,6 +57,7 @@ try:
         redis_set_nx,
     )
 except ImportError:
+    from core.config import settings
     from settings_loader import get_app_settings
     from utils.metrics import inc as _metric_inc
     from utils.redis_client import (
@@ -178,6 +180,7 @@ async def _over_daily_cap(user_id: str, cap: int) -> bool:
 
 _CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-calling turn
 
+
 # Release the conversation lock ONLY if we still own it (F09).
 #
 # The lock used to be released with an unconditional DELETE, which is unsafe
@@ -188,6 +191,13 @@ _CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-
 #
 # Compare-and-delete has to be atomic, hence Lua: a GET-then-DELETE can still
 # delete B's lock if B acquires in the gap between the two calls.
+def _redis_configured() -> bool:
+    """Whether a real Redis is configured, as opposed to redis_client's
+    in-process dict fallback. Decides which release path is sound — see
+    _release_conversation_lock."""
+    return bool(getattr(settings, "REDIS_URL", None))
+
+
 _RELEASE_IF_OWNER_LUA = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
     return redis.call('del', KEYS[1])
@@ -204,21 +214,27 @@ async def _release_conversation_lock(lock_key: str, token: str) -> None:
     of it. Raising here would turn a Redis blip into a failed chat turn whose
     reply the rider has already seen streamed.
     """
-    try:
-        await redis_eval(_RELEASE_IF_OWNER_LUA, 1, lock_key, token)
+    if _redis_configured():
+        try:
+            await redis_eval(_RELEASE_IF_OWNER_LUA, 1, lock_key, token)
+        except Exception:
+            # Includes RuntimeError. redis_eval re-raises RuntimeErrors coming
+            # from a LIVE connection as well as its own "unconfigured" one
+            # (see its `except RuntimeError: raise`), so catching RuntimeError
+            # here to mean "no Lua available" would silently drop a real Redis
+            # error onto the non-atomic path below — against a cluster-shared
+            # key, which is exactly the clobber the token exists to prevent.
+            # Configured Redis therefore gets the atomic path or nothing.
+            logger.error(
+                "ai conversation-lock release failed — lock will expire on its TTL",
+                exc_info=True,
+                extra={"lock_key": lock_key},
+            )
         return
-    except RuntimeError:
-        # REDIS_URL unset — redis_client is a single in-process dict and there
-        # is no Lua interpreter (see redis_eval's docstring). No other replica
-        # can hold this key, so a non-atomic compare-and-delete is exact here.
-        pass
-    except Exception:
-        logger.error(
-            "ai conversation-lock release failed — lock will expire on its TTL",
-            exc_info=True,
-            extra={"lock_key": lock_key},
-        )
-        return
+
+    # REDIS_URL unset — redis_client is a single in-process dict and there is
+    # no Lua interpreter (see redis_eval's docstring). No other replica can
+    # hold this key, so a non-atomic compare-and-delete is exact here.
     try:
         if await redis_get(lock_key) == token:
             await redis_delete(lock_key)
@@ -446,7 +462,7 @@ async def _run_chat_turn(
         for _iteration in range(max_iterations):
             turn_text: List[str] = []
             turn_end = None
-            # F08 (2026-09-08 AI security assessment): provider text used to be
+            # F08 (AI security assessment (PR #5138)): provider text used to be
             # yielded raw and filtered only at the end, for the STORED copy —
             # so a clean ai_messages transcript did not prove the rider saw a
             # clean answer. Filter before delivery instead, through a buffer
@@ -592,7 +608,7 @@ async def _run_chat_turn(
     # This comment used to end "the raw text has already streamed to the
     # client this turn, so the rider still sees the real reply; only
     # stored/replayed copies change." That was a deliberate choice and F08
-    # (2026-09-08 AI security assessment) found it wrong: a clean ai_messages
+    # (AI security assessment (PR #5138)) found it wrong: a clean ai_messages
     # row proved nothing about what the rider actually received, and a
     # scripted provider reply containing a synthetic email reached the client
     # unchanged. The stream is filtered too now (StreamingOutputFilter above).

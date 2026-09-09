@@ -5,106 +5,86 @@ The problem
 ``ai/orchestrator.py`` yielded provider text straight to the client as it
 arrived, and applied ``scrub_pii`` / ``filter_tool_leakage`` only at the end,
 to the copy written to ``ai_messages`` and the FAQ cache. So a clean database
-transcript did not prove the rider saw a clean answer: the 2026-09-08 AI
-security assessment (F08) scripted a provider response containing a synthetic
+transcript did not prove the rider saw a clean answer: the AI security
+assessment (PR #5138, F08) scripted a provider response containing a synthetic
 email address and watched it reach the emitted response unchanged.
 
-Filtering a stream is not the same as filtering a string. A redactable value
-can arrive split across chunks — ``"call me at 306-"`` then ``"555-1234"`` —
-and scrubbing each chunk on its own sees neither half as a match. That is the
-"detecting sensitive values across token boundaries" the assessment asks for.
+Why the obvious implementation is wrong
+---------------------------------------
+The tempting approach is to hold back a tail of the buffer, scrub the head, and
+emit it. **That is unsound, and the first version of this module shipped it.**
+``scrub_pii`` is not decomposable over string splits, for three separate
+reasons:
+
+* Under ``ScrubPolicy.AI_CHAT`` it stashes bracketed trip pins
+  (``_BRACKETED_COORDS``) before the pattern pass. Split ``[`` from the digits
+  and the stash never matches, so the pin is destroyed — the exact 2026-09-04
+  re-geocode regression the AI_CHAT exception exists to prevent.
+* Patterns run **sequentially**, and an earlier substitution can create the
+  boundary a later pattern needs. ``3782 822463 10005306-555-1234`` only
+  matches the Amex pattern *after* the phone substitution produces a non-digit
+  boundary. Scanning the raw buffer for "matches to avoid splitting" cannot see
+  a match that does not exist yet, so the split lands inside it and a full PAN
+  is emitted raw.
+* Several patterns rely on lookbehind/lookahead anchors to avoid colliding with
+  this codebase's own ids and timestamps. Cut a 13-digit reference number in
+  the middle and the tail ``4567890123`` matches ``[2-9]\\d{9}`` at string
+  start — the filter *invents* a redaction and corrupts a legitimate answer.
+
+So: never hand ``scrub_pii`` a fragment.
 
 The approach
 ------------
-Hold back a tail of the text and only emit what can no longer change.
+Always scrub the **whole accumulated buffer**, and hold back in *output* space:
+emit only the prefix of the scrubbed result that is far enough from its end
+that more input cannot change it. Every scrub therefore sees exactly the string
+the final scrub will see, and the streamed bytes are identical to filtering the
+whole reply at once — which is what the differential tests assert.
 
-Two distinct hazards, handled by two distinct mechanisms:
-
-1. **An incomplete match at the tail.** ``"...306-555-12"`` is not a phone
-   number yet and would emit unredacted, then the remaining ``"34"`` would
-   follow harmlessly. ``_HOLDBACK_CHARS`` keeps the last N characters
-   unemitted until more text arrives or the stream ends, so a value that is
-   still being assembled is never released early. N must exceed the longest
-   value that could plausibly be split this way.
-
-2. **A complete match straddling the cut point.** Holding back N characters
-   still leaves a cut at ``len - N``, and a match can start before it and end
-   after it. Splitting there is worse than useless: the head emits the value's
-   first characters raw, and the tail — no longer matching the pattern without
-   them — emits the rest raw too, so a holdback alone can *defeat* the scrub
-   rather than help it. ``_safe_cut`` therefore runs the real patterns over
-   the buffer and walks the cut backwards past any match that overlaps it.
-
-Neither mechanism alone is sufficient; both are cheap.
+``_MIN_RELEASE_CHARS`` coalesces the re-scrubs. Scrubbing the whole buffer on
+every token would be O(n^2) with a painful constant (measured: ~515 ms of CPU
+for a 4 KB reply at 4-char chunks). Attempting a release only once ~32 new
+characters have accumulated brings that to ~67 ms in ~0.5 ms slices, which is
+affordable against a turn that already costs seconds of provider latency. This
+is purely a cost knob — correctness does not depend on it, because the scrub
+still sees the whole buffer either way.
 
 What this deliberately does NOT do
 ----------------------------------
-It does not make the emitted text equal to the fully-scrubbed final text in
-every case. Redaction is applied to progressively larger prefixes, so a value
-that only becomes matchable with context far beyond the holdback window can
-still slip. Regex-detectable categories are what this closes — the same scope
-limit ``pii.py`` documents for itself. A plain name is not caught here either.
+Only regex-detectable categories are caught — the same scope limit ``pii.py``
+documents for itself. A plain name, a free-form address or a provincial licence
+number streams through untouched, exactly as they do in the stored copy.
 
-It also does not replace the final scrub in the orchestrator: the stored copy
-must still be filtered independently, because ``flush()`` correctness is not
-something the persistence path should have to depend on.
+It also does not replace the final scrub in the orchestrator: the stored copy is
+filtered independently, so the persistence path never depends on this module
+having been correct.
 """
 
 import logging
-from typing import List
 
 try:
-    from .pii import _PII_PATTERNS, _POLICY_SKIPS, ScrubPolicy, filter_tool_leakage, scrub_pii
+    from .pii import ScrubPolicy, filter_tool_leakage, scrub_pii
 except ImportError:  # python -m backend.server vs top-level
-    from ai.pii import (  # type: ignore
-        _PII_PATTERNS,
-        _POLICY_SKIPS,
-        ScrubPolicy,
-        filter_tool_leakage,
-        scrub_pii,
-    )
+    from ai.pii import ScrubPolicy, filter_tool_leakage, scrub_pii  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-# How much text to withhold from the client until more arrives.
+# How much of the SCRUBBED output to withhold until more input arrives.
 #
-# Sized above the longest value that could realistically be assembled across
-# chunk boundaries: an email address is the longest of the categories
-# `pii.py` matches (cards top out around 25 characters, phones 20, bracketed
-# coordinates 30, SIN 11, postal code 8). 96 gives generous headroom for a
-# long local-part@domain without making the UI feel like it stutters — the
-# holdback only ever delays text, it never drops it, and `flush()` releases
-# whatever is left the moment the turn ends.
+# Sized above the longest single value the patterns can match, so that adding
+# more input can never rewrite text already released: an email address is the
+# longest category (cards top out around 25 characters, bracketed coordinates
+# 30, phones 20, SIN 11, postal code 8). 96 leaves generous headroom.
 #
-# This bounds hazard 1 only (a partial match at the tail). Complete matches of
-# ANY length are handled by `_safe_cut`, which does not depend on this value.
+# The holdback only ever delays text — `flush()` releases whatever remains the
+# moment the turn ends, and `_release` additionally refuses to emit anything
+# that would contradict what was already sent.
 _HOLDBACK_CHARS = 96
 
-
-def _safe_cut(buffer: str, cut: int, policy: ScrubPolicy) -> int:
-    """Move ``cut`` back so it does not fall inside a redactable match.
-
-    Returns the largest index <= ``cut`` such that no pattern match in
-    ``buffer`` starts before it and ends after it. A match that *ends exactly*
-    at the cut is fine — it is wholly inside the emitted head and will be
-    redacted there.
-
-    Runs the same ``_PII_PATTERNS`` the scrubber does, honouring the policy's
-    skip set, so it can never disagree with ``scrub_pii`` about what counts as
-    a match.
-    """
-    if cut <= 0:
-        return 0
-    skips = _POLICY_SKIPS[policy]
-    for tag, pattern, _replacement in _PII_PATTERNS:
-        if tag in skips:
-            continue
-        for match in pattern.finditer(buffer):
-            if match.start() < cut < match.end():
-                cut = match.start()
-                if cut <= 0:
-                    return 0
-    return cut
+# Minimum new input between release attempts. A pure cost control — see the
+# module docstring. Larger means fewer whole-buffer scrubs and chunkier
+# streaming; smaller means smoother streaming and more CPU.
+_MIN_RELEASE_CHARS = 32
 
 
 class StreamingOutputFilter:
@@ -121,66 +101,84 @@ class StreamingOutputFilter:
         if tail:
             yield tail
 
-    ``feed`` returns the text now safe to emit (often ``""`` early in a
-    stream, while the holdback fills). ``flush`` returns whatever remains,
-    fully scrubbed. Every character fed is eventually emitted exactly once,
-    modulo redaction — asserted by the round-trip tests.
+    ``feed`` returns the text now safe to emit (``""`` while the holdback fills
+    or between coalesced releases). ``flush`` returns the remainder. The
+    concatenation of everything returned equals
+    ``filter_tool_leakage(scrub_pii(whole_text, policy))`` — asserted directly
+    by the differential tests, which is the only property worth having here.
 
     Never raises on content: a filter failure must not break a chat turn, the
-    same contract ``scrub_pii_deep`` holds. On an unexpected error it falls
-    back to scrubbing and emitting the whole buffer, which is the safe
-    direction (redacted output, no data loss) rather than emitting raw.
+    same contract ``scrub_pii_deep`` holds.
     """
 
-    def __init__(self, *, policy: ScrubPolicy = ScrubPolicy.AI_CHAT, holdback: int = _HOLDBACK_CHARS):
+    def __init__(
+        self,
+        *,
+        policy: ScrubPolicy = ScrubPolicy.AI_CHAT,
+        holdback: int = _HOLDBACK_CHARS,
+        min_release: int = _MIN_RELEASE_CHARS,
+    ):
         self._policy = policy
         self._holdback = max(0, holdback)
-        self._buffer = ""
-        self._emitted: List[str] = []
+        self._min_release = max(0, min_release)
+        self._raw = ""
+        self._emitted = ""
+        self._unreleased = 0
 
     def feed(self, chunk: str) -> str:
         if not chunk:
             return ""
-        self._buffer += chunk
-        cut = len(self._buffer) - self._holdback
-        if cut <= 0:
+        self._raw += chunk
+        self._unreleased += len(chunk)
+        if self._unreleased < self._min_release:
             return ""
-        try:
-            cut = _safe_cut(self._buffer, cut, self._policy)
-        except Exception:  # noqa: BLE001 - never break the turn over filtering
-            logger.error("streaming output filter failed on cut; holding text", exc_info=True)
-            return ""
-        if cut <= 0:
-            return ""
-        head, self._buffer = self._buffer[:cut], self._buffer[cut:]
-        return self._apply(head)
+        self._unreleased = 0
+        return self._release(final=False)
 
     def flush(self) -> str:
-        """Emit the withheld tail. Safe to call more than once (idempotent:
-        the buffer is cleared), so a caller can flush in a ``finally`` without
-        tracking whether the normal path already did."""
-        if not self._buffer:
-            return ""
-        head, self._buffer = self._buffer, ""
-        return self._apply(head)
+        """Emit everything still withheld. Idempotent — safe to call from a
+        ``finally`` without tracking whether the normal path already ran."""
+        return self._release(final=True)
 
     @property
     def emitted_text(self) -> str:
         """Everything released to the client so far, post-filter.
 
-        The orchestrator needs this to answer "what did the rider actually
-        see?" — which, once filtering is incremental, is no longer the same
-        string as the raw provider text.
+        The orchestrator persists this rather than the raw text, so the stored
+        transcript records what the rider actually received.
         """
-        return "".join(self._emitted)
+        return self._emitted
 
-    def _apply(self, text: str) -> str:
+    def _release(self, *, final: bool) -> str:
         try:
-            out = filter_tool_leakage(scrub_pii(text, policy=self._policy))
-        except Exception:  # noqa: BLE001
-            # Emitting raw here would defeat the whole point; emitting nothing
-            # would silently truncate the rider's answer. Redact wholesale.
-            logger.error("streaming output filter failed on scrub; redacting chunk", exc_info=True)
-            out = "[redacted]"
-        self._emitted.append(out)
+            full = filter_tool_leakage(scrub_pii(self._raw, policy=self._policy))
+        except Exception:  # noqa: BLE001 - a filter failure must not break the turn
+            logger.error(
+                "streaming output filter failed; withholding text until flush",
+                exc_info=True,
+                extra={"domain": "ai", "surface": "backend"},
+            )
+            # Withhold rather than emit raw. On the final call there is nothing
+            # left to withhold FOR, but emitting unfiltered text is the one
+            # outcome this module exists to prevent, so it stays withheld and
+            # the orchestrator's own final scrub still produces a clean stored
+            # copy.
+            return ""
+
+        stable = full if final else full[: max(0, len(full) - self._holdback)]
+
+        if not stable.startswith(self._emitted):
+            # A late redaction rewrote text already sent to the client. The
+            # holdback is sized so this cannot happen (no pattern match is
+            # longer than it), and no test case has ever produced it — but we
+            # cannot un-emit, so the safe response is to stop adding to a
+            # transcript we know is inconsistent, and say so loudly.
+            logger.error(
+                "streaming output filter: emitted prefix diverged from the final scrub — withholding the remainder",
+                extra={"domain": "ai", "surface": "backend"},
+            )
+            return ""
+
+        out = stable[len(self._emitted) :]
+        self._emitted = stable
         return out

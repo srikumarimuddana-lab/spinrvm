@@ -210,14 +210,18 @@ class TestHappyPaths:
         # persisted assistant row must be scrubbed the same as the user row,
         # not treated as trusted first-party text.
         #
-        # F08 (2026-09-08 AI security assessment) INVERTED the streaming half
-        # of this test. It used to assert `"306-555-1234" in tokens` with the
-        # comment "the client still sees the raw text streamed this turn" —
-        # i.e. it pinned the defect as intended behaviour. A clean
-        # ai_messages row does not prove the rider saw a clean answer, so the
-        # emitted stream is now filtered too. The phone number is split across
-        # two provider events here specifically to exercise the
-        # cross-chunk-boundary case.
+        # F08 (PR #5138) INVERTED the streaming half of this test. It used to
+        # assert `"306-555-1234" in tokens` with the comment "the client still
+        # sees the raw text streamed this turn" — i.e. it pinned the defect as
+        # intended behaviour. A clean ai_messages row does not prove the rider
+        # saw a clean answer, so the emitted stream is filtered too.
+        #
+        # This reply is shorter than StreamingOutputFilter's holdback, so it is
+        # released in one piece at flush(). That is deliberate here: this test
+        # covers the ORCHESTRATOR wiring (does filtered text reach the frames
+        # at all). The incremental release path — where every shipped defect
+        # actually lived — is covered in test_ai_stream_filter.py, whose
+        # fixtures all exceed the holdback on purpose.
         adapter = FakeAdapter([[_text("Your driver's number is 306-"), _text("555-1234, call anytime."), _end()]])
         frames, mocks = await _run(adapter)
         tokens = "".join(p["text"] for n, p in frames if n == "token")
@@ -236,8 +240,9 @@ class TestHappyPaths:
         adapter = FakeAdapter([[_text("Let me run "), _text("find_place to check that address for you."), _end()]])
         frames, mocks = await _run(adapter)
         # F08: same inversion as the PII test above — this used to assert
-        # "find_place" REACHED the client. Output rules now apply to the
-        # stream as well as the stored copy.
+        # "find_place" REACHED the client. Output rules now apply to the stream
+        # as well as the stored copy. Also below the holdback; see the note on
+        # that test for why that is fine here.
         tokens = "".join(p["text"] for n, p in frames if n == "token")
         assert "find_place" not in tokens
         assert "[internal]" in tokens
@@ -747,7 +752,7 @@ class TestConversationLock:
 
     @pytest.mark.anyio
     async def test_lock_release_is_ownership_checked(self):
-        """F09 (2026-09-08 AI security assessment): the lock was released with
+        """F09 (AI security assessment (PR #5138)): the lock was released with
         an unconditional DELETE. When a turn outlives the 90s TTL, turn A's
         release deletes turn B's freshly-acquired lock and turn C can start
         alongside B — so the release made the concurrency it exists to prevent
@@ -786,6 +791,7 @@ class TestConversationLock:
             patches[8],
             patch.object(orch, "redis_set_nx", AsyncMock(side_effect=fake_set_nx)),
             patch.object(orch, "redis_eval", AsyncMock(side_effect=fake_eval)),
+            patch.object(orch, "_redis_configured", lambda: True),
         ):
             async for _ in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message="hi"):
                 pass
@@ -809,7 +815,10 @@ class TestConversationLock:
                 return 1
             return 0
 
-        with patch.object(orch, "redis_eval", AsyncMock(side_effect=fake_eval)):
+        with (
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=fake_eval)),
+            patch.object(orch, "_redis_configured", lambda: True),
+        ):
             await orch._release_conversation_lock("ai:conv_lock:conv-1", "our-expired-token")
 
         assert stored["ai:conv_lock:conv-1"] == "someone-elses-token"
@@ -847,7 +856,7 @@ class TestConversationLock:
         A single in-process dict has no other holder to clobber, so the
         non-atomic compare-and-delete is exact there."""
         with (
-            patch.object(orch, "redis_eval", AsyncMock(side_effect=RuntimeError("no lua"))),
+            patch.object(orch, "_redis_configured", lambda: False),
             patch.object(orch, "redis_get", AsyncMock(return_value="tok")),
             patch.object(orch, "redis_delete", AsyncMock()) as del_mock,
         ):
@@ -858,8 +867,28 @@ class TestConversationLock:
     async def test_release_never_raises(self):
         """A failed release must not fail the turn — the rider has already seen
         the reply stream, and the lock carries a TTL."""
-        with patch.object(orch, "redis_eval", AsyncMock(side_effect=ConnectionError("down"))):
+        with (
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=ConnectionError("down"))),
+            patch.object(orch, "_redis_configured", lambda: True),
+        ):
             await orch._release_conversation_lock("ai:conv_lock:conv-1", "tok")
+
+    @pytest.mark.anyio
+    async def test_live_redis_runtimeerror_never_falls_back_to_the_racy_path(self):
+        """redis_eval re-raises RuntimeErrors from a LIVE connection as well as
+        its own "unconfigured" one, so treating RuntimeError as "no Lua" would
+        drop a real Redis error onto a non-atomic GET-then-DELETE against a
+        cluster-shared key — reintroducing the exact clobber the token
+        prevents. Configured Redis gets the atomic path or nothing."""
+        with (
+            patch.object(orch, "_redis_configured", lambda: True),
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=RuntimeError("Event loop is closed"))),
+            patch.object(orch, "redis_get", AsyncMock()) as get_mock,
+            patch.object(orch, "redis_delete", AsyncMock()) as del_mock,
+        ):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "tok")
+        get_mock.assert_not_awaited()
+        del_mock.assert_not_awaited()
 
 
 class TestDailyCapFallback:

@@ -121,7 +121,7 @@ class TestMiddleware:
     @pytest.mark.anyio
     @pytest.mark.parametrize("role", ["admin", "super_admin", "operations", "support", "finance", "custom"])
     async def test_every_verified_staff_role_rejected(self, role):
-        """F07 (2026-09-08 AI security assessment).
+        """F07 (AI security assessment (PR #5138)).
 
         The gate was ``user.get("role") == "admin"`` — one of the six roles
         the verified staff pipeline returns. Offline middleware probes

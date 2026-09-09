@@ -9,7 +9,7 @@
 | Surface(s) | backend (visible in rider-app / driver-app chat UI) |
 | Domain (Sentry tag) | ai |
 | PR / commit link | branch `claude/pr-5138-implementation-27zn2l` |
-| Related issue or gap ID | F08, `docs/security/2026-09-08-ai-security-assessment.md` (PR #5138), remediation order 4 |
+| Related issue or gap ID | F08, the AI security assessment on PR #5138, remediation order 4 |
 
 ## 1. Issue / gap identified
 
@@ -200,52 +200,65 @@ code rollback, with the caveat that reverting restores the finding.
 
 ## 9. Verification performed
 
-- [x] **Offline probe against the real module** (`probe_f08.py`) — the module is
-      pure, so it was exercised directly with `pii.py` loaded and `core.config`
-      stubbed: 5 secret types × 7 chunk sizes all redacted; streamed output
-      byte-identical to the whole-string scrub at 4 chunk sizes each; clean text
-      preserved exactly; `emitted_text` consistent; flush idempotent; both
-      policies honoured; and **400 randomised uneven chunkings** all redacted
-      and matched the whole-string result. **All pass.**
-- [x] **Second probe** (`probe_f08b.py`) re-ran every assertion in the new
-      pytest file against the real implementation, including a sweep placing
-      the secret at 40 different offsets so a fixed-holdback cut lands inside
-      it. **All pass.**
-- [x] **The orchestrator-wiring assertions were verified by AST extraction**,
-      which caught a real defect: the test originally inspected
-      `run_chat_turn`, a thin conversation-lock wrapper containing none of the
-      streaming code, so all four assertions would have **passed vacuously**.
-      Retargeted to `_run_chat_turn` and re-verified.
-- [x] **Blast-radius review** — every `token`-frame consumer enumerated in §4,
-      and the already-scrubbed-input argument checked against the actual
-      `AI_CHAT` skip set (`_POLICY_SKIPS`) rather than assumed.
-- [x] Existing tests audited for conflicts: found three that depended on the
-      old behaviour (two asserting the defect, one on frame count) and updated
-      all three with the reversal explained in the test itself.
-- [x] `ruff check` + `ruff format --check` clean on all changed files.
+> **This section is a correction.** The first version of this change shipped
+> broken, and this log's own "All pass" evidence was the reason it looked
+> fine. Recorded here because the failure mode — a confident verification
+> statement backed by a vacuous test — is more useful to the next person than
+> the fix is.
+
+**What went wrong.** Every fixture in the original test suite and offline probe
+was shorter than `_HOLDBACK_CHARS` (96), so `feed()` always returned `""` and
+`flush()` scrubbed the whole string in one piece. The "400 randomised
+chunkings" therefore compared `scrub(whole)` against `scrub(whole)` — trivially
+equal — and passed while the incremental path was defective in four separate
+ways, all found in review:
+
+| Defect | Measured |
+|---|---|
+| AI_CHAT bracketed trip pins destroyed (`[[COORDS]]`) — the 2026-09-04 re-geocode regression, and it corrupted the persisted row too | 60/60 offsets |
+| Invented redactions: a split 13-digit reference tail matched the phone pattern at string start | 9/60 offsets |
+| Tool-name leakage: `find_` + `place` matches neither fragment | 18/60 offsets |
+| A full Amex PAN emitted raw, because that match only exists *after* the phone substitution creates its boundary | reproduced |
+
+The root cause is one sentence: **`scrub_pii` is not decomposable over string
+splits.** It stashes bracketed coordinates before the pattern pass, applies
+patterns sequentially so one substitution creates the next one's boundary, and
+relies on lookbehind anchors that need the whole string. Any design that hands
+it a fragment is unsound, and "scan for matches and avoid splitting them"
+cannot fix it — a scan cannot see a match that does not exist yet.
+
+**The rewrite** always scrubs the whole accumulated buffer and holds back in
+*output* space, so every scrub sees exactly the string the final scrub sees.
+
+- [x] **Differential property, asserted directly:** the concatenation of
+      everything emitted equals filtering the whole reply at once. Verified
+      against the real module across 7 texts x 9 chunk sizes x 2 policies, plus
+      **2000 randomised uneven chunkings** — all exact matches.
+- [x] **All four shipped defects re-tested at 40-60 offsets each: 0 failures.**
+- [x] **A vacuity guard is now a test** (`test_fixtures_actually_exercise_the_
+      release_path`): every fixture must exceed the holdback, and `feed()` must
+      emit before `flush()`. That assertion would have failed on the original
+      suite.
+- [x] **Cost measured, not assumed.** Whole-buffer re-scrubbing on every token
+      is ~515 ms of CPU for a 4 KB reply at 4-char chunks. `_MIN_RELEASE_CHARS`
+      (32) coalesces it to ~67 ms in ~0.5 ms slices — sub-millisecond per call,
+      so no meaningful event-loop block.
+- [x] `ruff check` + `ruff format --check` clean.
 
 ## 10. What was NOT verified
 
-- **The pytest suite was not run.** PyPI is unreachable (gateway 403), so
-  backend dependencies cannot be installed. The new tests and the four updated
-  ones are **unrun** and must go green in CI before merge. The probes exercise
-  the filter thoroughly but do **not** exercise it inside a real
-  `_run_chat_turn` with a real adapter — the wiring is verified statically
-  only.
-- **No real streaming UX check.** The §5 lag is reasoned from the holdback
-  size, not observed against a live provider on a device. Given this is a
-  visible change to a shipped screen, **watching one real reply stream is the
-  check most worth doing before merge**, and the one I could not do.
-- **`ai/public_assistant.py` is NOT covered by this change.** It has its own
-  runner and its own emission path. The assessment's F08 text concerns the
-  orchestrator, and the public assistant's tool results are already scrubbed
-  under STRICT, but its *model prose* is emitted on the same
-  filter-after-the-fact basis. **F08 is therefore only closed for the
-  authenticated surface**; the public assistant needs the same treatment and
-  is left open.
-- **Scope limit inherited from `pii.py`:** only regex-detectable categories are
-  caught. A plain name, a free-form address, or a provincial licence number
-  streams through untouched, exactly as they do in the stored copy today.
-- **A value that only becomes matchable with context beyond the 96-character
-  window can still slip.** The holdback is a bound, not a proof.
-- No latency or CPU measurement of `_safe_cut`.
+- **The pytest suite still has not run** — PyPI is unreachable (gateway 403),
+  so the tests are exercised only by executing the same assertions against the
+  real module in a stub harness. CI must be green before merge.
+- **No real reply was watched streaming.** The UX characteristics in §5 are
+  reasoned and measured offline, not observed in the app. Given this is a
+  visible change to a shipped screen, that remains the check most worth doing.
+- **`ai/public_assistant.py` is still NOT covered** — separate runner, separate
+  emission path. F08 is closed for the authenticated surface only.
+- **Scope limit inherited from `pii.py`:** only regex-detectable categories.
+  A plain name or free-form address streams through untouched.
+- The correctness argument rests on the holdback exceeding the longest possible
+  single match. That is true for the current patterns; a future pattern longer
+  than 96 characters would need the constant raised. The `startswith` guard in
+  `_release` detects that case and withholds rather than corrupting, but it has
+  never fired in testing, so its behaviour is unexercised.

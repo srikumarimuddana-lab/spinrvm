@@ -58,141 +58,52 @@ def _stop(patches):
         p.stop()
 
 
-# ── support_chat (legacy shim → central AI engine) ──────────────────────
+# ── support_chat (retired stub) ─────────────────────────────────────────
 #
-# F04 (2026-09-08 AI security assessment). This endpoint used to call Gemini
-# directly and sat outside every AI control: no ai_assistant_enabled switch,
-# no provider factory, no daily quota, no input length bound, and a
-# synchronous generate_content inside an async route. It now delegates to
-# ai.orchestrator.run_chat_turn, the same engine /api/v1/ai/chat uses.
+# F04 (PR #5138). This endpoint used to call Gemini directly and sat outside
+# every AI control: no ai_assistant_enabled switch, no provider factory, no
+# daily quota, no input length bound, and a synchronous generate_content
+# inside an async route.
 #
-# The Gemini-specific tests that used to live here (patching
-# google.generativeai.configure / GenerativeModel, and the GEMINI_API_KEY /
-# GOOGLE_API_KEY env-var branches) are deleted rather than ported: none of
-# that code path exists any more, so they would have tested nothing. What
-# replaces them is the contract that actually matters now — that the route
-# reaches the central engine, keeps its legacy response shape, and never
-# lets the caller pick an identity.
+# It was first rewritten to delegate to ai.orchestrator.run_chat_turn. Review
+# caught that this quietly WIDENED it: the pre-F04 route was a prompt-only FAQ
+# bot, and delegating handed a legacy client the full authenticated tool set
+# (propose_ride_booking, escalate_to_support — real Zoho tickets) whose action
+# frames this response shape cannot carry, plus cross-user FAQ-cache
+# eligibility on every call because conversation_id was always None.
 #
-# The SYSTEM_PROMPT content assertions also moved out, to
-# tests/test_ai_prompts_policy.py, pointed at ai/prompts.py — the prompt this
-# endpoint now actually uses.
+# It is now a stub that makes no provider call at all. The Gemini-SDK tests
+# that used to live here are deleted rather than ported: none of that code
+# path exists.
 
 
-class _FakeTurn:
-    """Stands in for run_chat_turn: an async generator of (name, payload)."""
-
-    def __init__(self, frames):
-        self.frames = frames
-        self.kwargs = None
-
-    def __call__(self, **kwargs):
-        self.kwargs = kwargs
-
-        async def _gen():
-            for frame in self.frames:
-                yield frame
-
-        return _gen()
-
-
-class TestSupportChatDelegatesToCentralEngine:
+class TestSupportChatIsARetiredStub:
     @pytest.mark.anyio
-    async def test_reply_is_assembled_from_token_frames(self):
-        from backend.routes.support import ChatRequest, support_chat
-
-        fake = _FakeTurn([("token", {"text": "You keep "}), ("token", {"text": "100% of the fare."})])
-        with patch("backend.routes.support.run_chat_turn", fake):
-            result = await support_chat(
-                ChatRequest(message="How do I get paid?"),
-                request=MagicMock(),
-                current_user=dict(_DRIVER_USER, is_driver=True),
-            )
-
-        assert result == {"reply": "You keep 100% of the fare."}
-
-    @pytest.mark.anyio
-    async def test_authenticated_user_is_passed_through_not_the_body(self):
-        """driver_id is accepted and ignored. It has never selected an
-        identity here and must not start doing so — the turn is scoped to the
-        authenticated caller."""
-        from backend.routes.support import ChatRequest, support_chat
-
-        fake = _FakeTurn([("token", {"text": "ok"})])
-        with patch("backend.routes.support.run_chat_turn", fake):
-            await support_chat(
-                ChatRequest(message="hi", driver_id="someone-elses-driver-id"),
-                request=MagicMock(),
-                current_user=dict(_DRIVER_USER, is_driver=True),
-            )
-
-        assert fake.kwargs["user"]["id"] == "driver-user-1"
-        assert "someone-elses-driver-id" not in str(fake.kwargs)
-
-    @pytest.mark.anyio
-    async def test_audience_comes_from_the_user_row(self):
-        from backend.routes.support import ChatRequest, support_chat
-
-        fake = _FakeTurn([("token", {"text": "ok"})])
-        with patch("backend.routes.support.run_chat_turn", fake):
-            await support_chat(
-                ChatRequest(message="hi"), request=MagicMock(), current_user=dict(_RIDER, is_driver=False)
-            )
-        assert fake.kwargs["audience"] == "rider"
-
-        fake2 = _FakeTurn([("token", {"text": "ok"})])
-        with patch("backend.routes.support.run_chat_turn", fake2):
-            await support_chat(
-                ChatRequest(message="hi"),
-                request=MagicMock(),
-                current_user=dict(_DRIVER_USER, is_driver=True),
-            )
-        assert fake2.kwargs["audience"] == "driver"
-
-    @pytest.mark.anyio
-    async def test_engine_error_frame_falls_back_without_a_500(self):
-        """An engine refusal (AI disabled, quota exceeded, provider
-        misconfigured) must reach an old client as the legacy fallback string,
-        not a structured error body it has no handler for."""
+    async def test_returns_the_fallback_without_calling_any_provider(self):
         from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
 
-        fake = _FakeTurn([("error", {"code": "ai_disabled", "message": "disabled"})])
-        with patch("backend.routes.support.run_chat_turn", fake):
-            result = await support_chat(ChatRequest(message="hi"), request=MagicMock(), current_user=dict(_RIDER))
-
+        result = await support_chat(
+            ChatRequest(message="How do I get paid?"),
+            request=MagicMock(),
+            current_user=dict(_DRIVER_USER, is_driver=True),
+        )
         assert result == {"reply": FALLBACK_REPLY}
 
-    @pytest.mark.anyio
-    async def test_engine_exception_falls_back_and_logs_error(self, caplog):
-        """The blanket fallback is deliberate (never strand a driver
-        mid-conversation), but CLAUDE.md forbids the failure vanishing — it
-        must surface at error level with the domain/surface tags."""
-        import logging
+    def test_module_reaches_for_no_ai_engine_at_all(self):
+        """The strongest form of "the bypass is closed": there is no provider
+        call on this path to bypass a control with. Pins the absence of both
+        the deprecated SDK and the central engine."""
+        import inspect
 
-        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
+        from backend.routes import support as support_mod
 
-        def _boom(**kwargs):
-            raise RuntimeError("provider exploded")
+        src = inspect.getsource(support_mod)
+        assert "google.generativeai" not in src
+        assert "run_chat_turn" not in src
 
-        with patch("backend.routes.support.run_chat_turn", _boom):
-            with caplog.at_level(logging.ERROR, logger="backend.routes.support"):
-                result = await support_chat(ChatRequest(message="hi"), request=MagicMock(), current_user=dict(_RIDER))
-
-        assert result == {"reply": FALLBACK_REPLY}
-        assert any(r.levelno >= logging.ERROR for r in caplog.records)
-
-    @pytest.mark.anyio
-    async def test_empty_reply_falls_back(self):
-        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
-
-        fake = _FakeTurn([("token", {"text": "   "})])
-        with patch("backend.routes.support.run_chat_turn", fake):
-            result = await support_chat(ChatRequest(message="hi"), request=MagicMock(), current_user=dict(_RIDER))
-        assert result == {"reply": FALLBACK_REPLY}
-
-    def test_message_is_length_bounded_like_the_central_route(self):
-        """The legacy field had no max_length at all, so an arbitrarily long
-        body went straight to the provider."""
+    def test_message_is_still_length_bounded(self):
+        """Kept from the delegating version: the legacy field had no
+        max_length, so an arbitrarily long body was accepted."""
         import pydantic
 
         from backend.routes.support import ChatRequest
@@ -202,14 +113,17 @@ class TestSupportChatDelegatesToCentralEngine:
         with pytest.raises(pydantic.ValidationError):
             ChatRequest(message="")
 
-    def test_route_no_longer_imports_the_deprecated_gemini_sdk(self):
-        """The finding named the deprecated google.generativeai SDK on this
-        path specifically. Pin that this module no longer reaches for it."""
-        import inspect
+    @pytest.mark.anyio
+    async def test_driver_id_is_accepted_and_ignored(self):
+        """It has never selected an identity here and must not start to."""
+        from backend.routes.support import FALLBACK_REPLY, ChatRequest, support_chat
 
-        from backend.routes import support as support_mod
-
-        assert "google.generativeai" not in inspect.getsource(support_mod)
+        result = await support_chat(
+            ChatRequest(message="hi", driver_id="someone-elses-driver-id"),
+            request=MagicMock(),
+            current_user=dict(_RIDER),
+        )
+        assert result == {"reply": FALLBACK_REPLY}
 
 
 # ── support_escalate ───────────────────────────────────────────────────

@@ -9,7 +9,7 @@
 | Surface(s) | backend |
 | Domain (Sentry tag) | ai |
 | PR / commit link | branch `claude/pr-5138-implementation-27zn2l` |
-| Related issue or gap ID | F09 (**partial** — one of six sub-items), `docs/security/2026-09-08-ai-security-assessment.md` (PR #5138), remediation order 4 |
+| Related issue or gap ID | F09 (**partial** — one of six sub-items), the AI security assessment on PR #5138, remediation order 4 |
 
 **This closes one part of F09 and explicitly leaves the rest open.** See §10
 for exactly what is not done — the finding should not be marked resolved on
@@ -190,3 +190,27 @@ Also not verified:
 - **No concurrency test with two real overlapping turns.** The clobber scenario
   is verified as a modelled sequence, not as two racing coroutines against a
   live Redis.
+
+---
+
+## Review follow-up (2026-09-09)
+
+**The `RuntimeError` fallback was unsound.** `redis_eval` raises `RuntimeError`
+for its own "REDIS_URL unset" case *and* re-raises `RuntimeError`s surfacing
+from a live connection (`except RuntimeError: raise` in its body). Catching
+`RuntimeError` to mean "no Lua interpreter here" therefore dropped a **real
+Redis error onto the non-atomic GET-then-DELETE path against a
+cluster-shared key** — turn B can acquire the lock in the await gap between the
+two calls and turn A's delete removes it. That is precisely the clobber the
+ownership token was added to prevent, reintroduced through the error path.
+
+The branch is now chosen up-front by `_redis_configured()` (a `settings.REDIS_URL`
+check): configured Redis gets the atomic Lua path **or nothing**, and the
+non-atomic compare-and-delete is reached only when there is genuinely a single
+in-process dict and no other holder to race. Pinned by
+`test_live_redis_runtimeerror_never_falls_back_to_the_racy_path`.
+
+Also fixed: `_redis_configured` referenced a `settings` symbol this module never
+imported, which would have raised `NameError` from inside the `finally` that
+releases the lock — breaking the turn. `settings` is now imported under the
+dual-import pattern.

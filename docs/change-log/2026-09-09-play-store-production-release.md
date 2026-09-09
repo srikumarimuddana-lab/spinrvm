@@ -258,3 +258,49 @@ Play's highest existing versionCode for `com.spinr.user` is **3** (v1.0.2,
   the fix is registering the app signing SHA-1 in Firebase and enabling the
   Play Integrity link for that package — not a code change.
 - No App Check token was minted or verified from this environment.
+
+---
+
+## Addendum 3 — `submit-play-store.yml`, a submit-only workflow
+
+**Issue/gap identified.** No path in the repo could submit an *already-built*
+AAB. `eas-native-build.yml` only submits as a side effect of building, and
+`deploy-driver-play-testing.yml`'s `skip_build` mode is driver-only and pinned
+to the `android-auto` profile. So a finished build whose submission failed had
+no re-run route short of a full rebuild.
+
+**Root cause.** Submission was only ever modelled as a build side effect. That
+held while the sole Android submit path was the driver's Android Auto line;
+it stopped holding the moment a build succeeded but its submit did not.
+
+**Fix.** New `workflow_dispatch` workflow that submits an existing EAS build:
+picks app (`rider-app` / `driver-app` / `both`), track, optional per-app build
+ID (blank = `--latest`), and an optional staged-rollout fraction.
+
+**Risk & impact.** Additive — a new file, no existing workflow changed. It can
+reach the production track, so it is genuinely capable of a public release;
+that is gated only by the operator's dispatch inputs, matching how
+`eas-native-build.yml` already treats `auto_submit`. The track is patched into
+the runner's working copy with `jq` rather than committed, so the repo keeps
+one canonical default (`internal`) and the track stays a per-run choice.
+`driver-app`'s `android-auto` submit profile is not read or modified —
+verified explicitly in the test below.
+
+**User experience effect.** None directly; it is a release mechanism. What it
+releases is user-visible, which is why the job summary ends with the App Check
+verification step rather than declaring success.
+
+**Verification performed.** A test script exercised, against the real
+`eas.json` files: YAML parse and step order; the `plan` matrix for all three
+`app` values (each output parsed as JSON); the `jq` track patch for both apps
+across `internal`/`production`, confirming `releaseStatus` survives; the
+staged-rollout patch producing `{"track":"production","releaseStatus":
+"inProgress","rollout":0.1}`; that `android-auto` is untouched; build-ID
+validation accepting both real UUIDs and rejecting `not-a-uuid` and
+`$(curl evil.sh)`; and rollout validation accepting 0/0.1/1/1.0 while
+rejecting 1.5, `abc`, and `0.1; rm -rf /`.
+
+**What was NOT verified.** The workflow has never run — Actions dispatch
+returns 403 for this session's integration, so `eas submit` itself is
+unexercised here. It also cannot appear in the Actions UI until the file is on
+the default branch; `workflow_dispatch` workflows are only listed from there.

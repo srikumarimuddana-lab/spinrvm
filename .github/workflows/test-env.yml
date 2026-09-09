@@ -13,6 +13,17 @@ on:
   pull_request:
     branches: [staging]
 
+concurrency:
+  group: test-env-${{ github.ref }}
+  # Never cancel a push-triggered run: build-mobile-test (eas build) and
+  # ota-update-test (eas update, below) push non-idempotent state to Expo --
+  # killing one mid-publish orphans an EAS build or races the `test` OTA
+  # channel between two runs. Same reasoning as ci.yml's own conditional
+  # cancel-in-progress in this same diff, and the pattern every other
+  # deploy-adjacent workflow in this repo already uses (deploy-fly.yml,
+  # deploy-backend*.yml, eas-native-build.yml, submit-play-store.yml).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: '3.12'
   # 22, not 20: build-mobile-test/ota-update-test below both run "Setup EAS"

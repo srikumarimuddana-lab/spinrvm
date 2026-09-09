@@ -70,6 +70,7 @@
         "language": "en-CA"
       },
       "android": {
+        "serviceAccountKeyPath": "./play-service-account.json",
         "track": "internal",
         "releaseStatus": "completed"
       }

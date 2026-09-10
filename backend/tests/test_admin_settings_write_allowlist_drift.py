@@ -52,6 +52,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "ai_faq_cache_ttl_seconds",
         "ai_faq_semantic_enabled",
         "ai_faq_semantic_min_score",
+        "ai_fare_quote_show_unavailable_enabled",
         "ai_history_max_messages",
         "ai_max_output_tokens",
         "ai_max_tool_iterations",

@@ -137,6 +137,13 @@ function ActionBubble({
                 </div>
                 {action.quotes.map((q, i) => {
                     const hasSavings = !!q.promo_savings && q.final_total !== q.total;
+                    // AI17/F4: absent/undefined means available — only an
+                    // explicit `false` (set by the backend when the
+                    // show-unavailable flag is on) marks an option as
+                    // priced-but-not-currently-bookable. Mirrors
+                    // rider-app/components/FareQuoteCard.tsx's treatment —
+                    // this console uses the same shared get_fare_quote tool.
+                    const isUnavailable = q.available === false;
                     // Self-contained message carrying the quote's exact
                     // [lat,lng] and vehicle id verbatim (mirrors the rider
                     // app's quote-card tap) — a prose-only message forced a
@@ -151,22 +158,30 @@ function ActionBubble({
                                     buildQuoteBookingDisplayMessage(action, q),
                                 )
                             }
-                            className="w-full flex items-center justify-between gap-3 rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent"
+                            disabled={isUnavailable}
+                            title={isUnavailable ? "No drivers nearby right now — not bookable" : undefined}
+                            className={`w-full flex items-center justify-between gap-3 rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent ${
+                                isUnavailable ? "opacity-45 cursor-not-allowed hover:bg-background" : ""
+                            }`}
                         >
                             <span>
                                 <span className="font-medium">{q.vehicle_type ?? "Ride"}</span>
-                                <span className="block text-xs text-muted-foreground">
-                                    {[
-                                        q.eta_minutes != null
-                                            ? `${q.eta_minutes} min${q.closest_driver_km != null ? ` (${q.closest_driver_km} km)` : ""} away`
-                                            : null,
-                                        q.capacity != null ? `${q.capacity} seats` : null,
-                                        (q.surge_multiplier ?? 1) > 1 ? `${q.surge_multiplier}x surge` : null,
-                                    ]
-                                        .filter(Boolean)
-                                        .join(" · ")}
-                                </span>
-                                {hasSavings ? (
+                                {isUnavailable ? (
+                                    <span className="block text-xs text-muted-foreground">No drivers nearby</span>
+                                ) : (
+                                    <span className="block text-xs text-muted-foreground">
+                                        {[
+                                            q.eta_minutes != null
+                                                ? `${q.eta_minutes} min${q.closest_driver_km != null ? ` (${q.closest_driver_km} km)` : ""} away`
+                                                : null,
+                                            q.capacity != null ? `${q.capacity} seats` : null,
+                                            (q.surge_multiplier ?? 1) > 1 ? `${q.surge_multiplier}x surge` : null,
+                                        ]
+                                            .filter(Boolean)
+                                            .join(" · ")}
+                                    </span>
+                                )}
+                                {isUnavailable ? null : hasSavings ? (
                                     <span className="block text-xs font-medium text-success">
                                         {q.promo_code} · save ${q.promo_savings}
                                     </span>

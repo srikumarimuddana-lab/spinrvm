@@ -22,6 +22,7 @@ import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { HAS_AUTHENTICATED_BEFORE_KEY } from './login';
 
 export default function OtpScreen() {
@@ -537,7 +538,7 @@ function createStyles(colors: ThemeColors) {
     },
     scrollContent: {
       flexGrow: 1,
-      paddingHorizontal: 24,
+      paddingHorizontal: SPACING.lg,
     },
     backBtn: {
       width: 44,
@@ -546,7 +547,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceLight,
       justifyContent: 'center',
       alignItems: 'center',
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
     // Vertically centers the OTP form between the back button and the
     // bottom safe-area so there is no large trailing gap at the page end.
@@ -584,14 +585,14 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 36,
     },
     title: {
-      fontSize: 26,
+      fontSize: FONT.h2,
       fontWeight: '800',
       color: colors.text,
       letterSpacing: -0.5,
       marginBottom: 10,
     },
     subtitle: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       color: colors.textDim,
       lineHeight: 22,
     },
@@ -599,7 +600,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 17,
       fontWeight: '700',
       color: colors.text,
-      marginTop: 4,
+      marginTop: SPACING.xs,
     },
     // Code input
     codeContainer: {
@@ -667,7 +668,7 @@ function createStyles(colors: ThemeColors) {
       shadowOpacity: 0.25,
       shadowRadius: 12,
       elevation: 6,
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
     verifyBtnInactive: {
       backgroundColor: colors.border,
@@ -684,7 +685,7 @@ function createStyles(colors: ThemeColors) {
     },
     verifyBtnText: {
       color: '#fff',
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '700',
     },
     verifyBtnTextInactive: {
@@ -699,10 +700,10 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
     },
     resendText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
       color: colors.primary,
     },
@@ -723,7 +724,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
     },
     changeNumberText: {
       fontSize: 14,
@@ -736,16 +737,16 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.border,
       padding: 18,
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
-    consentCardTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 6 },
-    consentCardBody: { fontSize: 13, color: colors.textDim, lineHeight: 19, marginBottom: 14 },
+    consentCardTitle: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text, marginBottom: 6 },
+    consentCardBody: { fontSize: FONT.bodySm, color: colors.textDim, lineHeight: 19, marginBottom: 14 },
     consentRow: {
       flexDirection: 'row',
       alignItems: 'flex-start',
       gap: 10,
       minHeight: 44,
-      paddingVertical: 4,
+      paddingVertical: SPACING.xs,
       marginBottom: 14,
     },
     consentRowText: { flex: 1, fontSize: 12, color: colors.textDim, lineHeight: 18, paddingTop: 3 },

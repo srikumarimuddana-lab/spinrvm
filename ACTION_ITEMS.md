@@ -24220,6 +24220,49 @@ how much they de-risk a public launch._
   this is a per-repo scoping gap rather than a full account-level absence)
   — out of scope to check from this session, which only sees this repo.
 
+### C100. `driver-app-test` is red on `main`'s own tip — `CarMarker.test.tsx`'s image-decode-retry suite, confirmed unrelated to the commits that happened to be `main`'s HEAD when it failed
+
+- [ ] **Status:** OPEN — confirmed base-branch-red, not caused by this
+  session's own PR (#5203, AI17/F4 — touches only backend, `shared/types/ai.ts`,
+  `rider-app/components/FareQuoteCard.tsx`, and
+  `admin-dashboard/src/app/dashboard/ai-console/page.tsx`, none of which
+  `CarMarker.tsx` or its test import). Found via PR #5203's own
+  `driver-app-test` CI failure, then verified independently against
+  `main`'s own history rather than assumed.
+- **Failure:** `__tests__/components/CarMarker.test.tsx`, suite
+  `CarMarker — car-icon decode failure retries then reports once
+  (2026-09-09, "green circle, never a car")` plus one case in
+  `CarMarker — Android ring-change re-arms the frozen snapshot` — 7 tests
+  fail with `No instances found with node type: "Image"` at
+  `UNSAFE_getByType(Image)` call sites (lines 110/141/169/491 as of the
+  2026-09-10 run). Full run: `Test Suites: 1 failed, 138 passed, 139
+  total` / `Tests: 7 failed, 1565 passed, 1572 total`.
+- **Confirmed base-branch-red, not diff-specific:** checked
+  `driver-app-test`'s job on `main`'s own CI/CD Pipeline run for commit
+  `f9f52c7` ("dispatch: reuse PostGIS RPC distance instead of recomputing
+  haversine", #5199 — a backend dispatch change touching no driver-app UI
+  code at all) — same job, same conclusion: `failure`, while every other
+  job in that run (`backend-test`, `rider-app-test`, `admin-test`, both
+  E2E suites) passed. Two unrelated commits, two unrelated diffs, same
+  `driver-app-test` failure — this is `main`'s own state, not a
+  per-PR artifact.
+- **Not root-caused or fixed here** — out of scope for the PR that
+  surfaced it (AI17/F4 doesn't touch `CarMarker.tsx`, its test file, or
+  anything in its import chain; fixing it there would be scope creep past
+  "surgical changes"). The test's own name cites "2026-09-09" as when its
+  scenario was authored — worth checking whether a same-day or
+  since-then change to `CarMarker.tsx`'s image-load/retry logic (or to
+  the RN `Image` mocking setup shared across driver-app's test suite)
+  changed how/whether an `Image` node renders under test, since
+  `UNSAFE_getByType(Image)` finding nothing suggests the component tree
+  under test no longer renders an `Image` node at all in this scenario,
+  not a timing/flake issue.
+- **Files (reference only, no code changed by this entry):**
+  `driver-app/__tests__/components/CarMarker.test.tsx`,
+  `shared/components/CarMarker.tsx` (per C90/C70/the three prior
+  `CarMarker.tsx` change-logs cross-referenced above — the actual
+  component whose retry logic the failing suite exercises).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -6,8 +6,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -49,6 +47,7 @@ def create_app() -> FastAPI:
 
     # --- Routes ---
     from app.web.dashboard import router as web_router
+    from app.web.config_api import router as config_router
     from app.integrations.telegram import router as telegram_router
     from app.integrations.zoho_cliq import router as cliq_router
     from app.integrations.zoho_desk import router as desk_router
@@ -56,6 +55,7 @@ def create_app() -> FastAPI:
     from app.mcp.server import router as mcp_router
 
     app.include_router(web_router)
+    app.include_router(config_router, prefix="/api", tags=["config"])
     app.include_router(telegram_router, prefix="/telegram", tags=["telegram"])
     app.include_router(cliq_router, prefix="/zoho/cliq", tags=["zoho-cliq"])
     app.include_router(desk_router, prefix="/zoho/desk", tags=["zoho-desk"])

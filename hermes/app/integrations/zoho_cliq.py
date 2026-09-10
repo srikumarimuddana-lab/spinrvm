@@ -87,13 +87,26 @@ async def cliq_webhook(request: Request):
     if event_type == "bot_message":
         text = body.get("message", {}).get("text", "")
         parts = text.strip().split(None, 1)
-        cmd = parts[0] if parts else "help"
+        cmd = parts[0] if parts else ""
         params = parts[1] if len(parts) > 1 else ""
-        try:
-            reply = await _handle_cliq_command(cmd, params)
-        except Exception:
-            logger.exception("Cliq command error: %s", cmd)
-            reply = f"Error processing '{cmd}'"
+
+        # Known commands go through the command handler; free text goes to LLM
+        known = {"health", "infra", "ops", "kpi", "report", "full", "rides", "drivers", "help"}
+        if cmd.lower().strip("/") in known:
+            try:
+                reply = await _handle_cliq_command(cmd, params)
+            except Exception:
+                logger.exception("Cliq command error: %s", cmd)
+                reply = f"Error processing '{cmd}'"
+        elif settings.LLM_PROVIDER:
+            try:
+                from app.llm.providers import chat
+                reply = await chat([{"role": "user", "content": text}])
+            except Exception:
+                logger.exception("Cliq LLM error")
+                reply = "Sorry, I couldn't process that. Try a known command: help"
+        else:
+            reply = await _handle_cliq_command(cmd or "help", params)
         return {"text": reply}
 
     if event_type == "slash_command":

@@ -39,6 +39,21 @@ class Settings(BaseSettings):
     ZOHO_DESK_ORG_ID: str = ""
     ZOHO_DESK_API_URL: str = "https://desk.zoho.com/api/v1"
 
+    # LLM
+    LLM_PROVIDER: str = ""  # "anthropic" | "openai" | "" (disabled)
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o"
+    LLM_MAX_TOKENS: int = 2048
+    LLM_SYSTEM_PROMPT: str = (
+        "You are Hermes, the Spinr ops assistant. You have tools to check "
+        "infrastructure health, operational KPIs, manage Zoho Desk tickets, "
+        "and send messages via Telegram and Zoho Cliq. Be concise and direct. "
+        "When asked about status or metrics, always use the appropriate tool "
+        "rather than guessing."
+    )
+
     @property
     def allowed_telegram_users(self) -> set[int]:
         if not self.TELEGRAM_ALLOWED_USERS:

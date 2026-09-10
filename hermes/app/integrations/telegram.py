@@ -147,5 +147,13 @@ async def telegram_webhook(request: Request):
         except Exception:
             logger.exception("Error handling command %s", cmd)
             await _send(chat_id, f"Error processing {cmd}. Check logs.")
+    elif settings.LLM_PROVIDER:
+        try:
+            from app.llm.providers import chat
+            reply = await chat([{"role": "user", "content": text}])
+            await _send(chat_id, reply, parse_mode="Markdown")
+        except Exception:
+            logger.exception("LLM chat error for Telegram")
+            await _send(chat_id, "Sorry, I couldn't process that. Try a /command instead.")
 
     return {"ok": True}

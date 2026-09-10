@@ -1070,6 +1070,58 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       table-wide). Doesn't by itself prove old-app data is blended in —
       needs Spinr's confirmed launch/dual-run-start date to compare
       against, which isn't recorded in this file.
+  - **2026-09-10 — closed the "broader pre-launch question" from the
+    migration-approach doc's Phase 6 (raised 2026-08-30, "not yet done as
+    of this edit") for drivers/riders/rides, via live read-only queries
+    against production. Full detail:
+    `docs/change-log/2026-09-10-a34-pre-launch-data-contamination-check.md`.**
+    - **Tool #16 (pre-launch flagging) has, in fact, already run against
+      production and is fully current** — 854/854 dormant legacy drivers
+      flagged, 25/25 pre-launch-dated rides flagged, 0 unflagged remaining.
+      Recomputed the tool's own dormant-candidate SQL live independently;
+      it matched exactly. This corrects the migration-approach doc's "not
+      yet done" framing for the two tables this tool covers.
+    - **New finding: real PII already sits on confirmed-dormant (zero
+      real activity, ever) driver profiles.** Of those 854: **97 have a
+      `sin` value**, **146 have `date_of_birth`**, **241 have at least one
+      `driver_vehicle_history` row** (VIN/insurance/registration). The
+      SIN/DOB backfill (tool #4) and vehicle-history backfill (tool #5)
+      match by phone/driver-row existence only — neither has an activity
+      or launch-date gate, unlike the pre-launch-flag tool built
+      specifically because that gap mattered. Net effect: SIN — the single
+      most sensitive field this codebase stores per CLAUDE.md's PIPEDA
+      section — is retained today for profiles with zero operational
+      footprint. Not a breach (no exposure occurred); a data-minimization/
+      retention-hygiene gap.
+    - **New finding: the same pattern exists for riders, with no flag
+      mechanism at all.** `pre_launch_flag_service.py` only ever wrote
+      `drivers`/`rides`, never `users`. Of 1,132 legacy-imported rider
+      accounts, only 5 carry a pre-launch `created_at` (riders' import
+      doesn't preserve the original signup date the way drivers' does, so
+      date isn't a useful proxy here either — same reason the driver
+      tool's own docstring rejected date-gating). Using the same
+      zero-activity proxy instead: **1,046 of 1,132 (92%) have never taken
+      a single ride in Spinr**, and **153** of those already have
+      `saved_addresses` rows (home/work/favorite backfill, tool #10)
+      attached.
+    - **Checked, not a new gap: insurance-period reconstruction (migration
+      332) is traceable, not silently contaminated.** All 25 pre-launch
+      rides are among the 246 rides migration 332 reconstructed Period 2/3
+      audit rows for (492 rows total) — but both `is_reconstructed = true`
+      and `pre_launch_test = true` mark this population, so an SGI audit
+      pull can identify and exclude it. Recorded for completeness, not
+      flagged as action-needed.
+    - **Recommendation, not yet decided by anyone with the authority to
+      decide it:** whether to purge (null `sin`/`date_of_birth`, delete the
+      `driver_vehicle_history`/`saved_addresses` rows) for the confirmed-
+      dormant population is a product-owner/privacy-officer call, same as
+      every other PII-retention decision in this item — not made here. The
+      cheap, additive, zero-risk piece worth doing regardless of that
+      decision: extend `pre_launch_flag_service.py` to also flag `users`
+      (riders) using the same zero-activity proxy, so this population is
+      at least identifiable going forward without a one-off manual query
+      like the one that produced these numbers. Not implemented in this
+      pass — flagged for an explicit go-ahead first.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
@@ -18041,10 +18093,11 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   most-recent-wins deliberately, documented in ADR-012, transition test
   added). One pre-existing finding was deferred to **AI18**.
 
-- [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
+- [x] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
   found while root-causing AI16, deliberately not shipped in that PR; each
-  is its own scoped change. **F1, F2, F3, F5 CLOSED 2026-09-10 (PR #5177 +
-  a same-day follow-up commit); F4 still open, needs a product decision.**
+  is its own scoped change. **All 5 sub-items CLOSED — F1/F2/F3/F5 on
+  2026-09-10 (PR #5177 + a same-day follow-up commit); F4 same day, on the
+  same follow-up branch.**
   - [x] **F1** — investigated as spec'd ("needs a word-boundary-buffered
     stream filter... behind a settings flag, default off") and found that
     premise stale: the buffered stream filter already shipped
@@ -18068,11 +18121,22 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
     fallback removed entirely; an unmapped future code now always
     resolves to the generic default instead of leaking backend text. See
     `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
-  - [ ] **F4** — still open. the assistant hides the fare entirely when
-    no drivers are online, while `rider-app/app/ride-options.tsx` shows
-    prices under a "No cars available" banner — product decision on
-    parity (backend `tools_booking.py` + `FareQuoteCard.tsx` + shared
-    types + prompt, flagged).
+  - [x] **F4** — product decision made (parity: AI matches
+    `ride-options.tsx`, not the other way around). `get_fare_quote()`
+    (`backend/ai/tools_booking.py`) now prices an unavailable vehicle type
+    (`available: false`) instead of omitting it, for both partial and
+    total outages, behind `ai_fare_quote_show_unavailable_enabled`
+    (migration 410, default **FALSE** — new behaviour, ships dark, unlike
+    F1's kill-switch above). Recommendation and the booking-shortcut Redis
+    pin always come from available options only, regardless of the flag —
+    an unavailable option showing a price is never bookable through it.
+    `shared/types/ai.ts`'s `FareQuoteOption` gained the field additively;
+    both `rider-app/components/FareQuoteCard.tsx` and the admin AI
+    console (`admin-dashboard/src/app/dashboard/ai-console/page.tsx` —
+    found via blast-radius grep, same shared tool feeds both) dim and
+    disable an unavailable option, "No drivers nearby" instead of
+    ETA/capacity. See
+    `docs/change-log/2026-09-10-ai17-f4-fare-quote-availability-parity.md`.
   - [x] **F5** — `conversations.py`'s `delete_conversation` now
     best-effort deletes the `ai:quote:{conversation_id}` Redis pin after
     the DB rows, same fail-open contract as the pin's own writer. See
@@ -24227,6 +24291,49 @@ how much they de-risk a public launch._
   configured for *other* repos' Claude Code environments (would confirm
   this is a per-repo scoping gap rather than a full account-level absence)
   — out of scope to check from this session, which only sees this repo.
+
+### C100. `driver-app-test` is red on `main`'s own tip — `CarMarker.test.tsx`'s image-decode-retry suite, confirmed unrelated to the commits that happened to be `main`'s HEAD when it failed
+
+- [ ] **Status:** OPEN — confirmed base-branch-red, not caused by this
+  session's own PR (#5203, AI17/F4 — touches only backend, `shared/types/ai.ts`,
+  `rider-app/components/FareQuoteCard.tsx`, and
+  `admin-dashboard/src/app/dashboard/ai-console/page.tsx`, none of which
+  `CarMarker.tsx` or its test import). Found via PR #5203's own
+  `driver-app-test` CI failure, then verified independently against
+  `main`'s own history rather than assumed.
+- **Failure:** `__tests__/components/CarMarker.test.tsx`, suite
+  `CarMarker — car-icon decode failure retries then reports once
+  (2026-09-09, "green circle, never a car")` plus one case in
+  `CarMarker — Android ring-change re-arms the frozen snapshot` — 7 tests
+  fail with `No instances found with node type: "Image"` at
+  `UNSAFE_getByType(Image)` call sites (lines 110/141/169/491 as of the
+  2026-09-10 run). Full run: `Test Suites: 1 failed, 138 passed, 139
+  total` / `Tests: 7 failed, 1565 passed, 1572 total`.
+- **Confirmed base-branch-red, not diff-specific:** checked
+  `driver-app-test`'s job on `main`'s own CI/CD Pipeline run for commit
+  `f9f52c7` ("dispatch: reuse PostGIS RPC distance instead of recomputing
+  haversine", #5199 — a backend dispatch change touching no driver-app UI
+  code at all) — same job, same conclusion: `failure`, while every other
+  job in that run (`backend-test`, `rider-app-test`, `admin-test`, both
+  E2E suites) passed. Two unrelated commits, two unrelated diffs, same
+  `driver-app-test` failure — this is `main`'s own state, not a
+  per-PR artifact.
+- **Not root-caused or fixed here** — out of scope for the PR that
+  surfaced it (AI17/F4 doesn't touch `CarMarker.tsx`, its test file, or
+  anything in its import chain; fixing it there would be scope creep past
+  "surgical changes"). The test's own name cites "2026-09-09" as when its
+  scenario was authored — worth checking whether a same-day or
+  since-then change to `CarMarker.tsx`'s image-load/retry logic (or to
+  the RN `Image` mocking setup shared across driver-app's test suite)
+  changed how/whether an `Image` node renders under test, since
+  `UNSAFE_getByType(Image)` finding nothing suggests the component tree
+  under test no longer renders an `Image` node at all in this scenario,
+  not a timing/flake issue.
+- **Files (reference only, no code changed by this entry):**
+  `driver-app/__tests__/components/CarMarker.test.tsx`,
+  `shared/components/CarMarker.tsx` (per C90/C70/the three prior
+  `CarMarker.tsx` change-logs cross-referenced above — the actual
+  component whose retry logic the failing suite exercises).
 
 ## Recently completed (do not redo)
 

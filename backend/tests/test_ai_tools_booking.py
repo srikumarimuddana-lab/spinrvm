@@ -1251,6 +1251,10 @@ class TestFareQuote:
         assert len(result["quotes"]) == 1
         assert result["unavailable_vehicle_types"] == ["XL"]
         q = result["quotes"][0]
+        # AI17/F4: ai_fare_quote_show_unavailable_enabled is unset here (only
+        # google_maps_api_key is patched) — the flag-off default must keep
+        # quote objects exactly as before F4, with no "available" key at all.
+        assert "available" not in q
         assert q["vehicle_type"] == "Economy"
         assert q["eta_minutes"] == 4
         assert q["closest_driver_km"] == 1.8
@@ -1385,6 +1389,81 @@ class TestFareQuote:
             assert ok
             repriced = await tools_booking.load_pinned_quote("conv-1")
             assert repriced["total"] == "18.48" and "no_drivers" not in repriced
+
+    @pytest.mark.anyio
+    async def test_show_unavailable_flag_prices_a_partially_unavailable_type(self):
+        """AI17/F4: with the flag on, an unavailable vehicle type (XL, in
+        the shared ESTIMATES fixture) gets a real priced quote object
+        instead of being omitted — matching ride-options.tsx's dimmed,
+        priced-but-disabled card. Recommendation/pin must still only ever
+        target the available option."""
+        args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
+        pin = AsyncMock()
+        with (
+            _patch_estimates(ESTIMATES),
+            _patch_promos(PROMOS),
+            patch.object(
+                tools_booking,
+                "get_app_settings",
+                AsyncMock(return_value={"google_maps_api_key": "", "ai_fare_quote_show_unavailable_enabled": True}),
+            ),
+            _patch_area(),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+            patch.object(tools_booking, "_pin_quote", pin),
+        ):
+            result, ok = await execute_tool("get_fare_quote", args, user=dict(RIDER, _conversation_id="conv-1"))
+        assert ok
+        assert len(result["quotes"]) == 2
+        by_type = {q["vehicle_type"]: q for q in result["quotes"]}
+        assert by_type["Economy"]["available"] is True
+        assert by_type["XL"]["available"] is False
+        # Still fully priced, not a placeholder — same shape as a bookable one.
+        assert by_type["XL"]["total"]
+        assert by_type["XL"]["final_total"]
+        assert result["unavailable_vehicle_types"] == ["XL"]
+        # Never recommends/pins the unavailable option.
+        assert result["recommended_vehicle_type_id"] == "vt-1"
+        assert "never offer to book one" in result["note"]
+        pin.assert_awaited_once()
+        _, pinned = pin.await_args.args
+        assert pinned["vehicle_type_id"] == "vt-1"
+
+    @pytest.mark.anyio
+    async def test_show_unavailable_flag_all_unavailable_still_shares_priced_quotes(self):
+        """AI17/F4: with the flag on, a total outage still hits the
+        no_drivers branch (nothing is bookable) but now carries priced
+        quotes for reference. The pin must stay endpoints-only — pricing
+        visibility never weakens the "book it" typed-shortcut guard."""
+        all_unavailable = {
+            "estimates": [dict(ESTIMATES["estimates"][0], available=False, eta_minutes=None, driver_count=0)],
+            "route_polyline": None,
+        }
+        args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
+        pin = AsyncMock()
+        with (
+            _patch_estimates(all_unavailable),
+            _patch_promos([]),
+            patch.object(
+                tools_booking,
+                "get_app_settings",
+                AsyncMock(return_value={"google_maps_api_key": "", "ai_fare_quote_show_unavailable_enabled": True}),
+            ),
+            _patch_area(),
+            patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
+            patch.object(tools_booking, "_pin_quote", pin),
+        ):
+            result, ok = await execute_tool("get_fare_quote", args, user=dict(RIDER, _conversation_id="conv-1"))
+        assert ok
+        assert result["no_drivers"] is True
+        assert len(result["quotes"]) == 1
+        assert result["quotes"][0]["available"] is False
+        assert result["quotes"][0]["total"]
+        assert "NONE are currently bookable" in result["note"]
+        assert "Never call propose_ride_booking" in result["note"]
+        pin.assert_awaited_once()
+        _, pinned = pin.await_args.args
+        assert pinned["no_drivers"] is True
+        assert "vehicle_type_id" not in pinned and "total" not in pinned
 
     @pytest.mark.anyio
     async def test_promo_failure_does_not_kill_quote(self):

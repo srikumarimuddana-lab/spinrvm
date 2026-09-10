@@ -334,6 +334,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // show the ride-offer panel like an incoming call when the app is
         // backgrounded or killed. See plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
+        // @notifee/react-native ships its Android core module as a local .aar, not via any
+        // public Maven registry — without this, :app:debugRuntimeClasspath fails to resolve
+        // app.notifee:core on every local build. See plugins/withNotifeeMavenRepo.js.
+        './plugins/withNotifeeMavenRepo',
         // Drops permissions our dependencies declare but this app never uses.
         // Both were hard Play submit rejections, not warnings — see
         // plugins/withoutUnusedPermissions.js.

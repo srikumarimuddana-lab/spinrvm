@@ -17,7 +17,7 @@ from typing import Any
 # ─── Classification rules ────────────────────────────────────────────────────
 
 SURFACE_JOBS: dict[str, list[str]] = {
-    "backend":          ["backend-test", "backend-check"],
+    "backend":          ["backend-test"],
     "rider-app":        ["rider-app-test", "rider-app-check"],
     "driver-app":       ["driver-app-test", "driver-app-check"],
     "admin-dashboard":  ["admin-test"],

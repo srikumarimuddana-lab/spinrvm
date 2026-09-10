@@ -23661,8 +23661,50 @@ how much they de-risk a public launch._
   anything specific to this file.** Re-check on the first `main` push or
   `rider-app`/`driver-app`-touching PR after C96 is confirmed resolved.
 
-### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session
+### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session — CLOSED (cleared 2026-09-09, exact time unconfirmed)
 
+- **Resolution confirmed 2026-09-10, checking `main`'s tip:** the outage is
+  over. `main`'s newest push at the time of this check (commit `746af5f`,
+  PR #5149, `Security Gates` run `34419182471`) shows real CI again: every
+  job has a genuine `runner_id`, multi-second-to-multi-minute step timings
+  (e.g. Semgrep scan 1m44s, admin-dashboard build 69s, pip-audit 47s), and
+  substantive pass/fail results — including real findings (`G4b`/`G4c`
+  yarn/npm audit failures on actual CVEs, not the C96 instant-reject
+  signature). This is the first clean/real run this thread directly
+  observed; the exact clear time is bounded only to "sometime between
+  ~03:49 UTC 2026-09-09 (last confirmed-still-ongoing check, on PR #5143)
+  and ~23:57 UTC 2026-09-09 (this clean run)" — no session watched the
+  transition happen. Total outage duration: **at least ~19.5 hours,
+  possibly up to ~27.5 hours** (from ~20:23 UTC Sep 8) depending where in
+  that ~20-hour window it actually cleared.
+- **Root cause: still not billing-confirmed, but a strong circumstantial
+  candidate exists.** PR #5141 (merged 21:22 UTC Sep 8, mid-outage, by a
+  concurrent session) added a `concurrency:` cancellation group to
+  `ci.yml` — the one heavy 16-job workflow in the repo that had no such
+  group, so every push queued a full new run stacked on any still in
+  flight instead of superseding it. That PR explicitly flagged this as "a
+  plausible contributor... consistent with a spend limit or included-
+  minutes cap... not root-cause-confirmed (that needs GitHub billing/
+  usage access no session here has)." The ~20-27 hour outage window is
+  also consistent with a **daily** Actions spend/minutes cap that resets
+  on a schedule, rather than a one-off platform incident (which would
+  more typically clear on the order of minutes-to-hours, per GitHub's own
+  incident history) — this remains circumstantial, not confirmed, since
+  no session in this repo has GitHub Actions billing/usage-dashboard
+  access to check directly.
+- **Consequence still standing:** PRs #5133, #5134, #5136, #5137, and
+  #5143 (this item's own tracking PR) were all merged by the repo owner
+  during the outage with no real CI evidence — see the update below for
+  detail. None have since been re-verified against a real CI run; if any
+  of their changes need debugging later, remember they were never
+  actually machine-checked before merging, only reasoned about.
+- **Not further investigated:** the exact clear timestamp (would need
+  combing every intermediate `main` push between 03:49 and 23:57 UTC Sep 9
+  — dozens of commits — for the first one with real job durations; not
+  done here since the outage being over is what matters going forward,
+  not the precise minute it ended); whether PR #5141's concurrency fix
+  actually caused the recovery or was coincidental to an independent
+  billing-cap reset.
 - **Update 2026-09-09 ~03:00 UTC:** still OPEN — re-confirmed on `main`'s
   newest pushes (commits `8faa99b`, `e30fed9`, ~02:52-02:53 UTC), same
   instant-fail (2-10s), no-logs signature, now **~6.5 hours** of continuous
@@ -23678,7 +23720,8 @@ how much they de-risk a public launch._
   consolidated into one shared check 2026-09-08 ~22:00 UTC (one session
   checks, wakes the others only if the fact changes) to stop the redundant
   polling — see that session's own trigger history if resuming this thread.
-- [ ] **Status:** OPEN — escalated to the user; needs a human with GitHub
+- [x] **Status (historical):** OPEN at the time this line was written —
+  escalated to the user; needs a human with GitHub
   org/repo billing or Actions-admin access. Found while investigating a CI
   failure wake on PR #5134 (a docs-only B11/R-G recording PR, whose only
   code touch is `continue-on-error: true` additions to `ci.yml`/

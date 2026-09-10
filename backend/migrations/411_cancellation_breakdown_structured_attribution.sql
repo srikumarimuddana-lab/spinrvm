@@ -1,4 +1,4 @@
--- Migration 410: cancellation breakdown — structured attribution + rider reasons
+-- Migration 411: cancellation breakdown — structured attribution + rider reasons
 --
 -- migration-override-ok: intentional CREATE OR REPLACE of an existing function
 -- — public.admin_cancellation_breakdown (165, last amended 350) — to fix a
@@ -169,7 +169,7 @@ COMMENT ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) IS
     'Cancellation reason/party/hour breakdown for /analytics/cancellation-reasons, '
     'plus a rider-specific reason breakdown (rider_reasons/total_rider_cancellations). '
     'Prefers structured cancelled_by/cancellation_type (38) over reason-string parsing '
-    'for reason/party (410; same pattern as admin_marketplace_funnel, 351). '
+    'for reason/party (411; same pattern as admin_marketplace_funnel, 351). '
     'Hour buckets on America/Regina (350). Excludes legacy-imported rides (349).';
 
 REVOKE EXECUTE ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) FROM PUBLIC, anon, authenticated;

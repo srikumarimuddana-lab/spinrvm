@@ -37,7 +37,7 @@ informative bucket for that diagnosis was being counted against the wrong party.
 
 ## 3. Fix / remediation
 
-Migration 410 (`backend/migrations/410_cancellation_breakdown_structured_attribution.sql`)
+Migration 411 (`backend/migrations/411_cancellation_breakdown_structured_attribution.sql`)
 `CREATE OR REPLACE`s `admin_cancellation_breakdown` to:
 1. Prefer `cancelled_by`/`cancellation_type` over string-matching for both the `reason` and
    `party` fields (string-matching remains only as a fallback for pre-migration-38 rows with
@@ -100,9 +100,9 @@ Reasons" table to the existing Cancellations tab, in the same style as the pre-e
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/410_cancellation_breakdown_structured_attribution.sql` | New migration: `CREATE OR REPLACE admin_cancellation_breakdown` — structured-attribution-first classification + new `rider_reasons`/`total_rider_cancellations` output | Fix the mis-attribution bug; add the rider-reason breakdown the ticket asked for |
+| `backend/migrations/411_cancellation_breakdown_structured_attribution.sql` | New migration: `CREATE OR REPLACE admin_cancellation_breakdown` — structured-attribution-first classification + new `rider_reasons`/`total_rider_cancellations` output | Fix the mis-attribution bug; add the rider-reason breakdown the ticket asked for |
 | `backend/routes/admin/analytics.py` | `get_cancellation_breakdown()` now reads `rider_reasons`/`total_rider_cancellations` from the RPC response and includes them in the JSON response; cache key bumped `v2` → `v3` | Thread the new RPC fields to the frontend; avoid serving stale-shaped cached responses after deploy |
-| `backend/tests/test_admin_analytics_coverage.py` | New `TestCancellationBreakdownMigration410` static-assertion test class; two new route-level tests (`test_rider_reasons_passed_through_with_pct`, `test_rider_reasons_zero_total_no_division_error`); updated `test_cache_key_version_bumped_off_the_utc_buckets` (the two endpoints' cache versions now diverge) | Cover the new migration and route behavior; fix a test whose assumption (`overview` and `cancellation-reasons` share one cache version) no longer holds |
+| `backend/tests/test_admin_analytics_coverage.py` | New `TestCancellationBreakdownMigration411` static-assertion test class; two new route-level tests (`test_rider_reasons_passed_through_with_pct`, `test_rider_reasons_zero_total_no_division_error`); updated `test_cache_key_version_bumped_off_the_utc_buckets` (the two endpoints' cache versions now diverge) | Cover the new migration and route behavior; fix a test whose assumption (`overview` and `cancellation-reasons` share one cache version) no longer holds |
 | `admin-dashboard/src/app/dashboard/analytics/page.tsx` | New "Rider Cancellation Reasons" table in the Cancellations tab; new `RIDER_REASON_LABELS`/`riderReasonColors()`; added `admin_cancelled` to the existing `REASON_LABELS`/`reasonColors()` | Render the new breakdown; give the new `admin_cancelled` bucket a real label/color instead of relying on the fallback grey |
 
 ## 7. Before / after
@@ -124,7 +124,7 @@ END AS reason,
 ```
 
 ```sql
--- After (migration 410)
+-- After (migration 411)
 CASE
     WHEN cancellation_type = 'no_drivers_found' THEN 'no_drivers_available'
     WHEN cancelled_by = 'rider'  THEN 'rider_cancelled'   -- structured column checked first
@@ -141,7 +141,7 @@ END AS reason,
 
 Re-run migration 350's `admin_cancellation_breakdown` function body verbatim (a
 `CREATE OR REPLACE`, no schema change, no data written) — this is a pure read-path revert,
-documented in migration 410's own rollback comment. If only the frontend/route changes need
+documented in migration 411's own rollback comment. If only the frontend/route changes need
 reverting independently, `git revert` those two commits; they touch only response
 construction and rendering, not stored data.
 
@@ -149,9 +149,18 @@ Note: because this is a read-only reclassification (see §4), there is no data-l
 remediation needed either direction — reverting or rolling forward only changes how existing
 rows are *read*, never what's stored.
 
+**Renumbering note:** this migration was originally authored and committed as `410_...sql`.
+CI's Migration Safety Check caught a genuine cross-PR numbering race — a different PR
+(`410_ai_fare_quote_show_unavailable.sql`) merged migration 410 to `main` first, after this
+branch had already been created from an earlier `main`. Per `backend/migrations/CLAUDE.md`
+("if two PRs conflict on a number, the second one renames to the next free slot before
+merge"), this file was renamed to `411_...sql` and all in-repo self-references (the file's own
+header comment, its `COMMENT ON FUNCTION`, the test class name, and this log) were updated to
+match. No functional change resulted from the rename.
+
 ## 9. Verification performed
 
-- [x] Automated tests run: `pytest backend/tests/test_admin_analytics_coverage.py -q -k Cancellation` → 19 passed (8 pre-existing in `TestCancellationReasons` + 1 pre-existing in `TestMarketplaceMigration351`, unrelated to this change but matched by the keyword filter, + 2 new route-level tests + 9 new `TestCancellationBreakdownMigration410` static-assertion tests). The pre-existing `test_cache_key_version_bumped_off_the_utc_buckets` was also updated (not added) since its assumption that `/overview` and `/cancellation-reasons` share one cache version no longer holds. `ruff check` / `ruff format --check` clean on both changed backend files.
+- [x] Automated tests run: `pytest backend/tests/test_admin_analytics_coverage.py -q -k Cancellation` → 19 passed (7 pre-existing in `TestCancellationReasons` + 1 pre-existing in `TestMarketplaceMigration351`, unrelated to this change but matched by the keyword filter, + 2 new route-level tests + 9 new `TestCancellationBreakdownMigration411` static-assertion tests). The pre-existing `test_cache_key_version_bumped_off_the_utc_buckets` was also updated (not added) since its assumption that `/overview` and `/cancellation-reasons` share one cache version no longer holds. `ruff check` / `ruff format --check` clean on both changed backend files.
 - [x] Manual repro / verification: read migration 350's actual current body (not a stale earlier version — self-corrected mid-investigation, see below) and confirmed the exact bug via `CancelReasonSheet.tsx`'s preset text before writing the fix.
 - [x] Blast-radius grep performed: `admin_cancellation_breakdown` (only caller: `routes/admin/analytics.py`), and `booking_import_service.py`'s legacy synthetic reason text (excluded via `legacy_import_metadata` predicate, unaffected).
 - [x] Reviewed against relevant CLAUDE.md conventions: migration append-only/reversible rules, structured-attribution pattern already established by migration 351, cache-key versioning convention already established by the `v2` bump on the same function.

@@ -64,7 +64,7 @@ class TestCancellationReasons:
         assert data["hourly_distribution"][3]["count"] == 2
 
     def test_rider_reasons_passed_through_with_pct(self, admin_client):
-        """Migration 410's new fields must reach the response, not just the
+        """Migration 411's new fields must reach the response, not just the
         existing reason/party/hourly ones."""
         bd = {
             "total": 10,
@@ -667,7 +667,7 @@ class TestAnalyticsAreaScopeAndTimezone:
         """Entries cached under UTC bucketing must not be served after the switch.
 
         The two endpoints' versions moved independently since this test was
-        written: /overview is still on v2 (untouched by migration 410), while
+        written: /overview is still on v2 (untouched by migration 411), while
         /cancellation-reasons bumped to v3 when admin_cancellation_breakdown's
         response shape changed (structured attribution + rider_reasons) — a
         stale v2 cache entry there would be missing the new keys.
@@ -1303,11 +1303,11 @@ class TestSecurityDefinerLockdownMigration:
         assert body.count("has_function_privilege('authenticated'") >= 2
 
 
-# ── cancellation breakdown: structured attribution + rider reasons (410) ──
+# ── cancellation breakdown: structured attribution + rider reasons (411) ──
 
 
-class TestCancellationBreakdownMigration410:
-    """Static checks on migration 410 — no database is available to run it.
+class TestCancellationBreakdownMigration411:
+    """Static checks on migration 411 — no database is available to run it.
 
     admin_cancellation_breakdown (165, last amended 350) classified who
     cancelled by fuzzy-matching the free-text cancellation_reason, even
@@ -1318,13 +1318,19 @@ class TestCancellationBreakdownMigration410:
     migration ports the same structured-first pattern already used by
     admin_marketplace_funnel (351, see TestMarketplaceMigration351 above)
     into admin_cancellation_breakdown, and adds a rider_reasons breakdown.
+
+    Originally authored as migration 410; renumbered to 411 before merge
+    because another PR merged a different migration 410
+    (410_ai_fare_quote_show_unavailable.sql) to main first — a genuine
+    cross-PR numbering race the migrations/CLAUDE.md convention resolves by
+    having the second PR take the next free slot.
     """
 
     @staticmethod
     def _body() -> str:
         from pathlib import Path
 
-        p = Path(__file__).resolve().parents[1] / "migrations" / "410_cancellation_breakdown_structured_attribution.sql"
+        p = Path(__file__).resolve().parents[1] / "migrations" / "411_cancellation_breakdown_structured_attribution.sql"
         return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
 
     def test_reason_prefers_structured_columns_over_string_matching(self):

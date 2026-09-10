@@ -1250,7 +1250,7 @@ function DriverDashboard() {
             centered close enough to overlap the driver's own CarMarker (see
             its prop doc — root cause of the "concentric circles around the
             car icon" report on iOS). */}
-        {rideState === 'idle' && heatmapCells.length > 0 && Platform.OS === 'android' && (
+        {rideState === 'idle' && heatmapCells.length > 0 && (
           <HeatmapCells
             cells={heatmapCells}
             region={heatmapRegion}
@@ -1285,7 +1285,27 @@ function DriverDashboard() {
           heatmapProjection.ts) since it has no native map to anchor to.
           Same idle-only + driverLocation-exclusion gating as the Android
           branch above. */}
-      {Platform.OS === 'ios' && rideState === 'idle' && heatmapCells.length > 0 && (
+      {/* DISABLED 2026-09-10 (incident): driver-app 2.0.03 100% crash on iOS,
+          `TurboModuleRegistry.getEnforcing(...): 'RNSkiaModule' could not be
+          found` — an OTA-pushed JS bundle referencing @shopify/react-native-
+          skia reached iOS binaries that predate the native module. The
+          existing try/catch-around-require() guard in loadSkia() should have
+          caught this (verified: TurboModuleRegistry.getEnforcing's failure
+          is a plain, synchronous, catchable JS throw — confirmed by reading
+          the actual invariant/TurboModuleRegistry source, and this repo's
+          own existing test simulating the identical throw already passes
+          against the unmodified code) — so the exact mechanism is NOT yet
+          confirmed. Rather than trust an unverified guess under incident
+          pressure, this removes the entire require('@shopify/react-native-
+          skia') call from ever executing again: HeatmapCells' Android-only
+          gate above was lifted back to all platforms, restoring its
+          original, Skia-free iOS circle-fallback rendering (safe, unchanged
+          since before HM-32). Re-enable only after: (1) the real Sentry
+          stack trace confirms the actual throw site, and (2) a real EAS
+          native-build device test confirms no crash on both pre- and
+          post-Skia binaries. See
+          docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md. */}
+      {false && Platform.OS === 'ios' && rideState === 'idle' && heatmapCells.length > 0 && (
         <HeatmapGradientOverlay
           cells={heatmapCells}
           region={liveHeatmapRegion ?? heatmapRegion}

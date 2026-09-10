@@ -180,6 +180,13 @@ async def _over_daily_cap(user_id: str, cap: int) -> bool:
 
 _CONV_LOCK_TTL_SECONDS = 90  # generous ceiling for a full multi-iteration tool-calling turn
 
+# AI17/F1: forcing StreamingOutputFilter's holdback past any real reply's
+# length makes _release(final=False) always return "" (see its `stable =
+# full[: max(0, len(full) - self._holdback)]`), so nothing leaves the
+# filter until flush(). Used only when ai_stream_incremental_enabled is
+# False — filtering itself is unaffected either way.
+_DISABLE_INCREMENTAL_HOLDBACK = 1 << 30
+
 
 # Release the conversation lock ONLY if we still own it (F09).
 #
@@ -451,6 +458,12 @@ async def _run_chat_turn(
     tool_user["_client_capabilities"] = frozenset(client_capabilities or ())
 
     max_iterations = int(settings.get("ai_max_tool_iterations") or 6)
+    # AI17/F1: operational kill-switch for INCREMENTAL release only — an
+    # explicit True default so a settings dict missing this key (a stale
+    # cache entry, a test fixture) never accidentally disables streaming.
+    # filter_tool_leakage/scrub_pii(AI_CHAT) run on the full reply either
+    # way; see _DISABLE_INCREMENTAL_HOLDBACK above and migration 409.
+    incremental_streaming_enabled = settings.get("ai_stream_incremental_enabled", True)
     all_text: List[str] = []
     emitted_text: List[str] = []
     used_tool_names: List[str] = []
@@ -473,7 +486,11 @@ async def _run_chat_turn(
             # across a tool call would stall the rider's visible reply behind
             # the tool's latency for no safety gain — a value cannot span two
             # separate provider responses.
-            out_filter = StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT)
+            out_filter = (
+                StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT)
+                if incremental_streaming_enabled
+                else StreamingOutputFilter(policy=ScrubPolicy.AI_CHAT, holdback=_DISABLE_INCREMENTAL_HOLDBACK)
+            )
             async for event in adapter.stream_turn(system=system, messages=messages, tools=tools):
                 if event.type == "text" and event.text:
                     turn_text.append(event.text)

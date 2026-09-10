@@ -9,6 +9,7 @@ import {
   TouchableOpacityProps,
   ViewStyle,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
 import { FONT, SPACING } from '../utils/responsive';
@@ -27,10 +28,16 @@ import { FONT, SPACING } from '../utils/responsive';
  * border-radii — 30px, 12px, 28px) across become-driver.tsx, report-safety.tsx
  * and ride-options.tsx; those three are this PR's only migrated consumers.
  *
- * What this intentionally does NOT do: no icon-slot prop, no outline/ghost
- * variant — nothing in the codebase's real CTA buttons needed either, and
- * this component only extracts patterns that already exist (see CLAUDE.md
- * "Simplicity first"). Add them when a real screen needs them.
+ * `icon` (added for driver-app's UX3 migration, 2026-09-10) is an optional
+ * leading glyph rendered before the label — extracted from the first two
+ * real call sites that actually needed one: ActivityView's "Try Again"
+ * retry pill and documents.tsx's "Re-upload Document" button. Every
+ * pre-existing consumer omits it and renders byte-identical to before.
+ *
+ * What this intentionally does NOT do: no outline/ghost variant — nothing
+ * in the codebase's real CTA buttons needed one yet, and this component
+ * only extracts patterns that already exist (see CLAUDE.md "Simplicity
+ * first"). Add one when a real screen needs it.
  */
 export type ButtonVariant = 'primary' | 'secondary' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -52,9 +59,20 @@ export interface ButtonProps
    *  a button meant to sit inline (e.g. side-by-side with flex:1 wrappers,
    *  as RideOfferPanel's accept/decline pair already does at the call site). */
   fullWidth?: boolean;
+  /** Optional leading icon (an Ionicons glyph name) rendered before the
+   *  label. Hidden while `loading` — the spinner replaces the whole label
+   *  row, same as a button with no icon. Omit for a plain text button;
+   *  every pre-UX3 consumer does. */
+  icon?: keyof typeof Ionicons.glyphMap;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
 }
+
+// Leading-icon size/gap per size — proportioned to each size's text/padding,
+// matching the two real call sites' own prior icon sizes (16 for the sm
+// re-upload button, 18 for the md-ish retry pill) rather than one fixed value.
+const ICON_SIZES: Record<ButtonSize, number> = { sm: 16, md: 18, lg: 20 };
+const ICON_GAPS: Record<ButtonSize, number> = { sm: 6, md: 8, lg: 8 };
 
 export function Button({
   children,
@@ -63,6 +81,7 @@ export function Button({
   loading = false,
   disabled = false,
   fullWidth = true,
+  icon,
   style,
   textStyle,
   onPress,
@@ -100,12 +119,22 @@ export function Button({
       {loading ? (
         <ActivityIndicator color={spinnerColor} size="small" />
       ) : (
-        <Text
-          style={[SIZE_STYLES[size].text, styles[`${variant}Text`], textStyle]}
-          numberOfLines={1}
-        >
-          {children}
-        </Text>
+        <>
+          {icon && (
+            <Ionicons
+              name={icon}
+              size={ICON_SIZES[size]}
+              color={spinnerColor}
+              style={{ marginRight: ICON_GAPS[size] }}
+            />
+          )}
+          <Text
+            style={[SIZE_STYLES[size].text, styles[`${variant}Text`], textStyle]}
+            numberOfLines={1}
+          >
+            {children}
+          </Text>
+        </>
       )}
     </TouchableOpacity>
   );

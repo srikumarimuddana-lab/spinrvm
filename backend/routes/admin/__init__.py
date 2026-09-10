@@ -172,10 +172,12 @@ admin_router.include_router(driver_import_router, dependencies=[Depends(require_
 admin_router.include_router(legacy_driver_import_router, dependencies=[Depends(require_module("drivers"))])
 # Legacy SIN/DOB backfill (Phase 2 of the 2026-08-27 migration plan) — writes
 # a vault-encrypted SIN + date_of_birth onto already-legacy-imported drivers
-# from the previous app's banks.csv/drivers.csv export. Same "drivers"
-# module gate as the bulk driver import above; the underlying write is
-# guarded further at commit time (never clobbers a value already on file).
-admin_router.include_router(legacy_sin_dob_backfill_router, dependencies=[Depends(require_module("drivers"))])
+# from the previous app's banks.csv/drivers.csv export. Writes a government
+# ID, so this takes the same strictly-super_admin posture as reveal-sin/
+# update-sin/tax_id_import (not the plain "drivers" module gate the other
+# legacy-import routers above use) — the underlying write is guarded further
+# at commit time (never clobbers a value already on file).
+admin_router.include_router(legacy_sin_dob_backfill_router, dependencies=[Depends(require_super_admin)])
 # Legacy vehicle-history backfill (2026-08-27 migration plan Phase 2) —
 # admin-dashboard wrapper over services/driver_import_service.py's
 # plan/apply_legacy_vehicle_history_backfill (also used by

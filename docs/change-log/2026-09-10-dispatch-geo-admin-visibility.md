@@ -109,7 +109,7 @@ follow-up cleanup.
 - [x] Manual repro / real browser check: started the actual Next.js dev server and ran the new Playwright interaction tests (`e2e/monitoring.spec.ts -g dispatch-geo`) against it — both new tests pass, plus the full `monitoring.spec.ts` file (10/10) to confirm no regression to the sibling redis/live-map pages.
 - [x] Blast-radius grep performed: `admin_dispatch_geo_status`, `_postgis_ids`/`_rows_for_ids`-style checks for every new function's callers before wiring anything in; confirmed sidebar.tsx/command-palette-routes.ts edits are pure additions, not modifications to existing entries.
 - [x] Reviewed against relevant CLAUDE.md conventions: admin-dashboard visual-regression gate (explicitly checked which of the 6 seeded pages could be affected — none), dual-import pattern (matched in the new backend route), Sentry/observability tagging conventions (no new capture paths — read-only status route, no new error class).
-- [ ] **Real production build (`npm run build`) — not yet run as of this entry; will run before opening the PR.** Per CLAUDE.md, a passing dev server + `tsc --noEmit` is not equivalent to a real build for an admin-dashboard change.
+- [x] **Real production build (`npm run build`) — run and passed.** Exit 0, no error/fail lines in the build log, `/dashboard/monitoring/dispatch-geo` appears correctly in the compiled route list alongside every other route.
 - [x] Feature-flagged if user-visible and non-trivial — not applicable/not needed: this is a new, isolated internal-admin page gated by the existing `settings` module permission, not a change to any existing flow.
 
 ## 10. Sign-off

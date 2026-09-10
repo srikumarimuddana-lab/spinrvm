@@ -52,13 +52,26 @@ use plain discovery mode for that. Ends with dated entries filed into
    not to need this — reserve it for open-ended ideation and true discovery
    sweeps):
    - Agent A: catalog the surface's current interaction vocabulary — every
-     button variant, transition/animation, and loading/empty/error-state
-     pattern already in use, with file:line. Ideas must build on this, not
-     duplicate it.
-   - Agent B: friction points — screens with no loading/empty/error state,
-     inconsistent button treatment across similar actions, abrupt
-     (non-animated) state changes a user would feel as jarring. Each finding
-     needs a concrete repro (file:line + what a user actually sees), not a vibe.
+     button variant, transition/animation (note duration/easing where
+     discoverable from code, and which transitions look ad-hoc — no easing,
+     inconsistent durations across visually-similar actions — versus
+     deliberate), and loading/empty/error-state pattern already in use, with
+     file:line. This is the one motion-*craft* angle no other reviewer
+     checks: `spinr-design-consistency-reviewer` only checks reduced-motion
+     respect, `spinr-ui-ux-critic` only checks whether motion reads as
+     decorative noise — neither judges whether a transition's timing/easing
+     is actually well-made. Ideas must build on this catalog, not duplicate it.
+   - Agent B: friction as raw material for ideas, not a compliance pass.
+     `spinr-design-consistency-reviewer` already owns the mechanical "does
+     every async action have all four states" finding — run that agent for
+     the audit; don't restate its findings here. Instead look for: abrupt
+     (non-animated) state changes a user would feel as jarring, button
+     treatments inconsistent across visually-similar actions, and existing
+     loading/empty/error states that are functionally present but feel
+     low-effort (a bare spinner where a skeleton would read calmer, a plain
+     "no results" where empty-state guidance would help). Each finding needs
+     a concrete file:line + what a user actually sees, framed as "here's an
+     upgrade idea," not "here's a violation."
    - Agent C: precedent — does a comparable pattern already exist elsewhere in
      this surface (or `shared/`) that a new idea should reuse instead of
      introducing a fourth way to do the same thing?

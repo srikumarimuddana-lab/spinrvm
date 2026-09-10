@@ -327,3 +327,56 @@ export const explainDriverImportIssue: IssueExplainer = createIssueExplainer(
         ],
     ],
 );
+
+// ── Bulk Rider Import ────────────────────────────────────────────────────
+export const explainRiderImportIssue: IssueExplainer = createIssueExplainer(
+    {
+        "CSV is empty": {
+            cause: "The uploaded file has no data rows.",
+            fix: "Check that the file wasn't saved empty or truncated during export.",
+        },
+        "CSV is missing required column: phone": {
+            cause: "The uploaded CSV has no phone column, which every row needs to be matched against Spinr.",
+            fix: "Re-download the CSV template above and confirm your file's header row includes phone.",
+        },
+        "phone is required": {
+            cause: "This row has no phone number, so there's nothing to match it to an account.",
+            fix: "Fill in the phone number for this row, or remove the row.",
+        },
+        "duplicate phone in CSV": {
+            cause: "The same phone number appears on more than one row in this file.",
+            fix: "Keep only one row per phone number -- decide which is correct and remove the other.",
+        },
+        "phone matches existing DRIVER — will update stripe_customer_id if provided, rider flags already set": {
+            cause: "This phone number already belongs to a Spinr driver -- they already have rider access, so this row will only update their Stripe customer ID if one was provided.",
+            fix: "This is expected and not a problem -- drivers can also ride as riders. No action needed.",
+        },
+        "phone matches existing user — will update fields if provided": {
+            cause: "This phone number already belongs to a Spinr account -- this row will update that account's fields rather than create a new one.",
+            fix: "This is expected when re-uploading a CSV with updated details for an existing rider. No action needed.",
+        },
+    },
+    [
+        [
+            "invalid phone format (expected +1XXXXXXXXXX):",
+            {
+                cause: "This row's phone number isn't in the expected +1 followed by 10 digits format.",
+                fix: "Check the phone value for this row -- it may be missing the country code, have extra characters, or be the wrong length.",
+            },
+        ],
+        [
+            "customer_id '",
+            {
+                cause: "This row's customer_id doesn't start with cus_, which is how Stripe customer IDs are always formatted.",
+                fix: "Check the customer_id value for this row -- it may be a different kind of ID, or blank/malformed.",
+            },
+        ],
+        [
+            "SKIPPED — matched account status is",
+            {
+                cause: "This row's phone matches an account that's in the middle of being deleted or already deleted -- Spinr never re-populates personal data onto an account like that automatically.",
+                fix: "This needs manual review, not a re-run of the import -- check the matched account's status in the admin Users page and decide by hand whether this row should be imported at all.",
+            },
+        ],
+    ],
+);

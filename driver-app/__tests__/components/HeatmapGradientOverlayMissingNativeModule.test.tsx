@@ -19,6 +19,21 @@ jest.mock('@shopify/react-native-skia', () => {
   throw new Error('Native module RNSkiaModule tried to be registered twice');
 });
 
+// Simulate a binary where the TurboModule proxy exists but Skia's native
+// module is not registered — the exact scenario from the 2.0.03 crash.
+const originalProxy = (globalThis as any).__turboModuleProxy;
+beforeEach(() => {
+  (globalThis as any).__turboModuleProxy = (name: string) =>
+    name === 'RNSkiaModule' ? null : originalProxy?.(name);
+});
+afterEach(() => {
+  if (originalProxy === undefined) {
+    delete (globalThis as any).__turboModuleProxy;
+  } else {
+    (globalThis as any).__turboModuleProxy = originalProxy;
+  }
+});
+
 jest.mock('@shared/theme/ThemeContext', () => ({
   useTheme: () => ({ colors: { heatmapRamp: ['#ffe3e0', '#ffb3ac', '#ff7a6e', '#ff3b30', '#b71c1c'] } }),
 }));

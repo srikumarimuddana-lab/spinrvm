@@ -26,12 +26,14 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 try:
+    from ai.pii import scrub_pii
     from dependencies import get_current_user, get_current_user_active_session
     from services.zoho_desk_integration import create_support_ticket
     from services.zoho_desk_service import ZohoDeskError
     from utils.rate_limiter import ai_chat_limit
 except ImportError:
     from ..utils.rate_limiter import ai_chat_limit  # type: ignore
+    from .ai.pii import scrub_pii  # type: ignore
     from .dependencies import (  # type: ignore
         get_current_user,
         get_current_user_active_session,
@@ -84,8 +86,8 @@ async def support_chat(
     Why a stub rather than a delegation to the central engine: delegating was
     tried first and quietly WIDENED this endpoint. The pre-F04 route was a
     prompt-only FAQ bot with no tools, no stored conversation and no cache
-    participation. Routing it through ``run_chat_turn`` handed a legacy client
-    the full authenticated rider/driver tool set — including
+    participation. Routing it through the central engine's turn handler handed
+    a legacy client the full authenticated rider/driver tool set — including
     ``propose_ride_booking`` and ``escalate_to_support``, whose side effects
     (a real Zoho ticket) would fire while the resulting ``action`` frame was
     dropped, because this response shape has nowhere to put a card. It also
@@ -123,9 +125,19 @@ async def support_escalate(
     Returns the ticket number on success; on a Zoho outage / disabled
     integration it falls back to the support contact line so the user is never
     left without a path to help.
+
+    ``message``/``transcript`` are scrubbed (ScrubPolicy.STRICT, same as
+    ai/support_assistant.py's own use of scrub_pii on this same ticket data
+    when drafting a reply) before Zoho Desk -- a third party -- ever sees
+    them. A rider troubleshooting a declined card or typing their own phone
+    number into the chat must not have it land in a support ticket verbatim.
     """
+    scrubbed_message = scrub_pii(req.message)
+    scrubbed_transcript = scrub_pii(req.transcript) if req.transcript else None
     try:
-        result = await create_support_ticket(user=current_user, message=req.message, transcript=req.transcript or None)
+        result = await create_support_ticket(
+            user=current_user, message=scrubbed_message, transcript=scrubbed_transcript
+        )
     except ZohoDeskError:
         return {"success": False, "reply": FALLBACK_REPLY}
     return {

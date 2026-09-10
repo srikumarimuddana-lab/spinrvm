@@ -69,6 +69,10 @@ def _fake_request() -> Request:
 class TestListAndGetStaff:
     @pytest.mark.asyncio
     async def test_list_staff_strips_credentials_and_sets_headers(self):
+        # W3 (2026-09-10 RBAC audit): list_staff now sits behind
+        # Depends(require_role("super_admin")), matching create_staff/
+        # delete_staff's own pattern — use SUPER here too, consistent with
+        # how this file already calls those.
         rows = [_staff_row(mfa_secret="topsecret", mfa_backup_codes=[{"hash": "x"}])]
         response = AsyncMock()
         response.headers = {}
@@ -76,7 +80,7 @@ class TestListAndGetStaff:
             patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=rows)),
             patch.object(staff_mod.db_supabase, "count_documents", AsyncMock(return_value=1)),
         ):
-            result = await staff_mod.list_staff(response, admin=OPS, limit=500, offset=0)
+            result = await staff_mod.list_staff(response, admin=SUPER, limit=500, offset=0)
 
         assert result[0].get("password_hash") is None
         assert result[0].get("mfa_secret") is None
@@ -87,7 +91,7 @@ class TestListAndGetStaff:
     @pytest.mark.asyncio
     async def test_get_staff_strips_credentials(self):
         with patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[_staff_row()])):
-            result = await staff_mod.get_staff("staff-1")
+            result = await staff_mod.get_staff("staff-1", admin=SUPER)
         assert result["id"] == "staff-1"
         assert "password_hash" not in result
 
@@ -95,7 +99,7 @@ class TestListAndGetStaff:
     async def test_get_staff_404(self):
         with patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
-                await staff_mod.get_staff("missing")
+                await staff_mod.get_staff("missing", admin=SUPER)
         assert exc.value.status_code == 404
 
     def test_list_modules_returns_static_payload(self):
@@ -226,6 +230,78 @@ class TestCreateStaff:
 
         assert audit_rows and audit_rows[0]["action"] == "staff_created"
         assert audit_rows[0]["details"]["email_masked"] != "audited@spinr.ca"
+
+    @pytest.mark.asyncio
+    async def test_custom_role_full_modules_requires_password_confirmation(self):
+        """Admin RBAC audit finding W4 (docs/audit/2026-09-10-admin-portal-
+        security-rbac-audit.md): a "custom" role granted every
+        AVAILABLE_MODULES string is super_admin-equivalent access without
+        ever being flagged role=="super_admin" — must require the same
+        re-auth as an explicit super_admin promotion."""
+        req = staff_mod.StaffCreateRequest(
+            email="fullcustom@spinr.ca",
+            password=_STRONG_TEST_PW,
+            first_name="A",
+            last_name="B",
+            role="custom",
+            modules=list(staff_mod.AVAILABLE_MODULES),
+        )
+        with patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[])):
+            with pytest.raises(HTTPException) as exc:
+                await staff_mod.create_staff(req, admin=SUPER)
+        assert exc.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_custom_role_full_modules_succeeds_with_confirmation_and_flags_audit(self):
+        req = staff_mod.StaffCreateRequest(
+            email="fullcustom2@spinr.ca",
+            password=_STRONG_TEST_PW,
+            first_name="A",
+            last_name="B",
+            role="custom",
+            modules=list(staff_mod.AVAILABLE_MODULES),
+            password_confirmation="correct",
+        )
+
+        async def _get_rows(table, match=None, **kw):
+            if match and match.get("id") == "admin-super":
+                return [_staff_row(id="admin-super", password_hash="realhash")]
+            return []
+
+        audit_rows = []
+
+        async def _capture(table, row):
+            if table == "audit_logs":
+                audit_rows.append(row)
+
+        with (
+            patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock(side_effect=_capture)),
+            patch.object(staff_mod, "verify_password", return_value=(True, None)),
+        ):
+            result = await staff_mod.create_staff(req, admin=SUPER)
+
+        assert set(result["modules"]) == set(staff_mod.AVAILABLE_MODULES)
+        assert audit_rows[0]["details"]["super_admin_equivalent"] is True
+
+    @pytest.mark.asyncio
+    async def test_custom_role_partial_modules_does_not_require_confirmation(self):
+        """A custom role short of full parity is unaffected — only the
+        actual full-grant case triggers the W4 gate."""
+        req = staff_mod.StaffCreateRequest(
+            email="partial@spinr.ca",
+            password=_STRONG_TEST_PW,
+            first_name="A",
+            last_name="B",
+            role="custom",
+            modules=["dashboard", "users"],
+        )
+        with (
+            patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[])),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock(return_value=None)),
+        ):
+            result = await staff_mod.create_staff(req, admin=SUPER)
+        assert result["modules"] == ["dashboard", "users"]
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +614,94 @@ class TestUpdateStaff:
 
         assert audit_rows and audit_rows[0]["action"] == "staff_updated"
         assert "updated_at" not in audit_rows[0]["details"]
+
+    @pytest.mark.asyncio
+    async def test_grant_full_modules_via_custom_role_requires_password_confirmation(self):
+        """Admin RBAC audit finding W4: an existing custom-role staffer whose
+        modules are being expanded to every AVAILABLE_MODULES string must
+        hit the same re-auth gate as an explicit super_admin promotion."""
+        req = staff_mod.StaffUpdateRequest(modules=list(staff_mod.AVAILABLE_MODULES))
+        with patch.object(
+            staff_mod.db_supabase,
+            "get_rows",
+            AsyncMock(return_value=[_staff_row(role="custom", modules=["dashboard"])]),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await staff_mod.update_staff("staff-1", req, admin=SUPER)
+        assert exc.value.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_grant_full_modules_succeeds_with_confirmation_and_flags_audit(self):
+        req = staff_mod.StaffUpdateRequest(modules=list(staff_mod.AVAILABLE_MODULES), password_confirmation="correct")
+
+        async def _get_rows(table, match=None, **kw):
+            if match and match.get("id") == "staff-1":
+                return [_staff_row(role="custom", modules=["dashboard"])]
+            if match and match.get("id") == "admin-super":
+                return [_staff_row(id="admin-super", password_hash="realhash")]
+            return []
+
+        audit_rows = []
+
+        async def _capture(table, row):
+            if table == "audit_logs":
+                audit_rows.append(row)
+
+        with (
+            patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+            patch.object(staff_mod.db_supabase, "update_one", AsyncMock()),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock(side_effect=_capture)),
+            patch.object(staff_mod, "verify_password", return_value=(True, None)),
+            patch.object(staff_mod, "revoke_all_for_user", AsyncMock()),
+        ):
+            result = await staff_mod.update_staff("staff-1", req, admin=SUPER)
+
+        assert result == {"success": True}
+        assert audit_rows[0]["details"]["super_admin_equivalent"] is True
+
+    @pytest.mark.asyncio
+    async def test_editing_already_full_parity_staffer_does_not_re_require_confirmation(self):
+        """The gate only fires on the TRANSITION into full parity (mirrors
+        the super_admin promotion check) — editing an unrelated field on an
+        already-full-modules custom-role staffer must not re-prompt."""
+        req = staff_mod.StaffUpdateRequest(first_name="Renamed")
+        with (
+            patch.object(
+                staff_mod.db_supabase,
+                "get_rows",
+                AsyncMock(return_value=[_staff_row(role="custom", modules=list(staff_mod.AVAILABLE_MODULES))]),
+            ),
+            patch.object(staff_mod.db_supabase, "update_one", AsyncMock()),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+        ):
+            result = await staff_mod.update_staff("staff-1", req, admin=SUPER)
+        assert result == {"success": True}
+
+    @pytest.mark.asyncio
+    async def test_super_admin_promotion_not_double_gated_by_w4_check(self):
+        """A role=="super_admin" promotion is excluded from the W4 check
+        (_resulting_role != "super_admin") — it's already covered by the
+        A-P3-6 promotion gate above, so this must not require two separate
+        password_confirmation prompts for one action."""
+        req = staff_mod.StaffUpdateRequest(role="super_admin", password_confirmation="correct")
+
+        async def _get_rows(table, match=None, **kw):
+            if match and match.get("id") == "staff-1":
+                return [_staff_row(role="operations")]
+            if match and match.get("id") == "admin-super":
+                return [_staff_row(id="admin-super", password_hash="realhash")]
+            return []
+
+        with (
+            patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(side_effect=_get_rows)),
+            patch.object(staff_mod.db_supabase, "update_one", AsyncMock()),
+            patch.object(staff_mod.db_supabase, "insert_one", AsyncMock()),
+            patch.object(staff_mod, "verify_password", return_value=(True, None)) as verify_mock,
+            patch.object(staff_mod, "revoke_all_for_user", AsyncMock()),
+        ):
+            result = await staff_mod.update_staff("staff-1", req, admin=SUPER)
+        assert result == {"success": True}
+        verify_mock.assert_called_once()  # not twice — one gate, not two
 
 
 # ---------------------------------------------------------------------------

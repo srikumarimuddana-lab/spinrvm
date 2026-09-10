@@ -23,10 +23,15 @@ exercises every branch:
 - No service-account JSON configured (falsy `settings.FIREBASE_SERVICE_ACCOUNT_JSON`)
   — takes the `firebase_admin.initialize_app()` (no-cred, ADC) branch.
   - Happy path.
-  - `initialize_app()` raises — caught by the module's own bare
-    `except Exception: pass` (`# noqa: S110`) at that specific call site, so
-    NO error is logged in this sub-branch (distinct from the JSON-configured
-    failure paths above, which do log). Verified explicitly below.
+  - `initialize_app()` raises — logged loudly at this specific call site
+    (`logger.error(..., exc_info=True)`), same as the JSON-configured failure
+    paths below. Verified explicitly below.
+  - (C97, 2026-09-10): this branch used to have its own local
+    `except Exception: pass` swallowing the failure with zero log output —
+    on a non-GCP host with no service-account JSON set, Application Default
+    Credentials reliably fail, and the app booted looking healthy with FCM
+    silently, permanently non-functional. Fixed to log loudly instead; see
+    `docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`.
 
 Dual-import note (CLAUDE.md): loaded as `backend.core.security`, the relative
 `from .config import settings` wins, so `settings` and `firebase_admin` are
@@ -178,17 +183,17 @@ def test_unconfigured_empty_string_also_takes_default_credentials_branch(monkeyp
     fake_firebase_admin.initialize_app.assert_called_once_with()
 
 
-def test_unconfigured_initialize_app_failure_is_swallowed_by_local_bare_except(
-    monkeypatch, fake_firebase_admin, caplog
-):
-    """Unlike the JSON-configured failure paths, this specific call site has
-    its own local `except Exception: pass  # noqa: S110` — so a failure here
-    is swallowed with NO error logged at all, not even by the outer handler
-    (the outer handler never gets a chance to see it)."""
+def test_unconfigured_initialize_app_failure_is_logged_loudly(monkeypatch, fake_firebase_admin, caplog):
+    """C97 (2026-09-10): this call site used to have its own local
+    `except Exception: pass` swallowing the failure with NO log at all —
+    the exact gap that let Firebase silently fail to initialize on a
+    non-GCP host with no service-account JSON set, with the app booting
+    looking healthy and FCM permanently, silently non-functional. Now
+    logs loudly, matching every other failure branch in this function."""
     _set_service_account_json(monkeypatch, None)
     fake_firebase_admin.initialize_app.side_effect = RuntimeError("no default credentials found")
 
     with caplog.at_level(logging.ERROR, logger="backend.core.security"):
         security.init_firebase()  # must not raise
 
-    assert "Firebase initialization failed" not in caplog.text
+    assert "Firebase initialization failed" in caplog.text

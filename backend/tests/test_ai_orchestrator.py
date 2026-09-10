@@ -251,6 +251,53 @@ class TestHappyPaths:
         assert "[internal]" in assistant_call.args[2]
         assert "find_place" not in assistant_call.args[2]
 
+    @pytest.mark.anyio
+    async def test_incremental_streaming_kill_switch_still_filters_everything(self):
+        # AI17/F1 follow-up: ai_stream_incremental_enabled=False is an
+        # operational lever for the RELEASE mechanism, not a privacy
+        # toggle — filtering must still remove 100% of the leak, it should
+        # just arrive as a single frame instead of several. Multiple chunks
+        # well past StreamingOutputFilter's holdback/min_release so the
+        # default (enabled) path would release more than once.
+        adapter = FakeAdapter(
+            [
+                [
+                    _text("x" * 80 + " Let me run "),
+                    _text("find_place to check that address, call 306-"),
+                    _text("555-1234 if it fails." + "z" * 40),
+                    _end(),
+                ]
+            ]
+        )
+        settings = dict(SETTINGS, ai_stream_incremental_enabled=False)
+        frames, mocks = await _run(adapter, settings=settings)
+        token_frames = [p["text"] for n, p in frames if n == "token"]
+        # The property under test: the switch actually suppresses
+        # incremental release (a single flush), not just an implementation
+        # detail — unlike the frame-count-agnostic tests above.
+        assert len(token_frames) == 1
+        tokens = token_frames[0]
+        assert "find_place" not in tokens and "[internal]" in tokens
+        assert "306-555-1234" not in tokens and "[PHONE]" in tokens
+        assistant_call = mocks["append"].await_args_list[1]
+        assert "find_place" not in assistant_call.args[2]
+        assert "306-555-1234" not in assistant_call.args[2]
+
+    @pytest.mark.anyio
+    async def test_incremental_streaming_defaults_on_when_setting_absent(self):
+        # A settings dict missing the key entirely (stale cache row, an old
+        # test fixture) must behave as enabled — the explicit `True` default
+        # in orchestrator.py, not settings.get's implicit None/falsy.
+        settings = dict(SETTINGS)
+        settings.pop("ai_stream_incremental_enabled", None)
+        long_chunks = [_text("x" * 60) for _ in range(4)] + [_end()]
+        adapter = FakeAdapter([long_chunks])
+        frames, _ = await _run(adapter, settings=settings)
+        token_frames = [p["text"] for n, p in frames if n == "token"]
+        # Enough text to cross the holdback more than once; a single frame
+        # here would mean the flag was misread as disabled by default.
+        assert len(token_frames) > 1
+
 
 # Rule 6c in the system prompt mentions the block by name, so the test
 # sentinel must be text only the INJECTED block carries.

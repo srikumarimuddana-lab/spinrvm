@@ -296,6 +296,112 @@ describe('CarMarker — onBearingChange (shared bearing source for map camera + 
     });
     unmount();
   });
+
+  it('uses the playback spline bearing when the tick chord is under 3 m, so heading 0 cannot pin the car north', () => {
+    // ~1.1 m north of `coord` — under selectBearing's MIN_BEARING_MOVE_M(3)
+    // but interpolating, so coalescePlaybackBearing must take p.bearing 180
+    // (south) instead of the Android placeholder heading 0.
+    mockPlaybackPosition.mockReturnValue({
+      coordinate: { latitude: 50.44521, longitude: -104.6189 },
+      bearing: 180,
+      mode: 'interpolating',
+    });
+    const onBearingChange = jest.fn();
+    const { unmount } = render(
+      <CarMarker coordinate={coord} heading={0} onBearingChange={onBearingChange} />,
+    );
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+    expect(onBearingChange).toHaveBeenCalledWith(180);
+    unmount();
+  });
+
+  it('emits world-space bearing to onBearingChange even when the map camera is already rotated', () => {
+    const mapHeadingRef = { current: 90 };
+    const onBearingChange = jest.fn();
+    const { unmount } = render(
+      <CarMarker
+        coordinate={coord}
+        mapHeadingRef={mapHeadingRef}
+        onBearingChange={onBearingChange}
+      />,
+    );
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+    // Camera must keep receiving 42, not visualRotationDegrees(42, 90).
+    // Feeding the offset back would lock course-up at heading 0.
+    expect(onBearingChange).toHaveBeenCalledWith(42);
+    unmount();
+  });
+});
+
+describe('CarMarker — Android rotation interpolates through a turn, not a single snap (2026-09-09, "no smooth animation")', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+  const mockPlaybackPosition = playbackPosition as jest.Mock;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+    // ~89m north of `coord`, bearing 90 — a sharp turn from the initial
+    // heading=0 — clears both the ticker's 0.5m churn guard and
+    // selectBearing's MIN_BEARING_MOVE_M so the tick actually applies it.
+    mockPlaybackPosition.mockReturnValue({
+      coordinate: { latitude: 50.446, longitude: -104.6189 },
+      bearing: 90,
+      mode: 'interpolating',
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+    mockPlaybackPosition.mockReturnValue(null);
+  });
+
+  it('passes through intermediate rotation values instead of jumping straight to the target', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} heading={0} />,
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(500); // one TICK_MS — selects bearing 90, starts the tween
+    });
+
+    const seenValues = new Set<number>();
+    for (let i = 0; i < 6; i++) {
+      act(() => {
+        jest.advanceTimersByTime(16); // ~1 animation frame
+      });
+      seenValues.add(UNSAFE_root.findByType(Marker).props.rotation);
+    }
+
+    // At least one sampled frame lands strictly between the start (0) and
+    // target (90) heading — proof rotation is interpolated across frames,
+    // not stepped to the target in a single jump the way it was before this
+    // fix (which set androidRotation to the target directly, once, per tick).
+    const midValues = [...seenValues].filter((v) => v > 0 && v < 90);
+    expect(midValues.length).toBeGreaterThan(0);
+
+    // And it settles exactly at the target once the tween completes.
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.rotation).toBe(90);
+
+    unmount();
+  });
+
+  it('does not throw across repeated ticks, unmount included (RAF loop cleans up)', () => {
+    const { unmount } = render(<CarMarker coordinate={coord} heading={0} />);
+    expect(() => {
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+    }).not.toThrow();
+    expect(() => unmount()).not.toThrow();
+  });
 });
 
 describe('CarMarker — Android rotation interpolates through a turn, not a single snap (2026-09-09, "no smooth animation")', () => {
@@ -524,6 +630,60 @@ describe('CarMarker — Android ring-change re-arms the frozen snapshot', () => 
     rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
     expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
 
+    unmount();
+  });
+});
+
+describe('CarMarker — iOS Apple Maps rotates the car PNG via view transform', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'ios';
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+  });
+
+  it('renders an iOS-only rotate wrapper around the car image', () => {
+    const { getByTestId, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
+    expect(getByTestId('car-marker-ios-rotate')).toBeTruthy();
+    unmount();
+  });
+
+  it('does not freeze tracksViewChanges after image load (a frozen snapshot would pin the PNG north)', () => {
+    const { UNSAFE_root, unmount } = render(<CarMarker coordinate={coord} heading={180} />);
+    act(() => {
+      UNSAFE_root.findByType(Image).props.onLoad();
+    });
+    act(() => {
+      jest.advanceTimersByTime(350);
+    });
+    // iOS uses Marker.Animated (host name MarkerAnimated in the maps mock).
+    const marker = UNSAFE_root.findByType('MarkerAnimated' as any);
+    expect(marker.props.tracksViewChanges).toBe(true);
+    unmount();
+  });
+});
+
+describe('CarMarker — Android does not use the iOS rotate wrapper', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+  });
+
+  it('does not render car-marker-ios-rotate (Marker.rotation is the Android path)', () => {
+    const { queryByTestId, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
+    expect(queryByTestId('car-marker-ios-rotate')).toBeNull();
     unmount();
   });
 });

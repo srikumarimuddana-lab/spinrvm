@@ -120,6 +120,7 @@ jest.mock('../components/BookingProposalCard', () => (props: any) => {
 });
 jest.mock('../components/bookingProposal', () => ({
   buildQuoteBookingMessage: (_quote: any, option: any) => `Book the ${option} option`,
+  buildQuoteBookingDisplayMessage: (_quote: any, option: any) => `Book the ${option} option (display)`,
 }));
 jest.mock('../components/FareQuoteCard', () => (props: any) => {
   const { TouchableOpacity: RNTouchableOpacity, Text: RNText } = require('react-native');
@@ -398,7 +399,12 @@ describe('AiAssistantScreen', () => {
     const r = await renderScreen();
     const selectBtn = r.root.findByProps({ accessibilityLabel: 'fare-quote-select' });
     act(() => { selectBtn.props.onPress(); });
-    expect(mockSendMessage).toHaveBeenCalledWith('Book the economy option');
+    // AI17/F2: sendMessage now also gets the display-only twin (no raw
+    // vehicle_type_id) as its second argument.
+    expect(mockSendMessage).toHaveBeenCalledWith(
+      'Book the economy option',
+      'Book the economy option (display)',
+    );
   });
 
   it('renders a plain user/assistant text bubble', async () => {

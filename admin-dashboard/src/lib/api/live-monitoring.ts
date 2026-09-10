@@ -275,3 +275,73 @@ export const flushRedisPrefix = (prefix: string) =>
         },
     );
 
+// ── Monitoring: Dispatch Geo-Provider Status ──────────────────────────
+
+export type DispatchGeoProvider = "legacy" | "shadow" | "postgis" | "h3";
+
+export type DispatchGeoEvent = {
+    kind: string;
+    reason: string;
+    at: string;
+    from_provider?: string;
+    to_provider?: string;
+    ride_id?: string | null;
+    severity?: string;
+    [key: string]: unknown;
+};
+
+export type DispatchGeoLastServed = {
+    provider: string;
+    configured: string;
+    failed_over: boolean;
+    reason: string;
+    ride_id?: string | null;
+    area_id?: string | null;
+    [key: string]: unknown;
+};
+
+export type DispatchGeoStatus = {
+    configured_provider: DispatchGeoProvider;
+    effective_provider: string;
+    h3_would_serve: boolean | null;
+    last_failover: DispatchGeoEvent | null;
+    status_summary: string | null;
+    h3_ready: boolean;
+    blockers: string[];
+    index: Record<string, unknown> | null;
+    unhealthy: Record<string, unknown> | null;
+    last_served: DispatchGeoLastServed | null;
+    events: DispatchGeoEvent[];
+    redis: {
+        backend?: string;
+        connected?: boolean;
+        maxmemory_policy?: string;
+        used_memory_percent?: number | null;
+        used_memory_human?: string;
+        evicted_keys_total?: number;
+        error?: string;
+    };
+    index_ttl_seconds: number;
+    memory_headroom_percent: number;
+    required_eviction_policy: string;
+};
+
+export const getDispatchGeoStatus = () =>
+    request<DispatchGeoStatus>("/api/admin/monitoring/dispatch-geo");
+
+export type DispatchGeoRebuildResult = {
+    admin_id: string;
+    ok: boolean;
+    skipped: boolean;
+    incomplete: boolean;
+    generation?: number;
+    driver_count?: number;
+    failed?: number;
+    [key: string]: unknown;
+};
+
+export const rebuildDispatchGeoIndex = () =>
+    request<DispatchGeoRebuildResult>("/api/admin/monitoring/dispatch-geo/rebuild", {
+        method: "POST",
+    });
+

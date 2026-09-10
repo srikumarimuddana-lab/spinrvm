@@ -159,6 +159,12 @@ export interface AiChatMessage {
     | 'ride_status'
     | 'map_picker';
   content: string;
+  /** AI17/F2: what to render instead of `content`, when present — for a
+   * local echo whose real `content` carries machine-only text (e.g. a
+   * quote-card tap's "(vehicle id <uuid>)") the model needs but a rider
+   * never should see. Never sent to the backend; `content` is. Absent on
+   * messages reloaded from history (the server only stores `content`). */
+  displayContent?: string;
   action?: AiAction;
   createdAt: number;
 }

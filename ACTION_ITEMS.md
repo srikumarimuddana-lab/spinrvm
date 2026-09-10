@@ -1043,6 +1043,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     this is a data question needing a live query, not a code gap); two
     incompatible legacy-ID namespaces still need a crosswalk table (now
     half-closed, see above).
+  - **2026-09-10 — re-ran the two ambiguous Stripe buckets against live
+    production; evidence shifted, not yet a decision.** This session's
+    Supabase MCP connector reached `spinrmobileapp` (confirmed prod)
+    directly — the "no live prod access" blocker cited throughout this
+    item no longer applies, at least for read-only queries. Full detail:
+    `docs/change-log/2026-09-10-a34-stripe-bucket-recheck.md`.
+    - **`350b5267…` ($33.32): now looks like likely-already-paid, not
+      owed.** A matching payout (paid 2026-08-12) exists now — it simply
+      hadn't synced into the mirror table when the 2026-08-16 audit ran.
+      Same "clean 1:1 pair" evidence class as bucket #4 ($22.43).
+    - **`93a899d5…` ($9.45): still not attributable to one transaction,
+      but the direction changed.** This driver's entire Stripe history (17
+      payments, zero exceptions, including 2 correctly-excluded refunds)
+      shows every payment paid out in full within ~1 day — both `$9.45`
+      events included. No orphaned amount exists anywhere in their record.
+      Leans "likely already paid," same caveat as above.
+    - **If both are accepted**, the $42.77 combined figure moves out of
+      "treat as owed," and the $185.31–$228.08 range collapses toward
+      **$185.31**. Not applied here — needs the same product-owner
+      sign-off every other bucket call in this item has gotten.
+    - **Blended-ledger question — narrowed, not settled.**
+      `driver_stripe_ledger`'s true earliest row is **2026-04-21**, not
+      "May–August" as previously stated (that was based on the 15-bucket
+      sample, not the full table — 357 rows, 50 distinct Stripe accounts,
+      table-wide). Doesn't by itself prove old-app data is blended in —
+      needs Spinr's confirmed launch/dual-run-start date to compare
+      against, which isn't recorded in this file.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
@@ -18016,25 +18043,40 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 
 - [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
   found while root-causing AI16, deliberately not shipped in that PR; each
-  is its own scoped change. (F1) `filter_tool_leakage` runs on the
-  *persisted* reply only (`orchestrator.py`) — a tool name or internal
-  identifier the model prints is seen live by the rider; needs a
-  word-boundary-buffered stream filter in `ai/pii.py` applied at the token
-  yield, behind a `settings` flag (migration + `schemas.py` +
-  `routes/admin/settings.py` + `test_admin_settings_write_allowlist_drift`),
-  default off. (F2) `shared/utils/aiLocationMessages.ts` embeds the raw
-  `vehicle_type_id` UUID in the rider-visible tapped-quote bubble — add a
-  `displayContent` on the local echo (store + screen + admin console
-  mirror) so the model still gets the id and the rider sees prose. (F3)
-  `rider-app/store/aiChatStore.ts` renders the raw server `message` for any
-  unmapped error code — map `conversation_busy`, `provider_error`,
-  `ai_misconfigured`, `not_found` and drop the passthrough. (F4) the
-  assistant hides the fare entirely when no drivers are online, while
-  `rider-app/app/ride-options.tsx` shows prices under a "No cars available"
-  banner — product decision on parity (backend `tools_booking.py` +
-  `FareQuoteCard.tsx` + shared types + prompt, flagged). (F5) nothing clears
-  `ai:quote:{conversation_id}` on "new conversation" or
-  `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
+  is its own scoped change. **F1, F2, F3, F5 CLOSED 2026-09-10 (PR #5177 +
+  a same-day follow-up commit); F4 still open, needs a product decision.**
+  - [x] **F1** — investigated as spec'd ("needs a word-boundary-buffered
+    stream filter... behind a settings flag, default off") and found that
+    premise stale: the buffered stream filter already shipped
+    unconditionally in PR #5138 ("F08") — `ai/stream_filter.py`'s
+    `StreamingOutputFilter` already applies `filter_tool_leakage` +
+    `scrub_pii` to every token before release, not just the persisted
+    copy. Shipping F1 literally (default-off flag) would have regressed a
+    working, security-audited protection to off-by-default. Escalated;
+    resolved instead as `ai_stream_incremental_enabled` (migration 409,
+    default **TRUE** — an operational kill-switch for incremental
+    *release timing*, never a privacy toggle: filtering is unconditional
+    either way). See `docs/change-log/2026-09-10-ai17-f1-stream-filter-kill-switch.md`.
+  - [x] **F2** — `buildQuoteBookingMessage`'s output stayed the literal
+    text sent to the model (`prompts.py` rule 6 needs the vehicle id
+    verbatim); a new sibling `buildQuoteBookingDisplayMessage` plus
+    `AiChatMessage.displayContent` carry the rider/admin-visible prose
+    twin instead, as originally specified. See
+    `docs/change-log/2026-09-10-ai17-f2-hide-vehicle-id-in-chat-bubble.md`.
+  - [x] **F3** — `aiChatStore.ts`'s `ERROR_MESSAGES` map extended
+    (`ai_misconfigured`, `provider_error`) and the raw-`event.data.message`
+    fallback removed entirely; an unmapped future code now always
+    resolves to the generic default instead of leaking backend text. See
+    `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
+  - [ ] **F4** — still open. the assistant hides the fare entirely when
+    no drivers are online, while `rider-app/app/ride-options.tsx` shows
+    prices under a "No cars available" banner — product decision on
+    parity (backend `tools_booking.py` + `FareQuoteCard.tsx` + shared
+    types + prompt, flagged).
+  - [x] **F5** — `conversations.py`'s `delete_conversation` now
+    best-effort deletes the `ai:quote:{conversation_id}` Redis pin after
+    the DB rows, same fail-open contract as the pin's own writer. See
+    `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
 
 - [x] **AI18. Anonymous web assistant's tool path is dead in production** —
   found during AI16's review round, pre-existing and unrelated to that fix.
@@ -18257,6 +18299,129 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 - **Acceptance:** at least one self-serve corporate account signed and actively booking
   rides; Captain Taxi-style target segment validated or ruled out with a real
   conversation.
+
+### rider-app/driver-app design-system adoption gaps (2026-09-10 research, this session)
+
+Found while building the new `spinr-rider-driver-design-system` skill
+(`.claude/skills/spinr-rider-driver-design-system/SKILL.md`) — two independent
+codebase inventories (rider-app, driver-app), file:line evidence in each.
+These are adoption gaps against an *already-decided* intended system, not
+open design questions — the direction itself is settled; closing these is
+mechanical follow-up work, prioritizable independently.
+
+- [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
+  minority of screens in both apps** — **Status:** open, identified
+  2026-09-10.
+  - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
+    (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
+    there is no `Text.defaultProps` override or themed `Text` wrapper
+    anywhere in either app — the font only applies where a component
+    explicitly sets `fontFamily`. Rider-app: 21 of 64 sampled files do;
+    driver-app: 8 of 61. Everywhere else, `Text` silently renders the OS
+    system font (San Francisco/Roboto), not the brand typeface.
+  - **Why it matters:** the large majority of both apps' screens are not
+    actually on-brand typography today, despite the font being loaded and
+    "intended" per `.claude/context/brand-spinr.md`.
+  - **Action:** either introduce a themed `Text` wrapper/default so the
+    brand font applies by default app-wide, or sweep remaining files to set
+    `fontFamily` explicitly — a design decision on which mechanism, not
+    covered by this item.
+  - **Files:** none yet — see rider-app/driver-app inventory evidence above
+    for the full per-file breakdown (not reproduced here to avoid drift from
+    the source; re-grep `fontFamily` vs `fontWeight`-only usage before
+    starting).
+  - **Acceptance:** a defined, enforced mechanism exists such that new
+    screens can't silently ship off-brand-font by omission.
+
+- [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
+  exist but are used in only 1–4 files per app** — **Status:** open,
+  identified 2026-09-10.
+  - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
+    (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
+    h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
+    `shared/components/{Button,Card,Input}.tsx` and directly imported in
+    only 4 rider-app screens and 1 driver-app screen. Everywhere else,
+    `padding`/`margin`/`fontSize` are ad-hoc numeric literals — thousands of
+    occurrences across both apps, loosely but not strictly clustered near
+    the scale's own values.
+  - **Why it matters:** no enforced spacing/type rhythm means visual
+    inconsistency compounds silently as new screens are added, each picking
+    its own numbers.
+  - **Action:** decide whether to push broader adoption of the existing
+    `SPACING`/`FONT` constants (sweep existing screens) or accept ad-hoc
+    literals as the status quo and only require the constants for new code
+    — a scope decision, not included in this item.
+  - **Files:** none yet.
+  - **Acceptance:** new screens have a clear, documented expectation on
+    which to use.
+
+- [ ] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
+  — **Status:** open, identified 2026-09-10.
+  - **Issue/gap:** the shared `Button` primitive (8 consumers in rider-app)
+    was extracted from driver-app's own `RideOfferPanel` accept/decline
+    buttons but was never adopted back into driver-app itself
+    (`docs/change-log/2026-09-04-shared-button-card-input-primitives.md`
+    already noted zero driver-app consumers; still true as of 2026-09-10).
+    Every driver-app button is an independently hand-styled
+    `TouchableOpacity`, and several genuinely different treatments coexist
+    for functionally similar actions (see `RideOfferPanel`, `AlertDialog`,
+    `ActivityView`'s retry pills, and per-screen one-offs in
+    `documents.tsx`/`payout.tsx`).
+  - **Why it matters:** button treatment drifts screen-by-screen with no
+    shared source of truth in the app that most needs fast, confident
+    glanceability.
+  - **Action:** evaluate whether `shared/components/Button.tsx` (as-is, or
+    extended with a driver-app-appropriate variant/size) can absorb
+    driver-app's existing button treatments, starting with the
+    highest-traffic ones (`RideOfferPanel` accept/decline,
+    `DriverIdlePanel`'s GO/STOP toggle is likely too bespoke to fold in —
+    see `spinr-rider-driver-design-system` skill's driver-app section on
+    why that one's real-time motion is treated as intentional, not drift).
+  - **Files:** none yet.
+  - **Acceptance:** driver-app's common confirm/retry/action buttons route
+    through one shared component, or a documented decision explains why not.
+
+- [ ] **UX4. No shared transition timing/easing system in either app —
+  near-identical interactions independently reimplemented** — **Status:**
+  open, identified 2026-09-10.
+  - **Issue/gap:** no `TIMING`/`EASING` constants module exists anywhere;
+    each screen picks its own `Animated.timing` duration (found ranging
+    50ms–14000ms across both apps) and easing curve (explicit in a handful
+    of files, omitted — falling back to RN's default — in most). Concrete
+    duplication: rider-app's OTP wrong-code shake
+    (`rider-app/app/otp.tsx:124-128`, 60ms/step) and driver-app's PIN
+    wrong-code shake (`driver-app/components/dashboard/ActiveRidePanel.tsx:319-323`,
+    50ms/step) are the same interaction, independently reimplemented with
+    different offsets and durations.
+  - **Why it matters:** functionally identical interactions feel
+    inconsistent across (and even within) apps for no reason other than
+    independent implementation.
+  - **Action:** introduce a shared `TIMING`/`EASING` constants module
+    (mirroring `SPACING`/`FONT` in `shared/utils/responsive.ts`) and migrate
+    at least the duplicated shake pattern onto one shared implementation.
+  - **Files:** none yet.
+  - **Acceptance:** the two shake implementations converge on one shared
+    function/constant; a documented duration/easing convention exists for
+    new motion work.
+
+- [ ] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
+  that match neither the current nor the previous theme tokens, and has no
+  dark-mode awareness** — **Status:** open, identified 2026-09-10. This one
+  is a live bug, not just adoption debt — flagging distinctly from UX1–UX4.
+  - **Issue/gap:** `driver-app/components/toastConfig.tsx:8-11`'s
+    `VARIANT_CONFIG` hardcodes `success:'#0d9f6e'`, `error:'#dc2626'`,
+    `warning:'#d97706'`, `info:'#1a73e8'` — none of these match
+    `shared/theme/index.ts`'s current values, and the file has no
+    `useTheme()` call at all, so toast colors never adapt to dark mode.
+  - **Why it matters:** toast notifications (a frequent, high-visibility UI
+    element) render with off-brand, theme-incorrect colors for every driver,
+    in both light and dark mode, today.
+  - **Action:** rewrite `VARIANT_CONFIG` to read from `useTheme()`'s
+    `colors.success`/`colors.error`/`colors.warning`/`colors.info` (and dark
+    variants) like the rest of the app.
+  - **Files:** `driver-app/components/toastConfig.tsx`.
+  - **Acceptance:** driver-app toast colors match the current theme tokens
+    in both light and dark mode.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 
@@ -22469,6 +22634,29 @@ how much they de-risk a public launch._
   check-run timestamps, but not *why* the platform allowed it (config gap
   vs. bypass), which needs human settings-page access this session
   doesn't have.
+- **2026-09-10 — follow-up check while re-examining A43; confirms this
+  entry's diagnosis, surfaces one narrower gap.** Pulled #5048's full CI
+  Guard Rails job list (run `34007800478`) directly. Two separate jobs in
+  two different workflows both ran pytest on this PR: `backend-test`
+  (`ci.yml`) — covered above, genuinely reported `failure` — and a second,
+  parallel job, `shared-coverage-run` / "Run backend test suite with
+  coverage (shared)" (`ci-guardrails.yml`), which reported `success`
+  despite the same 8 failing tests / 41 errors. **That second job's
+  leniency is deliberate, not a bug**: its pytest step ends `|| true` and
+  the job itself carries `continue-on-error: true` by design, so a real
+  test failure can't cascade into skipping the three downstream
+  coverage-floor gates that consume its coverage artifact (see the job's
+  own code comments, referencing
+  `docs/audit/2026-08-27-cicd-gates-guardrails-audit.md` §5). Removing
+  that leniency would reintroduce the cascading-skip problem it was
+  written to prevent — considered and rejected as a fix for this reason.
+  **What is genuinely new:** the "CI Guard Rails Summary" bot comment
+  (even after C74's fix below) has no row for `backend-test`'s result —
+  none of its 10 listed gates check "did the test suite pass." Anyone
+  reading only that one comment, all-green, has zero visibility into
+  whether tests actually passed, on any PR, not just this one. Doesn't
+  change this entry's root cause or Action — it strengthens the case for
+  it, since right now no bot comment surfaces that signal at all.
 
 ### C74. `security-gates.yml`/`ci-guardrails.yml` summary jobs never failed regardless of gate results
 
@@ -23661,8 +23849,50 @@ how much they de-risk a public launch._
   anything specific to this file.** Re-check on the first `main` push or
   `rider-app`/`driver-app`-touching PR after C96 is confirmed resolved.
 
-### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session
+### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session — CLOSED (cleared 2026-09-09, exact time unconfirmed)
 
+- **Resolution confirmed 2026-09-10, checking `main`'s tip:** the outage is
+  over. `main`'s newest push at the time of this check (commit `746af5f`,
+  PR #5149, `Security Gates` run `34419182471`) shows real CI again: every
+  job has a genuine `runner_id`, multi-second-to-multi-minute step timings
+  (e.g. Semgrep scan 1m44s, admin-dashboard build 69s, pip-audit 47s), and
+  substantive pass/fail results — including real findings (`G4b`/`G4c`
+  yarn/npm audit failures on actual CVEs, not the C96 instant-reject
+  signature). This is the first clean/real run this thread directly
+  observed; the exact clear time is bounded only to "sometime between
+  ~03:49 UTC 2026-09-09 (last confirmed-still-ongoing check, on PR #5143)
+  and ~23:57 UTC 2026-09-09 (this clean run)" — no session watched the
+  transition happen. Total outage duration: **at least ~19.5 hours,
+  possibly up to ~27.5 hours** (from ~20:23 UTC Sep 8) depending where in
+  that ~20-hour window it actually cleared.
+- **Root cause: still not billing-confirmed, but a strong circumstantial
+  candidate exists.** PR #5141 (merged 21:22 UTC Sep 8, mid-outage, by a
+  concurrent session) added a `concurrency:` cancellation group to
+  `ci.yml` — the one heavy 16-job workflow in the repo that had no such
+  group, so every push queued a full new run stacked on any still in
+  flight instead of superseding it. That PR explicitly flagged this as "a
+  plausible contributor... consistent with a spend limit or included-
+  minutes cap... not root-cause-confirmed (that needs GitHub billing/
+  usage access no session here has)." The ~20-27 hour outage window is
+  also consistent with a **daily** Actions spend/minutes cap that resets
+  on a schedule, rather than a one-off platform incident (which would
+  more typically clear on the order of minutes-to-hours, per GitHub's own
+  incident history) — this remains circumstantial, not confirmed, since
+  no session in this repo has GitHub Actions billing/usage-dashboard
+  access to check directly.
+- **Consequence still standing:** PRs #5133, #5134, #5136, #5137, and
+  #5143 (this item's own tracking PR) were all merged by the repo owner
+  during the outage with no real CI evidence — see the update below for
+  detail. None have since been re-verified against a real CI run; if any
+  of their changes need debugging later, remember they were never
+  actually machine-checked before merging, only reasoned about.
+- **Not further investigated:** the exact clear timestamp (would need
+  combing every intermediate `main` push between 03:49 and 23:57 UTC Sep 9
+  — dozens of commits — for the first one with real job durations; not
+  done here since the outage being over is what matters going forward,
+  not the precise minute it ended); whether PR #5141's concurrency fix
+  actually caused the recovery or was coincidental to an independent
+  billing-cap reset.
 - **Update 2026-09-09 ~03:00 UTC:** still OPEN — re-confirmed on `main`'s
   newest pushes (commits `8faa99b`, `e30fed9`, ~02:52-02:53 UTC), same
   instant-fail (2-10s), no-logs signature, now **~6.5 hours** of continuous
@@ -23678,7 +23908,8 @@ how much they de-risk a public launch._
   consolidated into one shared check 2026-09-08 ~22:00 UTC (one session
   checks, wakes the others only if the fact changes) to stop the redundant
   polling — see that session's own trigger history if resuming this thread.
-- [ ] **Status:** OPEN — escalated to the user; needs a human with GitHub
+- [x] **Status (historical):** OPEN at the time this line was written —
+  escalated to the user; needs a human with GitHub
   org/repo billing or Actions-admin access. Found while investigating a CI
   failure wake on PR #5134 (a docs-only B11/R-G recording PR, whose only
   code touch is `continue-on-error: true` additions to `ci.yml`/
@@ -23778,6 +24009,224 @@ how much they de-risk a public launch._
   ~45-minute window by the available evidence, not narrowed further;
   whether the same failure is hitting *every* repo under this account or
   is scoped to this one.
+
+### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
+
+- [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
+  Backend fix (loud Firebase Admin SDK init failure) and a narrowed client-side fix (foreground
+  fallback toast) shipped as follow-up PRs — see below. Ops check (confirm the Firebase
+  credential on Fly/Railway) and the metric/iOS recommendations remain open.
+- **Correction (same day, before the client-side fix shipped):** the client-side finding below
+  originally read as "every notification type except ride offers is silently dropped, foreground
+  and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
+  overstated for background/killed state: only `new_ride_assignment`/`live_activity` are sent
+  data-only — every other type carries a real FCM `notification` block targeting a channel
+  confirmed to exist on-device (`'ride-offers'`, created at cold start via `expo-notifications`,
+  `driver-app/app/_layout.tsx:449`), so Android auto-displays those in background/killed state
+  with no app JS code needing to run. The foreground gap is real but narrower than originally
+  framed: only a message type outside the app's existing explicit list falls through to a silent
+  navigation with no toast — that's what the shipped client-side fix actually closes. Full
+  correction in the audit doc's own "Correction" section, left visible against the original
+  claim rather than silently rewritten.
+- **Two independent findings, either explains the symptom, both may be true at once:**
+  1. **Backend (infra-shaped):** Firebase Admin SDK init falls through to Application Default
+     Credentials on a non-GCP host (Fly/Railway) with the failure wrapped in a bare
+     `except Exception: pass` (`backend/core/security.py:12-29`) — zero log, no startup failure,
+     no metric. The app boots looking healthy; the SDK only visibly fails per-push, later, as a
+     scattered log line with no metric or alert tied to it (`spinr_dispatch_offer_sent_total` is
+     incremented at offer-*claim* time, `routes/rides/matching.py:1270`, not at push-send
+     outcome). This would silently break **every** push type, including ride offers, on whichever
+     host has the gap.
+  2. **Client (code-structural):** on Android, `@react-native-firebase/messaging`'s manifest
+     service takes priority over `expo-notifications`' for the same FCM intent-filter, so
+     `expo-notifications`' handler (`driver-app/app/_layout.tsx:219-243`) is dead code for
+     FCM-originated messages. The app's real foreground listener
+     (`driver-app/hooks/useDriverDashboard.ts:1812-1838`) only branches on
+     `new_ride_assignment`; the background/killed handler
+     (`driver-app/services/backgroundMessaging.ts:159-259`) only branches on
+     `new_ride_assignment`/`ride_cancelled`/`location_health`. Every other data-only type (chat,
+     document/license expiry reminders, generic alerts, promos) is silently dropped, no display,
+     no error. **Ride-offer notifications specifically are confirmed correctly built and
+     displayed end-to-end** — this gap is scoped to every *other* notification type.
+- **The fork that determines priority:** if ride offers themselves are invisible → points at
+  finding 1 (infra), since the client-side ride-offer path is confirmed correct. If ride offers
+  arrive but other types (chat/reminders/alerts) never show → finding 2 (client) alone explains
+  it, no infra involvement needed. Not resolvable from code alone — needs the user to say which
+  they're actually observing.
+- **Verification performed:** two parallel subagent passes, each reading real source and citing
+  file:line for every claim (not inferred from symptoms) — one on the backend send pipeline
+  (re-audited every driver-facing `send_push_notification` call site for a recurrence of the
+  2026-08-11 N3 ID-mismatch bug class; found none), one on the driver-app client pipeline (FCM
+  token registration/refresh, foreground/background handlers, Android notification channel,
+  iOS background-mode config, error-swallowing). Full finding tables with severity ratings in the
+  audit doc.
+- **What was NOT verified:** live production state (whether `FIREBASE_SERVICE_ACCOUNT_JSON` is
+  actually set/valid on Fly and/or Railway today — needs ops access this session doesn't have);
+  whether Sentry is actually receiving the relevant error-level logs via the loguru→Sentry bridge
+  and whether an alert exists on them; the iOS `UIBackgroundModes` finding (flagged SUSPECTED —
+  no compiled iOS build available to confirm against); which of the two findings is the one the
+  user is actually experiencing (the fork above).
+- **Recommendations, in leverage order** (full detail in the audit doc): (1) ops check —
+  confirm the Firebase service-account credential on both hosts, costs nothing, resolves the fork
+  fastest; (2) make the SDK init failure loud instead of silent; (3) add a real
+  `spinr_push_send_total{outcome=...}` delivery-outcome metric, since none exists today; (4) add
+  an explicit fallback-notification path for unhandled FCM message types on the client, closing
+  the silent-drop gap for everything except ride offers; (5) confirm the iOS background-mode gap
+  against a real build; (6) either wire `expo-notifications`' handler into the real path or
+  remove the now-misleading dead code.
+
+### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
+
+- [x] **Status:** CLOSED — corrected same day by direct evidence from the user's real machine. The
+  "patch fails to apply" finding below was a sandbox artifact, not a real bug: this cloud
+  session's `node_modules/react-native` install has zero real `.js` source files (only `.d.ts`
+  stubs, see the original finding below), so **any** patch-package run here would fail
+  regardless of whether the patch itself is actually broken. On the user's real Windows machine,
+  `yarn install` for both apps completed and `patch-package` reported **both patches applied
+  successfully**:
+  - `driver-app` (`react-native+0.86.3.patch` against installed `react-native@0.86.3`): applied
+    with **zero warnings**, even running under `patch-package --error-on-warn` (the app's own
+    postinstall script), which would have failed the command on any fuzz/context mismatch. Exact
+    match, no version drift, no problem.
+  - `rider-app` (`react-native+0.86.2.patch` against installed `react-native@0.86.3`): applied
+    successfully, with only patch-package's routine "patch file version mismatch" notice — that
+    warning fires purely from comparing the patch **filename's** version string against the
+    installed package's version string, independent of whether the underlying diff needed any
+    fuzzy matching. It is cosmetic, not a sign the fix is broken or missing.
+  **Corrected conclusion:** the Android Bridgeless crash workaround (8 files, `ActivityIndicator`
+  etc.) has very likely been active and working correctly in both apps' real builds all along —
+  including on EAS builds and any prior local/CI build, none of which run in this stub
+  environment. There is no evidence of an active customer-facing regression. The only real,
+  much smaller remaining item: `rider-app/patches/react-native+0.86.2.patch` has a stale
+  filename (installed version is 0.86.3) and should be renamed/regenerated to silence the
+  cosmetic warning — a cleanup, not a crash fix. No urgency; do it opportunistically.
+  **Lesson for future sessions:** this cloud sandbox's `node_modules` for `react-native` cannot
+  be trusted to diagnose patch-package or native-module issues — verify findings like this one
+  against a real environment before writing them up as active bugs, per this repo's own
+  verification discipline (`CLAUDE.md`: "never let a tool's own output stand in for
+  verification").
+
+- [ ] ~~**Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
+  No code changed; regeneration requires a real `node_modules/react-native` install (local
+  machine or CI), which this Claude Code cloud sandbox does not have — see "Why this can't be
+  finished here" in the doc.~~ (superseded by the correction above — kept for the record, not
+  a live status)
+- **What's broken:** `rider-app/patches/react-native+0.86.2.patch` (stale filename, installed RN
+  is 0.86.3) and `driver-app/patches/react-native+0.86.3.patch` (filename matches, still fails)
+  both fail `patch-package` application against installed `react-native@0.86.3`. Confirmed via
+  direct inspection of `node_modules/react-native` in both apps: none of the patch's 8 target
+  files carry the `PATCH (spinr rider-app/driver-app):` marker, so the fix is not active in
+  either app's current install.
+- **What the patch does:** works around a real Android crash — RN's Android `ActivityIndicator`
+  (and 7 other components: `RefreshControl`, `Switch`, `Modal`, `DebuggingOverlay`,
+  `HScrollViewNativeComponents`, and two `VirtualView` native components) import native
+  components that return a non-renderable object under the New Architecture (Bridgeless),
+  throwing `"Element type is invalid... got: object"` at render time. The fix swaps in a
+  JS-only fallback. Full original patch content (all 8 files, both apps) is intact and
+  version-controlled in the two patch files above — nothing was lost.
+- **Near-miss during investigation:** a diagnostic `patch-package` dry-run inside `driver-app`
+  overwrote `driver-app/patches/react-native+0.86.3.patch` with an unrelated 393,995-line diff
+  (this sandbox's installed `react-native` is a `.d.ts`-only stub — 0 real `.js` files under
+  `Libraries/`, confirmed via `find`/`wc -l` — so any patch generated here is diffed against
+  stub content, not real RN source). Caught via `git status`/`git diff` before commit and
+  reverted with `git checkout --`; repo is clean, both patch files match `git HEAD`. This is
+  the direct evidence for why regeneration must happen outside this environment.
+- **Recommended next step:** per the handoff doc — on a machine/CI with a full real RN install,
+  hand-port each of the 8 files' fix against the current 0.86.3 source (don't assume old hunk
+  context still matches), regenerate via `npx patch-package react-native`, verify on a real
+  Android build/emulator (render-time crash — `tsc`/lint prove nothing), then follow the
+  Change Impact Log gate before merging (customer-facing rendering path, live app testing).
+  Worth checking first whether RN 0.86.3 already fixed the underlying issue upstream, in which
+  case some/all of the 8 may be deletable rather than needing a rewrite.
+- **What was NOT verified:** whether the underlying Bridgeless/`ProgressBarAndroid` bug is still
+  present in RN 0.86.3 upstream (not checked against RN's own changelog/issues); whether the
+  other 7 files' native components have the same failure mode as `ActivityIndicator`'s
+  documented one (inferred by pattern, not confirmed per-file); no Android build/emulator
+  available in this sandbox to reproduce the original crash or verify any fix.
+- **2026-09-10, later same day — handoff doc corrected, upstream cross-check
+  done, answer is no shortcut.** Read the full patch content directly rather
+  than trusting the handoff doc's file list, and fetched real RN 0.86.3
+  source (npm's exact `gitHead` for that version) to check whether any of
+  it's already fixed upstream. Three corrections to the handoff doc:
+  (1) it's **9 files** for driver-app, not 8 — `Libraries/Components/ScrollView/ScrollView.js`
+  was missing from the list entirely; (2) the two apps' patches are **not
+  identical** (driver-app: 612 lines/11 fix markers; rider-app: 518 lines/7,
+  missing `ScrollView.js` and two driver-app-only iOS crash fixes for
+  `ActivityIndicator`/`Modal` — each citing a real prior production crash,
+  BrandSplash and CancelReasonSheet respectively); (3) it's **two unrelated
+  bug classes**, not one — 7 files are the documented Bridgeless
+  runtime-render crash, but the 2 `VirtualView` files are an unrelated
+  codegen **build-time** parse failure ("Unable to determine event
+  arguments"), on a component Spinr doesn't even use. Upstream check: 6 of 9
+  files' exact root-cause lines are byte-identical to the pre-patch state in
+  real RN 0.86.3 source — nothing is fixed upstream, nothing is deletable,
+  the full hand-port this item already called for is still required. Full
+  detail: `docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`
+  (updated in place, not superseded).
+
+### C99. No Fly.io/Railway CLI access AND the Firebase MCP server can't authenticate from this environment — two independent blockers on verifying prod secrets, including C97's own top recommendation
+
+- [ ] **Status:** OPEN — setup gap, needs a human to grant access; not fixable
+  by any session. Surfaced 2026-09-10 when the user asked this session to
+  check whether `FIREBASE_SERVICE_ACCOUNT_JSON` is valid on both Fly.io
+  and Railway — the #1 recommendation in **C97** (driver-app push
+  notifications), which flagged confirming this credential as the fastest,
+  cheapest way to resolve its two-root-cause fork.
+- **Update 2026-09-10, later same day — a second, independent blocker
+  found on the Firebase side itself, not just Fly/Railway:** once the
+  `firebase` MCP server (re)connected to this session, checked whether it
+  could confirm the credential from Firebase's own side (project/service-
+  account existence) as a partial workaround for not having Fly/Railway
+  access. It cannot, for two stacked reasons: (1) `firebase_get_environment`
+  shows `Authenticated User: <NONE>` — no Google account signed in; (2)
+  attempting `firebase_login` to fix that **fails outright**:
+  `Error: Failed to make request to https://auth.firebase.tools/attest` —
+  the OAuth handshake itself can't reach Firebase's auth endpoint from this
+  sandboxed environment, the same category of failure as C96's investigation
+  finding `githubstatus.com` blocked by this session's own egress proxy.
+  This means even a human completing Firebase login elsewhere would not
+  unblock a Claude session here — the session itself cannot complete the
+  handshake, independent of credentials. Two separate blockers now stand
+  between any session in this repo and confirming this one credential:
+  no Fly/Railway access at all, and a Firebase auth flow that can't
+  complete even when a connector is present.
+- **What's missing, confirmed directly:** `which flyctl fly railway` finds
+  none of the three installed in this session's shell; no `mcp__fly*` or
+  `mcp__railway*` tools appear anywhere in this session's tool list
+  (contrast with Vercel, Supabase, GitHub, Figma, which are all connected
+  here). `FIREBASE_SERVICE_ACCOUNT_JSON` lives as a secret inside each
+  platform's own vault (per `CLAUDE.md`'s Deployment section — backend
+  ships to both Fly `yyz` primary and Railway standby), not in this repo,
+  so there is no file this session could read to check it either.
+- **Consequence:** the exact same gap almost certainly blocks
+  `session_012kZfwCw2q9T5T1HjvdXyAK` (C97's own owning session) from
+  confirming its own top recommendation — that session's post-turn status
+  as of 2026-09-10 explicitly reads "need Firebase credential check" as
+  its blocker. Two independent sessions hit the identical wall.
+- **What a human can do right now, without waiting on this being fixed**
+  (commands handed to the user directly, not run here):
+  ```bash
+  # Fly.io — confirms the secret exists + last-set date (never shows the value)
+  flyctl secrets list -a <fly-app-name>
+  # Railway — same idea
+  railway variables --service <service-name>
+  # To actually validate the JSON parses and shows the right project/service-account
+  # (still never prints the private key):
+  flyctl ssh console -a <fly-app-name> -C "python3 -c \"import json,os; d=json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT_JSON']); print(d['project_id'], d['client_email'])\""
+  # railway run <same python one-liner> for the Railway side
+  ```
+- **Fix, if the user wants sessions to do this directly in future:** grant
+  Fly.io and Railway CLI credentials (or connect their respective MCP
+  servers, if/when one exists) to this repo's Claude Code environment —
+  scoped to this project specifically, per the user's own stated policy
+  on project-scoped tool access (never account-wide/all-projects) for
+  CLI-based tech-stack components. This is a connector/environment
+  configuration change, not a code change — no PR can close this item by
+  itself the way most items here are closed.
+- **Not investigated:** whether this account has Fly.io/Railway access
+  configured for *other* repos' Claude Code environments (would confirm
+  this is a per-repo scoping gap rather than a full account-level absence)
+  — out of scope to check from this session, which only sees this repo.
 
 ## Recently completed (do not redo)
 

@@ -297,6 +297,8 @@ export {
     adminRegenerateImportedRoutes,
     adminValidateTaxIdBackfill,
     adminCommitTaxIdBackfill,
+    adminPrepareValidateTaxIdFromLegacyExport,
+    adminPrepareCommitTaxIdFromLegacyExport,
     adminValidateSinDobBackfill,
     adminCommitSinDobBackfill,
     adminValidateVehicleHistoryBackfill,
@@ -366,6 +368,10 @@ export type {
     TaxIdBackfillCounts,
     TaxIdBackfillReport,
     TaxIdBackfillCommitResult,
+    TaxIdBackfillJoinStats,
+    TaxIdBackfillFromLegacyExportReport,
+    LegacyExportFiles,
+    LegacyExportOptions,
     SinDobBackfillReportItem,
     SinDobBackfillCounts,
     SinDobBackfillReport,
@@ -545,6 +551,8 @@ export {
     getRedisConnectivity,
     getInfrastructureStats,
     flushRedisPrefix,
+    getDispatchGeoStatus,
+    rebuildDispatchGeoIndex,
 } from "./api/live-monitoring";
 export type {
     AdminPlaceBias,
@@ -556,6 +564,11 @@ export type {
     InfrastructureStats,
     WebsocketHealth,
     RedisConnectivityProbe,
+    DispatchGeoProvider,
+    DispatchGeoEvent,
+    DispatchGeoLastServed,
+    DispatchGeoStatus,
+    DispatchGeoRebuildResult,
 } from "./api/live-monitoring";
 export {
     getDocumentRequirements,

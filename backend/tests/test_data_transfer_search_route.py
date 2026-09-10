@@ -174,3 +174,18 @@ def test_search_pagination_computes_offset(admin_client):
         resp = admin_client.get("/api/admin/data-transfer/search?page=3&page_size=20")
     assert resp.status_code == 200
     assert _entity_call(get_rows).kwargs.get("offset") == 40
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_non_super_admin_even_if_mount_is_bypassed():
+    """Admin RBAC audit finding W2: this router is mounted require_super_admin
+    but had no independent per-handler check. Direct call (skipping FastAPI's
+    dependency injection) proves the new _require_super_admin() guard fires
+    on its own."""
+    from fastapi import HTTPException
+
+    from backend.routes.admin.data_transfer_search import search_entities
+
+    with pytest.raises(HTTPException) as exc_info:
+        await search_entities(request=None, admin={"id": "admin-2", "role": "admin"})
+    assert exc_info.value.status_code == 403

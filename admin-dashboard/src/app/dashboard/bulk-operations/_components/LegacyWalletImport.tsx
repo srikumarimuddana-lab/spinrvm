@@ -24,7 +24,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, Info, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Loader2, Upload } from "lucide-react";
 import {
     adminCommitWalletImport,
     adminValidateWalletImport,
@@ -33,6 +33,10 @@ import {
     type WalletImportReport,
     type WalletImportReportItem,
 } from "@/lib/api";
+import { explainWalletImportIssue } from "@/lib/bulk-import-error-help";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable } from "@/components/bulk-import/issue-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,14 +47,6 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card";
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
 import { exportToCsv } from "@/lib/export-csv";
 
@@ -77,44 +73,22 @@ const FILE_FIELDS = [
 
 type FileState = Partial<Record<keyof WalletImportFiles, File | null>>;
 
-function IssueTable({ items }: { items: WalletImportReportItem[] }) {
+function WalletIssueTable({ items }: { items: WalletImportReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-24">Row</TableHead>
-                        <TableHead className="w-40">Wallet entry</TableHead>
-                        <TableHead className="w-40">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.row_num}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.row_num}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.old_id}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
+        <IssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.row_num}-${it.field}-${i}`}
+            getRef={(it) => String(it.row_num)}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="Row"
+            extraColumn={{ label: "Wallet entry", getValue: (it) => it.old_id }}
+            explain={explainWalletImportIssue}
+        />
     );
 }
 
-function Stat({
-    label,
-    value,
-    tone,
-    money,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-    money?: boolean;
-}) {
+function MoneyStatTile({ label, value, tone }: { label: string; value: number; tone?: "warn" | "error" }) {
     const toneCls =
         tone === "error" && value > 0
             ? "text-destructive"
@@ -123,9 +97,7 @@ function Stat({
               : "text-foreground";
     return (
         <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>
-                {money ? `$${value.toFixed(2)}` : value}
-            </div>
+            <div className={`text-2xl font-semibold ${toneCls}`}>${value.toFixed(2)}</div>
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
@@ -262,36 +234,55 @@ export function LegacyWalletImport() {
                     Legacy wallet-balance import
                 </CardTitle>
                 <CardDescription>
-                    Import prepaid rider/driver wallet credits from the previous app. Riders and
-                    drivers are matched by phone number; an entry whose party is not in Spinr is
-                    skipped and reported, not fabricated.
+                    Import prepaid rider/driver wallet credits from the previous app.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-                <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                    <div className="space-y-1">
-                        <p className="font-medium">
+                <WhatThisToolDoes
+                    what={
+                        <>
+                            Credits or debits a rider or driver&apos;s Spinr wallet balance to
+                            match a prepaid credit they had on the previous app, matched to their
+                            Spinr account by phone number.
+                        </>
+                    }
+                    why={
+                        <>
+                            A rider or driver who had money in their old-app wallet shouldn&apos;t
+                            lose it just because Spinr is a new system — this tool carries that
+                            balance forward.
+                        </>
+                    }
+                    whichFiles={
+                        <>
+                            Three files from the raw MongoDB export:{" "}
+                            <span className="font-mono">wallets.csv</span> (one row per legacy
+                            credit/debit entry), <span className="font-mono">customers.csv</span>{" "}
+                            and <span className="font-mono">drivers.csv</span> (used only to
+                            resolve each entry&apos;s owner by phone number).
+                        </>
+                    }
+                    value={
+                        <>
+                            A migrated rider or driver sees their old balance already in their
+                            wallet, without anyone manually re-crediting each account.
+                        </>
+                    }
+                    safetyNote={
+                        <>
                             This directly credits/debits real wallet balances — unlike the booking
-                            importer, there is no offsetting mechanism.
-                        </p>
-                        <p className="text-muted-foreground">
-                            Every delta goes through the row-locked wallet_apply_delta function
-                            (never a plain balance write), and a re-sent commit for the same batch
-                            dedups automatically instead of double-crediting. Always run the dry
-                            run first and check the net total.
-                        </p>
-                    </div>
-                </div>
-
-                <div className="flex gap-2 rounded-md border border-muted bg-muted/30 p-3 text-sm">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                    <p className="text-muted-foreground">
-                        The CSV columns this tool expects are inferred from the export&apos;s other
-                        files, not yet confirmed against a real wallets.csv header row. Read the
-                        error list carefully on your first dry run.
-                    </p>
-                </div>
+                            importer, there is no offsetting mechanism. Every delta goes through
+                            the row-locked wallet_apply_delta function (never a plain balance
+                            write), and a re-sent commit for the same batch dedups automatically
+                            instead of double-crediting. An entry whose party isn&apos;t in Spinr
+                            yet is skipped and reported, not fabricated. The CSV columns this tool
+                            expects are inferred from the export&apos;s other files, not yet
+                            confirmed against a real wallets.csv header row — always run the dry
+                            run first and read the error list carefully before the first real
+                            commit.
+                        </>
+                    }
+                />
 
                 {/* 1. Files */}
                 <div className="space-y-3">
@@ -343,14 +334,14 @@ export function LegacyWalletImport() {
                         <h3 className="text-sm font-medium">3. Review and commit</h3>
 
                         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                            <Stat label="Deltas to apply" value={c.target_rows} />
-                            <Stat label="Rider-owned" value={c.rider_rows} />
-                            <Stat label="Driver-owned" value={c.driver_rows} />
-                            <Stat label="Unmatched (skipped)" value={c.skipped_unmatched} tone="warn" />
-                            <Stat label="Sum credited" value={c.sum_add} money />
-                            <Stat label="Sum debited" value={c.sum_deduct} money />
-                            <Stat label="Net" value={c.sum_net} money />
-                            <Stat label="Zero-amount (skipped)" value={c.skipped_zero_amount} tone="warn" />
+                            <StatTile label="Deltas to apply" value={c.target_rows} />
+                            <StatTile label="Rider-owned" value={c.rider_rows} />
+                            <StatTile label="Driver-owned" value={c.driver_rows} />
+                            <StatTile label="Unmatched (skipped)" value={c.skipped_unmatched} tone="warn" />
+                            <MoneyStatTile label="Sum credited" value={c.sum_add} />
+                            <MoneyStatTile label="Sum debited" value={c.sum_deduct} />
+                            <MoneyStatTile label="Net" value={c.sum_net} />
+                            <StatTile label="Zero-amount (skipped)" value={c.skipped_zero_amount} tone="warn" />
                         </div>
 
                         <p className="text-xs text-muted-foreground">
@@ -395,7 +386,7 @@ export function LegacyWalletImport() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <WalletIssueTable items={report.errors} />
                             </div>
                         ) : null}
 
@@ -404,7 +395,7 @@ export function LegacyWalletImport() {
                                 <p className="text-sm font-medium text-warning">
                                     {report.warnings.length} warning(s) — these do not block the import
                                 </p>
-                                <IssueTable items={report.warnings} />
+                                <WalletIssueTable items={report.warnings} />
                             </div>
                         ) : null}
 

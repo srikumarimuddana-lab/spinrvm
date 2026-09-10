@@ -18043,25 +18043,40 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 
 - [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
   found while root-causing AI16, deliberately not shipped in that PR; each
-  is its own scoped change. (F1) `filter_tool_leakage` runs on the
-  *persisted* reply only (`orchestrator.py`) — a tool name or internal
-  identifier the model prints is seen live by the rider; needs a
-  word-boundary-buffered stream filter in `ai/pii.py` applied at the token
-  yield, behind a `settings` flag (migration + `schemas.py` +
-  `routes/admin/settings.py` + `test_admin_settings_write_allowlist_drift`),
-  default off. (F2) `shared/utils/aiLocationMessages.ts` embeds the raw
-  `vehicle_type_id` UUID in the rider-visible tapped-quote bubble — add a
-  `displayContent` on the local echo (store + screen + admin console
-  mirror) so the model still gets the id and the rider sees prose. (F3)
-  `rider-app/store/aiChatStore.ts` renders the raw server `message` for any
-  unmapped error code — map `conversation_busy`, `provider_error`,
-  `ai_misconfigured`, `not_found` and drop the passthrough. (F4) the
-  assistant hides the fare entirely when no drivers are online, while
-  `rider-app/app/ride-options.tsx` shows prices under a "No cars available"
-  banner — product decision on parity (backend `tools_booking.py` +
-  `FareQuoteCard.tsx` + shared types + prompt, flagged). (F5) nothing clears
-  `ai:quote:{conversation_id}` on "new conversation" or
-  `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
+  is its own scoped change. **F1, F2, F3, F5 CLOSED 2026-09-10 (PR #5177 +
+  a same-day follow-up commit); F4 still open, needs a product decision.**
+  - [x] **F1** — investigated as spec'd ("needs a word-boundary-buffered
+    stream filter... behind a settings flag, default off") and found that
+    premise stale: the buffered stream filter already shipped
+    unconditionally in PR #5138 ("F08") — `ai/stream_filter.py`'s
+    `StreamingOutputFilter` already applies `filter_tool_leakage` +
+    `scrub_pii` to every token before release, not just the persisted
+    copy. Shipping F1 literally (default-off flag) would have regressed a
+    working, security-audited protection to off-by-default. Escalated;
+    resolved instead as `ai_stream_incremental_enabled` (migration 409,
+    default **TRUE** — an operational kill-switch for incremental
+    *release timing*, never a privacy toggle: filtering is unconditional
+    either way). See `docs/change-log/2026-09-10-ai17-f1-stream-filter-kill-switch.md`.
+  - [x] **F2** — `buildQuoteBookingMessage`'s output stayed the literal
+    text sent to the model (`prompts.py` rule 6 needs the vehicle id
+    verbatim); a new sibling `buildQuoteBookingDisplayMessage` plus
+    `AiChatMessage.displayContent` carry the rider/admin-visible prose
+    twin instead, as originally specified. See
+    `docs/change-log/2026-09-10-ai17-f2-hide-vehicle-id-in-chat-bubble.md`.
+  - [x] **F3** — `aiChatStore.ts`'s `ERROR_MESSAGES` map extended
+    (`ai_misconfigured`, `provider_error`) and the raw-`event.data.message`
+    fallback removed entirely; an unmapped future code now always
+    resolves to the generic default instead of leaking backend text. See
+    `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
+  - [ ] **F4** — still open. the assistant hides the fare entirely when
+    no drivers are online, while `rider-app/app/ride-options.tsx` shows
+    prices under a "No cars available" banner — product decision on
+    parity (backend `tools_booking.py` + `FareQuoteCard.tsx` + shared
+    types + prompt, flagged).
+  - [x] **F5** — `conversations.py`'s `delete_conversation` now
+    best-effort deletes the `ai:quote:{conversation_id}` Redis pin after
+    the DB rows, same fail-open contract as the pin's own writer. See
+    `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
 
 - [x] **AI18. Anonymous web assistant's tool path is dead in production** —
   found during AI16's review round, pre-existing and unrelated to that fix.

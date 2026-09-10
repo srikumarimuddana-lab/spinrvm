@@ -21,6 +21,7 @@
   "/dashboard/forecast": 0,
   "/dashboard/heatmap": 0,
   "/dashboard/monitoring": 0,
+  "/dashboard/monitoring/dispatch-geo": 0,
   "/dashboard/monitoring/redis": 0,
   "/dashboard/notifications": 1,
   "/dashboard/promotions": 0,

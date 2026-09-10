@@ -11,7 +11,7 @@ import {
     Menu, X, ChevronRight,
     Shield, ShieldAlert, Cloud, Trophy, Activity,
     Inbox, Clock, Headphones, BarChart3, Sparkles, Gift, Upload, FileText, Bug, Mail, Gavel,
-    PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap, CreditCard,
+    PackageSearch, Flag, FileWarning, ScrollText, BookOpen, Zap, CreditCard, Compass,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Suspense, useState, useEffect } from "react";
@@ -193,6 +193,7 @@ const NAV_GROUPS: NavGroup[] = [
         title: "System",
         items: [
             { href: "/dashboard/monitoring/redis", label: "Redis & Infra", icon: Activity, module: "settings" },
+            { href: "/dashboard/monitoring/dispatch-geo", label: "Dispatch Geo Status", icon: Compass, module: "settings" },
             // superAdminOnly: the backend mounts /api/admin/sentry under
             // require_super_admin (raw production error data), so an
             // "admin"-role user would see the entry and 403 on every call.

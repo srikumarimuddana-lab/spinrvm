@@ -115,6 +115,54 @@ test.describe('admin dashboard: monitoring/redis — interaction', () => {
   });
 });
 
+test.describe('admin dashboard: monitoring/dispatch-geo — interaction', () => {
+  const MOCK_STATUS = {
+    configured_provider: 'postgis',
+    effective_provider: 'postgis',
+    h3_would_serve: false,
+    last_failover: null,
+    status_summary: null,
+    h3_ready: false,
+    blockers: ['redis_not_connected'],
+    index: null,
+    unhealthy: null,
+    last_served: null,
+    events: [],
+    redis: { backend: 'redis', connected: true },
+    index_ttl_seconds: 300,
+    memory_headroom_percent: 20,
+    required_eviction_policy: 'noeviction',
+  };
+  const MOCK_REBUILD = { admin_id: 'admin-e2e', ok: true, skipped: false, incomplete: false, generation: 1, driver_count: 5, failed: 0 };
+
+  async function mockDispatchGeo(page: any) {
+    await setupAdminMocks(page, {
+      extra: async (route, url, method, json) => {
+        if (url.includes('/monitoring/dispatch-geo/rebuild')) return json(200, MOCK_REBUILD);
+        if (url.includes('/monitoring/dispatch-geo')) return json(200, MOCK_STATUS);
+        return null;
+      },
+    });
+  }
+
+  test('page loads with configured + effective provider badges', async ({ page }) => {
+    await mockDispatchGeo(page);
+    await page.goto('/dashboard/monitoring/dispatch-geo');
+    await expect(page.getByText('Configured Provider')).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText('Effective Provider')).toBeVisible();
+    await expect(page.getByText('postgis').first()).toBeVisible();
+  });
+
+  test('rebuild button is clickable and shows a toast', async ({ page }) => {
+    await mockDispatchGeo(page);
+    await page.goto('/dashboard/monitoring/dispatch-geo');
+    const rebuildBtn = page.getByRole('button', { name: /rebuild h3 index/i });
+    await expect(rebuildBtn).toBeVisible({ timeout: 20000 });
+    await rebuildBtn.click();
+    await expect(page.getByText(/h3 index rebuilt/i)).toBeVisible({ timeout: 10000 });
+  });
+});
+
 test.describe('admin dashboard: surge — redirect', () => {
   test('/dashboard/surge redirects to /dashboard/service-areas', async ({ page }) => {
     await setupAdminMocks(page, {

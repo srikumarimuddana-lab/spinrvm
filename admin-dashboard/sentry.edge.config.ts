@@ -9,7 +9,7 @@
  * No replay/browser integrations here: the edge runtime has no DOM.
  */
 import * as Sentry from '@sentry/nextjs';
-import { scrubEvent as beforeSend } from './sentry.scrub';
+import { scrubBreadcrumb as beforeBreadcrumb, scrubEvent as beforeSend } from './sentry.scrub';
 
 // Region note: see sentry.server.config.ts. The cold-start region check lives
 // there only — it would run on every middleware invocation if duplicated here.
@@ -20,6 +20,7 @@ Sentry.init({
   release: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
   enabled: !!(process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN),
   beforeSend,
+  beforeBreadcrumb,
   // Required tags per CLAUDE.md observability conventions ([21-4]).
   initialScope: {
     tags: {

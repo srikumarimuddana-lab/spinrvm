@@ -29,8 +29,12 @@ import {
     type VehicleHistoryBackfillReport,
     type VehicleHistoryBackfillReportItem,
 } from "@/lib/api";
+import { explainVehicleHistoryIssue } from "@/lib/bulk-import-error-help";
 import { PageHeader } from "@/components/page-header";
 import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable } from "@/components/bulk-import/issue-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,14 +45,6 @@ import {
     CardDescription,
     CardContent,
 } from "@/components/ui/card";
-import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableHead,
-    TableRow,
-    TableCell,
-} from "@/components/ui/table";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -77,51 +73,17 @@ const REPORT_COLUMNS = [
     { key: "message", label: "message" },
 ];
 
-function IssueTable({ items }: { items: VehicleHistoryBackfillReportItem[] }) {
+function VehicleHistoryIssueTable({ items }: { items: VehicleHistoryBackfillReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-40">Row (old_driver_id)</TableHead>
-                        <TableHead className="w-48">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.old_driver_id}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.old_driver_id}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
-    );
-}
-
-function Stat({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-}) {
-    const toneCls =
-        tone === "error" && value > 0
-            ? "text-destructive"
-            : tone === "warn" && value > 0
-              ? "text-warning"
-              : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
+        <IssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.old_driver_id}-${it.field}-${i}`}
+            getRef={(it) => it.old_driver_id}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="old_driver_id"
+            explain={explainVehicleHistoryIssue}
+        />
     );
 }
 
@@ -275,34 +237,60 @@ export default function LegacyVehicleHistoryBackfillPage() {
                 title="Legacy Vehicle-History Backfill"
                 description={
                     <>
-                        Backfill <span className="font-mono">driver_vehicle_history</span> (the 7-year
-                        regulatory driver/vehicle-linkage record) from the previous app&apos;s raw Mongo
-                        export, for drivers already created by the{" "}
+                        Backfill <span className="font-mono">driver_vehicle_history</span> for
+                        drivers already created by the{" "}
                         <Link href="/dashboard/drivers/legacy-import" className="underline">
                             Legacy Driver Import
                         </Link>
-                        . This is append-only — it never mutates or deletes an existing history row,
-                        and it never touches a live driver or vehicle field.
+                        .
                     </>
                 }
             />
 
-            <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                <div className="space-y-1">
-                    <p className="font-medium">
-                        A row is only skipped, never fabricated — and only known legacy-imported
-                        drivers are touched.
-                    </p>
-                    <p className="text-muted-foreground">
+            <WhatThisToolDoes
+                what={
+                    <>
+                        Appends a record of a driver&apos;s vehicle details over time (VIN, plate,
+                        make, model, colour, year) into the audit trail Spinr already keeps —{" "}
+                        <span className="font-mono">driver_vehicle_history</span> — for drivers
+                        already created by the Legacy Driver Import.
+                    </>
+                }
+                why={
+                    <>
+                        Saskatchewan&apos;s regulatory rules require a 7-year record of the link
+                        between a driver and their vehicle. Without this backfill, a migrated
+                        driver&apos;s vehicle history from the previous app would simply be
+                        missing.
+                    </>
+                }
+                whichFiles={
+                    <>
+                        The same raw MongoDB export&apos;s{" "}
+                        <span className="font-mono">vehicle_details.csv</span> (VIN/plate/make/
+                        model/colour/year, keyed by driver_id) and{" "}
+                        <span className="font-mono">drivers.csv</span> (used only to resolve
+                        driver_id to a phone number).
+                    </>
+                }
+                value={
+                    <>
+                        Preserves the regulatory record without anyone re-entering vehicle history
+                        by hand, and never touches a live driver or vehicle field — it only appends
+                        to the audit trail.
+                    </>
+                }
+                safetyNote={
+                    <>
+                        This is append-only — it never mutates or deletes an existing history row.
                         A <span className="font-mono">driver_id</span> with no matching phone, or a
                         phone matching a driver never tagged as legacy-imported, is skipped and
                         reported as a warning — a phone coincidence can never touch an organic
-                        driver&apos;s vehicle history. A row whose value hasn&apos;t changed from the
-                        previously-known value for that field is not logged again.
-                    </p>
-                </div>
-            </div>
+                        driver&apos;s vehicle history. A row whose value hasn&apos;t changed from
+                        the previously-known value for that field is not logged again.
+                    </>
+                }
+            />
 
             <Card>
                 <CardHeader>
@@ -389,20 +377,20 @@ export default function LegacyVehicleHistoryBackfillPage() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                            <Stat label="Vehicle rows" value={counts?.vehicle_rows ?? 0} />
-                            <Stat label="History rows to insert" value={counts?.history_rows_to_insert ?? 0} />
-                            <Stat label="Skipped (unmatched)" value={counts?.skipped_unmatched ?? 0} tone="warn" />
-                            <Stat
+                            <StatTile label="Vehicle rows" value={counts?.vehicle_rows ?? 0} />
+                            <StatTile label="History rows to insert" value={counts?.history_rows_to_insert ?? 0} />
+                            <StatTile label="Skipped (unmatched)" value={counts?.skipped_unmatched ?? 0} tone="warn" />
+                            <StatTile
                                 label="Skipped (not a known legacy driver)"
                                 value={counts?.skipped_not_legacy_driver ?? 0}
                                 tone="warn"
                             />
-                            <Stat
+                            <StatTile
                                 label="Skipped (already backfilled)"
                                 value={counts?.skipped_already_backfilled ?? 0}
                             />
-                            <Stat label="Warnings" value={report.warnings.length} tone="warn" />
-                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                            <StatTile label="Warnings" value={report.warnings.length} tone="warn" />
+                            <StatTile label="Errors" value={report.errors.length} tone="error" />
                         </div>
 
                         <div className="flex justify-end">
@@ -439,7 +427,7 @@ export default function LegacyVehicleHistoryBackfillPage() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <VehicleHistoryIssueTable items={report.errors} />
                             </div>
                         )}
 
@@ -448,7 +436,7 @@ export default function LegacyVehicleHistoryBackfillPage() {
                                 <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                                     <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
                                 </h3>
-                                <IssueTable items={report.warnings} />
+                                <VehicleHistoryIssueTable items={report.warnings} />
                             </div>
                         )}
 

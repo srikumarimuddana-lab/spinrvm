@@ -94,7 +94,7 @@ function loadSkia(): SkiaModule | null {
   } catch {
     _skiaCache = null;
   }
-  return _skiaCache;
+  return _skiaCache ?? null;
 }
 
 export const HeatmapGradientOverlay: React.FC<HeatmapGradientOverlayProps> = React.memo(

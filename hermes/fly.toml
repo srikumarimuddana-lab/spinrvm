@@ -1,44 +1,45 @@
-# Hermes — Spinr Ops Agent
-# Deploy: fly deploy --config hermes/fly.toml
-# Secrets: fly secrets set TELEGRAM_BOT_TOKEN=... SPINR_API_KEY=... etc.
+# fly.toml app configuration file generated for spinrvm on 2026-09-10T20:06:51Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "hermes-spinr"
-primary_region = "yyz"
-kill_signal = "SIGINT"
-kill_timeout = "15s"
+app = 'spinrvm'
+primary_region = 'yyz'
+kill_signal = 'SIGINT'
+kill_timeout = '15s'
 
 [build]
-  dockerfile = "Dockerfile"
-
-[env]
-  ENV = "production"
-  PORT = "8585"
-  LOG_LEVEL = "info"
-  HERMES_PUBLIC_URL = "https://hermes-spinr.fly.dev"
+  dockerfile = 'Dockerfile'
 
 [deploy]
-  strategy = "rolling"
+  strategy = 'rolling'
+
+[env]
+  ENV = 'production'
+  HERMES_PUBLIC_URL = 'https://hermes-spinr.fly.dev'
+  LOG_LEVEL = 'info'
+  PORT = '8585'
 
 [http_service]
-  internal_port = 8585
+  internal_port = 8080
   force_https = true
-  auto_stop_machines = "suspend"
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
   min_machines_running = 1
-  processes = ["app"]
+  processes = ['app']
 
   [http_service.concurrency]
-    type = "connections"
-    soft_limit = 200
+    type = 'connections'
     hard_limit = 300
+    soft_limit = 200
 
   [[http_service.checks]]
-    grace_period = "15s"
-    interval = "30s"
-    method = "GET"
-    timeout = "5s"
-    path = "/health"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '15s'
+    method = 'GET'
+    path = '/health'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = 'shared-cpu-1x'
+  memory = '512mb'

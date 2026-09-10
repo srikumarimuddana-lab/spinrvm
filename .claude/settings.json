@@ -118,6 +118,10 @@
           {
             "type": "command",
             "command": "bash -c 'cd admin-dashboard && npm ci --silent && echo \"admin deps ok\"'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'cd shared && npm ci --silent && echo \"shared deps ok\"'"
           }
         ]
       }

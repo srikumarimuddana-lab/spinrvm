@@ -227,6 +227,66 @@ async def test_postgis_requests_more_ids_than_matching_limit():
     assert db.rpc.await_args.args[1]["p_limit"] >= 5000
 
 
+async def test_postgis_reuses_rpc_distance_without_recomputing_haversine():
+    """The RPC already computed + ordered by ST_Distance — don't redo that math."""
+    db = MagicMock()
+    # RPC returns nearest-first, with its own distance_m per id.
+    db.rpc = AsyncMock(
+        return_value=[
+            {"driver_id": "near", "distance_m": 2000.0},
+            {"driver_id": "far", "distance_m": 8000.0},
+        ]
+    )
+    # Eligibility re-fetch returns rows in a *different* order than the RPC —
+    # sorting must still land on near-then-far using the known distances.
+    db.get_rows_batched_in = AsyncMock(
+        return_value=[
+            {"id": "far", "lat": 53.0, "lng": -106.67},
+            {"id": "near", "lat": 52.13, "lng": -106.67},
+        ]
+    )
+    with (
+        patch("services.dispatch_candidates.haversine_km", side_effect=AssertionError("should not recompute")),
+        patch("services.dispatch_candidates.remember_last_served", AsyncMock()),
+        patch("services.dispatch_candidates.get_last_served", AsyncMock(return_value=None)),
+        patch("services.dispatch_candidates.recent_events", AsyncMock(return_value=[])),
+    ):
+        rows = await fetch_dispatch_candidates(
+            db=db,
+            dispatch_filter=FILTER,
+            pickup_lat=52.13,
+            pickup_lng=-106.67,
+            search_radius_km=10,
+            app_settings={"dispatch_geo_provider": "postgis"},
+            area=None,
+            ride_id="ride-postgis-dist",
+        )
+    assert [r["id"] for r in rows] == ["near", "far"]
+
+
+async def test_postgis_falls_back_to_haversine_when_rpc_omits_distance():
+    """Older/mocked RPC responses without distance_m must still work."""
+    db = MagicMock()
+    db.rpc = AsyncMock(return_value=[{"driver_id": "a"}])
+    db.get_rows_batched_in = AsyncMock(return_value=[{"id": "a", "lat": 52.13, "lng": -106.67}])
+    with (
+        patch("services.dispatch_candidates.remember_last_served", AsyncMock()),
+        patch("services.dispatch_candidates.get_last_served", AsyncMock(return_value=None)),
+        patch("services.dispatch_candidates.recent_events", AsyncMock(return_value=[])),
+    ):
+        rows = await fetch_dispatch_candidates(
+            db=db,
+            dispatch_filter=FILTER,
+            pickup_lat=52.13,
+            pickup_lng=-106.67,
+            search_radius_km=10,
+            app_settings={"dispatch_geo_provider": "postgis"},
+            area=None,
+            ride_id="ride-postgis-no-dist",
+        )
+    assert [r["id"] for r in rows] == ["a"]
+
+
 async def test_h3_recovery_notifies_ops():
     db = MagicMock()
     db.get_rows_batched_in = AsyncMock(return_value=LEGACY_ROWS)

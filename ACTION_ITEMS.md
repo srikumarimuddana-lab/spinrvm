@@ -23937,12 +23937,42 @@ how much they de-risk a public launch._
   against a real build; (6) either wire `expo-notifications`' handler into the real path or
   remove the now-misleading dead code.
 
-### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive
+### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 
-- [ ] **Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
+- [x] **Status:** CLOSED — corrected same day by direct evidence from the user's real machine. The
+  "patch fails to apply" finding below was a sandbox artifact, not a real bug: this cloud
+  session's `node_modules/react-native` install has zero real `.js` source files (only `.d.ts`
+  stubs, see the original finding below), so **any** patch-package run here would fail
+  regardless of whether the patch itself is actually broken. On the user's real Windows machine,
+  `yarn install` for both apps completed and `patch-package` reported **both patches applied
+  successfully**:
+  - `driver-app` (`react-native+0.86.3.patch` against installed `react-native@0.86.3`): applied
+    with **zero warnings**, even running under `patch-package --error-on-warn` (the app's own
+    postinstall script), which would have failed the command on any fuzz/context mismatch. Exact
+    match, no version drift, no problem.
+  - `rider-app` (`react-native+0.86.2.patch` against installed `react-native@0.86.3`): applied
+    successfully, with only patch-package's routine "patch file version mismatch" notice — that
+    warning fires purely from comparing the patch **filename's** version string against the
+    installed package's version string, independent of whether the underlying diff needed any
+    fuzzy matching. It is cosmetic, not a sign the fix is broken or missing.
+  **Corrected conclusion:** the Android Bridgeless crash workaround (8 files, `ActivityIndicator`
+  etc.) has very likely been active and working correctly in both apps' real builds all along —
+  including on EAS builds and any prior local/CI build, none of which run in this stub
+  environment. There is no evidence of an active customer-facing regression. The only real,
+  much smaller remaining item: `rider-app/patches/react-native+0.86.2.patch` has a stale
+  filename (installed version is 0.86.3) and should be renamed/regenerated to silence the
+  cosmetic warning — a cleanup, not a crash fix. No urgency; do it opportunistically.
+  **Lesson for future sessions:** this cloud sandbox's `node_modules` for `react-native` cannot
+  be trusted to diagnose patch-package or native-module issues — verify findings like this one
+  against a real environment before writing them up as active bugs, per this repo's own
+  verification discipline (`CLAUDE.md`: "never let a tool's own output stand in for
+  verification").
+
+- [ ] ~~**Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
   No code changed; regeneration requires a real `node_modules/react-native` install (local
   machine or CI), which this Claude Code cloud sandbox does not have — see "Why this can't be
-  finished here" in the doc.
+  finished here" in the doc.~~ (superseded by the correction above — kept for the record, not
+  a live status)
 - **What's broken:** `rider-app/patches/react-native+0.86.2.patch` (stale filename, installed RN
   is 0.86.3) and `driver-app/patches/react-native+0.86.3.patch` (filename matches, still fails)
   both fail `patch-package` application against installed `react-native@0.86.3`. Confirmed via

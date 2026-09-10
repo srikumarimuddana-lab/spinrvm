@@ -1070,6 +1070,58 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       table-wide). Doesn't by itself prove old-app data is blended in —
       needs Spinr's confirmed launch/dual-run-start date to compare
       against, which isn't recorded in this file.
+  - **2026-09-10 — closed the "broader pre-launch question" from the
+    migration-approach doc's Phase 6 (raised 2026-08-30, "not yet done as
+    of this edit") for drivers/riders/rides, via live read-only queries
+    against production. Full detail:
+    `docs/change-log/2026-09-10-a34-pre-launch-data-contamination-check.md`.**
+    - **Tool #16 (pre-launch flagging) has, in fact, already run against
+      production and is fully current** — 854/854 dormant legacy drivers
+      flagged, 25/25 pre-launch-dated rides flagged, 0 unflagged remaining.
+      Recomputed the tool's own dormant-candidate SQL live independently;
+      it matched exactly. This corrects the migration-approach doc's "not
+      yet done" framing for the two tables this tool covers.
+    - **New finding: real PII already sits on confirmed-dormant (zero
+      real activity, ever) driver profiles.** Of those 854: **97 have a
+      `sin` value**, **146 have `date_of_birth`**, **241 have at least one
+      `driver_vehicle_history` row** (VIN/insurance/registration). The
+      SIN/DOB backfill (tool #4) and vehicle-history backfill (tool #5)
+      match by phone/driver-row existence only — neither has an activity
+      or launch-date gate, unlike the pre-launch-flag tool built
+      specifically because that gap mattered. Net effect: SIN — the single
+      most sensitive field this codebase stores per CLAUDE.md's PIPEDA
+      section — is retained today for profiles with zero operational
+      footprint. Not a breach (no exposure occurred); a data-minimization/
+      retention-hygiene gap.
+    - **New finding: the same pattern exists for riders, with no flag
+      mechanism at all.** `pre_launch_flag_service.py` only ever wrote
+      `drivers`/`rides`, never `users`. Of 1,132 legacy-imported rider
+      accounts, only 5 carry a pre-launch `created_at` (riders' import
+      doesn't preserve the original signup date the way drivers' does, so
+      date isn't a useful proxy here either — same reason the driver
+      tool's own docstring rejected date-gating). Using the same
+      zero-activity proxy instead: **1,046 of 1,132 (92%) have never taken
+      a single ride in Spinr**, and **153** of those already have
+      `saved_addresses` rows (home/work/favorite backfill, tool #10)
+      attached.
+    - **Checked, not a new gap: insurance-period reconstruction (migration
+      332) is traceable, not silently contaminated.** All 25 pre-launch
+      rides are among the 246 rides migration 332 reconstructed Period 2/3
+      audit rows for (492 rows total) — but both `is_reconstructed = true`
+      and `pre_launch_test = true` mark this population, so an SGI audit
+      pull can identify and exclude it. Recorded for completeness, not
+      flagged as action-needed.
+    - **Recommendation, not yet decided by anyone with the authority to
+      decide it:** whether to purge (null `sin`/`date_of_birth`, delete the
+      `driver_vehicle_history`/`saved_addresses` rows) for the confirmed-
+      dormant population is a product-owner/privacy-officer call, same as
+      every other PII-retention decision in this item — not made here. The
+      cheap, additive, zero-risk piece worth doing regardless of that
+      decision: extend `pre_launch_flag_service.py` to also flag `users`
+      (riders) using the same zero-activity proxy, so this population is
+      at least identifiable going forward without a one-off manual query
+      like the one that produced these numbers. Not implemented in this
+      pass — flagged for an explicit go-ahead first.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as

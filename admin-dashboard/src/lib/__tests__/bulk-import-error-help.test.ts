@@ -4,6 +4,8 @@ import {
   explainSinDobIssue,
   explainVehicleHistoryIssue,
   explainSavedAddressIssue,
+  explainWalletImportIssue,
+  explainBookingImportIssue,
 } from '../bulk-import-error-help';
 
 describe('createIssueExplainer', () => {
@@ -68,5 +70,32 @@ describe('explainSavedAddressIssue', () => {
 
   it('does not carry driver-crosswalk messages', () => {
     expect(explainSavedAddressIssue('no Spinr driver with this phone number')).toBeNull();
+  });
+});
+
+describe('explainWalletImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainWalletImportIssue('no matching rider/driver account found')).not.toBeNull();
+    expect(explainWalletImportIssue('pre-launch (before 2026-03-30); skipped as test data')).not.toBeNull();
+  });
+
+  it('matches the dynamic unrecognized-type/status prefixes', () => {
+    expect(explainWalletImportIssue("unrecognized legacy wallet type 'foo'")).not.toBeNull();
+    expect(explainWalletImportIssue("unrecognized legacy wallet status 'bar'")).not.toBeNull();
+  });
+
+  it('does not carry booking-import messages', () => {
+    expect(explainWalletImportIssue('booking is missing its legacy _id')).toBeNull();
+  });
+});
+
+describe('explainBookingImportIssue', () => {
+  it('matches its own messages', () => {
+    expect(explainBookingImportIssue('fees + tax + tip exceed the total charged')).not.toBeNull();
+    expect(explainBookingImportIssue('no legacy earnings row; using booking you_earn')).not.toBeNull();
+  });
+
+  it('does not carry wallet-import messages', () => {
+    expect(explainBookingImportIssue('wallet entry is missing its legacy _id')).toBeNull();
   });
 });

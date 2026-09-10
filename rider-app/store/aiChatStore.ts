@@ -148,7 +148,7 @@ interface AiChatState {
 
   loadConfig: () => Promise<void>;
   loadHistory: () => Promise<void>;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, displayText?: string) => Promise<void>;
   /** Return leg of the "Drop a pin" card: sends the confirmed map pin back
    * into the chat as a user message carrying exact [lat,lng] coordinates
    * (the bracketed format the model is instructed to pass through verbatim,
@@ -221,15 +221,19 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (text: string) => {
+  sendMessage: async (text: string, displayText?: string) => {
     const trimmed = text.trim();
     if (!trimmed || get().isStreaming) return;
 
+    // AI17/F2: `content` stays the full text the model needs (e.g. a
+    // quote-tap's "(vehicle id <uuid>)") — only `displayContent`, if given,
+    // changes what the bubble renders. streamChat below still sends `trimmed`.
     const userMessage: AiChatMessage = {
       id: newId(),
       role: 'user',
       kind: 'text',
       content: trimmed,
+      displayContent: displayText?.trim() || undefined,
       createdAt: Date.now(),
     };
     const assistantId = newId();

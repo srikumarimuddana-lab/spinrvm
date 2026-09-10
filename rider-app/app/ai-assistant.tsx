@@ -37,7 +37,7 @@ import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/a
 import { buildLocationChoiceMessage } from '@shared/utils/aiLocationMessages';
 import { useAuthStore } from '@shared/store/authStore';
 import BookingProposalCard from '../components/BookingProposalCard';
-import { buildQuoteBookingMessage } from '../components/bookingProposal';
+import { buildQuoteBookingMessage, buildQuoteBookingDisplayMessage } from '../components/bookingProposal';
 import FareQuoteCard from '../components/FareQuoteCard';
 import AiAuroraBackground from '../components/AiAuroraBackground';
 import AiWelcomeOrb from '../components/AiWelcomeOrb';
@@ -301,11 +301,17 @@ export default function AiAssistantScreen() {
   }, [messages, toolStatus]);
 
   const handleSend = useCallback(
-    (text?: string) => {
+    (text?: string, displayText?: string) => {
       const value = (text ?? input).trim();
       if (!value) return;
       setInput('');
-      sendMessage(value);
+      // Only forward a second arg when there's a real display twin (AI17/F2)
+      // — every other call site keeps sendMessage's single-arg call shape.
+      if (displayText) {
+        sendMessage(value, displayText);
+      } else {
+        sendMessage(value);
+      }
     },
     [input, sendMessage],
   );
@@ -394,8 +400,12 @@ export default function AiAssistantScreen() {
           onSelect={(option) => {
             // Self-contained message carrying the priced [lat,lng] verbatim —
             // the assistant's next turn sees only message text, and must not
-            // re-geocode the trip the rider just saw priced.
-            handleSend(buildQuoteBookingMessage(quote, option));
+            // re-geocode the trip the rider just saw priced. AI17/F2: the
+            // rider sees the display twin instead (no raw vehicle_type_id).
+            handleSend(
+              buildQuoteBookingMessage(quote, option),
+              buildQuoteBookingDisplayMessage(quote, option),
+            );
           }}
         />
       );
@@ -430,7 +440,9 @@ export default function AiAssistantScreen() {
           </View>
         )}
         <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-          <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>{item.content}</Text>
+          <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
+            {item.displayContent ?? item.content}
+          </Text>
         </View>
       </View>
     );

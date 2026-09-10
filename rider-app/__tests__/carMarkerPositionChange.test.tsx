@@ -15,7 +15,7 @@
  */
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
-import { Platform } from 'react-native';
+import { Animated, Platform } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { Image } from 'expo-image';
 import { CarMarker } from '@shared/components/CarMarker';
@@ -56,6 +56,11 @@ jest.mock('expo-image', () => {
   const ReactActual = require('react');
   return { Image: (props: any) => ReactActual.createElement('ExpoImage', props) };
 });
+
+const mockCaptureException = jest.fn();
+jest.mock('@shared/services/errorReporting', () => ({
+  captureException: (...args: unknown[]) => mockCaptureException(...args),
+}));
 
 describe('CarMarker — onPositionChange (shared position source for rider follow cameras)', () => {
   const coord = { latitude: 50.4452, longitude: -104.6189 };
@@ -205,6 +210,136 @@ describe('CarMarker — Android ring-change re-arms the frozen snapshot', () => 
     rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
     expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
 
+    unmount();
+  });
+});
+
+/**
+ * Ported from driver-app's own copy of this component (see
+ * driver-app/__tests__/components/CarMarker.test.tsx, "car-icon decode
+ * failure retries then reports once" describe block, 2026-09-09 fix) after
+ * the same gap was found in rider-app's copy: a bundled-asset decode failure
+ * had no way back (onError only ever toggled the custom-vs-bundled image
+ * choice, a no-op with no custom image), so the marker froze at the ring-only
+ * snapshot forever with nothing surfaced to monitoring.
+ */
+describe('CarMarker — car-icon decode failure retries then reports once', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockCaptureException.mockClear();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('retries a failed decode with backoff, remounting a fresh Image each time', () => {
+    const { UNSAFE_getByType } = render(<CarMarker coordinate={coord} heading={90} />);
+
+    const firstImage = UNSAFE_getByType(Image);
+    // onError and the timer advance are deliberately in SEPARATE act() calls
+    // — see driver-app's original test for why (onError's setState updater
+    // schedules its setTimeout as a side effect of being invoked, and act()
+    // only flushes/commits at the end of its own callback).
+    act(() => {
+      firstImage.props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+
+    // A retry bumps the Image's key, producing a distinct element instance —
+    // proof the native view actually remounted to re-attempt the decode.
+    const secondImage = UNSAFE_getByType(Image);
+    expect(secondImage).not.toBe(firstImage);
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('reports to error tracking exactly once after MAX_IMAGE_RETRIES exhausted, never before', () => {
+    const { UNSAFE_getByType } = render(<CarMarker coordinate={coord} heading={90} />);
+
+    // 4 failures: 3 retries (0->1->2->3), the 4th finds retries exhausted.
+    for (let i = 0; i < 4; i++) {
+      act(() => {
+        UNSAFE_getByType(Image).props.onError();
+      });
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+    }
+
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ domain: 'rides', surface: 'rider-app' }),
+    );
+
+    // A further failure past exhaustion must not report again.
+    act(() => {
+      UNSAFE_getByType(Image).props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+
+  it('never reports once the image successfully loads', () => {
+    const { UNSAFE_getByType } = render(<CarMarker coordinate={coord} heading={90} />);
+    act(() => {
+      UNSAFE_getByType(Image).props.onError();
+    });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    act(() => {
+      UNSAFE_getByType(Image).props.onLoad();
+    });
+    act(() => {
+      jest.advanceTimersByTime(6000);
+    });
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Ported from driver-app's own copy of this component (2026-09-09 fix,
+ * "green circle, no car" recurrence): the mount animation used to start at
+ * opacity 0 / scale 0 on every platform, racing Android's one-shot marker
+ * snapshot against a native-driven fade-in that doesn't reliably re-trigger
+ * that snapshot. Starting at full opacity/scale on Android closes the race.
+ */
+describe('CarMarker — Android mount starts the car icon visible, not faded in', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+
+  afterEach(() => {
+    Platform.OS = originalPlatformOS;
+  });
+
+  it('mounts with opacity 1 / scale 1 on Android (no fade-in to race the snapshot)', () => {
+    Platform.OS = 'android';
+    const { UNSAFE_root, unmount } = render(<CarMarker coordinate={coord} />);
+    // The mount Animated.Value itself (not a rendered style snapshot) is the
+    // authoritative check — read via the rendered wrapper's style prop.
+    const animatedWrapper = UNSAFE_root.findAllByType(Animated.View)[0];
+    expect(animatedWrapper.props.style.opacity.__getValue()).toBe(1);
+    expect(animatedWrapper.props.style.transform[0].scale.__getValue()).toBe(1);
+    unmount();
+  });
+
+  it('mounts with opacity 0 / scale 0 on iOS (unchanged pop-in behavior — spring plays from there)', () => {
+    Platform.OS = 'ios';
+    const { UNSAFE_root, unmount } = render(<CarMarker coordinate={coord} />);
+    const animatedWrapper = UNSAFE_root.findAllByType(Animated.View)[0];
+    // Only the starting value is asserted here — the native-driven spring
+    // itself isn't observable through fake timers in this test environment.
+    // iOS has no marker-snapshot race to guard against (Marker.Animated
+    // re-renders live), so starting faded-out and popping in is safe there;
+    // the regression this file guards is Android-only (see the sibling test).
+    expect(animatedWrapper.props.style.opacity.__getValue()).toBe(0);
+    expect(animatedWrapper.props.style.transform[0].scale.__getValue()).toBe(0);
     unmount();
   });
 });

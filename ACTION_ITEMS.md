@@ -18487,28 +18487,61 @@ mechanical follow-up work, prioritizable independently.
   - **Acceptance:** driver-app's common confirm/retry/action buttons route
     through one shared component, or a documented decision explains why not.
 
-- [ ] **UX4. No shared transition timing/easing system in either app —
+- [x] **UX4. No shared transition timing/easing system in either app —
   near-identical interactions independently reimplemented** — **Status:**
-  open, identified 2026-09-10.
-  - **Issue/gap:** no `TIMING`/`EASING` constants module exists anywhere;
-    each screen picks its own `Animated.timing` duration (found ranging
+  closed 2026-09-10 for the two originally-named call sites
+  (`fix/ux4-shared-motion-timing`); two more instances of the identical
+  pattern turned up during this fix's own blast-radius grep and remain
+  open — see Residual below.
+  - **Issue/gap:** no `TIMING`/`EASING` constants module existed; each
+    screen picked its own `Animated.timing` duration (found ranging
     50ms–14000ms across both apps) and easing curve (explicit in a handful
     of files, omitted — falling back to RN's default — in most). Concrete
-    duplication: rider-app's OTP wrong-code shake
-    (`rider-app/app/otp.tsx:124-128`, 60ms/step) and driver-app's PIN
-    wrong-code shake (`driver-app/components/dashboard/ActiveRidePanel.tsx:319-323`,
-    50ms/step) are the same interaction, independently reimplemented with
-    different offsets and durations.
+    duplication: rider-app's OTP wrong-code shake (`rider-app/app/otp.tsx`,
+    was 60ms/step) and driver-app's PIN wrong-code shake
+    (`driver-app/components/dashboard/ActiveRidePanel.tsx`, was 50ms/step)
+    were the same interaction, independently reimplemented with different
+    offsets and durations.
   - **Why it matters:** functionally identical interactions feel
     inconsistent across (and even within) apps for no reason other than
     independent implementation.
-  - **Action:** introduce a shared `TIMING`/`EASING` constants module
-    (mirroring `SPACING`/`FONT` in `shared/utils/responsive.ts`) and migrate
-    at least the duplicated shake pattern onto one shared implementation.
-  - **Files:** none yet.
-  - **Acceptance:** the two shake implementations converge on one shared
-    function/constant; a documented duration/easing convention exists for
-    new motion work.
+  - **Fix:** added `shared/utils/motion.ts` exporting `TIMING`/`EASING`
+    constants — kept as a new sibling file rather than folded into
+    `shared/utils/responsive.ts`, since that file is explicitly scoped to
+    device/window-dimension-driven values (breakpoints, scaled fonts), not
+    static motion tokens — plus one shared `shakeHorizontal(value,
+    amplitudes?)` helper. The sequence-construction logic itself (not just
+    the duration/easing numbers) was duplicated between the two call
+    sites, so a thin shared function was judged worth it; a full
+    `useShakeAnimation()` hook was considered and rejected, because
+    rider-app already creates its `Animated.Value` via the local
+    `useAnimatedValue` hook while driver-app creates its ref directly with
+    its own verified-safe `react-hooks/refs` justification comment —
+    forcing one of those two independently-fine, established idioms to
+    change for this alone would be scope beyond what the item asked for,
+    and `shakeHorizontal()` already converges duration + easing + sequence
+    shape without touching either file's value-creation pattern. Amplitude
+    (rider-app 12/8, driver-app 10/6) is passed in by each caller rather
+    than unified, since the item asked to converge duration/easing, not
+    visual amplitude, and changing amplitude would be a visible behavior
+    change this item didn't ask for.
+  - **Residual — found, not fixed:** the same blast-radius grep turned up
+    two more instances of the *exact same* 12/-12/8/-8/0 @ 60ms shake,
+    outside this item's original scope: `rider-app/app/verify-email.tsx:99-103`
+    and `driver-app/app/otp.tsx:153-157` (a separate OTP screen from
+    `ActiveRidePanel`'s PIN entry). Neither was touched here — flagging so
+    a follow-up migrates them onto `shakeHorizontal()` too, rather than
+    this closure being read as "all shake duplication in the codebase is
+    now fixed."
+  - **Files:** `shared/utils/motion.ts` (new),
+    `shared/utils/__tests__/motion.test.ts` (new), `shared/package.json`
+    (export entry), `rider-app/app/otp.tsx`,
+    `driver-app/components/dashboard/ActiveRidePanel.tsx`.
+  - **Acceptance:** met for the two originally-named call sites — both
+    now converge on shared `TIMING.shakeStep`/`EASING.shake` via
+    `shakeHorizontal()`, and a documented duration/easing convention exists
+    in `shared/utils/motion.ts` for new motion work. Not met repo-wide —
+    see Residual above.
 
 - [x] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
   that match neither the current nor the previous theme tokens, and has no

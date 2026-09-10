@@ -134,7 +134,7 @@ class StaffUpdateRequest(BaseModel):
 @router.get("/staff")
 async def list_staff(
     response: Response,
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(require_role("super_admin")),
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
@@ -146,6 +146,14 @@ async def list_staff(
     response-shape change. Default limit is 500 to preserve the legacy
     "return everything" behaviour for the current admin dashboard, which
     does not yet paginate this endpoint.
+
+    Admin RBAC audit finding W3 (docs/audit/2026-09-10-admin-portal-security-
+    rbac-audit.md): the "staff" module's own AVAILABLE_MODULES comment says
+    "Only super_admin can access this", but this route was gated only by
+    require_module("staff") at the router mount — a custom-role admin
+    mistakenly (or deliberately) granted just that one module could read
+    every staff member's email/role/modules. require_role("super_admin")
+    enforces the comment's actual stated intent.
     """
     staff = await db_supabase.get_rows("admin_staff", limit=limit, offset=offset)
     total = await db_supabase.count_documents("admin_staff")
@@ -233,8 +241,12 @@ async def list_modules():
 
 
 @router.get("/staff/{staff_id}")
-async def get_staff(staff_id: str):
-    """Get a single staff member."""
+async def get_staff(staff_id: str, admin: dict = Depends(require_role("super_admin"))):
+    """Get a single staff member.
+
+    See list_staff above for the W3 audit finding this closes — same
+    roster-disclosure gap, single-record instead of the full list.
+    """
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")

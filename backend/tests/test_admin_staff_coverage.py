@@ -69,6 +69,10 @@ def _fake_request() -> Request:
 class TestListAndGetStaff:
     @pytest.mark.asyncio
     async def test_list_staff_strips_credentials_and_sets_headers(self):
+        # W3 (2026-09-10 RBAC audit): list_staff now sits behind
+        # Depends(require_role("super_admin")), matching create_staff/
+        # delete_staff's own pattern — use SUPER here too, consistent with
+        # how this file already calls those.
         rows = [_staff_row(mfa_secret="topsecret", mfa_backup_codes=[{"hash": "x"}])]
         response = AsyncMock()
         response.headers = {}
@@ -76,7 +80,7 @@ class TestListAndGetStaff:
             patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=rows)),
             patch.object(staff_mod.db_supabase, "count_documents", AsyncMock(return_value=1)),
         ):
-            result = await staff_mod.list_staff(response, admin=OPS, limit=500, offset=0)
+            result = await staff_mod.list_staff(response, admin=SUPER, limit=500, offset=0)
 
         assert result[0].get("password_hash") is None
         assert result[0].get("mfa_secret") is None
@@ -87,7 +91,7 @@ class TestListAndGetStaff:
     @pytest.mark.asyncio
     async def test_get_staff_strips_credentials(self):
         with patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[_staff_row()])):
-            result = await staff_mod.get_staff("staff-1")
+            result = await staff_mod.get_staff("staff-1", admin=SUPER)
         assert result["id"] == "staff-1"
         assert "password_hash" not in result
 
@@ -95,7 +99,7 @@ class TestListAndGetStaff:
     async def test_get_staff_404(self):
         with patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
-                await staff_mod.get_staff("missing")
+                await staff_mod.get_staff("missing", admin=SUPER)
         assert exc.value.status_code == 404
 
     def test_list_modules_returns_static_payload(self):

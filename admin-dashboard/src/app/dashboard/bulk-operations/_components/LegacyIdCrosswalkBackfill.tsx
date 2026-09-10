@@ -29,19 +29,11 @@ import {
     type CrosswalkBackfillReport,
     type CrosswalkPopulationCounts,
 } from "@/lib/api";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/use-toast";
-
-function Stat({ label, value, tone }: { label: string; value: number; tone?: "warn" }) {
-    const toneCls = tone === "warn" && value > 0 ? "text-warning" : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
-    );
-}
 
 function PopulationSummary({ title, counts }: { title: string; counts: CrosswalkPopulationCounts }) {
     const eligible = counts.eligible_drivers_found ?? counts.eligible_riders_found ?? 0;
@@ -49,11 +41,11 @@ function PopulationSummary({ title, counts }: { title: string; counts: Crosswalk
         <div className="space-y-2">
             <h4 className="text-xs font-medium text-muted-foreground">{title}</h4>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <Stat label="Eligible" value={eligible} />
-                <Stat label="New rows to write" value={counts.new_rows_to_write} />
-                <Stat label="Already recorded" value={counts.already_recorded} />
+                <StatTile label="Eligible" value={eligible} />
+                <StatTile label="New rows to write" value={counts.new_rows_to_write} />
+                <StatTile label="Already recorded" value={counts.already_recorded} />
                 {counts.ambiguous_skipped !== undefined ? (
-                    <Stat label="Ambiguous (skipped)" value={counts.ambiguous_skipped} tone="warn" />
+                    <StatTile label="Ambiguous (skipped)" value={counts.ambiguous_skipped} tone="warn" />
                 ) : null}
             </div>
         </div>
@@ -154,14 +146,45 @@ export function LegacyIdCrosswalkBackfill() {
                     Legacy ID crosswalk backfill
                 </CardTitle>
                 <CardDescription>
-                    Record which old-app ID(s) — Mongo ObjectId or the Saskatoon numeric driver
-                    ID — each Spinr driver/rider resolved from, using the phone-match every
-                    importer already ran. No CSV needed — this reads directly from production. A
-                    rider whose own rides disagree on the old customer ID is reported as
-                    ambiguous and skipped, never guessed.
+                    Record which old-app ID(s) each Spinr driver/rider resolved from, for future
+                    support/audit lookups.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+                <WhatThisToolDoes
+                    what={
+                        <>
+                            Records which old-app ID(s) — a Mongo ObjectId or the Saskatoon numeric
+                            driver ID — each Spinr driver/rider resolved from, using the same
+                            phone-match every importer already ran.
+                        </>
+                    }
+                    why={
+                        <>
+                            Without this, tracing a support ticket or an audit question back to a
+                            specific old-app record means manually re-deriving the phone-match by
+                            hand across drivers/rides every time.
+                        </>
+                    }
+                    whichFiles={<>No file upload — this reads directly from production data already in Spinr.</>}
+                    value={
+                        <>
+                            A future support or audit lookup can go straight from an old-app ID to
+                            a Spinr account, instead of re-doing the matching work from scratch.
+                        </>
+                    }
+                    safetyNote={
+                        <>
+                            Additive-only inserts into a table nothing else writes to, so this
+                            tool skips the type-to-confirm gate other production-writing tools on
+                            this page use. This pass can only record linkage Supabase already
+                            has — it can&apos;t recover an old id the original phone-match missed.
+                            A rider whose own rides disagree on the old customer ID is reported as
+                            ambiguous and skipped, never guessed.
+                        </>
+                    }
+                />
+
                 <div className="space-y-3">
                     <h3 className="text-sm font-medium">1. Preview</h3>
                     <Button onClick={handlePreview} disabled={previewing}>

@@ -7,6 +7,8 @@ import {
   explainWalletImportIssue,
   explainBookingImportIssue,
   explainLegacyDriverImportIssue,
+  explainDriverImportIssue,
+  explainRiderImportIssue,
 } from '../bulk-import-error-help';
 
 describe('createIssueExplainer', () => {
@@ -122,5 +124,55 @@ describe('explainLegacyDriverImportIssue', () => {
 
   it('does not carry booking/wallet messages', () => {
     expect(explainLegacyDriverImportIssue('booking is missing its legacy _id')).toBeNull();
+  });
+});
+
+describe('explainDriverImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainDriverImportIssue('duplicate old_driver_id')).not.toBeNull();
+    expect(
+      explainDriverImportIssue('matching user or driver already exists; handle manually before import'),
+    ).not.toBeNull();
+    expect(
+      explainDriverImportIssue('VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)'),
+    ).not.toBeNull();
+  });
+
+  it('matches the dynamic vehicle-type and already-imported-update prefixes', () => {
+    expect(explainDriverImportIssue("no vehicle_types row matched 'suv'")).not.toBeNull();
+    expect(
+      explainDriverImportIssue('driver already imported; updating 2 changed vehicle field(s)'),
+    ).not.toBeNull();
+  });
+
+  it('does not carry Legacy Driver Import messages', () => {
+    expect(explainDriverImportIssue('row has no _id')).toBeNull();
+  });
+});
+
+describe('explainRiderImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainRiderImportIssue('duplicate phone in CSV')).not.toBeNull();
+    expect(
+      explainRiderImportIssue('phone matches existing user — will update fields if provided'),
+    ).not.toBeNull();
+  });
+
+  it('matches the dynamic phone-format, customer_id, and protected-skip prefixes', () => {
+    expect(
+      explainRiderImportIssue('invalid phone format (expected +1XXXXXXXXXX): 555-1234'),
+    ).not.toBeNull();
+    expect(
+      explainRiderImportIssue("customer_id 'abc123' doesn't look like a Stripe ID (expected cus_…)"),
+    ).not.toBeNull();
+    expect(
+      explainRiderImportIssue(
+        "SKIPPED — matched account status is 'pending_deletion'; no fields were modified. Requires manual review before this row can be imported.",
+      ),
+    ).not.toBeNull();
+  });
+
+  it('does not carry driver-import messages', () => {
+    expect(explainRiderImportIssue('duplicate old_driver_id')).toBeNull();
   });
 });

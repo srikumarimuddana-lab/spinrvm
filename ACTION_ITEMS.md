@@ -18285,6 +18285,129 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   rides; Captain Taxi-style target segment validated or ruled out with a real
   conversation.
 
+### rider-app/driver-app design-system adoption gaps (2026-09-10 research, this session)
+
+Found while building the new `spinr-rider-driver-design-system` skill
+(`.claude/skills/spinr-rider-driver-design-system/SKILL.md`) — two independent
+codebase inventories (rider-app, driver-app), file:line evidence in each.
+These are adoption gaps against an *already-decided* intended system, not
+open design questions — the direction itself is settled; closing these is
+mechanical follow-up work, prioritizable independently.
+
+- [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
+  minority of screens in both apps** — **Status:** open, identified
+  2026-09-10.
+  - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
+    (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
+    there is no `Text.defaultProps` override or themed `Text` wrapper
+    anywhere in either app — the font only applies where a component
+    explicitly sets `fontFamily`. Rider-app: 21 of 64 sampled files do;
+    driver-app: 8 of 61. Everywhere else, `Text` silently renders the OS
+    system font (San Francisco/Roboto), not the brand typeface.
+  - **Why it matters:** the large majority of both apps' screens are not
+    actually on-brand typography today, despite the font being loaded and
+    "intended" per `.claude/context/brand-spinr.md`.
+  - **Action:** either introduce a themed `Text` wrapper/default so the
+    brand font applies by default app-wide, or sweep remaining files to set
+    `fontFamily` explicitly — a design decision on which mechanism, not
+    covered by this item.
+  - **Files:** none yet — see rider-app/driver-app inventory evidence above
+    for the full per-file breakdown (not reproduced here to avoid drift from
+    the source; re-grep `fontFamily` vs `fontWeight`-only usage before
+    starting).
+  - **Acceptance:** a defined, enforced mechanism exists such that new
+    screens can't silently ship off-brand-font by omission.
+
+- [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
+  exist but are used in only 1–4 files per app** — **Status:** open,
+  identified 2026-09-10.
+  - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
+    (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
+    h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
+    `shared/components/{Button,Card,Input}.tsx` and directly imported in
+    only 4 rider-app screens and 1 driver-app screen. Everywhere else,
+    `padding`/`margin`/`fontSize` are ad-hoc numeric literals — thousands of
+    occurrences across both apps, loosely but not strictly clustered near
+    the scale's own values.
+  - **Why it matters:** no enforced spacing/type rhythm means visual
+    inconsistency compounds silently as new screens are added, each picking
+    its own numbers.
+  - **Action:** decide whether to push broader adoption of the existing
+    `SPACING`/`FONT` constants (sweep existing screens) or accept ad-hoc
+    literals as the status quo and only require the constants for new code
+    — a scope decision, not included in this item.
+  - **Files:** none yet.
+  - **Acceptance:** new screens have a clear, documented expectation on
+    which to use.
+
+- [ ] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
+  — **Status:** open, identified 2026-09-10.
+  - **Issue/gap:** the shared `Button` primitive (8 consumers in rider-app)
+    was extracted from driver-app's own `RideOfferPanel` accept/decline
+    buttons but was never adopted back into driver-app itself
+    (`docs/change-log/2026-09-04-shared-button-card-input-primitives.md`
+    already noted zero driver-app consumers; still true as of 2026-09-10).
+    Every driver-app button is an independently hand-styled
+    `TouchableOpacity`, and several genuinely different treatments coexist
+    for functionally similar actions (see `RideOfferPanel`, `AlertDialog`,
+    `ActivityView`'s retry pills, and per-screen one-offs in
+    `documents.tsx`/`payout.tsx`).
+  - **Why it matters:** button treatment drifts screen-by-screen with no
+    shared source of truth in the app that most needs fast, confident
+    glanceability.
+  - **Action:** evaluate whether `shared/components/Button.tsx` (as-is, or
+    extended with a driver-app-appropriate variant/size) can absorb
+    driver-app's existing button treatments, starting with the
+    highest-traffic ones (`RideOfferPanel` accept/decline,
+    `DriverIdlePanel`'s GO/STOP toggle is likely too bespoke to fold in —
+    see `spinr-rider-driver-design-system` skill's driver-app section on
+    why that one's real-time motion is treated as intentional, not drift).
+  - **Files:** none yet.
+  - **Acceptance:** driver-app's common confirm/retry/action buttons route
+    through one shared component, or a documented decision explains why not.
+
+- [ ] **UX4. No shared transition timing/easing system in either app —
+  near-identical interactions independently reimplemented** — **Status:**
+  open, identified 2026-09-10.
+  - **Issue/gap:** no `TIMING`/`EASING` constants module exists anywhere;
+    each screen picks its own `Animated.timing` duration (found ranging
+    50ms–14000ms across both apps) and easing curve (explicit in a handful
+    of files, omitted — falling back to RN's default — in most). Concrete
+    duplication: rider-app's OTP wrong-code shake
+    (`rider-app/app/otp.tsx:124-128`, 60ms/step) and driver-app's PIN
+    wrong-code shake (`driver-app/components/dashboard/ActiveRidePanel.tsx:319-323`,
+    50ms/step) are the same interaction, independently reimplemented with
+    different offsets and durations.
+  - **Why it matters:** functionally identical interactions feel
+    inconsistent across (and even within) apps for no reason other than
+    independent implementation.
+  - **Action:** introduce a shared `TIMING`/`EASING` constants module
+    (mirroring `SPACING`/`FONT` in `shared/utils/responsive.ts`) and migrate
+    at least the duplicated shake pattern onto one shared implementation.
+  - **Files:** none yet.
+  - **Acceptance:** the two shake implementations converge on one shared
+    function/constant; a documented duration/easing convention exists for
+    new motion work.
+
+- [ ] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
+  that match neither the current nor the previous theme tokens, and has no
+  dark-mode awareness** — **Status:** open, identified 2026-09-10. This one
+  is a live bug, not just adoption debt — flagging distinctly from UX1–UX4.
+  - **Issue/gap:** `driver-app/components/toastConfig.tsx:8-11`'s
+    `VARIANT_CONFIG` hardcodes `success:'#0d9f6e'`, `error:'#dc2626'`,
+    `warning:'#d97706'`, `info:'#1a73e8'` — none of these match
+    `shared/theme/index.ts`'s current values, and the file has no
+    `useTheme()` call at all, so toast colors never adapt to dark mode.
+  - **Why it matters:** toast notifications (a frequent, high-visibility UI
+    element) render with off-brand, theme-incorrect colors for every driver,
+    in both light and dark mode, today.
+  - **Action:** rewrite `VARIANT_CONFIG` to read from `useTheme()`'s
+    `colors.success`/`colors.error`/`colors.warning`/`colors.info` (and dark
+    variants) like the rest of the app.
+  - **Files:** `driver-app/components/toastConfig.tsx`.
+  - **Acceptance:** driver-app toast colors match the current theme tokens
+    in both light and dark mode.
+
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 
 _Not launch-gating, but every mature platform at this stage has them. Ordered by

@@ -561,6 +561,12 @@ class AppSettings(BaseModel):
     # reworded questions with no shared keyword still match. Ships dark; falls
     # back to lexical matching when off or when a row has no embedding.
     ai_faq_semantic_enabled: bool = False
+    # AI17/F1 follow-up: operational kill-switch for INCREMENTAL streaming,
+    # not a privacy toggle — the chat scrub policy already runs on the full
+    # reply unconditionally (stream_filter.py). Default True matches the
+    # pre-existing, already-live streaming behaviour; False forces the
+    # whole turn to release as one scrubbed chunk at the end.
+    ai_stream_incremental_enabled: bool = True
     ai_embedding_provider: str = ""  # "" | openai | gemini
     ai_embedding_model: str = ""  # blank → provider default
     ai_faq_semantic_min_score: float = 0.30  # cosine floor to count as a match

@@ -59,12 +59,38 @@ const WEIGHT_STEPS = [400, 500, 600, 700] as const;
 
 const DEFAULT_FAMILY = FAMILY_BY_WEIGHT_STEP[400];
 
+// RN's fontWeight type also allows a handful of iOS-only keyword weights
+// (ultralight/thin/.../black) and plain numbers, in addition to the numeric
+// strings and 'normal'/'bold' rider-app's own styles actually use (verified
+// via grep — none of these keywords appear in this codebase today). Handled
+// here for type-correctness and so a future style using one degrades to the
+// nearest loaded family instead of silently falling through to the default.
+const KEYWORD_WEIGHTS: Record<string, number> = {
+  ultralight: 100,
+  thin: 100,
+  light: 300,
+  regular: 400,
+  normal: 400,
+  medium: 500,
+  semibold: 600,
+  condensed: 400,
+  condensedBold: 700,
+  heavy: 800,
+  black: 900,
+  bold: 700,
+};
+
 function familyForWeight(fontWeight: TextStyle['fontWeight']): string {
   if (fontWeight == null) return DEFAULT_FAMILY;
-  if (fontWeight === 'normal') return FAMILY_BY_WEIGHT_STEP[400];
-  if (fontWeight === 'bold') return FAMILY_BY_WEIGHT_STEP[700];
 
-  const numeric = parseInt(fontWeight, 10);
+  let numeric: number;
+  if (typeof fontWeight === 'number') {
+    numeric = fontWeight;
+  } else if (fontWeight in KEYWORD_WEIGHTS) {
+    numeric = KEYWORD_WEIGHTS[fontWeight];
+  } else {
+    numeric = parseInt(fontWeight, 10);
+  }
   if (Number.isNaN(numeric)) return DEFAULT_FAMILY;
 
   let nearestStep: (typeof WEIGHT_STEPS)[number] = WEIGHT_STEPS[0];

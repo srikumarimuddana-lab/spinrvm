@@ -59,7 +59,7 @@ def test_html_labels_a_revision_matched_v2_snapshot_as_actual_route() -> None:
     assert "91% GPS coverage" in html
 
 
-def test_html_uses_incomplete_fallback_copy_without_a_stale_snapshot() -> None:
+def test_html_silently_omits_map_when_gps_capture_incomplete() -> None:
     html = generate_receipt_html(
         {
             **RIDE,
@@ -73,9 +73,11 @@ def test_html_uses_incomplete_fallback_copy_without_a_stale_snapshot() -> None:
     )
 
     assert "https://maps.example/route-v4.png" not in html
-    assert "Route snapshot unavailable" in html
-    assert "GPS capture was incomplete (54% coverage)" in html
+    assert "Route snapshot unavailable" not in html
+    assert "GPS capture was incomplete" not in html
     assert "Actual route (revision" not in html
+    assert "Pickup" in html
+    assert "Dropoff" in html
 
 
 def test_html_never_calls_a_legacy_planned_snapshot_an_actual_route() -> None:
@@ -203,14 +205,14 @@ def test_pdf_embeds_snapshot_bytes_and_prints_truthful_quality_note() -> None:
     assert "91% GPS coverage" in text
 
 
-def test_pdf_uses_incomplete_note_without_calling_a_planned_snapshot_actual() -> None:
+def test_pdf_omits_diagnostic_note_when_snapshot_unavailable() -> None:
     pdf = generate_receipt_pdf(
         RIDE,
         RIDER,
-        route_snapshot_note="Route snapshot unavailable — GPS capture was incomplete (54% coverage).",
+        route_snapshot_note="",
         route_snapshot_is_actual=False,
     )
 
     text = _pdf_text(pdf)
-    assert "Route snapshot unavailable" in text
+    assert "Route snapshot unavailable" not in text
     assert "Actual route" not in text

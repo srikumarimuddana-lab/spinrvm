@@ -563,9 +563,14 @@ describe('DriverDashboardScreen', () => {
 });
 
 describe('demand heatmap overlay (idle only)', () => {
-  // jest-expo defaults Platform.OS to 'ios' — HeatmapCells is Android-only
-  // since HM-32 (it renders react-native-maps' native <Heatmap>, a MapView
-  // child; iOS gets HeatmapGradientOverlay, a sibling Skia canvas, instead).
+  // HeatmapGradientOverlay (the Skia gradient overlay, HM-32) is kill-switched
+  // as of 2026-09-10 pending investigation of a driver-app 2.0.03 100% iOS
+  // crash (TurboModuleRegistry.getEnforcing 'RNSkiaModule') — see the
+  // driver dashboard screen's render-site comment and
+  // docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md. HeatmapCells
+  // (react-native-maps' native <Heatmap> on Android, a Skia-free Circle
+  // fallback on iOS — pre-dates HM-32) is back to rendering on both
+  // platforms, exactly as it did before HM-32 ever touched this screen.
   const originalPlatformOS = Platform.OS;
   afterEach(() => {
     Platform.OS = originalPlatformOS;
@@ -585,16 +590,24 @@ describe('demand heatmap overlay (idle only)', () => {
     expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
   });
 
-  it('renders HeatmapGradientOverlay on iOS when cells are present, never HeatmapCells', async () => {
+  it('renders HeatmapCells on iOS too when cells are present, never HeatmapGradientOverlay (Skia kill-switched)', async () => {
     Platform.OS = 'ios';
     mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
-    expect(r.root.findByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toBeTruthy();
-    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+    expect(r.root.findByProps({ accessibilityLabel: 'heatmap-cells' })).toBeTruthy();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
   });
 
-  it('omits HeatmapGradientOverlay with zero cells (iOS)', async () => {
+  it('omits HeatmapCells with zero cells (iOS)', async () => {
     Platform.OS = 'ios';
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
+  });
+
+  it('never renders HeatmapGradientOverlay at all, on any platform (Skia kill-switch, 2026-09-10)', async () => {
+    Platform.OS = 'ios';
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
   });

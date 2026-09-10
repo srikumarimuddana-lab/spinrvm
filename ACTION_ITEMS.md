@@ -23975,6 +23975,26 @@ how much they de-risk a public launch._
   other 7 files' native components have the same failure mode as `ActivityIndicator`'s
   documented one (inferred by pattern, not confirmed per-file); no Android build/emulator
   available in this sandbox to reproduce the original crash or verify any fix.
+- **2026-09-10, later same day — handoff doc corrected, upstream cross-check
+  done, answer is no shortcut.** Read the full patch content directly rather
+  than trusting the handoff doc's file list, and fetched real RN 0.86.3
+  source (npm's exact `gitHead` for that version) to check whether any of
+  it's already fixed upstream. Three corrections to the handoff doc:
+  (1) it's **9 files** for driver-app, not 8 — `Libraries/Components/ScrollView/ScrollView.js`
+  was missing from the list entirely; (2) the two apps' patches are **not
+  identical** (driver-app: 612 lines/11 fix markers; rider-app: 518 lines/7,
+  missing `ScrollView.js` and two driver-app-only iOS crash fixes for
+  `ActivityIndicator`/`Modal` — each citing a real prior production crash,
+  BrandSplash and CancelReasonSheet respectively); (3) it's **two unrelated
+  bug classes**, not one — 7 files are the documented Bridgeless
+  runtime-render crash, but the 2 `VirtualView` files are an unrelated
+  codegen **build-time** parse failure ("Unable to determine event
+  arguments"), on a component Spinr doesn't even use. Upstream check: 6 of 9
+  files' exact root-cause lines are byte-identical to the pre-patch state in
+  real RN 0.86.3 source — nothing is fixed upstream, nothing is deletable,
+  the full hand-port this item already called for is still required. Full
+  detail: `docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`
+  (updated in place, not superseded).
 
 ## Recently completed (do not redo)
 

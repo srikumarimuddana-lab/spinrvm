@@ -37,18 +37,109 @@ prevent is a live regression risk.
 
 ## What the patch actually does
 
-Both patches are the same fix (confirmed identical in content, just filed
-under two different version-suffixed names), touching **8 files**, not just
-one:
+**Correction (2026-09-10, later same day): the "8 files, identical between
+apps" claim above was wrong on both counts — verified by reading the full
+patch content, not just its file list.**
+
+The two patches are **not identical**: `driver-app/patches/react-native+0.86.3.patch`
+has 612 lines / 11 `PATCH (spinr...)` markers; `rider-app/patches/react-native+0.86.2.patch`
+has 518 lines / 7 markers. Confirmed via `diff` on their `diff --git` header
+lines: driver-app's patch touches a 9th file rider-app's doesn't —
+`Libraries/Components/ScrollView/ScrollView.js` — and driver-app's
+ActivityIndicator/Modal hunks carry two extra, driver-app-only iOS fixes
+(see "Two distinct root causes" below) that rider-app's hunks for those same
+files don't include. Whoever regenerates these should **not** assume porting
+one patch and copying it to the other app is correct — diff the two
+patches' shared files against each other first to see exactly where they
+already diverge on purpose.
+
+Driver-app's patch (the more complete of the two), 9 files:
 
 1. `Libraries/Components/ActivityIndicator/ActivityIndicator.js`
 2. `Libraries/Components/RefreshControl/RefreshControl.js`
-3. `Libraries/Components/Switch/Switch.js`
-4. `Libraries/Debugging/DebuggingOverlay.js`
-5. `Libraries/Modal/Modal.js`
-6. `src/private/components/scrollview/HScrollViewNativeComponents.js`
-7. `src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js`
-8. `src/private/components/virtualview/VirtualViewNativeComponent.js`
+3. `Libraries/Components/ScrollView/ScrollView.js` — **missing from this doc's original file list; also absent from rider-app's patch entirely**
+4. `Libraries/Components/Switch/Switch.js`
+5. `Libraries/Debugging/DebuggingOverlay.js`
+6. `Libraries/Modal/Modal.js`
+7. `src/private/components/scrollview/HScrollViewNativeComponents.js`
+8. `src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js`
+9. `src/private/components/virtualview/VirtualViewNativeComponent.js`
+
+rider-app's patch touches the same 9 minus `ScrollView.js` (8 files), and
+its ActivityIndicator/Modal hunks are the Android-only halves of driver-app's
+(no iOS extension — see below).
+
+### Two distinct root causes, not one — correcting "very likely the same class of fix"
+
+This doc originally guessed all 8 files shared one root cause (Bridgeless
+runtime rendering) and flagged that as unconfirmed. Having now read every
+hunk directly, there are **two unrelated bug classes**:
+
+- **Runtime Bridgeless-rendering crash** (7 files: ActivityIndicator,
+  RefreshControl, ScrollView, Switch, DebuggingOverlay, Modal,
+  HScrollViewNativeComponents) — `codegenNativeComponent(..., {interfaceOnly:
+  true})` resolves to a non-renderable object at render time, throwing
+  `"Element type is invalid... got: object"`. Each of these files' fix
+  detects the broken component and falls back to a JS-only implementation.
+  `ScrollView.js`'s hunk is a defensive guard for `HScrollViewNativeComponents.js`'s
+  fix specifically (falls back to plain `View` if the patched native
+  component still isn't renderable for any reason), not an independent fix.
+- **Build-time codegen parse failure** (2 files: both VirtualView native
+  component specs) — unrelated to Bridgeless rendering. RN's codegen
+  (`@react-native/babel-plugin-codegen`) can't resolve a *named type alias*
+  (`NativeModeChangeEvent`) referenced inside `DirectEventHandler<...>`,
+  throwing "Unable to determine event arguments for onModeChange" at build
+  time. The fix inlines the event shape directly instead of referencing the
+  alias. Per the patch's own comment, `VirtualView` isn't even used by
+  Spinr's app code — this exists purely to stop the build from failing
+  during RN's own internal codegen pass, not to fix app behavior.
+
+Additionally, two files (`ActivityIndicator.js`, `Modal.js`) have a
+**driver-app-only iOS extension** beyond the Android fix described above —
+each citing a specific real crash already seen in production:
+`ActivityIndicator`'s iOS fallback exists because a non-renderable native
+component "crashed BrandSplash (and thus the whole app at first render) on
+the driver app while rider was unaffected"; `Modal`'s iOS fallback exists
+because the same failure "crashed CancelReasonSheet on ride cancel." Neither
+extension is present in rider-app's patch for those files.
+
+**The exact, complete original patch content for all 9 driver-app files (8
+for rider-app) is still intact and version-controlled** — nothing was lost.
+Read directly from:
+- `rider-app/patches/react-native+0.86.2.patch`
+- `driver-app/patches/react-native+0.86.3.patch`
+
+Both files are confirmed unmodified against `git HEAD` as of this handoff.
+
+### Checked whether RN 0.86.3 already fixed any of this upstream — no
+
+The "Cross-check worth doing first" section below was written before this
+check existed; running it now gives a clear negative answer, so the full
+hand-port is confirmed necessary, not just recommended as a precaution.
+Fetched the real RN 0.86.3 source (npm's `gitHead` for that exact version,
+commit `95cffbff2e071e278987c7d7cd51fbc970dd5622`, `facebook/react-native`)
+for 6 of the 9 files and compared each patch's stated "before" lines against
+it verbatim:
+
+| File | Root-cause line/import | Still present in 0.86.3? |
+|---|---|---|
+| `ActivityIndicator.js` | `require('../ProgressBarAndroid/ProgressBarAndroid').default` | Yes, byte-identical |
+| `RefreshControl.js` | `import AndroidSwipeRefreshLayoutNativeComponent, {...} from './AndroidSwipeRefreshLayoutNativeComponent'` | Yes, byte-identical |
+| `Switch.js` | `import AndroidSwitchNativeComponent, {...} from './AndroidSwitchNativeComponent'` | Yes, byte-identical |
+| `Modal.js` | `import RCTModalHostView from './RCTModalHostViewNativeComponent'` | Yes, byte-identical |
+| `HScrollViewNativeComponents.js` | Android branch still resolves to `AndroidHorizontalScrollViewNativeComponent`/`AndroidHorizontalScrollContentViewNativeComponent` | Yes, byte-identical |
+| `VirtualViewNativeComponent.js` | `onModeChange` still typed via the named `NativeModeChangeEvent` alias | Yes, byte-identical |
+
+Not independently re-fetched: `ProgressBarAndroid.js` itself (confirmed its
+`ActivityIndicator.js` caller is unchanged, which is what actually matters —
+the file that defines the codegen call may have moved to a platform-suffixed
+variant, but the import path that triggers the crash hasn't), `DebuggingOverlay.js`,
+`ScrollView.js`, `VirtualViewExperimentalNativeComponent.js` (its sibling
+`VirtualViewNativeComponent.js` was checked and is unchanged; both files
+carry the identical fix pattern per the patch itself). Given 6 of 6 checked
+files are byte-identical to the pre-patch state, treat all 9 as unfixed
+upstream unless a future check finds otherwise — there is no shortcut here;
+every file needs the same hand-port this doc already recommended.
 
 The documented root cause (from the `ActivityIndicator.js` hunk's own
 in-patch comment — the most legible of the 8):
@@ -115,18 +206,25 @@ sandbox:
 
 1. `cd rider-app && yarn install --check-files` (or `driver-app` — this will
    report the same patch-apply failure locally; that's expected, continue).
-2. For each of the 8 files listed above: open the original patch's hunk for
-   that file (from the still-intact `patches/react-native+0.86.*.patch`) side
-   by side with the **current** installed
-   `node_modules/react-native/<path>`. Confirm what the current file's
-   Android/native-component code path actually looks like now, then hand-port
-   the same fallback-to-JS-View fix, adapted to the current code structure.
-   Do not assume the old hunk's surrounding context still matches — RN's
-   internals shift between patch versions, which is exactly why the old
-   patch stopped applying.
-3. Once all 8 files are edited in `node_modules`, regenerate the patch:
+2. For each of the 9 driver-app files / 8 rider-app files listed above: open
+   the original patch's hunk for that file (from the still-intact
+   `patches/react-native+0.86.*.patch`) side by side with the **current**
+   installed `node_modules/react-native/<path>`. Confirm what the current
+   file's Android/native-component code path actually looks like now, then
+   hand-port the same fix, adapted to the current code structure. Do not
+   assume the old hunk's surrounding context still matches — RN's internals
+   shift between patch versions, which is exactly why the old patch stopped
+   applying. **The two VirtualView files need a different verification step
+   than the other 7**: since their bug is a codegen build-time parse
+   failure, not a runtime render crash, confirming the fix still applies
+   means triggering RN's codegen pass (part of the normal build) and
+   checking it doesn't throw "Unable to determine event arguments" — not
+   watching for a render-time crash on device.
+3. Once all files are edited in `node_modules`, regenerate the patch:
    `npx patch-package react-native` — this overwrites
-   `patches/react-native+<installed-version>.patch` with a fresh diff.
+   `patches/react-native+<installed-version>.patch` with a fresh diff. Do
+   this once per app — don't copy one app's regenerated patch to the other;
+   they're intentionally different (see "What the patch actually does").
 4. Delete `node_modules`, reinstall (`yarn install`), and confirm
    `patch-package` reports success with **no** "Failed to apply" error for
    `react-native`.
@@ -140,11 +238,14 @@ sandbox:
    customer-facing rendering path in both apps, in live app testing) before
    merging — use `docs/templates/CHANGE_IMPACT_LOG.md`.
 
-## Cross-check worth doing first
+## Cross-check worth doing first — DONE (2026-09-10), answer is no
 
 Before hand-porting, check whether RN 0.86.3 already fixed the underlying
-`ProgressBarAndroid`/Bridgeless issue upstream (RN's changelog /
-GitHub issues for the 0.86.x line). If it's already fixed upstream, some or
-all of these 8 patches may simply be deletable rather than needing a
-rewrite — cheaper and lower-risk than porting old workarounds forward.
-Confirm per-file, don't assume it covers all 8.
+`ProgressBarAndroid`/Bridgeless issue upstream. **Checked directly against
+real upstream RN 0.86.3 source (not the changelog — RN's changelog doesn't
+cover internal fixes at this granularity, confirmed by searching it for
+every relevant term with zero matches).** 6 of 9 files' exact root-cause
+lines are byte-identical to the pre-patch state — see the table in "What the
+patch actually does" above. None of these patches are deletable; every one
+still needs the hand-port this doc recommends. This section is kept for the
+record, not because it's still an open question.

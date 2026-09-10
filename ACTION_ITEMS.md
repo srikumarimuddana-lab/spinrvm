@@ -1111,17 +1111,20 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       and `pre_launch_test = true` mark this population, so an SGI audit
       pull can identify and exclude it. Recorded for completeness, not
       flagged as action-needed.
-    - **Recommendation, not yet decided by anyone with the authority to
-      decide it:** whether to purge (null `sin`/`date_of_birth`, delete the
-      `driver_vehicle_history`/`saved_addresses` rows) for the confirmed-
-      dormant population is a product-owner/privacy-officer call, same as
-      every other PII-retention decision in this item — not made here. The
-      cheap, additive, zero-risk piece worth doing regardless of that
-      decision: extend `pre_launch_flag_service.py` to also flag `users`
-      (riders) using the same zero-activity proxy, so this population is
-      at least identifiable going forward without a one-off manual query
-      like the one that produced these numbers. Not implemented in this
-      pass — flagged for an explicit go-ahead first.
+    - **Recommendation split in two — the cheap piece is now DONE
+      (2026-09-10); the real decision is still open.** Whether to purge
+      (null `sin`/`date_of_birth`, delete the `driver_vehicle_history`/
+      `saved_addresses` rows) for the confirmed-dormant population remains
+      a product-owner/privacy-officer call, same as every other
+      PII-retention decision in this item — **not made here.** The
+      additive, zero-risk piece — extending `pre_launch_flag_service.py`
+      (Migration Checklist tool #16) to also flag dormant `users` (riders)
+      using the same zero-activity proxy already used for drivers — was
+      built on explicit go-ahead: see
+      `docs/change-log/2026-09-10-pre-launch-flag-riders.md`. This
+      population is now identifiable on the admin dashboard going forward
+      without a one-off manual query; it does **not** by itself resolve
+      the purge decision above.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as

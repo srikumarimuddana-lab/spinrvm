@@ -3,7 +3,7 @@
 
 Two endpoints, no file upload -- unlike every other importer in this
 migration effort, this tool operates entirely on already-migrated
-production data (drivers/rides tables), not an uploaded CSV:
+production data (drivers/rides/users tables), not an uploaded CSV:
 
 - ``POST /api/admin/legacy/pre-launch-flag/preview`` -- read-only plan, no
   writes.
@@ -67,7 +67,12 @@ def _report(plan: svc.PreLaunchFlagPlan, batch: str) -> dict:
     return {
         "batch": batch,
         "counts": dict(plan.stats),
-        "can_commit": (plan.stats.get("driver_candidates", 0) + plan.stats.get("ride_candidates", 0)) > 0,
+        "can_commit": (
+            plan.stats.get("driver_candidates", 0)
+            + plan.stats.get("ride_candidates", 0)
+            + plan.stats.get("rider_candidates", 0)
+        )
+        > 0,
     }
 
 
@@ -109,17 +114,20 @@ async def commit_pre_launch_flag(
 
     flagged_drivers = len(plan.driver_candidates) - len(conflicts["drivers"])
     flagged_rides = len(plan.ride_candidates) - len(conflicts["rides"])
+    flagged_riders = len(plan.rider_candidates) - len(conflicts["users"])
 
     await log_admin_action(
         admin,
         "legacy_pre_launch_flag",
-        "drivers,rides",
+        "drivers,rides,users",
         batch,
         {
             "drivers_flagged": flagged_drivers,
             "rides_flagged": flagged_rides,
+            "riders_flagged": flagged_riders,
             "driver_conflicts": len(conflicts["drivers"]),
             "ride_conflicts": len(conflicts["rides"]),
+            "rider_conflicts": len(conflicts["users"]),
         },
     )
     return {
@@ -127,6 +135,8 @@ async def commit_pre_launch_flag(
         "committed": True,
         "drivers_flagged": flagged_drivers,
         "rides_flagged": flagged_rides,
+        "riders_flagged": flagged_riders,
         "driver_conflicts": len(conflicts["drivers"]),
         "ride_conflicts": len(conflicts["rides"]),
+        "rider_conflicts": len(conflicts["users"]),
     }

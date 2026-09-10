@@ -981,6 +981,15 @@ jobs:
   # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:
     runs-on: ubuntu-latest
+    # 2026-09-10: considered adding a detect-changes gate here as a CI-cost
+    # trim, and reverted it before merge -- security-gates.yml's gitleaks
+    # (G5a) and semgrep p/secrets (G3) are both continue-on-error: true
+    # (advisory, not blocking), so gating this job would have silently
+    # turned this repo's only genuinely blocking, unconditional secret scan
+    # into a path-filtered one for any PR touching only docs/config/root
+    # files -- a real coverage gap, not a safe cost cut. Left ungated,
+    # matching the policy already documented above (detect-changes job's
+    # own comment: "security-scan ... deliberately NOT gated").
     permissions:
       contents: read
       security-events: write
@@ -1051,7 +1060,15 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-  # Docker image security scan — blocks on CRITICAL or HIGH CVEs
+  # Docker image build + sign/push (main only). The CVE scan itself is
+  # NOT duplicated here -- security-gates.yml's `container-scan` (G6)
+  # builds the identical image from the identical Dockerfile and runs the
+  # identical exit-code:1 Trivy scan on every PR/push that could touch
+  # this job's own trigger surface (see its `if:`, gated on
+  # detect-changes.outputs.backend). Running that scan twice on every PR
+  # only doubled Actions cost with no additional coverage -- removed here,
+  # 2026-09-10 CI-cost trim. G6 is the sole enforced CVE gate for this
+  # image going forward; this job now only builds + signs + publishes it.
   docker-image-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1065,10 +1082,6 @@ jobs:
     # backend/Dockerfile + backend/**. No separate condition needed.
     permissions:
       contents: read
-      security-events: write
-      # C94: same wait-for-processing gap as security-scan above -- see
-      # its comment for why this is a separate scope from security-events.
-      actions: read
       packages: write    # GHCR push (main only, see "Push image to GHCR" step)
       id-token: write    # cosign keyless OIDC signing (main only)
 
@@ -1096,13 +1109,17 @@ jobs:
       # filesystem scan for vulnerability matching, even though the live
       # scan (used for the per-file inventory table) correctly shows the
       # real top-level msgpack==1.2.1 / setuptools==83.0.0 as clean. Fixed
-      # below via `skip-files` on both trivy-action steps, targeting that
-      # one file. This diagnostic step is kept, not removed, to prove the
-      # fix on this very run: after the fix, its bom.cdx.json group should
-      # still show the file exists (skip-files doesn't touch the image,
-      # only what Trivy reads), while the scan below should no longer flag
-      # it. If the finding persists after this PR, the printed groups below
-      # are the first thing to check. Never fails the job — diagnostic only.
+      # via `skip-files` on security-gates.yml's `container-scan` (G6) —
+      # the enforced scan for this image as of the 2026-09-10 CI-cost trim
+      # that removed this job's own duplicate Trivy scan (see the job-level
+      # comment above). This diagnostic step is kept, not removed, since it
+      # only inspects the built image directly (no Trivy dependency) and
+      # still proves the root cause on this run: its bom.cdx.json group
+      # should show the file exists (skip-files doesn't touch the image,
+      # only what Trivy reads) while G6's scan, over in security-gates.yml,
+      # no longer flags it. If the finding persists after this PR, the
+      # printed groups below are the first thing to check. Never fails the
+      # job — diagnostic only.
       - name: "DIAGNOSTIC (CR-2026-002): confirm pip's vendored CycloneDX SBOM"
         continue-on-error: true
         run: |
@@ -1131,50 +1148,6 @@ jobs:
             "cat /usr/local/lib/python3.12/site-packages/pip/_vendor/bom.cdx.json 2>/dev/null | \
              python3 -c 'import json,sys; d=json.load(sys.stdin); [print(c[\"name\"], c[\"version\"]) for c in d.get(\"components\",[]) if c[\"name\"] in (\"msgpack\",\"setuptools\")]' 2>/dev/null" || true
           echo "::endgroup::"
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: spinr-backend:ci-${{ github.sha }}
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-          # CR-2026-002 / #3048: excludes pip's own embedded CycloneDX SBOM
-          # (describes pip's internally vendored msgpack/setuptools copies,
-          # never imported by the app) — see diagnostic step above for the
-          # confirmed root cause. Trivy's per-file inventory of the real
-          # top-level packages is unaffected; this only stops it from also
-          # trusting this one third-party SBOM's component list.
-          skip-files: '**/pip/_vendor/bom.cdx.json'
-
-      - name: Upload SARIF report
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: spinr-backend:ci-${{ github.sha }}
-          format: 'sarif'
-          output: 'trivy-image.sarif'
-          ignore-unfixed: true
-          skip-files: '**/pip/_vendor/bom.cdx.json'
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload image scan results to GitHub Security
-        # C87: same hashFiles guard as the filesystem-scan upload above -- a
-        # failed "Upload SARIF report" step (its own transient flake) must not
-        # cascade into a second, misleading "file not found" failure here.
-        if: always() && hashFiles('trivy-image.sarif') != ''
-        uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
-        # C94: same repo-wide "Code scanning is not enabled" failure as the
-        # other 3 upload-sarif call sites. This job's real enforcement is the
-        # separate "Scan image with Trivy" step above (`exit-code: '1'`,
-        # format: table) -- independent of this SARIF upload, so this
-        # mitigation doesn't weaken it.
-        continue-on-error: true
-        with:
-          sarif_file: 'trivy-image.sarif'
 
       # INF-006: Sign the image with cosign (keyless, OIDC-based Sigstore).
       # Only runs on main so feature-branch builds don't require GHCR push

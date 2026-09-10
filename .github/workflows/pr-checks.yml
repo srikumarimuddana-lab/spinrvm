@@ -27,7 +27,16 @@ concurrency:
 jobs:
   auto-label:
     name: Auto-label by path
-    if: github.event.pull_request.draft == false
+    # 2026-09-10 CI-cost trim: path-based labeling only depends on the diff,
+    # not the PR description -- skip on a pure `edited` (title/body/base
+    # change) event, which previously re-ran this for zero reason.
+    # Known gap, accepted: `edited` also fires on a base-branch retarget,
+    # which DOES change the effective diff -- this job (and size-advisory/
+    # merge-conflict-detect below, same reasoning) goes stale until the
+    # next `synchronize` in that specific case rather than re-running
+    # immediately. Low-frequency enough not to warrant a
+    # github.event.changes.base guard for now.
+    if: github.event.pull_request.draft == false && github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -39,7 +48,10 @@ jobs:
 
   size-advisory:
     name: PR size advisory
-    if: github.event.pull_request.draft == false
+    # 2026-09-10 CI-cost trim: file/line counts only change with new commits
+    # (synchronize), not a description edit -- see auto-label's comment above
+    # for the same reasoning.
+    if: github.event.pull_request.draft == false && github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -271,7 +283,10 @@ jobs:
 
   merge-conflict-detect:
     name: Detect merge commits on branch
-    if: github.event.pull_request.draft == false
+    # 2026-09-10 CI-cost trim: merge-commit history between base/head SHAs
+    # only changes with new commits (synchronize), not a description edit --
+    # see auto-label's comment above for the same reasoning.
+    if: github.event.pull_request.draft == false && github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

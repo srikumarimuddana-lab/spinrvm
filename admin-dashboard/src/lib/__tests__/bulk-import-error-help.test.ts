@@ -6,6 +6,7 @@ import {
   explainSavedAddressIssue,
   explainWalletImportIssue,
   explainBookingImportIssue,
+  explainLegacyDriverImportIssue,
 } from '../bulk-import-error-help';
 
 describe('createIssueExplainer', () => {
@@ -97,5 +98,29 @@ describe('explainBookingImportIssue', () => {
 
   it('does not carry wallet-import messages', () => {
     expect(explainBookingImportIssue('wallet entry is missing its legacy _id')).toBeNull();
+  });
+});
+
+describe('explainLegacyDriverImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainLegacyDriverImportIssue('duplicate _id')).not.toBeNull();
+    expect(explainLegacyDriverImportIssue('already imported/linked by a previous run of this importer')).not.toBeNull();
+  });
+
+  it('matches the dynamic blank-name and duplicate-batch prefixes', () => {
+    expect(
+      explainLegacyDriverImportIssue(
+        'row has no name (abandoned onboarding in source app, set_up_profile=false; never linked to any ride); imported with placeholder name, forced needs_review',
+      ),
+    ).not.toBeNull();
+    expect(
+      explainLegacyDriverImportIssue(
+        'matches a driver created earlier in this same import batch (old_driver_id=abc123); merged into that row\'s history instead of creating a duplicate',
+      ),
+    ).not.toBeNull();
+  });
+
+  it('does not carry booking/wallet messages', () => {
+    expect(explainLegacyDriverImportIssue('booking is missing its legacy _id')).toBeNull();
   });
 });

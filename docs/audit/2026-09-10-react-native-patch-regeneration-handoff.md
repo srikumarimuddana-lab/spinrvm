@@ -1,9 +1,38 @@
 # React Native patch regeneration — handoff (2026-09-10)
 
-**Status: OPEN.** Tracked as `ACTION_ITEMS.md` C98. No code was changed by this
-investigation — this is a diagnosis + handoff package for whoever regenerates
-the patches next, because the fix **cannot be safely completed inside this
-Claude Code cloud sandbox** (see "Why this can't be finished here" below).
+**Status: CLOSED / FALSE ALARM — see correction below.** Tracked as `ACTION_ITEMS.md` C98
+(now closed with a same-day correction). The rest of this document is kept as-written for the
+record, but its central claim — that the Android crash workaround is "currently inactive" in
+both apps — turned out to be wrong, caused by this session's own broken sandbox environment.
+**Read this correction before acting on anything below.**
+
+## Correction (same day, 2026-09-10)
+
+On the user's real Windows machine, `yarn install` completed for both apps and `patch-package`
+reported **both patches applied successfully** — `driver-app`'s with zero warnings even under
+`--error-on-warn` (an exact-context match, no fuzz needed), `rider-app`'s with only the routine
+filename-vs-installed-version notice patch-package always prints on a version bump (that
+notice compares version **strings**, not diff content — it does not imply the underlying patch
+needed fuzzy matching or is broken).
+
+This directly contradicts the "Failed to apply patch" error documented below, which was
+reproduced only inside this Claude Code cloud sandbox. The explanation is the sandbox's own
+install, not the patches: as this doc's "Why this can't be finished here" section already
+found, this environment's `node_modules/react-native` contains **zero real `.js` source
+files** (only `.d.ts` type stubs) — so *any* patch-package run here fails, regardless of
+whether the real patch is broken. It wasn't broken. The Android crash workaround has very
+likely been active and correctly applied in every real build of both apps (EAS, prior local
+installs, CI) all along.
+
+**What's actually still worth doing** (low priority, cosmetic only): rename/regenerate
+`rider-app/patches/react-native+0.86.2.patch` to `react-native+0.86.3.patch` to match the
+currently installed version and silence the harmless mismatch warning. Nothing else below
+needs acting on. See `ACTION_ITEMS.md` C98 for the full correction writeup.
+
+---
+
+*Everything below this line is the original, since-corrected investigation — kept unedited for
+the record.*
 
 ## What's broken
 

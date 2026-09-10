@@ -215,3 +215,45 @@ export const explainBookingImportIssue: IssueExplainer = createIssueExplainer({
         fix: "This is a known, safe fallback for a small number of legacy bookings -- no action needed.",
     },
 });
+
+// ── Legacy Driver Import ────────────────────────────────────────────────
+export const explainLegacyDriverImportIssue: IssueExplainer = createIssueExplainer(
+    {
+        "row has no _id": {
+            cause: "This row has no _id value, so there's nothing to key this driver on.",
+            fix: "Check the source file for a blank _id in this row.",
+        },
+        "duplicate _id": {
+            cause: "Another row in this file already used this same _id.",
+            fix: "Check drivers.csv for two rows sharing the same _id -- only one can be applied.",
+        },
+        "phone is not a valid 10-digit North American number": {
+            cause: "This row's phone number isn't a recognizable 10-digit North American number.",
+            fix: "Check the phone value for this row -- it may be missing digits, have a non-North-American format, or be blank.",
+        },
+        "email is not a valid format; imported without it": {
+            cause: "This row's email address doesn't look like a valid email, so the driver was imported with no email instead of rejecting the whole row.",
+            fix: "This is expected and non-blocking -- Spinr authenticates by phone, not email, so a missing email doesn't stop the driver from using the app. No action needed unless you want to add a corrected email later.",
+        },
+        "already imported/linked by a previous run of this importer": {
+            cause: "This driver was already created or linked by an earlier run of this same import tool.",
+            fix: "This is expected on a re-run of the same file and is not a problem -- no action needed.",
+        },
+    },
+    [
+        [
+            "row has no name",
+            {
+                cause: "This row has a blank name in the source file -- on the previous app, that means the driver verified their phone but never finished setting up their profile, and never actually drove a trip.",
+                fix: "This is imported anyway with a placeholder name and forced into needs_review status, so it's safely excluded from dispatch either way. No action needed.",
+            },
+        ],
+        [
+            "matches a driver created earlier in this same import batch",
+            {
+                cause: "Another row earlier in this same CSV already created a driver with this same phone number -- this row's history was merged into that one instead of creating a duplicate.",
+                fix: "This is expected when the same driver appears more than once in the export and is not a problem. No action needed.",
+            },
+        ],
+    ],
+);

@@ -39,7 +39,7 @@ try:
     # which has a different API (.get()) from the pydantic Settings object.
     # Same convention as services/payment_service.py, for the same reason.
     from .core.config import settings as app_config
-    from .dependencies import get_admin_user, get_current_user
+    from .dependencies import get_admin_user, get_current_user, require_module
     from .geo_utils import get_service_area_polygon
     from .models.ride_status import RideStatus
     from .services.fare_service import DEFAULT_FARE, calculate_fare
@@ -51,7 +51,7 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings as app_config
-    from dependencies import get_admin_user, get_current_user
+    from dependencies import get_admin_user, get_current_user, require_module
     from geo_utils import get_service_area_polygon
     from models.ride_status import RideStatus
     from services.fare_service import DEFAULT_FARE, calculate_fare
@@ -505,9 +505,16 @@ async def get_area_fees(area_id: str):
     return fees
 
 
-@pricing_router.post("/areas/{area_id}/fees")
-async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
-    """Add a fee to a service area."""
+@pricing_router.post("/areas/{area_id}/fees", dependencies=[Depends(require_module("service_areas"))])
+async def create_area_fee(area_id: str, req: CreateAreaFeeRequest, admin: dict = Depends(get_admin_user)):
+    """Add a fee to a service area.
+
+    A29-class hardening: not currently reachable from any frontend (the
+    admin-dashboard's own fee editor goes through `POST /api/admin/areas/
+    {area_id}/fees`, `routes/admin/service_areas.py::admin_create_area_fee`)
+    but module-gated and audited here too for consistency and in case this
+    endpoint gets wired up later — same reasoning as `update_area_tax` below.
+    """
     area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
@@ -530,12 +537,15 @@ async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
         "updated_at": datetime.now(timezone.utc),
     }
     await db_supabase.insert_one("area_fees", fee)
+    await log_admin_action(
+        admin, "area_fee_created", "area_fees", fee["id"], {"service_area_id": area_id, "fee_name": fee["fee_name"]}
+    )
     return fee
 
 
-@pricing_router.put("/areas/{area_id}/fees/{fee_id}")
-async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest):
-    """Update an area fee."""
+@pricing_router.put("/areas/{area_id}/fees/{fee_id}", dependencies=[Depends(require_module("service_areas"))])
+async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest, admin: dict = Depends(get_admin_user)):
+    """Update an area fee. See `create_area_fee` for the A29-class hardening note."""
     update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
     for field in ["fee_name", "fee_type", "calc_mode", "amount", "description", "conditions", "is_active"]:
         val = getattr(req, field)
@@ -546,17 +556,21 @@ async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest):
         raise HTTPException(status_code=400, detail="calc_mode must be flat, per_km, or percentage")
 
     await db_supabase.update_one("area_fees", {"id": fee_id, "service_area_id": area_id}, update_data)
+    await log_admin_action(
+        admin, "area_fee_updated", "area_fees", fee_id, {"fields": sorted(k for k in update_data if k != "updated_at")}
+    )
     return (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("area_fees", {"id": fee_id}, limit=1))
 
 
-@pricing_router.delete("/areas/{area_id}/fees/{fee_id}")
-async def delete_area_fee(area_id: str, fee_id: str):
-    """Delete an area fee."""
+@pricing_router.delete("/areas/{area_id}/fees/{fee_id}", dependencies=[Depends(require_module("service_areas"))])
+async def delete_area_fee(area_id: str, fee_id: str, admin: dict = Depends(get_admin_user)):
+    """Delete an area fee. See `create_area_fee` for the A29-class hardening note."""
     await db_supabase.delete_one("area_fees", {"id": fee_id, "service_area_id": area_id})
+    await log_admin_action(admin, "area_fee_deleted", "area_fees", fee_id, {"service_area_id": area_id})
     return {"deleted": True}
 
 
-@pricing_router.put("/areas/{area_id}/tax")
+@pricing_router.put("/areas/{area_id}/tax", dependencies=[Depends(require_module("service_areas"))])
 async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest, admin: dict = Depends(get_admin_user)):
     """Update tax configuration for a service area.
 
@@ -626,9 +640,16 @@ async def get_vehicle_pricing(area_id: str):
     return {"fare_configs": configs, "vehicle_types": vehicles}
 
 
-@pricing_router.put("/drivers/{driver_id}/area")
-async def assign_driver_area(driver_id: str, service_area_id: str = Query(...)):
-    """Assign a driver to a service area (restricts them to that zone)."""
+@pricing_router.put("/drivers/{driver_id}/area", dependencies=[Depends(require_module("drivers"))])
+async def assign_driver_area(driver_id: str, service_area_id: str = Query(...), admin: dict = Depends(get_admin_user)):
+    """Assign a driver to a service area (restricts them to that zone).
+
+    A29-class hardening: not currently reachable from any frontend (the
+    admin-dashboard's own driver-area editor goes through `PUT /api/admin/
+    drivers/{driver_id}/area`, `routes/admin/drivers.py::admin_assign_driver_area`)
+    but module-gated and audited here too for consistency and in case this
+    endpoint gets wired up later — same reasoning as the area-fee routes above.
+    """
     area = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1)
     )
@@ -636,6 +657,7 @@ async def assign_driver_area(driver_id: str, service_area_id: str = Query(...)):
         raise HTTPException(status_code=404, detail="Service area not found")
 
     await db_supabase.update_one("drivers", {"id": driver_id}, {"service_area_id": service_area_id})
+    await log_admin_action(admin, "driver_area_assigned", "drivers", driver_id, {"service_area_id": service_area_id})
     return {"driver_id": driver_id, "service_area_id": service_area_id, "area_name": area.get("name")}
 
 

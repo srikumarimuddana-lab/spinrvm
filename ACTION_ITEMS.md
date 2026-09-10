@@ -22496,6 +22496,29 @@ how much they de-risk a public launch._
   check-run timestamps, but not *why* the platform allowed it (config gap
   vs. bypass), which needs human settings-page access this session
   doesn't have.
+- **2026-09-10 — follow-up check while re-examining A43; confirms this
+  entry's diagnosis, surfaces one narrower gap.** Pulled #5048's full CI
+  Guard Rails job list (run `34007800478`) directly. Two separate jobs in
+  two different workflows both ran pytest on this PR: `backend-test`
+  (`ci.yml`) — covered above, genuinely reported `failure` — and a second,
+  parallel job, `shared-coverage-run` / "Run backend test suite with
+  coverage (shared)" (`ci-guardrails.yml`), which reported `success`
+  despite the same 8 failing tests / 41 errors. **That second job's
+  leniency is deliberate, not a bug**: its pytest step ends `|| true` and
+  the job itself carries `continue-on-error: true` by design, so a real
+  test failure can't cascade into skipping the three downstream
+  coverage-floor gates that consume its coverage artifact (see the job's
+  own code comments, referencing
+  `docs/audit/2026-08-27-cicd-gates-guardrails-audit.md` §5). Removing
+  that leniency would reintroduce the cascading-skip problem it was
+  written to prevent — considered and rejected as a fix for this reason.
+  **What is genuinely new:** the "CI Guard Rails Summary" bot comment
+  (even after C74's fix below) has no row for `backend-test`'s result —
+  none of its 10 listed gates check "did the test suite pass." Anyone
+  reading only that one comment, all-green, has zero visibility into
+  whether tests actually passed, on any PR, not just this one. Doesn't
+  change this entry's root cause or Action — it strengthens the case for
+  it, since right now no bot comment surfaces that signal at all.
 
 ### C74. `security-gates.yml`/`ci-guardrails.yml` summary jobs never failed regardless of gate results
 

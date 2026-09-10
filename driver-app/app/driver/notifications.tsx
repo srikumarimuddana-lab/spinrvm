@@ -168,10 +168,11 @@ export default function NotificationsScreen() {
             </LinearGradient>
 
             <FlatList
+                style={{ flex: 1 }}
                 data={notifications}
                 renderItem={renderNotification}
                 keyExtractor={(item) => item.id}
-                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
+                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
                 showsVerticalScrollIndicator={false}
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}

@@ -23822,6 +23822,58 @@ how much they de-risk a public launch._
   whether the same failure is hitting *every* repo under this account or
   is scoped to this one.
 
+### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
+
+- [ ] **Status:** OPEN — full audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`),
+  no code changed. Recommendations ready; priority needs the user's input on which symptom
+  matches what they're actually seeing (see fork below) before picking which fix to ship first.
+- **Two independent findings, either explains the symptom, both may be true at once:**
+  1. **Backend (infra-shaped):** Firebase Admin SDK init falls through to Application Default
+     Credentials on a non-GCP host (Fly/Railway) with the failure wrapped in a bare
+     `except Exception: pass` (`backend/core/security.py:12-29`) — zero log, no startup failure,
+     no metric. The app boots looking healthy; the SDK only visibly fails per-push, later, as a
+     scattered log line with no metric or alert tied to it (`spinr_dispatch_offer_sent_total` is
+     incremented at offer-*claim* time, `routes/rides/matching.py:1270`, not at push-send
+     outcome). This would silently break **every** push type, including ride offers, on whichever
+     host has the gap.
+  2. **Client (code-structural):** on Android, `@react-native-firebase/messaging`'s manifest
+     service takes priority over `expo-notifications`' for the same FCM intent-filter, so
+     `expo-notifications`' handler (`driver-app/app/_layout.tsx:219-243`) is dead code for
+     FCM-originated messages. The app's real foreground listener
+     (`driver-app/hooks/useDriverDashboard.ts:1812-1838`) only branches on
+     `new_ride_assignment`; the background/killed handler
+     (`driver-app/services/backgroundMessaging.ts:159-259`) only branches on
+     `new_ride_assignment`/`ride_cancelled`/`location_health`. Every other data-only type (chat,
+     document/license expiry reminders, generic alerts, promos) is silently dropped, no display,
+     no error. **Ride-offer notifications specifically are confirmed correctly built and
+     displayed end-to-end** — this gap is scoped to every *other* notification type.
+- **The fork that determines priority:** if ride offers themselves are invisible → points at
+  finding 1 (infra), since the client-side ride-offer path is confirmed correct. If ride offers
+  arrive but other types (chat/reminders/alerts) never show → finding 2 (client) alone explains
+  it, no infra involvement needed. Not resolvable from code alone — needs the user to say which
+  they're actually observing.
+- **Verification performed:** two parallel subagent passes, each reading real source and citing
+  file:line for every claim (not inferred from symptoms) — one on the backend send pipeline
+  (re-audited every driver-facing `send_push_notification` call site for a recurrence of the
+  2026-08-11 N3 ID-mismatch bug class; found none), one on the driver-app client pipeline (FCM
+  token registration/refresh, foreground/background handlers, Android notification channel,
+  iOS background-mode config, error-swallowing). Full finding tables with severity ratings in the
+  audit doc.
+- **What was NOT verified:** live production state (whether `FIREBASE_SERVICE_ACCOUNT_JSON` is
+  actually set/valid on Fly and/or Railway today — needs ops access this session doesn't have);
+  whether Sentry is actually receiving the relevant error-level logs via the loguru→Sentry bridge
+  and whether an alert exists on them; the iOS `UIBackgroundModes` finding (flagged SUSPECTED —
+  no compiled iOS build available to confirm against); which of the two findings is the one the
+  user is actually experiencing (the fork above).
+- **Recommendations, in leverage order** (full detail in the audit doc): (1) ops check —
+  confirm the Firebase service-account credential on both hosts, costs nothing, resolves the fork
+  fastest; (2) make the SDK init failure loud instead of silent; (3) add a real
+  `spinr_push_send_total{outcome=...}` delivery-outcome metric, since none exists today; (4) add
+  an explicit fallback-notification path for unhandled FCM message types on the client, closing
+  the silent-drop gap for everything except ride offers; (5) confirm the iOS background-mode gap
+  against a real build; (6) either wire `expo-notifications`' handler into the real path or
+  remove the now-misleading dead code.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

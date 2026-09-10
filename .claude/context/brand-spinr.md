@@ -24,16 +24,26 @@ to admin-dashboard's `globals.css` per `docs/change-log/2026-07-29-admin-dashboa
 | Text | `#1A1A1A` | `#F2F2F7` | |
 | Text secondary | `#6B7280` | `#8E8E93` | |
 | Border | `#E5E7EB` | `#38383A` | |
-| Success | `#34C759` | `#30D158` | |
-| Warning | `#d97706` | `#F59E0B` | |
-| Info | `#3B82F6` | `#0A84FF` | |
-| Danger/error | `#DC2626` | `#FF453A` | |
+| Success | `#10B981` | `#34D399` | Tailwind emerald-500/400 — updated 2026-09-07, was `#34C759`/`#30D158` (iOS green). See below. |
+| Warning | `#F59E0B` | `#FBBF24` | Tailwind amber-500/400 — updated 2026-09-07, was `#d97706`/`#F59E0B`. |
+| Info | `#3B82F6` | `#0A84FF` | Unchanged — iOS system blue, already the dominant convention. |
+| Danger/error | `#EF4444` | `#F87171` | Tailwind red-500/400 — updated 2026-09-07, was `#DC2626`/`#FF453A`. |
 | Orange accent | `#FF9500` | `#FF9F0A` | |
 | Gold | `#FFD700` | `#FFD700` | |
 
 Spinr is **not** a teal/green or amber brand — earlier ad/video drafts in this
 session used an invented teal+amber palette because no brand reference existed
 yet; treat those as superseded.
+
+**2026-09-07 correction**: this table previously listed the pre-2026-09-07
+Success/Warning/Danger values, which had already drifted from
+`shared/theme/index.ts` — that file moved to the Tailwind-family shades above
+after usage-count evidence showed they were already the de facto majority
+convention across rider-app/driver-app (see
+`docs/design/rider-driver-app-design-system.md`'s "Known gap" section for the
+full before/after replacement counts and rationale). This file is corrected
+to match; if you find another doc still citing the old iOS values
+(`#34C759`/`#d97706`/`#DC2626`), it's stale the same way this one was.
 
 ## Typography
 

@@ -66,13 +66,35 @@ type SkiaModule = { Canvas: any; Group: any; Circle: any; Paint: any; Blur: any 
 // the same guard carSurface.tsx already uses for its own react-native-maps-
 // dependent imports — and degrades to "no gradient overlay" rather than
 // crashing the driver dashboard screen.
+//
+// The try/catch around require() alone is NOT enough: Skia's own init calls
+// TurboModuleRegistry.getEnforcing('RNSkiaModule'), whose Invariant
+// Violation crashes the Hermes runtime before JS try/catch can intercept it
+// (confirmed: driver-app 2.0.03 100% crash on iOS when the binary predates
+// the Skia dependency). Pre-check via the non-throwing __turboModuleProxy
+// global — the same JSI binding TurboModuleRegistry.get() wraps — so the
+// require() is never reached on a binary that doesn't include Skia.
+let _skiaCache: SkiaModule | null | undefined;
 function loadSkia(): SkiaModule | null {
+  if (_skiaCache !== undefined) return _skiaCache;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('@shopify/react-native-skia');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const proxy = (globalThis as any).__turboModuleProxy;
+    if (typeof proxy === 'function' && proxy('RNSkiaModule') == null) {
+      _skiaCache = null;
+      return null;
+    }
   } catch {
+    _skiaCache = null;
     return null;
   }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _skiaCache = require('@shopify/react-native-skia');
+  } catch {
+    _skiaCache = null;
+  }
+  return _skiaCache;
 }
 
 export const HeatmapGradientOverlay: React.FC<HeatmapGradientOverlayProps> = React.memo(

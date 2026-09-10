@@ -19,6 +19,7 @@ import {
 } from '../utils/markerPlayback';
 import { smoothFix, isImplausibleJump, type SmoothingState } from '../utils/gpsSmoothing';
 import type { FixFeed, MarkerFix } from '../utils/fixFeed';
+import { captureException } from '../services/errorReporting';
 
 const CAR_IMAGES = {
     standard: require('../assets/car_marker.png'),
@@ -147,6 +148,17 @@ const MAX_ROUTE_SNAP_M = 35;
 // Cap on the rotation tween so the car visibly turns rather than snapping,
 // without lagging a full position-animation behind sharp turns.
 const MAX_ROTATE_MS = 600;
+// A car-icon Image that fails to decode (transient OOM/codec glitch on a
+// low-end device — live-testing report 2026-09-09: "green circle, never a
+// car" persisting indefinitely) previously had no way back: onError only
+// ever toggled the custom-vs-bundled image choice, which is a no-op when
+// there was no custom image to begin with, so a bundled-asset failure left
+// hasLoadedImageRef permanently false and the marker froze at the mount
+// effect's 5s hard cap showing the ring only, forever. Retrying up to this
+// many times (remounting the Image via a bumped key) gives a transient
+// failure a chance to self-heal within that same 5s window. Ported from
+// driver-app/components/CarMarker.tsx.
+const MAX_IMAGE_RETRIES = 3;
 
 /**
  * Top-down car marker using the transparent PNG from shared/assets.
@@ -539,12 +551,19 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         };
     }, []);
     const handleImageLoaded = () => {
-        // Image bitmap is decoded — keep tracking through one more frame so the
-        // native Marker snapshot contains the car, then stop for perf.
+        // Image bitmap is decoded — force a tracksViewChanges false→true
+        // transition so Android Google Maps re-snapshots the marker with the
+        // car visible. setTracksViewChanges(true) when already true is a
+        // React no-op (no re-render, no bitmap re-capture). The brief false
+        // is invisible — the next-frame true commits a fresh snapshot.
+        // Ported from driver-app/components/CarMarker.tsx.
         hasLoadedImageRef.current = true;
-        setTracksViewChanges(true);
-        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
-        settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        setTracksViewChanges(false);
+        requestAnimationFrame(() => {
+            setTracksViewChanges(true);
+            if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+            settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        });
     };
 
     // Re-arm the snapshot on ANY ring identity change (color or presence),
@@ -585,14 +604,18 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         // instead.
     }, [ringChangeKey]);
 
-    // One-shot "pop in" on mount — see the class doc comment above for why
-    // this is a single spring rather than a loop. Native-driven: opacity and
-    // transform:scale both support the native driver, so this costs nothing
-    // on the JS thread and doesn't compete with the (JS-driven, non-style)
-    // rotation animation above.
+    // One-shot "pop in" on mount (iOS only). On Android, Google Maps renders
+    // custom markers as a bitmap snapshot of the React view. Starting at
+    // opacity 0 / scale 0 means the first snapshot captures the ring (outside
+    // this wrapper) but not the car (inside it, invisible). Native-driver
+    // animations don't reliably trigger the re-snapshot mechanism, so the
+    // bitmap can freeze ring-only — the "green circle, no car" bug. Starting
+    // at 1 on Android ensures the car is visible from the very first frame.
+    // Ported from driver-app/components/CarMarker.tsx.
     // eslint-disable-next-line react-hooks/refs
-    const mountAnim = useRef(new Animated.Value(0)).current;
+    const mountAnim = useRef(new Animated.Value(isAndroid ? 1 : 0)).current;
     useEffect(() => {
+        if (isAndroid) return;
         Animated.spring(mountAnim, {
             toValue: 1,
             friction: 6,
@@ -643,9 +666,56 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // back to the bundled variant. Reset when the URL changes so a fixed
     // upload is retried.
     const [imageFailed, setImageFailed] = useState(false);
+    // Bumped on every onError, up to MAX_IMAGE_RETRIES — included in the
+    // <Image>'s key below so a failed decode gets a fresh native Image
+    // instance to retry with, instead of the bundled fallback (which has
+    // nowhere further to fall back to) simply staying broken. See
+    // MAX_IMAGE_RETRIES' own doc comment for why this exists.
+    const [imageAttempt, setImageAttempt] = useState(0);
+    const imageRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Reported to error tracking at most once per mount — a flapping image
+    // must not spam Sentry every retry cycle.
+    const imageErrorReportedRef = useRef(false);
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    useEffect(() => setImageFailed(false), [imageUri]);
+    useEffect(() => {
+        setImageFailed(false);
+        setImageAttempt(0);
+        imageErrorReportedRef.current = false;
+    }, [imageUri]);
+    useEffect(() => () => {
+        if (imageRetryTimerRef.current) clearTimeout(imageRetryTimerRef.current);
+    }, []);
     const useCustomImage = !!imageUri && !imageFailed;
+
+    // Do not silently swallow a decode failure (CLAUDE.md: DB/auth/payment
+    // errors must surface loudly — the same applies here, since a silently
+    // broken car icon is a live-testing-confirmed regression with no other
+    // signal). Retries with backoff first (transient OOM/codec glitches on
+    // low-end devices self-heal); once retries are exhausted, report once so
+    // this is visible in production monitoring instead of a rider silently
+    // seeing no vehicle icon for the rest of their session. Ported from
+    // driver-app/components/CarMarker.tsx.
+    const handleImageError = useCallback(() => {
+        setImageFailed(true);
+        setTracksViewChanges(true);
+        setImageAttempt((attempt) => {
+            if (attempt >= MAX_IMAGE_RETRIES) {
+                if (!imageErrorReportedRef.current) {
+                    imageErrorReportedRef.current = true;
+                    captureException(
+                        new Error('CarMarker: car icon image failed to decode after retries'),
+                        { domain: 'rides', surface: 'rider-app' },
+                    );
+                }
+                return attempt;
+            }
+            if (imageRetryTimerRef.current) clearTimeout(imageRetryTimerRef.current);
+            imageRetryTimerRef.current = setTimeout(() => {
+                setImageAttempt((n) => n + 1);
+            }, 300 * (attempt + 1));
+            return attempt;
+        });
+    }, []);
 
     // Android: plain Marker + native animator (see the teleport-guard note
     // above). iOS: Marker.Animated + AnimatedRegion, which is smooth there.
@@ -767,8 +837,9 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                         style={iosRotateStyle ?? { width: size, height: size }}
                     >
                         <ExpoImage
+                            key={imageAttempt}
                             source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
-                            onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
+                            onError={handleImageError}
                             onLoad={handleImageLoaded}
                             contentFit="contain"
                             cachePolicy="disk"

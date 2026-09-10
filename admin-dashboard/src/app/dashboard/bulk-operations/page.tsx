@@ -41,7 +41,6 @@ import {
     adminRegenerateImportedRoutes,
     type StripeImportKind,
     type StripeImportReport,
-    type StripeImportReportItem,
     type StripeImportNeedsUpdateItem,
     type StripeImportStatus,
     type RiderImportReport,
@@ -61,7 +60,7 @@ import { DataQualityScan } from "./_components/DataQualityScan";
 import { DriverRepairPass } from "./_components/DriverRepairPass";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
-import { explainRiderImportIssue } from "@/lib/bulk-import-error-help";
+import { explainRiderImportIssue, explainStripeMappingIssue } from "@/lib/bulk-import-error-help";
 import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
 import { StatTile } from "@/components/bulk-import/stat-tile";
 import { IssueTable as SharedIssueTable } from "@/components/bulk-import/issue-table";
@@ -148,31 +147,6 @@ const REPORT_COLUMNS = [
     { key: "field", label: "field" },
     { key: "message", label: "message" },
 ];
-
-function IssueTable({ items }: { items: StripeImportReportItem[] }) {
-    return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-40">Row</TableHead>
-                        <TableHead className="w-48">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.row_ref}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.row_ref}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
-    );
-}
 
 /**
  * Drivers who already carry a DIFFERENT Stripe account than the CSV. The bulk
@@ -641,6 +615,14 @@ export default function BulkOperationsPage() {
                     accounts and riders keep saved cards
                 </div>
 
+                <WhatThisToolDoes
+                    what="Copies a driver's Stripe Connect account ID (payouts) or a rider's Stripe customer ID (saved cards) from the previous app onto their existing Spinr record, then checks each ID live against Stripe before anything is saved."
+                    why="Without this, a driver who already completed Stripe's bank/identity verification on the old app would have to redo all of it from scratch, and a rider who already saved a card would have to re-add it."
+                    whichFiles="One CSV you build by hand or download from &ldquo;Find matches by email&rdquo;: a driver mapping (old_driver_id and/or phone → stripe_account_id) or a rider mapping (phone and/or email → stripe_customer_id) — see the column requirements in step 1 below."
+                    value="Drivers keep getting paid without re-onboarding to Stripe, and riders keep their saved card instead of re-entering it — a smoother migration with no forced re-verification."
+                    safetyNote="Never overwrites an existing Stripe ID with a different one automatically — a driver or rider who already has a different ID on file is skipped and surfaced separately for an explicit, one-at-a-time confirmed update. Every ID is also validated live against Stripe before commit, so a CSV built from the wrong Stripe platform account fails loudly instead of silently linking the wrong account."
+                />
+
                 <Card>
                     <CardHeader>
                     <CardTitle>1. Prepare your CSV</CardTitle>
@@ -765,15 +747,15 @@ export default function BulkOperationsPage() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-                            <Stat label="Rows" value={counts?.rows ?? 0} />
-                            <Stat label="To map" value={counts?.to_map ?? 0} />
-                            <Stat
+                            <StatTile label="Rows" value={counts?.rows ?? 0} />
+                            <StatTile label="To map" value={counts?.to_map ?? 0} />
+                            <StatTile
                                 label="Skipped (already mapped)"
                                 value={counts?.skipped_already_mapped ?? 0}
                             />
-                            <Stat label="Needs update" value={counts?.needs_update ?? 0} />
-                            <Stat label="Warnings" value={report.warnings.length} tone="warn" />
-                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                            <StatTile label="Needs update" value={counts?.needs_update ?? 0} />
+                            <StatTile label="Warnings" value={report.warnings.length} tone="warn" />
+                            <StatTile label="Errors" value={report.errors.length} tone="error" />
                         </div>
 
                         {report.errors.length > 0 && (
@@ -793,7 +775,15 @@ export default function BulkOperationsPage() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <SharedIssueTable
+                                    items={report.errors}
+                                    getRowKey={(it, i) => `${it.row_ref}-${it.field}-${i}`}
+                                    getRef={(it) => it.row_ref}
+                                    getField={(it) => it.field}
+                                    getMessage={(it) => it.message}
+                                    refLabel="Row"
+                                    explain={explainStripeMappingIssue}
+                                />
                             </div>
                         )}
 
@@ -802,7 +792,15 @@ export default function BulkOperationsPage() {
                                 <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                                     <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
                                 </h3>
-                                <IssueTable items={report.warnings} />
+                                <SharedIssueTable
+                                    items={report.warnings}
+                                    getRowKey={(it, i) => `${it.row_ref}-${it.field}-${i}`}
+                                    getRef={(it) => it.row_ref}
+                                    getField={(it) => it.field}
+                                    getMessage={(it) => it.message}
+                                    refLabel="Row"
+                                    explain={explainStripeMappingIssue}
+                                />
                             </div>
                         )}
 
@@ -842,14 +840,14 @@ export default function BulkOperationsPage() {
                     <CardContent className="space-y-4">
                         {status && (
                             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                                <Stat label="Drivers in batch" value={status.drivers} />
-                                <Stat label="KYC synced (ok)" value={status.kyc_sync?.ok ?? 0} />
-                                <Stat
+                                <StatTile label="Drivers in batch" value={status.drivers} />
+                                <StatTile label="KYC synced (ok)" value={status.kyc_sync?.ok ?? 0} />
+                                <StatTile
                                     label="Sync failed"
                                     value={status.kyc_sync?.stripe_error ?? 0}
                                     tone="error"
                                 />
-                                <Stat label="Payouts enabled" value={status.payouts_enabled} />
+                                <StatTile label="Payouts enabled" value={status.payouts_enabled} />
                             </div>
                         )}
                         <Button
@@ -1777,28 +1775,5 @@ function RiderCreatedAtBackfillSection() {
                 )}
             </CardContent>
         </Card>
-    );
-}
-
-function Stat({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-}) {
-    const toneCls =
-        tone === "error" && value > 0
-            ? "text-destructive"
-            : tone === "warn" && value > 0
-              ? "text-warning"
-              : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
     );
 }

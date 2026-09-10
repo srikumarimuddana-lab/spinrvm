@@ -110,10 +110,19 @@ export async function deviceLocation(): Promise<{ lat: number; lng: number } | n
   }
 }
 
+// AI17/F3: every `code` the backend's streamChat 'error' event can carry
+// (see backend/ai/orchestrator.py's `yield "error", {"code": ...}` sites)
+// must have an entry here — the lookup below never falls back to the raw
+// `event.data.message`, so an unmapped future code gets `default` instead
+// of a possibly-technical backend string leaking to the rider.
 const ERROR_MESSAGES: Record<string, string> = {
   ai_disabled: 'The AI assistant is currently unavailable.',
   daily_cap: "You've reached today's AI assistant limit — try again tomorrow.",
   not_authenticated: 'Please sign in again to use the AI assistant.',
+  // Matches orchestrator.py's GENERIC_ERROR_MESSAGE wording verbatim so this
+  // fix doesn't change what the rider already sees for these two codes.
+  ai_misconfigured: 'Something went wrong on our side — please try again in a moment.',
+  provider_error: 'Something went wrong on our side — please try again in a moment.',
   default: "I'm having trouble right now — please try again in a moment.",
 };
 
@@ -293,7 +302,9 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
           break;
         }
         case 'error':
-          appendToAssistant(ERROR_MESSAGES[event.data.code] ?? event.data.message ?? ERROR_MESSAGES.default);
+          // Never fall back to the raw event.data.message — an unmapped code
+          // must resolve to a known, rider-safe string, not backend text.
+          appendToAssistant(ERROR_MESSAGES[event.data.code] ?? ERROR_MESSAGES.default);
           break;
         case 'done':
           break;

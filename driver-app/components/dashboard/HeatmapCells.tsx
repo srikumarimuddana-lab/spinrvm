@@ -150,12 +150,14 @@ export const HeatmapCells: React.FC<HeatmapCellsProps> = React.memo(
               center={center}
               radius={outerRadiusM}
               fillColor={hexToRgba(color, 0.14)}
+              strokeColor="transparent"
               strokeWidth={0}
             />
             <Circle
               center={center}
               radius={innerRadiusM}
               fillColor={hexToRgba(color, idx === 4 ? 0.5 : 0.32)}
+              strokeColor="transparent"
               strokeWidth={0}
             />
           </React.Fragment>

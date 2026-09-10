@@ -23887,6 +23887,45 @@ how much they de-risk a public launch._
   against a real build; (6) either wire `expo-notifications`' handler into the real path or
   remove the now-misleading dead code.
 
+### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive
+
+- [ ] **Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
+  No code changed; regeneration requires a real `node_modules/react-native` install (local
+  machine or CI), which this Claude Code cloud sandbox does not have — see "Why this can't be
+  finished here" in the doc.
+- **What's broken:** `rider-app/patches/react-native+0.86.2.patch` (stale filename, installed RN
+  is 0.86.3) and `driver-app/patches/react-native+0.86.3.patch` (filename matches, still fails)
+  both fail `patch-package` application against installed `react-native@0.86.3`. Confirmed via
+  direct inspection of `node_modules/react-native` in both apps: none of the patch's 8 target
+  files carry the `PATCH (spinr rider-app/driver-app):` marker, so the fix is not active in
+  either app's current install.
+- **What the patch does:** works around a real Android crash — RN's Android `ActivityIndicator`
+  (and 7 other components: `RefreshControl`, `Switch`, `Modal`, `DebuggingOverlay`,
+  `HScrollViewNativeComponents`, and two `VirtualView` native components) import native
+  components that return a non-renderable object under the New Architecture (Bridgeless),
+  throwing `"Element type is invalid... got: object"` at render time. The fix swaps in a
+  JS-only fallback. Full original patch content (all 8 files, both apps) is intact and
+  version-controlled in the two patch files above — nothing was lost.
+- **Near-miss during investigation:** a diagnostic `patch-package` dry-run inside `driver-app`
+  overwrote `driver-app/patches/react-native+0.86.3.patch` with an unrelated 393,995-line diff
+  (this sandbox's installed `react-native` is a `.d.ts`-only stub — 0 real `.js` files under
+  `Libraries/`, confirmed via `find`/`wc -l` — so any patch generated here is diffed against
+  stub content, not real RN source). Caught via `git status`/`git diff` before commit and
+  reverted with `git checkout --`; repo is clean, both patch files match `git HEAD`. This is
+  the direct evidence for why regeneration must happen outside this environment.
+- **Recommended next step:** per the handoff doc — on a machine/CI with a full real RN install,
+  hand-port each of the 8 files' fix against the current 0.86.3 source (don't assume old hunk
+  context still matches), regenerate via `npx patch-package react-native`, verify on a real
+  Android build/emulator (render-time crash — `tsc`/lint prove nothing), then follow the
+  Change Impact Log gate before merging (customer-facing rendering path, live app testing).
+  Worth checking first whether RN 0.86.3 already fixed the underlying issue upstream, in which
+  case some/all of the 8 may be deletable rather than needing a rewrite.
+- **What was NOT verified:** whether the underlying Bridgeless/`ProgressBarAndroid` bug is still
+  present in RN 0.86.3 upstream (not checked against RN's own changelog/issues); whether the
+  other 7 files' native components have the same failure mode as `ActivityIndicator`'s
+  documented one (inferred by pattern, not confirmed per-file); no Android build/emulator
+  available in this sandbox to reproduce the original crash or verify any fix.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -7,6 +7,7 @@
  */
 import {
   buildQuoteBookingMessage,
+  buildQuoteBookingDisplayMessage,
   displayFare,
   displayFareWithPromo,
   mapBookingError,
@@ -183,6 +184,42 @@ describe('buildQuoteBookingMessage', () => {
   it('degrades to the recommended option with no metadata at all', () => {
     const bare = { type: 'fare_quote', quotes: [] } as Extract<AiAction, { type: 'fare_quote' }>;
     expect(buildQuoteBookingMessage(bare, { total: '', final_total: '' })).toBe(
+      'Book the recommended option.',
+    );
+  });
+});
+
+describe('buildQuoteBookingDisplayMessage', () => {
+  const quote: Extract<AiAction, { type: 'fare_quote' }> = {
+    type: 'fare_quote',
+    quotes: [],
+    pickup_address: '4500 Gordon Rd, Regina',
+    dropoff_address: '4325 Wakeling St, Regina',
+    pickup_lat: 50.4079,
+    pickup_lng: -104.6501,
+    dropoff_lat: 50.4497,
+    dropoff_lng: -104.5345,
+  };
+  const option = {
+    vehicle_type: 'Economy',
+    vehicle_type_id: 'vt-1',
+    total: '30.92',
+    final_total: '20.92',
+    promo_code: 'SAVE75',
+  };
+
+  // AI17/F2: same trip as buildQuoteBookingMessage, minus the raw vehicle id
+  // a rider can't do anything with.
+  it('carries the same trip, promo and total but omits the vehicle id', () => {
+    expect(buildQuoteBookingDisplayMessage(quote, option)).toBe(
+      'Book the Economy from 4500 Gordon Rd, Regina [50.40790,-104.65010] ' +
+        'to 4325 Wakeling St, Regina [50.44970,-104.53450] with promo SAVE75, total $20.92.',
+    );
+  });
+
+  it('degrades to the recommended option with no metadata at all, no id either', () => {
+    const bare = { type: 'fare_quote', quotes: [] } as Extract<AiAction, { type: 'fare_quote' }>;
+    expect(buildQuoteBookingDisplayMessage(bare, { total: '', final_total: '' })).toBe(
       'Book the recommended option.',
     );
   });

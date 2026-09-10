@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, Image, View } from 'react-native';
+import { Animated, Easing, Platform, View } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
     coalescePlaybackBearing,
@@ -678,12 +679,18 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         };
     }, []);
     const handleImageLoaded = () => {
-        // Image bitmap is decoded — keep tracking through one more frame so the
-        // native Marker snapshot contains the car, then stop for perf.
+        // Image bitmap is decoded — force a tracksViewChanges false→true
+        // transition so Android Google Maps re-snapshots the marker with the
+        // car visible. setTracksViewChanges(true) when already true is a
+        // React no-op (no re-render, no bitmap re-capture). The brief false
+        // is invisible — the next-frame true commits a fresh snapshot.
         hasLoadedImageRef.current = true;
-        setTracksViewChanges(true);
-        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
-        settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        setTracksViewChanges(false);
+        requestAnimationFrame(() => {
+            setTracksViewChanges(true);
+            if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+            settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        });
     };
 
     // Re-arm the snapshot on ANY ring identity change (color or presence),
@@ -953,12 +960,12 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                         pointerEvents="none"
                         style={iosRotateStyle ?? { width: size, height: size }}
                     >
-                        <Image
+                        <ExpoImage
                             key={imageAttempt}
                             source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
                             onError={handleImageError}
                             onLoad={handleImageLoaded}
-                            resizeMode="contain"
+                            contentFit="contain"
                             style={{
                                 width: size,
                                 height: size,

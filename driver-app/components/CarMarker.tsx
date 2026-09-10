@@ -723,14 +723,17 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         // instead.
     }, [ringChangeKey]);
 
-    // One-shot "pop in" on mount — see the class doc comment above for why
-    // this is a single spring rather than a loop. Native-driven: opacity and
-    // transform:scale both support the native driver, so this costs nothing
-    // on the JS thread and doesn't compete with the (JS-driven, non-style)
-    // rotation animation above.
+    // One-shot "pop in" on mount (iOS only). On Android, Google Maps renders
+    // custom markers as a bitmap snapshot of the React view. Starting at
+    // opacity 0 / scale 0 means the first snapshot captures the ring (outside
+    // this wrapper) but not the car (inside it, invisible). Native-driver
+    // animations don't reliably trigger the re-snapshot mechanism, so the
+    // bitmap can freeze ring-only — the "green circle, no car" bug. Starting
+    // at 1 on Android ensures the car is visible from the very first frame.
     // eslint-disable-next-line react-hooks/refs
-    const mountAnim = useRef(new Animated.Value(0)).current;
+    const mountAnim = useRef(new Animated.Value(isAndroid ? 1 : 0)).current;
     useEffect(() => {
+        if (isAndroid) return;
         Animated.spring(mountAnim, {
             toValue: 1,
             friction: 6,

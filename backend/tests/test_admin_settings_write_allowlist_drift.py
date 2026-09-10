@@ -60,6 +60,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "ai_model",
         "ai_provider",
         "ai_public_chat_enabled",
+        "ai_stream_incremental_enabled",
         "apns_bundle_id",
         "apns_key_id",
         "apns_p8_key",

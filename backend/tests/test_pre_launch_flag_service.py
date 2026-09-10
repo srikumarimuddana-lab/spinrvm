@@ -115,8 +115,15 @@ def _ride(ride_id, *, created_at="2026-02-01", extra_meta=None):
     return {"id": ride_id, "created_at": created_at, "legacy_import_metadata": extra_meta or {}}
 
 
+def _rider(rider_id, *, created_at="2026-02-01", extra_meta=None):
+    meta = {"rider_csv_import": {"old_customer_id": "cust-1"}}
+    if extra_meta:
+        meta.update(extra_meta)
+    return {"id": rider_id, "created_at": created_at, "legacy_import_metadata": meta}
+
+
 def _fresh_store(**tables):
-    base = {"drivers": [], "rides": [], "driver_insurance_periods": []}
+    base = {"drivers": [], "rides": [], "driver_insurance_periods": [], "users": []}
     base.update(tables)
     return base
 
@@ -259,6 +266,53 @@ def test_already_flagged_ride_is_not_a_candidate_again(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Rider candidacy: zero-rides-ever is the only activity signal
+# --------------------------------------------------------------------------
+
+
+def test_dormant_legacy_rider_is_a_candidate(monkeypatch):
+    store = _fresh_store(users=[_rider("rider-1")])
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    assert [c.id for c in plan.rider_candidates] == ["rider-1"]
+
+
+def test_rider_with_a_ride_is_excluded(monkeypatch):
+    store = _fresh_store(
+        users=[_rider("rider-1")],
+        rides=[{"id": "ride-1", "rider_id": "rider-1", "created_at": "2026-06-01"}],
+    )
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    assert plan.rider_candidates == []
+
+
+def test_non_legacy_rider_is_never_a_candidate(monkeypatch):
+    row = {"id": "rider-1", "created_at": "2026-02-01", "legacy_import_metadata": {}}
+    store = _fresh_store(users=[row])
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    assert plan.rider_candidates == []
+
+
+def test_already_flagged_rider_is_not_a_candidate_again(monkeypatch):
+    store = _fresh_store(users=[_rider("rider-1", extra_meta={"pre_launch_test": True})])
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    assert plan.rider_candidates == []
+
+
+def test_post_launch_dormant_legacy_rider_is_still_a_candidate(monkeypatch):
+    """Riders' created_at isn't a useful pre-launch proxy (their import
+    doesn't preserve the original old-app signup date the way drivers'
+    does) -- zero-activity is the only gate, regardless of created_at."""
+    store = _fresh_store(users=[_rider("rider-1", created_at="2026-05-01")])
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    assert [c.id for c in plan.rider_candidates] == ["rider-1"]
+
+
+# --------------------------------------------------------------------------
 # apply_pre_launch_flags: writes, merge behavior, idempotency
 # --------------------------------------------------------------------------
 
@@ -271,7 +325,7 @@ def test_apply_flags_driver_and_ride_preserving_existing_metadata(monkeypatch):
     _use(monkeypatch, store)
     plan = svc.build_pre_launch_flag_plan()
     conflicts = svc.apply_pre_launch_flags(plan, batch=BATCH)
-    assert conflicts == {"drivers": [], "rides": []}
+    assert conflicts == {"drivers": [], "rides": [], "users": []}
 
     driver_row = next(r for r in store["drivers"] if r["id"] == "drv-1")
     assert driver_row["legacy_import_metadata"]["pre_launch_test"] is True
@@ -282,6 +336,20 @@ def test_apply_flags_driver_and_ride_preserving_existing_metadata(monkeypatch):
     ride_row = next(r for r in store["rides"] if r["id"] == "ride-1")
     assert ride_row["legacy_import_metadata"]["pre_launch_test"] is True
     assert ride_row["legacy_import_metadata"]["old_booking_id"] == "xyz"
+
+
+def test_apply_flags_rider_preserving_existing_metadata(monkeypatch):
+    store = _fresh_store(users=[_rider("rider-1")])
+    _use(monkeypatch, store)
+    plan = svc.build_pre_launch_flag_plan()
+    conflicts = svc.apply_pre_launch_flags(plan, batch=BATCH)
+    assert conflicts == {"drivers": [], "rides": [], "users": []}
+
+    rider_row = next(r for r in store["users"] if r["id"] == "rider-1")
+    assert rider_row["legacy_import_metadata"]["pre_launch_test"] is True
+    assert rider_row["legacy_import_metadata"]["pre_launch_flag"]["batch"] == BATCH
+    # Existing key preserved, not clobbered by the merge.
+    assert rider_row["legacy_import_metadata"]["rider_csv_import"] == {"old_customer_id": "cust-1"}
 
 
 def test_apply_is_idempotent_on_rerun(monkeypatch):
@@ -307,7 +375,7 @@ def test_apply_pre_launch_flags_picks_up_a_pre_apply_change(monkeypatch):
     store["drivers"][0]["legacy_import_metadata"]["some_other_writer_key"] = "concurrent-value"
 
     conflicts = svc.apply_pre_launch_flags(plan, batch=BATCH)
-    assert conflicts == {"drivers": [], "rides": []}
+    assert conflicts == {"drivers": [], "rides": [], "users": []}
     meta = store["drivers"][0]["legacy_import_metadata"]
     assert meta["pre_launch_test"] is True
     assert meta["some_other_writer_key"] == "concurrent-value"

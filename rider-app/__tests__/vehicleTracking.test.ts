@@ -8,10 +8,12 @@
  */
 import {
   bearingDegrees,
+  coalescePlaybackBearing,
   distanceMeters,
   selectBearing,
   shortestArcRotationTarget,
   snapToRoute,
+  visualRotationDegrees,
 } from '@shared/utils/vehicleTracking';
 
 // Regina Ave, Regina SK runs east–west near lng -104.6; ~1e-4 deg lat ≈ 11 m.
@@ -233,6 +235,53 @@ describe('selectBearing — bearing source priority', () => {
   it('ignores sub-threshold movement rather than deriving from jitter', () => {
     const r = selectBearing({ ...base, movedMeters: MIN_MOVE - 0.5, heading: null });
     expect(r.source).toBe('none');
+  });
+});
+
+describe('coalescePlaybackBearing — per-tick chord can be < 3 m while driving', () => {
+  const none: ReturnType<typeof selectBearing> = { bearing: null, source: 'none' };
+  const headingZero: ReturnType<typeof selectBearing> = { bearing: 0, source: 'heading' };
+  const travel: ReturnType<typeof selectBearing> = { bearing: 90, source: 'travel' };
+  const route: ReturnType<typeof selectBearing> = { bearing: 45, source: 'route' };
+
+  it('promotes the spline tangent when selectBearing fell through during interpolation', () => {
+    const r = coalescePlaybackBearing(none, { bearing: 180, mode: 'interpolating' });
+    expect(r).toEqual({ bearing: 180, source: 'travel' });
+  });
+
+  it('overrides Android placeholder heading 0 with the playback tangent while interpolating', () => {
+    const r = coalescePlaybackBearing(headingZero, { bearing: 180, mode: 'interpolating' });
+    expect(r).toEqual({ bearing: 180, source: 'travel' });
+  });
+
+  it('does not invent a bearing while holding/waiting (parked or buffer dry)', () => {
+    expect(coalescePlaybackBearing(none, { bearing: 180, mode: 'holding' }).source).toBe('none');
+    expect(coalescePlaybackBearing(headingZero, { bearing: 90, mode: 'waiting' })).toEqual(headingZero);
+  });
+
+  it('keeps a route snap and prefers the spline tangent on an existing travel selection', () => {
+    expect(coalescePlaybackBearing(route, { bearing: 180, mode: 'interpolating' })).toEqual(route);
+    expect(coalescePlaybackBearing(travel, { bearing: 12, mode: 'interpolating' })).toEqual({
+      bearing: 12,
+      source: 'travel',
+    });
+  });
+});
+
+describe('visualRotationDegrees — Apple Maps screen-upright annotations', () => {
+  it('equals world bearing on a north-up map', () => {
+    expect(visualRotationDegrees(180, 0)).toBe(180);
+    expect(visualRotationDegrees(90, 0)).toBe(90);
+  });
+
+  it('is 0 when course-up camera heading matches the car', () => {
+    expect(visualRotationDegrees(180, 180)).toBe(0);
+    expect(visualRotationDegrees(90, 90)).toBe(0);
+  });
+
+  it('wraps across 0/360 so southbound course-up is not 360', () => {
+    expect(visualRotationDegrees(10, 350)).toBe(20);
+    expect(visualRotationDegrees(0, 0)).toBe(0);
   });
 });
 

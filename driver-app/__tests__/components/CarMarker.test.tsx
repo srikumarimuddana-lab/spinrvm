@@ -1,7 +1,8 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
-import { Platform, Image } from 'react-native';
+import { Platform } from 'react-native';
 import { Marker } from 'react-native-maps';
+import { Image } from 'expo-image';
 import { CarMarker } from '../../components/CarMarker';
 import { playbackPosition, pushFix } from '@shared/utils/markerPlayback';
 

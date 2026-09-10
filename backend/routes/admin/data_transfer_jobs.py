@@ -28,6 +28,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as every other PII-export/import
+    router in this package does.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every sibling super_admin-class router uses, so
+    the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Data Transfer jobs require super_admin")
+
+
 EXPORT_STORAGE_BUCKET = "data-transfer-exports"
 _LIST_COLUMNS = (
     "id,requested_by_admin_id,entity_type,entity_ids,doc_type_filter,"
@@ -47,6 +60,7 @@ async def list_data_transfer_jobs(
     admin export history (who exported which entities/PII fields) is only
     ever visible to a super_admin. Excludes soft-deleted rows (the purge loop
     marks `deleted_at` after removing the Storage object)."""
+    _require_super_admin(admin)
     rows = await db_supabase.get_rows(
         "data_transfer_export_jobs",
         {"deleted_at": None},
@@ -73,6 +87,7 @@ async def get_data_transfer_job(
     just kicked off (the export route is backgrounded and returns only a
     job_id; the caller needs somewhere to check pending -> completed/failed).
     See list_data_transfer_jobs above for the super_admin gate."""
+    _require_super_admin(admin)
     rows = await db_supabase.get_rows("data_transfer_export_jobs", {"id": job_id}, limit=1, columns=_LIST_COLUMNS)
     if not rows:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -96,6 +111,7 @@ async def regenerate_job_download_link(
     sensitive of the three job endpoints, since it hands back a live download
     link into another admin's PII export bundle, not just metadata about
     it."""
+    _require_super_admin(admin)
     rows = await db_supabase.get_rows(
         "data_transfer_export_jobs", {"id": job_id}, limit=1, columns="id,status,storage_path,deleted_at"
     )

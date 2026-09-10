@@ -280,3 +280,46 @@ export function selectBearing(params: {
   }
   return { bearing: null, source: 'none' };
 }
+
+/**
+ * Playback ticks are 500 ms. Urban GPS cadence (e.g. 10 m / 4 s idle, 5 m /
+ * 2 s on-trip) often moves only ~1–2 m per tick — under selectBearing's 3 m
+ * floor — so route/travel never win and Android's placeholder heading `0`
+ * pins the icon north while the car is genuinely moving. The spline/path
+ * tangent from playback is the direction of the segment being animated this
+ * tick; when playback is interpolating or extrapolating, that tangent is
+ * trustworthy even if this tick's chord is short.
+ *
+ * Does not invent a bearing while waiting/holding (parked / buffer dry).
+ */
+export function coalescePlaybackBearing(
+  selected: BearingSelection,
+  playback: {
+    bearing: number | null;
+    mode: 'waiting' | 'interpolating' | 'extrapolating' | 'holding';
+  },
+): BearingSelection {
+  if (selected.source === 'route') return selected;
+  if (selected.source === 'travel') {
+    return playback.bearing != null
+      ? { bearing: playback.bearing, source: 'travel' }
+      : selected;
+  }
+  if (
+    playback.bearing != null &&
+    (playback.mode === 'interpolating' || playback.mode === 'extrapolating')
+  ) {
+    return { bearing: playback.bearing, source: 'travel' };
+  }
+  return selected;
+}
+
+/**
+ * On-screen icon angle for a screen-upright map annotation (Apple Maps
+ * MKAnnotationView): world-space course minus the map camera heading.
+ * North-up (mapHeading 0) → rotate by the course. Course-up (mapHeading
+ * equals the course) → 0, so the hood points to the top of the screen.
+ */
+export function visualRotationDegrees(worldBearing: number, mapHeading: number): number {
+  return ((worldBearing - mapHeading) % 360 + 360) % 360;
+}

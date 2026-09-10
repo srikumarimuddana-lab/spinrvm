@@ -23953,7 +23953,7 @@ how much they de-risk a public launch._
   documented one (inferred by pattern, not confirmed per-file); no Android build/emulator
   available in this sandbox to reproduce the original crash or verify any fix.
 
-### C99. No Fly.io or Railway CLI/MCP access from any Claude Code session in this repo — blocks verifying prod secrets directly, including C97's own top recommendation
+### C99. No Fly.io/Railway CLI access AND the Firebase MCP server can't authenticate from this environment — two independent blockers on verifying prod secrets, including C97's own top recommendation
 
 - [ ] **Status:** OPEN — setup gap, needs a human to grant access; not fixable
   by any session. Surfaced 2026-09-10 when the user asked this session to
@@ -23961,6 +23961,24 @@ how much they de-risk a public launch._
   and Railway — the #1 recommendation in **C97** (driver-app push
   notifications), which flagged confirming this credential as the fastest,
   cheapest way to resolve its two-root-cause fork.
+- **Update 2026-09-10, later same day — a second, independent blocker
+  found on the Firebase side itself, not just Fly/Railway:** once the
+  `firebase` MCP server (re)connected to this session, checked whether it
+  could confirm the credential from Firebase's own side (project/service-
+  account existence) as a partial workaround for not having Fly/Railway
+  access. It cannot, for two stacked reasons: (1) `firebase_get_environment`
+  shows `Authenticated User: <NONE>` — no Google account signed in; (2)
+  attempting `firebase_login` to fix that **fails outright**:
+  `Error: Failed to make request to https://auth.firebase.tools/attest` —
+  the OAuth handshake itself can't reach Firebase's auth endpoint from this
+  sandboxed environment, the same category of failure as C96's investigation
+  finding `githubstatus.com` blocked by this session's own egress proxy.
+  This means even a human completing Firebase login elsewhere would not
+  unblock a Claude session here — the session itself cannot complete the
+  handshake, independent of credentials. Two separate blockers now stand
+  between any session in this repo and confirming this one credential:
+  no Fly/Railway access at all, and a Firebase auth flow that can't
+  complete even when a connector is present.
 - **What's missing, confirmed directly:** `which flyctl fly railway` finds
   none of the three installed in this session's shell; no `mcp__fly*` or
   `mcp__railway*` tools appear anywhere in this session's tool list

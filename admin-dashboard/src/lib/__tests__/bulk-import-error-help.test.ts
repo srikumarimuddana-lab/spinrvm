@@ -9,6 +9,7 @@ import {
   explainLegacyDriverImportIssue,
   explainDriverImportIssue,
   explainRiderImportIssue,
+  explainStripeMappingIssue,
 } from '../bulk-import-error-help';
 
 describe('createIssueExplainer', () => {
@@ -32,6 +33,20 @@ describe('createIssueExplainer', () => {
       ['bar:', { cause: 'prefix', fix: 'prefix' }],
     ]);
     expect(explain('bar: exact')).toEqual({ cause: 'exact', fix: 'exact' });
+  });
+
+  it('matches a suffix rule for a message with a dynamic prefix', () => {
+    const explain = createIssueExplainer({}, [], [['is already mapped', { cause: 'c', fix: 'f' }]]);
+    expect(explain('acct_123 is already mapped')).toEqual({ cause: 'c', fix: 'f' });
+  });
+
+  it('prefers a prefix match over a suffix match', () => {
+    const explain = createIssueExplainer(
+      {},
+      [['foo', { cause: 'prefix', fix: 'prefix' }]],
+      [['bar', { cause: 'suffix', fix: 'suffix' }]],
+    );
+    expect(explain('foo bar')).toEqual({ cause: 'prefix', fix: 'prefix' });
   });
 });
 
@@ -174,5 +189,34 @@ describe('explainRiderImportIssue', () => {
 
   it('does not carry driver-import messages', () => {
     expect(explainRiderImportIssue('duplicate old_driver_id')).toBeNull();
+  });
+});
+
+describe('explainStripeMappingIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainStripeMappingIssue('stripe_account_id must look like acct_...')).not.toBeNull();
+    expect(explainStripeMappingIssue('no user matches this row')).not.toBeNull();
+    expect(explainStripeMappingIssue('customer is deleted in Stripe')).not.toBeNull();
+  });
+
+  it('matches the dynamic-suffix prefixes from the live-Stripe-validation phase', () => {
+    expect(explainStripeMappingIssue('account country is US, expected CA')).not.toBeNull();
+    expect(explainStripeMappingIssue('account is disabled (rejected.fraud)')).not.toBeNull();
+    expect(
+      explainStripeMappingIssue('object is test-mode but the configured Stripe key is live-mode'),
+    ).not.toBeNull();
+  });
+
+  it('matches the dynamic-prefix suffixes for duplicate/taken Stripe IDs', () => {
+    expect(explainStripeMappingIssue('acct_abc123 appears on multiple CSV rows')).not.toBeNull();
+    expect(explainStripeMappingIssue('acct_abc123 is already mapped to another driver')).not.toBeNull();
+    expect(explainStripeMappingIssue('cus_abc123 is already mapped to another user')).not.toBeNull();
+    expect(
+      explainStripeMappingIssue('acct_abc123 does not exist on this platform or is not accessible'),
+    ).not.toBeNull();
+  });
+
+  it('does not carry Bulk Rider Import messages', () => {
+    expect(explainStripeMappingIssue('duplicate phone in CSV')).toBeNull();
   });
 });

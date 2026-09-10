@@ -3,8 +3,9 @@
  * explanations, generalized from lib/tax-id-error-help.ts (the Legacy Tax-ID
  * Backfill pilot). Each tool's backend emits its own vocabulary of short,
  * technical messages -- this factory builds a lookup (exact match, then
- * prefix match for messages carrying a dynamic suffix) so each tool exports
- * a small, tool-specific map instead of duplicating the lookup logic.
+ * prefix match for messages carrying a dynamic suffix, then suffix match for
+ * messages carrying a dynamic prefix) so each tool exports a small,
+ * tool-specific map instead of duplicating the lookup logic.
  *
  * Matching is against the exact strings each tool's backend route/service
  * emits; if a backend message changes, add/update the mapping here rather
@@ -21,15 +22,21 @@ export interface IssueExplanation {
 export type IssueExplainer = (message: string) => IssueExplanation | null;
 
 /** Builds an explainer from an exact-match map plus optional prefix rules
- * (for messages carrying a dynamic suffix, e.g. "invalid SIN, skipped: <reason>"). */
+ * (for messages carrying a dynamic suffix, e.g. "invalid SIN, skipped: <reason>")
+ * and optional suffix rules (for messages carrying a dynamic prefix, e.g.
+ * "acct_123 is already mapped to another driver"). */
 export function createIssueExplainer(
     exact: Record<string, IssueExplanation>,
     prefixes: [string, IssueExplanation][] = [],
+    suffixes: [string, IssueExplanation][] = [],
 ): IssueExplainer {
     return (message: string) => {
         if (exact[message]) return exact[message];
         for (const [prefix, explanation] of prefixes) {
             if (message.startsWith(prefix)) return explanation;
+        }
+        for (const [suffix, explanation] of suffixes) {
+            if (message.endsWith(suffix)) return explanation;
         }
         return null;
     };
@@ -376,6 +383,179 @@ export const explainRiderImportIssue: IssueExplainer = createIssueExplainer(
             {
                 cause: "This row's phone matches an account that's in the middle of being deleted or already deleted -- Spinr never re-populates personal data onto an account like that automatically.",
                 fix: "This needs manual review, not a re-run of the import -- check the matched account's status in the admin Users page and decide by hand whether this row should be imported at all.",
+            },
+        ],
+    ],
+);
+
+// ── Legacy Stripe Mapping Import ────────────────────────────────────────
+export const explainStripeMappingIssue: IssueExplainer = createIssueExplainer(
+    {
+        // -- local matching/guard phase (drivers) --
+        "stripe_account_id must look like acct_...": {
+            cause: "This row's stripe_account_id doesn't look like a Stripe Connect account ID (Stripe account IDs always start with acct_).",
+            fix: "Check the stripe_account_id value for this row -- it may be blank, truncated, or a different kind of ID.",
+        },
+        "row has neither old_driver_id nor phone to match on": {
+            cause: "This row has nothing to match it to an existing Spinr driver -- both old_driver_id and phone are blank.",
+            fix: "Fill in at least one of old_driver_id or phone for this row, or remove it.",
+        },
+        "old_driver_id and phone resolve to different drivers": {
+            cause: "This row's old_driver_id matches one Spinr driver, but its phone number matches a different one -- the tool can't tell which is correct.",
+            fix: "Check this row's old_driver_id and phone against the admin Drivers page and correct whichever one is wrong.",
+        },
+        "no driver with this phone/old_driver_id found": {
+            cause: "Neither this row's old_driver_id nor its phone number matches any driver already in Spinr.",
+            fix: "This driver may not have gone through Legacy Driver Import yet -- re-run this tool after that import, or check the values for a typo.",
+        },
+        "multiple CSV rows resolve to the same record": {
+            cause: "More than one row in this file matches the same Spinr driver or rider -- only one row can update that record.",
+            fix: "Check the file for duplicate rows referencing the same driver/rider and keep only the correct one.",
+        },
+        // -- local matching/guard phase (riders) --
+        "stripe_customer_id must look like cus_...": {
+            cause: "This row's stripe_customer_id doesn't look like a Stripe Customer ID (Stripe customer IDs always start with cus_).",
+            fix: "Check the stripe_customer_id value for this row -- it may be blank, truncated, or a different kind of ID.",
+        },
+        "row has neither phone nor email to match on": {
+            cause: "This row has nothing to match it to an existing Spinr rider -- both phone and email are blank.",
+            fix: "Fill in at least one of phone or email for this row, or remove it.",
+        },
+        "phone and email resolve to different users": {
+            cause: "This row's phone number matches one Spinr account, but its email matches a different one -- the tool can't tell which is correct.",
+            fix: "Check this row's phone and email against the admin Users page and correct whichever one is wrong.",
+        },
+        "no user matches this row": {
+            cause: "Neither this row's phone number nor its email matches any account already in Spinr.",
+            fix: "This rider may not have gone through Bulk Rider Import yet -- re-run this tool after that import, or check the values for a typo.",
+        },
+        "user already has a different stripe_customer_id; drop this row": {
+            cause: "This rider already has a Stripe customer ID in Spinr (likely created automatically the first time they paid in the new app) -- it's different from the one in this CSV row.",
+            fix: "This is expected for riders who already used the new app before this import ran -- drop this row and have the rider re-add their card if needed. No action needed otherwise.",
+        },
+        // -- warnings: already-mapped / ignored old-id --
+        "driver already carries this stripe_account_id; skipped": {
+            cause: "This driver already has this exact Stripe account ID saved in Spinr -- there's nothing to update.",
+            fix: "This is expected on a re-run of the same file and is not a problem. No action needed.",
+        },
+        "old_stripe_account_id ignored (not acct_...)": {
+            cause: "This row's old_stripe_account_id column has a value, but it doesn't look like a real Stripe account ID, so it was ignored rather than saved.",
+            fix: "This is non-blocking -- the current stripe_account_id is still applied. Check the old_stripe_account_id value only if you need that history preserved.",
+        },
+        "user already carries this stripe_customer_id; skipped": {
+            cause: "This rider already has this exact Stripe customer ID saved in Spinr -- there's nothing to update.",
+            fix: "This is expected on a re-run of the same file and is not a problem. No action needed.",
+        },
+        "old_stripe_customer_id ignored (not cus_...)": {
+            cause: "This row's old_stripe_customer_id column has a value, but it doesn't look like a real Stripe customer ID, so it was ignored rather than saved.",
+            fix: "This is non-blocking -- the current stripe_customer_id is still applied. Check the old_stripe_customer_id value only if you need that history preserved.",
+        },
+        // -- live Stripe validation phase --
+        "stripe_secret_key is not set in app settings": {
+            cause: "Spinr's Stripe secret key isn't configured, so no row in this batch can be checked against real Stripe data.",
+            fix: "Set stripe_secret_key in Settings → App Settings, then re-run validate.",
+        },
+        "Stripe error while validating this row; re-run validate": {
+            cause: "Stripe returned a temporary error while this row was being checked -- not a problem with the row's data itself.",
+            fix: "Re-run validate. If it keeps failing on the same row, check Stripe's status page for an ongoing incident.",
+        },
+        "transfers capability was never requested on this account": {
+            cause: "This Stripe Connect account was never set up to receive payouts (transfers) -- it may have been created for a different purpose or incompletely.",
+            fix: "Check this account directly in the Stripe Dashboard before mapping it as a driver's payout destination.",
+        },
+        "details_submitted/payouts_enabled not yet true; driver finishes via in-app Stripe onboarding": {
+            cause: "This driver's Stripe account exists but onboarding isn't fully complete yet (missing bank details, identity verification, or similar).",
+            fix: "This is expected and non-blocking -- the mapping is still applied, and the driver finishes the remaining steps through the app's existing Stripe onboarding flow. No action needed.",
+        },
+        "customer is deleted in Stripe": {
+            cause: "This Stripe customer ID belongs to a customer that's been deleted in Stripe -- it can no longer hold a payment method.",
+            fix: "Drop this row; the rider will need a new Stripe customer created (e.g. by adding a card in the app), not this legacy ID.",
+        },
+        "Stripe customer metadata.user_id differs from the matched user": {
+            cause: "This Stripe customer object already has a different Spinr user_id recorded in its own Stripe metadata than the account this row matched to.",
+            fix: "This is non-blocking, but double-check in the Stripe Dashboard that this customer really belongs to the rider this row matched -- a mismatch here can mean the row matched the wrong account.",
+        },
+    },
+    [
+        // -- dynamic value as a MESSAGE PREFIX (fixed part after it) --
+        [
+            "account country is ",
+            {
+                cause: "This driver's Stripe Connect account isn't registered in Canada -- Spinr requires a CA-country account to pay out Canadian drivers.",
+                fix: "Check this account in the Stripe Dashboard; it may be from the wrong Stripe platform account or a different country's onboarding flow.",
+            },
+        ],
+        [
+            "transfers capability is ",
+            {
+                cause: "This Stripe Connect account's payout (transfers) capability isn't fully active yet -- it's pending, restricted, or inactive.",
+                fix: "This is non-blocking; the driver finishes onboarding through the app's existing Stripe flow. Check the account in the Stripe Dashboard if it stays incomplete for a long time.",
+            },
+        ],
+        [
+            "account is disabled (",
+            {
+                cause: "Stripe has disabled this Connect account -- either it was rejected during review or the platform paused it.",
+                fix: "Check the account's disabled_reason in the Stripe Dashboard before deciding whether this driver can be mapped at all.",
+            },
+        ],
+        [
+            "account type is ",
+            {
+                cause: "This Stripe Connect account isn't an Express account -- Spinr's driver payout flow is built around Express accounts specifically.",
+                fix: "This is non-blocking, but double-check in the Stripe Dashboard that this account is really the right one for this driver.",
+            },
+        ],
+        [
+            "business_type is ",
+            {
+                cause: "This Stripe Connect account is registered as a business, not an individual -- most Spinr drivers onboard as individuals.",
+                fix: "This is non-blocking, but double-check in the Stripe Dashboard that this account is really the right one for this driver.",
+            },
+        ],
+        [
+            "outstanding requirements: ",
+            {
+                cause: "Stripe still needs more information from this account before it can be fully verified (the specific fields follow the colon in the message above).",
+                fix: "This is non-blocking -- the driver finishes these through the app's existing Stripe onboarding flow. No action needed unless it stays incomplete for a long time.",
+            },
+        ],
+        [
+            "object is ",
+            {
+                cause: "The Stripe object this row points to is in test mode while Spinr's configured Stripe key is live mode (or vice versa) -- the two can never be mapped together.",
+                fix: "Confirm which Stripe platform account and mode (test/live) this CSV's IDs actually came from before re-running.",
+            },
+        ],
+    ],
+    [
+        // -- dynamic value as a MESSAGE PREFIX with a fixed SUFFIX --
+        [
+            "appears on multiple CSV rows",
+            {
+                cause: "The same Stripe ID appears on more than one row in this file -- it can't be mapped to more than one driver or rider.",
+                fix: "Check the file for duplicate Stripe IDs and keep only the correct row for each one.",
+            },
+        ],
+        [
+            "is already mapped to another driver",
+            {
+                cause: "This Stripe account ID is already saved on a different Spinr driver's record -- assigning it here would move the same payout destination to two drivers.",
+                fix: "Check the admin Drivers page for which driver already has this Stripe account ID, and confirm this row's driver match is correct before proceeding.",
+            },
+        ],
+        [
+            "is already mapped to another user",
+            {
+                cause: "This Stripe customer ID is already saved on a different Spinr rider's account -- assigning it here would move the same saved card to two riders.",
+                fix: "Check the admin Users page for which rider already has this Stripe customer ID, and confirm this row's rider match is correct before proceeding.",
+            },
+        ],
+        [
+            "does not exist on this platform or is not accessible",
+            {
+                cause: "Stripe couldn't find this ID at all under Spinr's configured Stripe key -- it may belong to a different Stripe platform account, a different mode (test vs. live), or be mistyped.",
+                fix: "Confirm this CSV's Stripe IDs really came from the same Stripe platform account Spinr is configured with (see the migration-scenario note above the upload form).",
             },
         ],
     ],

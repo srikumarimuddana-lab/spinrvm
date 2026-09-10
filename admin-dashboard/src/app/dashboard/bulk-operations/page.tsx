@@ -61,6 +61,10 @@ import { DataQualityScan } from "./_components/DataQualityScan";
 import { DriverRepairPass } from "./_components/DriverRepairPass";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
+import { explainRiderImportIssue } from "@/lib/bulk-import-error-help";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable as SharedIssueTable } from "@/components/bulk-import/issue-table";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1300,26 +1304,15 @@ function downloadRiderTemplate() {
 
 function RiderIssueTable({ items }: { items: RiderImportReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-20">Row</TableHead>
-                        <TableHead className="w-40">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.row_num}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.row_num}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
+        <SharedIssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.row_num}-${it.field}-${i}`}
+            getRef={(it) => String(it.row_num)}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="Row"
+            explain={explainRiderImportIssue}
+        />
     );
 }
 
@@ -1488,6 +1481,46 @@ function RiderImportSection() {
                 detection against existing users and drivers
             </div>
 
+            <WhatThisToolDoes
+                what={
+                    <>
+                        Creates a Spinr rider account for each row in a CSV of rider details,
+                        checking each phone number against existing users and drivers first.
+                    </>
+                }
+                why={
+                    <>
+                        Riders are sometimes onboarded in a batch from an existing spreadsheet or
+                        another system rather than one at a time through the app&apos;s own
+                        sign-up flow — this tool turns that spreadsheet into real Spinr rider
+                        accounts.
+                    </>
+                }
+                whichFiles={
+                    <>
+                        A single CSV — start from the downloadable template below. Only
+                        phone is required; customer_id (a Stripe customer ID), email, gender,
+                        ratings, and name fields are optional.
+                    </>
+                }
+                value={
+                    <>
+                        A batch of riders becomes real, ready-to-use accounts in one upload, with
+                        duplicate phone numbers caught and flagged automatically instead of
+                        creating conflicting accounts.
+                    </>
+                }
+                safetyNote={
+                    <>
+                        A phone number matching an existing account never creates a duplicate —
+                        that row updates the existing account&apos;s fields instead. A phone
+                        matching an account mid-deletion or already deleted is never
+                        auto-repopulated with new data; it&apos;s skipped and flagged for manual
+                        review.
+                    </>
+                }
+            />
+
             <Card>
                 <CardHeader>
                     <CardTitle>1. Prepare your rider CSV</CardTitle>
@@ -1580,14 +1613,14 @@ function RiderImportSection() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-                            <Stat label="Rows" value={counts?.rows ?? 0} />
-                            <Stat label="New riders" value={counts?.to_create ?? 0} />
-                            <Stat label="To update" value={counts?.to_update ?? 0} />
-                            <Stat label="Duplicate (driver)" value={counts?.duplicate_drivers ?? 0} tone="warn" />
+                            <StatTile label="Rows" value={counts?.rows ?? 0} />
+                            <StatTile label="New riders" value={counts?.to_create ?? 0} />
+                            <StatTile label="To update" value={counts?.to_update ?? 0} />
+                            <StatTile label="Duplicate (driver)" value={counts?.duplicate_drivers ?? 0} tone="warn" />
                             {/* P0-C: rows matched to a pending_deletion/deleted account — PII
                                 left untouched, needs manual admin review before importing. */}
-                            <Stat label="Needs review" value={counts?.protected_skips ?? 0} tone="error" />
-                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                            <StatTile label="Needs review" value={counts?.protected_skips ?? 0} tone="error" />
+                            <StatTile label="Errors" value={report.errors.length} tone="error" />
                         </div>
 
                         {report.duplicates.length > 0 && (

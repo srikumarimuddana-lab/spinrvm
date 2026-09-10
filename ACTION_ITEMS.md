@@ -18041,10 +18041,11 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   most-recent-wins deliberately, documented in ADR-012, transition test
   added). One pre-existing finding was deferred to **AI18**.
 
-- [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
+- [x] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
   found while root-causing AI16, deliberately not shipped in that PR; each
-  is its own scoped change. **F1, F2, F3, F5 CLOSED 2026-09-10 (PR #5177 +
-  a same-day follow-up commit); F4 still open, needs a product decision.**
+  is its own scoped change. **All 5 sub-items CLOSED — F1/F2/F3/F5 on
+  2026-09-10 (PR #5177 + a same-day follow-up commit); F4 same day, on the
+  same follow-up branch.**
   - [x] **F1** — investigated as spec'd ("needs a word-boundary-buffered
     stream filter... behind a settings flag, default off") and found that
     premise stale: the buffered stream filter already shipped
@@ -18068,11 +18069,22 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
     fallback removed entirely; an unmapped future code now always
     resolves to the generic default instead of leaking backend text. See
     `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
-  - [ ] **F4** — still open. the assistant hides the fare entirely when
-    no drivers are online, while `rider-app/app/ride-options.tsx` shows
-    prices under a "No cars available" banner — product decision on
-    parity (backend `tools_booking.py` + `FareQuoteCard.tsx` + shared
-    types + prompt, flagged).
+  - [x] **F4** — product decision made (parity: AI matches
+    `ride-options.tsx`, not the other way around). `get_fare_quote()`
+    (`backend/ai/tools_booking.py`) now prices an unavailable vehicle type
+    (`available: false`) instead of omitting it, for both partial and
+    total outages, behind `ai_fare_quote_show_unavailable_enabled`
+    (migration 410, default **FALSE** — new behaviour, ships dark, unlike
+    F1's kill-switch above). Recommendation and the booking-shortcut Redis
+    pin always come from available options only, regardless of the flag —
+    an unavailable option showing a price is never bookable through it.
+    `shared/types/ai.ts`'s `FareQuoteOption` gained the field additively;
+    both `rider-app/components/FareQuoteCard.tsx` and the admin AI
+    console (`admin-dashboard/src/app/dashboard/ai-console/page.tsx` —
+    found via blast-radius grep, same shared tool feeds both) dim and
+    disable an unavailable option, "No drivers nearby" instead of
+    ETA/capacity. See
+    `docs/change-log/2026-09-10-ai17-f4-fare-quote-availability-parity.md`.
   - [x] **F5** — `conversations.py`'s `delete_conversation` now
     best-effort deletes the `ai:quote:{conversation_id}` Redis pin after
     the DB rows, same fail-open contract as the pin's own writer. See

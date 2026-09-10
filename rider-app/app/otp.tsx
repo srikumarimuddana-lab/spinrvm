@@ -22,6 +22,7 @@ import { logCompleteRegistration } from '@shared/analytics/meta';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
+import { shakeHorizontal } from '@shared/utils/motion';
 import { HAS_AUTHENTICATED_BEFORE_KEY } from './login';
 
 const CODE_LENGTH = 4;
@@ -119,15 +120,10 @@ export default function OtpScreen() {
     // router is expo-router's stable singleton.
   }, [user, router]);
 
-  const triggerShake = () => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
-    ]).start();
-  };
+  // Shared shake sequence/timing/easing (ACTION_ITEMS.md UX4) — same
+  // amplitude as before (12/8), now sharing its step duration+easing with
+  // driver-app's PIN shake instead of a locally hardcoded 60ms/step.
+  const triggerShake = () => shakeHorizontal(shakeAnim);
 
   const handleCodeChange = (text: string) => {
     const digits = text.replace(/\D/g, '');

@@ -1043,6 +1043,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     this is a data question needing a live query, not a code gap); two
     incompatible legacy-ID namespaces still need a crosswalk table (now
     half-closed, see above).
+  - **2026-09-10 — re-ran the two ambiguous Stripe buckets against live
+    production; evidence shifted, not yet a decision.** This session's
+    Supabase MCP connector reached `spinrmobileapp` (confirmed prod)
+    directly — the "no live prod access" blocker cited throughout this
+    item no longer applies, at least for read-only queries. Full detail:
+    `docs/change-log/2026-09-10-a34-stripe-bucket-recheck.md`.
+    - **`350b5267…` ($33.32): now looks like likely-already-paid, not
+      owed.** A matching payout (paid 2026-08-12) exists now — it simply
+      hadn't synced into the mirror table when the 2026-08-16 audit ran.
+      Same "clean 1:1 pair" evidence class as bucket #4 ($22.43).
+    - **`93a899d5…` ($9.45): still not attributable to one transaction,
+      but the direction changed.** This driver's entire Stripe history (17
+      payments, zero exceptions, including 2 correctly-excluded refunds)
+      shows every payment paid out in full within ~1 day — both `$9.45`
+      events included. No orphaned amount exists anywhere in their record.
+      Leans "likely already paid," same caveat as above.
+    - **If both are accepted**, the $42.77 combined figure moves out of
+      "treat as owed," and the $185.31–$228.08 range collapses toward
+      **$185.31**. Not applied here — needs the same product-owner
+      sign-off every other bucket call in this item has gotten.
+    - **Blended-ledger question — narrowed, not settled.**
+      `driver_stripe_ledger`'s true earliest row is **2026-04-21**, not
+      "May–August" as previously stated (that was based on the 15-bucket
+      sample, not the full table — 357 rows, 50 distinct Stripe accounts,
+      table-wide). Doesn't by itself prove old-app data is blended in —
+      needs Spinr's confirmed launch/dual-run-start date to compare
+      against, which isn't recorded in this file.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as

@@ -18416,28 +18416,54 @@ open design questions — the direction itself is settled; closing these is
 mechanical follow-up work, prioritizable independently.
 
 - [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
-  minority of screens in both apps** — **Status:** open, identified
-  2026-09-10.
+  minority of screens in both apps** — **Status:** in progress —
+  rider-app partial rollout landed 2026-09-10 (see below); driver-app not
+  started. Do not mark closed until both are done.
   - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
     (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
-    there is no `Text.defaultProps` override or themed `Text` wrapper
-    anywhere in either app — the font only applies where a component
-    explicitly sets `fontFamily`. Rider-app: 21 of 64 sampled files do;
-    driver-app: 8 of 61. Everywhere else, `Text` silently renders the OS
+    there was no `Text.defaultProps` override or themed `Text` wrapper
+    anywhere in either app — the font only applied where a component
+    explicitly set `fontFamily`. Rider-app: 21 of 64 sampled files did;
+    driver-app: 8 of 61. Everywhere else, `Text` silently rendered the OS
     system font (San Francisco/Roboto), not the brand typeface.
   - **Why it matters:** the large majority of both apps' screens are not
     actually on-brand typography today, despite the font being loaded and
     "intended" per `.claude/context/brand-spinr.md`.
-  - **Action:** either introduce a themed `Text` wrapper/default so the
-    brand font applies by default app-wide, or sweep remaining files to set
-    `fontFamily` explicitly — a design decision on which mechanism, not
-    covered by this item.
-  - **Files:** none yet — see rider-app/driver-app inventory evidence above
-    for the full per-file breakdown (not reproduced here to avoid drift from
-    the source; re-grep `fontFamily` vs `fontWeight`-only usage before
-    starting).
+  - **Action taken (rider-app only, 2026-09-10):** user-confirmed direction
+    was the themed wrapper (not a sweep) — built
+    `shared/components/Text.tsx`, a drop-in `Text` replacement that
+    defaults `fontFamily` from `style.fontWeight` (400/500/600/700/normal/
+    bold mapped directly to the 4 loaded families; other numeric/keyword
+    weights snapped to the nearest loaded family; no `fontWeight` at all
+    defaults to Regular, matching RN's own implicit normal-weight default
+    so plain body copy's visual weight doesn't change). An explicit
+    `fontFamily` in `style` still overrides it. Unit-tested
+    (`shared/components/__tests__/Text.test.tsx`). Rolled out to 15 of
+    rider-app's ~34 files that had `fontWeight`-only Text with no
+    `fontFamily` anywhere in the file: `app/login.tsx`, `app/wallet.tsx`,
+    `app/(tabs)/account.tsx`, `app/ride-in-progress.tsx`,
+    `app/driver-arrived.tsx`, `app/notifications.tsx`,
+    `app/saved-places.tsx`, `app/scheduled-rides.tsx`, `app/settings.tsx`,
+    `app/safety-hub.tsx`, `app/manage-cards.tsx`, `app/pick-on-map.tsx`,
+    `components/FareQuoteCard.tsx`, `components/BookingProposalCard.tsx`,
+    `components/ConfirmSheet.tsx` (this last one alone fans out to ~15
+    consuming screens, since it's a shared confirm dialog).
+  - **Remaining follow-up scope (not done):** ~19 more rider-app files
+    still lack `fontFamily` entirely (re-grep `fontWeight` vs `fontFamily`
+    usage before picking the next batch — the app/components lists drift);
+    driver-app hasn't been touched at all (8 of 61 sampled files have
+    `fontFamily`, same wrapper pattern needs to land there too, per its own
+    parallel item/session). Neither app has every screen migrated yet.
+  - **Files:** see "Action taken" above for this round's exact list;
+    `shared/components/Text.tsx` is the new wrapper. Full remaining
+    per-file breakdown: re-grep `fontFamily` vs `fontWeight`-only usage
+    before starting the next batch (not reproduced here to avoid drift from
+    the source).
   - **Acceptance:** a defined, enforced mechanism exists such that new
-    screens can't silently ship off-brand-font by omission.
+    screens can't silently ship off-brand-font by omission — met for any
+    new rider-app screen that imports `Text` from
+    `@shared/components/Text` instead of `react-native` directly; not yet
+    enforced by lint, and driver-app has no equivalent yet.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** open,

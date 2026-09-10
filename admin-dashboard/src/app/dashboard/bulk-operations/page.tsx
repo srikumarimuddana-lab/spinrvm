@@ -60,7 +60,11 @@ import { DataQualityScan } from "./_components/DataQualityScan";
 import { DriverRepairPass } from "./_components/DriverRepairPass";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
 import { useAuthStore } from "@/store/authStore";
-import { explainRiderImportIssue, explainStripeMappingIssue } from "@/lib/bulk-import-error-help";
+import {
+    explainRiderImportIssue,
+    explainStripeMappingIssue,
+    explainRouteRegenIssue,
+} from "@/lib/bulk-import-error-help";
 import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
 import { StatTile } from "@/components/bulk-import/stat-tile";
 import { IssueTable as SharedIssueTable } from "@/components/bulk-import/issue-table";
@@ -908,12 +912,26 @@ export default function BulkOperationsPage() {
                     <MapPin className="h-4 w-4" />
                     Imported Ride Snapshots — regenerate route map images with Google Maps tiles
                 </div>
+                <WhatThisToolDoes
+                    what="Renders a PNG map image (real map tiles, with the route drawn on top and pickup/dropoff markers) for each imported ride, and saves it to that ride's record."
+                    why="Rides brought in by Legacy Booking Import have no snapshot image yet — this fills that gap so an imported ride's trip detail page looks the same as one created natively in Spinr."
+                    whichFiles="No file upload — this reads the imported rides already in the database (from Phase 4) and writes generated images. Nothing to prepare."
+                    value="Imported rides get the same visual trip-map experience as a normal Spinr ride, instead of a blank space where the route image should be."
+                    safetyNote="Preview first shows how many rides are eligible with zero writes made. With &ldquo;Re-generate all&rdquo; off, this only touches rides that don't already have a snapshot — it never overwrites an existing image."
+                />
                 <SnapshotRegenerateSection />
 
                 <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     <MapPin className="h-4 w-4" />
                     Imported Ride Routes — backfill road-following routes (OSRM/Google Directions)
                 </div>
+                <WhatThisToolDoes
+                    what="Computes a real road-following route (via OSRM, falling back to Google Directions) between each imported ride's pickup and dropoff, and updates that ride's distance to match the actual route instead of a straight line."
+                    why="Rides brought in from the previous app only carry a straight-line distance between pickup and dropoff — this replaces that placeholder with the real driving route and distance, the same way a normal Spinr ride's route is computed."
+                    whichFiles="No file upload — this reads the imported rides already in the database (from Phase 4) and writes computed routes. Nothing to prepare."
+                    value="Imported rides show an accurate road route and distance instead of an as-the-crow-flies placeholder, keeping trip-history reporting and map displays consistent with rides created natively in Spinr."
+                    safetyNote="Preview first shows how many rides are eligible with zero writes made. With &ldquo;Re-generate all&rdquo; off, this only touches rides that don't already have a real route — it never overwrites one that's already been backfilled."
+                />
                 <RouteRegenerateSection />
             </PhaseSection>
 
@@ -1097,12 +1115,23 @@ function SnapshotRegenerateSection() {
                                 <summary className="cursor-pointer text-muted-foreground">
                                     Error details ({result.errors.length})
                                 </summary>
-                                <ul className="mt-2 space-y-1 text-xs font-mono">
-                                    {result.errors.map((e, i) => (
-                                        <li key={i}>
-                                            {e.ride_id.slice(0, 8)}… — {e.error}
-                                        </li>
-                                    ))}
+                                <ul className="mt-2 space-y-2">
+                                    {result.errors.map((e, i) => {
+                                        const explanation = explainRouteRegenIssue(e.error);
+                                        return (
+                                            <li key={i} className="text-xs">
+                                                <p className="font-mono">
+                                                    {e.ride_id.slice(0, 8)}… — {e.error}
+                                                </p>
+                                                {explanation ? (
+                                                    <div className="mt-1 space-y-0.5 rounded border-l-2 border-muted-foreground/30 pl-2 text-muted-foreground">
+                                                        <p>{explanation.cause}</p>
+                                                        <p className="font-medium">What to do: {explanation.fix}</p>
+                                                    </div>
+                                                ) : null}
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
                             </details>
                         )}
@@ -1266,12 +1295,23 @@ function RouteRegenerateSection() {
                                 <summary className="cursor-pointer text-muted-foreground">
                                     Error details ({result.errors.length})
                                 </summary>
-                                <ul className="mt-2 space-y-1 text-xs font-mono">
-                                    {result.errors.map((e, i) => (
-                                        <li key={i}>
-                                            {e.ride_id.slice(0, 8)}… — {e.error}
-                                        </li>
-                                    ))}
+                                <ul className="mt-2 space-y-2">
+                                    {result.errors.map((e, i) => {
+                                        const explanation = explainRouteRegenIssue(e.error);
+                                        return (
+                                            <li key={i} className="text-xs">
+                                                <p className="font-mono">
+                                                    {e.ride_id.slice(0, 8)}… — {e.error}
+                                                </p>
+                                                {explanation ? (
+                                                    <div className="mt-1 space-y-0.5 rounded border-l-2 border-muted-foreground/30 pl-2 text-muted-foreground">
+                                                        <p>{explanation.cause}</p>
+                                                        <p className="font-medium">What to do: {explanation.fix}</p>
+                                                    </div>
+                                                ) : null}
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
                             </details>
                         )}

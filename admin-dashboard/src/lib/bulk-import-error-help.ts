@@ -560,3 +560,45 @@ export const explainStripeMappingIssue: IssueExplainer = createIssueExplainer(
         ],
     ],
 );
+
+// ── Imported Ride Snapshots / Routes (Route Map Snapshots + Route Backfill) ─
+// Both tools operate on the same imported-ride population and share two of
+// their four possible per-ride error strings ("missing coordinates",
+// "db update: <exception>") -- see routes/admin/rides.py's
+// admin_regenerate_imported_snapshots / admin_regenerate_imported_routes.
+// Unlike every other tool in this file, "upload: <exc>" / "db update: <exc>"
+// interpolate the raw underlying exception text, which has no fixed
+// vocabulary -- these two get a generic, honest explanation rather than a
+// guess at what the specific exception could be.
+export const explainRouteRegenIssue: IssueExplainer = createIssueExplainer(
+    {
+        "missing coordinates": {
+            cause: "This ride is missing a pickup or dropoff latitude/longitude, so there's nothing to draw a route between.",
+            fix: "Check this ride's pickup_lat/pickup_lng/dropoff_lat/dropoff_lng in the admin Rides page -- a legacy import row with blank coordinates can't get a snapshot or route until that's corrected.",
+        },
+        "render returned None": {
+            cause: "Both the Google Static Maps renderer and the OSM fallback renderer failed to produce an image for this ride, for reasons logged server-side but not returned here.",
+            fix: "Re-run Regenerate -- this is often a transient rendering/network issue. If it keeps failing on the same ride, check the backend logs for this ride_id.",
+        },
+        "no route from OSRM or Google Directions": {
+            cause: "Neither OSRM nor the Google Directions fallback could compute a road route between this ride's pickup and dropoff points.",
+            fix: "Check this ride's coordinates for a real Saskatchewan-area location -- an OSRM/Directions failure on both is more likely from a bad coordinate pair than a slow-passing map region.",
+        },
+    },
+    [
+        [
+            "upload: ",
+            {
+                cause: "The rendered map image failed to upload to storage -- the specific reason follows the colon in the message above, straight from the storage error.",
+                fix: "Re-run Regenerate -- this is usually transient. If it keeps failing on the same ride, check the backend logs for this ride_id and the storage error text shown above.",
+            },
+        ],
+        [
+            "db update: ",
+            {
+                cause: "The snapshot/route was generated successfully, but saving it to this ride's record failed -- the specific reason follows the colon in the message above, straight from the database error.",
+                fix: "Re-run Regenerate -- this is usually transient. If it keeps failing on the same ride, check the backend logs for this ride_id and the database error text shown above.",
+            },
+        ],
+    ],
+);

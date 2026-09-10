@@ -10,6 +10,7 @@ import {
   explainDriverImportIssue,
   explainRiderImportIssue,
   explainStripeMappingIssue,
+  explainRouteRegenIssue,
 } from '../bulk-import-error-help';
 
 describe('createIssueExplainer', () => {
@@ -218,5 +219,22 @@ describe('explainStripeMappingIssue', () => {
 
   it('does not carry Bulk Rider Import messages', () => {
     expect(explainStripeMappingIssue('duplicate phone in CSV')).toBeNull();
+  });
+});
+
+describe('explainRouteRegenIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainRouteRegenIssue('missing coordinates')).not.toBeNull();
+    expect(explainRouteRegenIssue('render returned None')).not.toBeNull();
+    expect(explainRouteRegenIssue('no route from OSRM or Google Directions')).not.toBeNull();
+  });
+
+  it('matches the dynamic-suffix upload/db-update prefixes', () => {
+    expect(explainRouteRegenIssue('upload: The resource was not found')).not.toBeNull();
+    expect(explainRouteRegenIssue('db update: connection timed out')).not.toBeNull();
+  });
+
+  it('does not carry Stripe Mapping messages', () => {
+    expect(explainRouteRegenIssue('customer is deleted in Stripe')).toBeNull();
   });
 });

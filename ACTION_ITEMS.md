@@ -13173,6 +13173,45 @@ record of what was assumed vs. what was actually true</summary>
     `main` as ambiguous) but may still matter for confirming `staging`'s
     current/intended behavior before the conditional logic ships.
 
+### C100. `driver-app/__tests__/components/CarMarker.test.tsx` — 7 tests broken by a prior `expo-image` migration the test was never updated for
+- [ ] **Status:** open, found 2026-09-10 while investigating an unrelated
+  CI failure on PR #5200 (a driver-app toast-color fix).
+- **Issue/gap:** `CarMarker.tsx:3` imports `Image as ExpoImage` from
+  `expo-image` and renders `<ExpoImage>` (line ~963) as the car icon — but
+  the test file (`CarMarker.test.tsx:3`) still imports `Image` from
+  `'react-native'` and locates the car icon via
+  `UNSAFE_getByType(Image)`/`findByType(Image)`. Since the rendered tree no
+  longer contains a React Native core `Image` node, every one of these
+  lookups throws `No instances found with node type: "Image"`. 7 tests fail
+  in the suite (retry/backoff-then-report, ring-freeze re-arm ×3, iOS
+  rotation-transform), all downstream of the same lookup bug.
+- **Root cause:** a prior commit switched `CarMarker.tsx`'s rendered image
+  element from RN's `Image` to `expo-image`'s (likely the same change as
+  "fix(driver-app): switch CarMarker to ExpoImage for Android marker
+  visibility", visible in recent `main` history) without updating this
+  test file's `Image` lookups to match.
+- **Confirmed not caused by PR #5200**: PR #5200's diff touches only
+  `driver-app/components/toastConfig.tsx`,
+  `driver-app/__tests__/components/toastConfig.theme.test.tsx`, and
+  `ACTION_ITEMS.md` — none of which `CarMarker.tsx`/`CarMarker.test.tsx`
+  import or are imported by. Reproduced identically (`7 failed, 18 passed`)
+  standalone on that PR's branch AND on a clean `git worktree` checkout of
+  `origin/main` at the exact commit PR #5200 is based on
+  (`f9f52c7`) — this is a pre-existing base-branch failure, not something
+  this PR introduced.
+- **Action:** update `CarMarker.test.tsx` to locate the car icon via
+  `expo-image`'s `Image` export (`import { Image as ExpoImage } from
+  'expo-image'`, then `UNSAFE_getByType(ExpoImage)`/`findByType(ExpoImage)`)
+  instead of React Native's core `Image`. No production code change
+  expected — this is a test-only fix for a lookup that fell out of sync
+  with a real, intentional rendering change.
+- **Files:** `driver-app/__tests__/components/CarMarker.test.tsx` (test-only
+  fix expected; `driver-app/components/CarMarker.tsx` itself is not
+  believed to need changes, since its `expo-image` migration was
+  deliberate).
+- **Acceptance:** `npx jest __tests__/components/CarMarker.test.tsx` passes
+  25/25 on `main`.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly
@@ -18471,24 +18510,41 @@ mechanical follow-up work, prioritizable independently.
     function/constant; a documented duration/easing convention exists for
     new motion work.
 
-- [ ] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
+- [x] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
   that match neither the current nor the previous theme tokens, and has no
-  dark-mode awareness** — **Status:** open, identified 2026-09-10. This one
-  is a live bug, not just adoption debt — flagging distinctly from UX1–UX4.
+  dark-mode awareness** — **Status:** closed 2026-09-10, same session that
+  filed it. This one was a live bug, not just adoption debt — flagged
+  distinctly from UX1–UX4.
   - **Issue/gap:** `driver-app/components/toastConfig.tsx:8-11`'s
-    `VARIANT_CONFIG` hardcodes `success:'#0d9f6e'`, `error:'#dc2626'`,
-    `warning:'#d97706'`, `info:'#1a73e8'` — none of these match
-    `shared/theme/index.ts`'s current values, and the file has no
-    `useTheme()` call at all, so toast colors never adapt to dark mode.
-  - **Why it matters:** toast notifications (a frequent, high-visibility UI
-    element) render with off-brand, theme-incorrect colors for every driver,
-    in both light and dark mode, today.
-  - **Action:** rewrite `VARIANT_CONFIG` to read from `useTheme()`'s
-    `colors.success`/`colors.error`/`colors.warning`/`colors.info` (and dark
-    variants) like the rest of the app.
-  - **Files:** `driver-app/components/toastConfig.tsx`.
+    `VARIANT_CONFIG` hardcoded `success:'#0d9f6e'`, `error:'#dc2626'`,
+    `warning:'#d97706'`, `info:'#1a73e8'` — none of these matched
+    `shared/theme/index.ts`'s current values, and the file had no
+    `useTheme()` call at all, so toast colors never adapted to dark mode.
+  - **Why it mattered:** toast notifications (a frequent, high-visibility UI
+    element) rendered with off-brand, theme-incorrect colors for every
+    driver, in both light and dark mode.
+  - **Fix:** `SpinrToast` now calls `useTheme()` and resolves background via
+    `colors.success`/`colors.error`/`colors.warning`/`colors.info` per
+    variant, replacing the static hex `VARIANT_CONFIG` bg map (icon glyph
+    names, which aren't a color-drift concern, stay a static lookup).
+  - **Files:** `driver-app/components/toastConfig.tsx`;
+    `driver-app/__tests__/components/toastConfig.theme.test.tsx` (new
+    regression test — light-mode tokens + dark-mode adaptation via a real
+    `ThemeProvider`).
+  - **Verification:** `npx jest __tests__/components/toastConfig` (5/5
+    passing, including the pre-existing a11y suite), `npx tsc --noEmit`
+    clean, `npx eslint` — the 4 `no-restricted-syntax` hardcoded-hex
+    warnings on the old `VARIANT_CONFIG` bg values are gone (14 → 11
+    warnings on the file; the remaining 11 are pre-existing, out of scope —
+    fixed-contrast white text/icon on a colored surface, a documented
+    exception, and padding/fontSize literals, which is UX2's territory, not
+    this item's).
+  - **Not fixed here:** rider-app's `components/Toast.tsx` has the
+    identical hardcoded `VARIANT_CONFIG` (confirmed byte-for-byte same
+    stale hex values) but was not in this item's stated file scope —
+    worth a follow-up item if picked up.
   - **Acceptance:** driver-app toast colors match the current theme tokens
-    in both light and dark mode.
+    in both light and dark mode. Met.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 

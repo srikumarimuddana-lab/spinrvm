@@ -43,6 +43,7 @@ import {
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, MIN_DISPLAYED_SPEED_MPS } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -1603,7 +1604,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.border,
       paddingHorizontal: 14,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.15,
@@ -1634,7 +1635,7 @@ function createStyles(colors: ThemeColors) {
       right: 0,
       backgroundColor: 'rgba(239,68,68,0.92)',
       paddingVertical: 6,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       zIndex: 200,
       alignItems: 'center',
     },
@@ -1645,24 +1646,24 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackTitle: {
       color: colors.text,
-      marginTop: 16,
+      marginTop: SPACING.md,
       fontSize: 17,
       fontWeight: '700',
       textAlign: 'center',
     },
     locationFallbackBody: {
       color: colors.textDim,
-      marginTop: 8,
+      marginTop: SPACING.sm,
       fontSize: 14,
       lineHeight: 20,
       textAlign: 'center',
     },
     locationFallbackBtn: {
-      marginTop: 16,
+      marginTop: SPACING.md,
       backgroundColor: colors.primary,
       borderRadius: 12,
       paddingVertical: 12,
-      paddingHorizontal: 32,
+      paddingHorizontal: SPACING.xl,
     },
     locationFallbackBtnSecondary: {
       backgroundColor: 'transparent',
@@ -1671,7 +1672,7 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackBtnText: {
       color: '#fff',
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
     },
     locationFallbackBtnTextSecondary: {
@@ -1726,7 +1727,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: `${colors.success}0F`,
     },
     countdownText: {
-      fontSize: 22,
+      fontSize: FONT.h3,
       fontWeight: '800',
       color: colors.primary,
     },
@@ -1750,7 +1751,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'flex-end',
     },
     fareLabel: {
-      fontSize: 11,
+      fontSize: FONT.label,
       color: colors.textDim,
       fontWeight: '500',
     },
@@ -1772,7 +1773,7 @@ function createStyles(colors: ThemeColors) {
     routeIconColumn: {
       alignItems: 'center',
       width: 20,
-      paddingTop: 4,
+      paddingTop: SPACING.xs,
     },
     routeDot: {
       width: 10,
@@ -1783,7 +1784,7 @@ function createStyles(colors: ThemeColors) {
       width: 2,
       flex: 1,
       backgroundColor: colors.border,
-      marginVertical: 4,
+      marginVertical: SPACING.xs,
     },
     routeDetails: {
       flex: 1,
@@ -1807,7 +1808,7 @@ function createStyles(colors: ThemeColors) {
     routeDivider: {
       height: 1,
       backgroundColor: colors.border,
-      marginVertical: 8,
+      marginVertical: SPACING.sm,
     },
     // Trip info badges
     tripInfoRow: {
@@ -1815,7 +1816,7 @@ function createStyles(colors: ThemeColors) {
       flexWrap: 'wrap',
       gap: 8,
       paddingHorizontal: 20,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     tripInfoBadge: {
       flexDirection: 'row',
@@ -1846,13 +1847,13 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.dangerBg,
       borderRadius: 16,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 8,
       borderWidth: 1,
       borderColor: '#FECACA',
     },
     declineText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
       color: '#FF4757',
     },
@@ -1863,7 +1864,7 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.primary,
       borderRadius: 16,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 8,
       shadowColor: colors.primary,
       shadowOffset: { width: 0, height: 4 },
@@ -1872,7 +1873,7 @@ function createStyles(colors: ThemeColors) {
       elevation: 6,
     },
     acceptText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '700',
       color: '#fff',
     },

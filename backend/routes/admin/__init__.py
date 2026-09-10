@@ -189,8 +189,12 @@ admin_router.include_router(legacy_vehicle_history_backfill_router, dependencies
 # to driver). Read-only + driver-addressed email; drivers module grant.
 admin_router.include_router(driver_statements_router, dependencies=[Depends(require_module("drivers"))])
 # Legacy Stripe mapping import (drivers + riders kinds) — migration ops
-# tooling, gated like the bulk driver import it mirrors.
-admin_router.include_router(stripe_import_router, dependencies=[Depends(require_module("drivers"))])
+# tooling. Every handler in stripe_import.py independently requires
+# super_admin already (its own docstring: "module grants are not enough");
+# the mount matches that actual enforcement so it isn't weaker than what the
+# code relies on — a future edit trimming the per-handler checks would
+# otherwise silently reopen this to any "drivers"-grant admin.
+admin_router.include_router(stripe_import_router, dependencies=[Depends(require_super_admin)])
 # Stripe payout-history sync (legacy migration: rebuild payouts from Stripe
 # Transfer truth). Writes to payouts, so it takes the booking-import posture:
 # require_super_admin at the mount AND re-checked inside each handler.

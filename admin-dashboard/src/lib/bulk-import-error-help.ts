@@ -257,3 +257,73 @@ export const explainLegacyDriverImportIssue: IssueExplainer = createIssueExplain
         ],
     ],
 );
+
+// ── Bulk Driver Import (Saskatoon recruitment CSV) ──────────────────────
+export const explainDriverImportIssue: IssueExplainer = createIssueExplainer(
+    {
+        "drivers CSV is empty": {
+            cause: "The uploaded file has no data rows.",
+            fix: "Check that the file wasn't saved empty or truncated during export.",
+        },
+        "drivers CSV is missing required column": {
+            cause: "The uploaded CSV is missing a column this tool requires.",
+            fix: "Re-download the CSV template above and compare its header row against your file.",
+        },
+        "duplicate old_driver_id": {
+            cause: "Another row in this file already used this same old_driver_id.",
+            fix: "Check the file for two rows sharing the same old_driver_id -- only one can be applied.",
+        },
+        "row is not scoped to Saskatoon": {
+            cause: "This row belongs to a different service area than this tool is scoped to.",
+            fix: "This tool only imports Saskatoon drivers -- remove this row, or use the correct import for its service area.",
+        },
+        "phone is not a valid 10-digit North American number": {
+            cause: "This row's phone number isn't a recognizable 10-digit North American number.",
+            fix: "Check the phone value for this row -- it may be missing digits, have an international format, or be blank.",
+        },
+        "email is not a valid format": {
+            cause: "This row's email address doesn't look like a valid email.",
+            fix: "Check the email value for this row for a typo or missing @ symbol.",
+        },
+        "could not parse date": {
+            cause: "This row's date of birth isn't in a format this tool recognizes.",
+            fix: "Check the date_of_birth value for this row -- it may be blank, malformed, or use an unexpected date format.",
+        },
+        "matching user or driver already exists; handle manually before import": {
+            cause: "A Spinr account already exists for this phone or email, but in a shape this tool can't safely reconcile automatically (e.g. it's not clearly the same person's existing driver profile).",
+            fix: "Look up this phone/email in the admin Users/Drivers pages and decide by hand whether to link, skip, or correct the row before re-running.",
+        },
+        "VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)": {
+            cause: "This row's VIN isn't a valid 17-character VIN -- it may be the wrong length or contain a letter (I, O, or Q) that's never used in a real VIN.",
+            fix: "Check the vin value for this row against the vehicle's registration.",
+        },
+        "web import does not accept a documents CSV; upload document files individually per driver after import": {
+            cause: "This row is a document record, but the admin upload tool only imports driver profile data -- document files are uploaded per-driver afterwards.",
+            fix: "Remove document rows from this CSV, import the drivers first, then upload each driver's documents individually from their driver page.",
+        },
+        "driver already imported by a previous run; no changes to apply": {
+            cause: "This driver was already imported by an earlier run of this same tool, and nothing in this row has changed since.",
+            fix: "This is expected on a re-run of the same file and is not a problem. No action needed.",
+        },
+        "date parses differently day-first vs month-first; verify the source sheet's format before commit": {
+            cause: "This row's date could mean two different real dates depending on whether the source used day-first or month-first formatting (e.g. 03/04/2025 could be March 4 or April 3).",
+            fix: "Check the original spreadsheet's date format and confirm this value means what you expect before committing.",
+        },
+    },
+    [
+        [
+            "no vehicle_types row matched",
+            {
+                cause: "This row's vehicle_type value doesn't match any vehicle type Spinr has configured.",
+                fix: "Check the vehicle_type value for this row against Spinr's configured vehicle types (Settings → Vehicle Types).",
+            },
+        ],
+        [
+            "driver already imported; updating",
+            {
+                cause: "This driver was already imported by an earlier run, but this row has different vehicle details -- the changed fields are being updated.",
+                fix: "This is expected when re-uploading a corrected file (e.g. adding a VIN that was missing before) and is not a problem. No action needed.",
+            },
+        ],
+    ],
+);

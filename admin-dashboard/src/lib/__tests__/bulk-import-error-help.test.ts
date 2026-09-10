@@ -7,6 +7,7 @@ import {
   explainWalletImportIssue,
   explainBookingImportIssue,
   explainLegacyDriverImportIssue,
+  explainDriverImportIssue,
 } from '../bulk-import-error-help';
 
 describe('createIssueExplainer', () => {
@@ -122,5 +123,28 @@ describe('explainLegacyDriverImportIssue', () => {
 
   it('does not carry booking/wallet messages', () => {
     expect(explainLegacyDriverImportIssue('booking is missing its legacy _id')).toBeNull();
+  });
+});
+
+describe('explainDriverImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainDriverImportIssue('duplicate old_driver_id')).not.toBeNull();
+    expect(
+      explainDriverImportIssue('matching user or driver already exists; handle manually before import'),
+    ).not.toBeNull();
+    expect(
+      explainDriverImportIssue('VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)'),
+    ).not.toBeNull();
+  });
+
+  it('matches the dynamic vehicle-type and already-imported-update prefixes', () => {
+    expect(explainDriverImportIssue("no vehicle_types row matched 'suv'")).not.toBeNull();
+    expect(
+      explainDriverImportIssue('driver already imported; updating 2 changed vehicle field(s)'),
+    ).not.toBeNull();
+  });
+
+  it('does not carry Legacy Driver Import messages', () => {
+    expect(explainDriverImportIssue('row has no _id')).toBeNull();
   });
 });

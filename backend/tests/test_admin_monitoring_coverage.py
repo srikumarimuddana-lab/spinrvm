@@ -359,6 +359,29 @@ async def test_flush_redis_prefix_audit_write_failure_does_not_block_response():
 
 
 # ---------------------------------------------------------------------------
+# Dispatch geo-index status (feat/49 — admin visibility)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_dispatch_geo_status_returns_the_combined_status_dict():
+    fake_status = {
+        "configured_provider": "postgis",
+        "effective_provider": "postgis",
+        "h3_would_serve": False,
+        "last_failover": None,
+        "status_summary": None,
+    }
+    with (
+        patch("settings_loader.get_app_settings", AsyncMock(return_value={"dispatch_geo_provider": "postgis"})),
+        patch.object(monitoring, "admin_dispatch_geo_status", AsyncMock(return_value=fake_status)) as status_mock,
+    ):
+        out = await monitoring.get_dispatch_geo_status(current_admin={"id": "admin-9"})
+    status_mock.assert_awaited_once_with({"dispatch_geo_provider": "postgis"})
+    assert out == fake_status
+
+
+# ---------------------------------------------------------------------------
 # Dispatch geo-index force rebuild (ACTION_ITEMS.md C53 finding 3)
 # ---------------------------------------------------------------------------
 

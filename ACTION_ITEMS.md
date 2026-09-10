@@ -22534,6 +22534,37 @@ how much they de-risk a public launch._
   used" — that needs a human looking at the Branches settings page (or,
   for the bypass question, the merge event's actor/method in the repo's
   audit log, which this session also cannot read).
+  - **2026-09-10 — new evidence narrows this toward admin bypass
+    specifically, still without a direct read of Settings → Branches.**
+    Full detail: `docs/change-log/2026-09-10-a43-admin-bypass-evidence.md`.
+    Four facts, none needing branch-protection read access: (1) PR #5048's
+    author and its `merged_by` are the **same account**, and
+    `list_repository_collaborators` shows that account holds **`admin`**
+    role — the repo's only other collaborator holds `write`; (2) a review
+    was explicitly requested from that other (write-only) collaborator and
+    **never given** (`get_reviews` returns empty) — the merge didn't wait
+    for it; (3) the "CI Guard Rails Summary" bot comment — the repo's own
+    custom merge-blocking gate, not just `backend-test` — didn't post
+    until **31 minutes after** the merge, meaning none of its ten gates had
+    reported in either direction at merge time, not just the one check
+    already known; (4) the PR's own body has a self-authored "Tier 7 ·
+    High-risk stop condition & unmerge trigger" section with "Rollback
+    command verified" and "On-call informed before merge" both left
+    unchecked. Together this is much more consistent with a GitHub
+    repo-admin merging past required reviews/checks (the standard
+    "administrators are exempt unless 'Do not allow bypassing the above
+    settings' is enabled" default) than with "the checks simply aren't
+    required" — a non-admin acting under the same branch protection
+    couldn't have merged with zero reviews the way this admin account did.
+    **Action narrowed accordingly:** a human with repo-admin access should
+    check specifically whether that one setting is on for `main`, rather
+    than auditing the full required-checks list from scratch. Confirmed
+    again, more thoroughly this pass, that no tool in this session's
+    GitHub MCP toolset exposes branch-protection rules or the audit log —
+    `list_branches` was tried and doesn't help here (no per-branch
+    protection detail worth the ~700+-branch pagination cost to find
+    `main`'s row, and even a bare boolean wouldn't reveal which checks are
+    required or whether admins are exempt).
 
 ### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
 

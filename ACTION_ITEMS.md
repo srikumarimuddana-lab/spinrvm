@@ -18489,8 +18489,8 @@ mechanical follow-up work, prioritizable independently.
 
 - [x] **UX4. No shared transition timing/easing system in either app —
   near-identical interactions independently reimplemented** — **Status:**
-  closed 2026-09-10 for the two originally-named call sites
-  (`fix/ux4-shared-motion-timing`); two more instances of the identical
+  closed 2026-09-10 for the two originally-named call sites (PR #5213,
+  `fix/ux4-shared-motion-timing`); two more instances of the identical
   pattern turned up during this fix's own blast-radius grep and remain
   open — see Residual below.
   - **Issue/gap:** no `TIMING`/`EASING` constants module existed; each

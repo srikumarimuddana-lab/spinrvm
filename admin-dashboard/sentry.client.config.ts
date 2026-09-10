@@ -4,7 +4,7 @@
  * Set NEXT_PUBLIC_SENTRY_DSN in Vercel / CI environment variables.
  */
 import * as Sentry from '@sentry/nextjs';
-import { scrubEvent as beforeSend } from './sentry.scrub';
+import { scrubBreadcrumb as beforeBreadcrumb, scrubEvent as beforeSend } from './sentry.scrub';
 
 // [22-2] PIPEDA data residency: Sentry has no Canadian region. EU
 // (o<org>.ingest.de.sentry.io) is the closest compliant option and remains the
@@ -30,6 +30,7 @@ Sentry.init({
   enabled: !!process.env.NEXT_PUBLIC_SENTRY_DSN,
 
   beforeSend,
+  beforeBreadcrumb,
 
   // Required tags per CLAUDE.md observability conventions ([21-4]).
   initialScope: {

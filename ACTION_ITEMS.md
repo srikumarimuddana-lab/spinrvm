@@ -1043,6 +1043,33 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     this is a data question needing a live query, not a code gap); two
     incompatible legacy-ID namespaces still need a crosswalk table (now
     half-closed, see above).
+  - **2026-09-10 — re-ran the two ambiguous Stripe buckets against live
+    production; evidence shifted, not yet a decision.** This session's
+    Supabase MCP connector reached `spinrmobileapp` (confirmed prod)
+    directly — the "no live prod access" blocker cited throughout this
+    item no longer applies, at least for read-only queries. Full detail:
+    `docs/change-log/2026-09-10-a34-stripe-bucket-recheck.md`.
+    - **`350b5267…` ($33.32): now looks like likely-already-paid, not
+      owed.** A matching payout (paid 2026-08-12) exists now — it simply
+      hadn't synced into the mirror table when the 2026-08-16 audit ran.
+      Same "clean 1:1 pair" evidence class as bucket #4 ($22.43).
+    - **`93a899d5…` ($9.45): still not attributable to one transaction,
+      but the direction changed.** This driver's entire Stripe history (17
+      payments, zero exceptions, including 2 correctly-excluded refunds)
+      shows every payment paid out in full within ~1 day — both `$9.45`
+      events included. No orphaned amount exists anywhere in their record.
+      Leans "likely already paid," same caveat as above.
+    - **If both are accepted**, the $42.77 combined figure moves out of
+      "treat as owed," and the $185.31–$228.08 range collapses toward
+      **$185.31**. Not applied here — needs the same product-owner
+      sign-off every other bucket call in this item has gotten.
+    - **Blended-ledger question — narrowed, not settled.**
+      `driver_stripe_ledger`'s true earliest row is **2026-04-21**, not
+      "May–August" as previously stated (that was based on the 15-bucket
+      sample, not the full table — 357 rows, 50 distinct Stripe accounts,
+      table-wide). Doesn't by itself prove old-app data is blended in —
+      needs Spinr's confirmed launch/dual-run-start date to compare
+      against, which isn't recorded in this file.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
@@ -22469,6 +22496,29 @@ how much they de-risk a public launch._
   check-run timestamps, but not *why* the platform allowed it (config gap
   vs. bypass), which needs human settings-page access this session
   doesn't have.
+- **2026-09-10 — follow-up check while re-examining A43; confirms this
+  entry's diagnosis, surfaces one narrower gap.** Pulled #5048's full CI
+  Guard Rails job list (run `34007800478`) directly. Two separate jobs in
+  two different workflows both ran pytest on this PR: `backend-test`
+  (`ci.yml`) — covered above, genuinely reported `failure` — and a second,
+  parallel job, `shared-coverage-run` / "Run backend test suite with
+  coverage (shared)" (`ci-guardrails.yml`), which reported `success`
+  despite the same 8 failing tests / 41 errors. **That second job's
+  leniency is deliberate, not a bug**: its pytest step ends `|| true` and
+  the job itself carries `continue-on-error: true` by design, so a real
+  test failure can't cascade into skipping the three downstream
+  coverage-floor gates that consume its coverage artifact (see the job's
+  own code comments, referencing
+  `docs/audit/2026-08-27-cicd-gates-guardrails-audit.md` §5). Removing
+  that leniency would reintroduce the cascading-skip problem it was
+  written to prevent — considered and rejected as a fix for this reason.
+  **What is genuinely new:** the "CI Guard Rails Summary" bot comment
+  (even after C74's fix below) has no row for `backend-test`'s result —
+  none of its 10 listed gates check "did the test suite pass." Anyone
+  reading only that one comment, all-green, has zero visibility into
+  whether tests actually passed, on any PR, not just this one. Doesn't
+  change this entry's root cause or Action — it strengthens the case for
+  it, since right now no bot comment surfaces that signal at all.
 
 ### C74. `security-gates.yml`/`ci-guardrails.yml` summary jobs never failed regardless of gate results
 
@@ -23886,6 +23936,91 @@ how much they de-risk a public launch._
   the silent-drop gap for everything except ride offers; (5) confirm the iOS background-mode gap
   against a real build; (6) either wire `expo-notifications`' handler into the real path or
   remove the now-misleading dead code.
+
+### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive
+
+- [ ] **Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
+  No code changed; regeneration requires a real `node_modules/react-native` install (local
+  machine or CI), which this Claude Code cloud sandbox does not have — see "Why this can't be
+  finished here" in the doc.
+- **What's broken:** `rider-app/patches/react-native+0.86.2.patch` (stale filename, installed RN
+  is 0.86.3) and `driver-app/patches/react-native+0.86.3.patch` (filename matches, still fails)
+  both fail `patch-package` application against installed `react-native@0.86.3`. Confirmed via
+  direct inspection of `node_modules/react-native` in both apps: none of the patch's 8 target
+  files carry the `PATCH (spinr rider-app/driver-app):` marker, so the fix is not active in
+  either app's current install.
+- **What the patch does:** works around a real Android crash — RN's Android `ActivityIndicator`
+  (and 7 other components: `RefreshControl`, `Switch`, `Modal`, `DebuggingOverlay`,
+  `HScrollViewNativeComponents`, and two `VirtualView` native components) import native
+  components that return a non-renderable object under the New Architecture (Bridgeless),
+  throwing `"Element type is invalid... got: object"` at render time. The fix swaps in a
+  JS-only fallback. Full original patch content (all 8 files, both apps) is intact and
+  version-controlled in the two patch files above — nothing was lost.
+- **Near-miss during investigation:** a diagnostic `patch-package` dry-run inside `driver-app`
+  overwrote `driver-app/patches/react-native+0.86.3.patch` with an unrelated 393,995-line diff
+  (this sandbox's installed `react-native` is a `.d.ts`-only stub — 0 real `.js` files under
+  `Libraries/`, confirmed via `find`/`wc -l` — so any patch generated here is diffed against
+  stub content, not real RN source). Caught via `git status`/`git diff` before commit and
+  reverted with `git checkout --`; repo is clean, both patch files match `git HEAD`. This is
+  the direct evidence for why regeneration must happen outside this environment.
+- **Recommended next step:** per the handoff doc — on a machine/CI with a full real RN install,
+  hand-port each of the 8 files' fix against the current 0.86.3 source (don't assume old hunk
+  context still matches), regenerate via `npx patch-package react-native`, verify on a real
+  Android build/emulator (render-time crash — `tsc`/lint prove nothing), then follow the
+  Change Impact Log gate before merging (customer-facing rendering path, live app testing).
+  Worth checking first whether RN 0.86.3 already fixed the underlying issue upstream, in which
+  case some/all of the 8 may be deletable rather than needing a rewrite.
+- **What was NOT verified:** whether the underlying Bridgeless/`ProgressBarAndroid` bug is still
+  present in RN 0.86.3 upstream (not checked against RN's own changelog/issues); whether the
+  other 7 files' native components have the same failure mode as `ActivityIndicator`'s
+  documented one (inferred by pattern, not confirmed per-file); no Android build/emulator
+  available in this sandbox to reproduce the original crash or verify any fix.
+
+### C99. No Fly.io or Railway CLI/MCP access from any Claude Code session in this repo — blocks verifying prod secrets directly, including C97's own top recommendation
+
+- [ ] **Status:** OPEN — setup gap, needs a human to grant access; not fixable
+  by any session. Surfaced 2026-09-10 when the user asked this session to
+  check whether `FIREBASE_SERVICE_ACCOUNT_JSON` is valid on both Fly.io
+  and Railway — the #1 recommendation in **C97** (driver-app push
+  notifications), which flagged confirming this credential as the fastest,
+  cheapest way to resolve its two-root-cause fork.
+- **What's missing, confirmed directly:** `which flyctl fly railway` finds
+  none of the three installed in this session's shell; no `mcp__fly*` or
+  `mcp__railway*` tools appear anywhere in this session's tool list
+  (contrast with Vercel, Supabase, GitHub, Figma, which are all connected
+  here). `FIREBASE_SERVICE_ACCOUNT_JSON` lives as a secret inside each
+  platform's own vault (per `CLAUDE.md`'s Deployment section — backend
+  ships to both Fly `yyz` primary and Railway standby), not in this repo,
+  so there is no file this session could read to check it either.
+- **Consequence:** the exact same gap almost certainly blocks
+  `session_012kZfwCw2q9T5T1HjvdXyAK` (C97's own owning session) from
+  confirming its own top recommendation — that session's post-turn status
+  as of 2026-09-10 explicitly reads "need Firebase credential check" as
+  its blocker. Two independent sessions hit the identical wall.
+- **What a human can do right now, without waiting on this being fixed**
+  (commands handed to the user directly, not run here):
+  ```bash
+  # Fly.io — confirms the secret exists + last-set date (never shows the value)
+  flyctl secrets list -a <fly-app-name>
+  # Railway — same idea
+  railway variables --service <service-name>
+  # To actually validate the JSON parses and shows the right project/service-account
+  # (still never prints the private key):
+  flyctl ssh console -a <fly-app-name> -C "python3 -c \"import json,os; d=json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT_JSON']); print(d['project_id'], d['client_email'])\""
+  # railway run <same python one-liner> for the Railway side
+  ```
+- **Fix, if the user wants sessions to do this directly in future:** grant
+  Fly.io and Railway CLI credentials (or connect their respective MCP
+  servers, if/when one exists) to this repo's Claude Code environment —
+  scoped to this project specifically, per the user's own stated policy
+  on project-scoped tool access (never account-wide/all-projects) for
+  CLI-based tech-stack components. This is a connector/environment
+  configuration change, not a code change — no PR can close this item by
+  itself the way most items here are closed.
+- **Not investigated:** whether this account has Fly.io/Railway access
+  configured for *other* repos' Claude Code environments (would confirm
+  this is a per-repo scoping gap rather than a full account-level absence)
+  — out of scope to check from this session, which only sees this repo.
 
 ## Recently completed (do not redo)
 

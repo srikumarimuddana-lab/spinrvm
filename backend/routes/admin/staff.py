@@ -119,6 +119,10 @@ class StaffCreateRequest(BaseModel):
     last_name: str
     role: str = "custom"  # super_admin, operations, support, finance, custom
     modules: Optional[List[str]] = None  # Only used if role=custom
+    # W4 (2026-09-10 RBAC audit): required when role="custom" with modules
+    # that grant super_admin-equivalent access — see
+    # _require_actor_password_confirmation.
+    password_confirmation: Optional[str] = None
 
 
 class StaffUpdateRequest(BaseModel):
@@ -127,14 +131,41 @@ class StaffUpdateRequest(BaseModel):
     role: Optional[str] = None
     modules: Optional[List[str]] = None
     is_active: Optional[bool] = None
-    # A-P3-6: required when promoting a staff member to super_admin
+    # A-P3-6: required when promoting a staff member to super_admin (or,
+    # per W4, granting a custom role every AVAILABLE_MODULES string)
     password_confirmation: Optional[str] = None
+
+
+async def _require_actor_password_confirmation(
+    admin: dict, password_confirmation: Optional[str], *, reason: str
+) -> None:
+    """Re-verify the acting admin's own password before a grant that reaches
+    super_admin-equivalent access — either an explicit promotion to
+    role="super_admin", or (W4, 2026-09-10 RBAC audit) a "custom" role whose
+    modules cover every AVAILABLE_MODULES string, which passes every
+    require_module() check just as completely without ever being flagged
+    role=="super_admin". Same backdoor-account risk, same safeguard either
+    way: a hijacked super_admin session could otherwise mint a persistent
+    super_admin-equivalent account with no distinct signal and no re-auth.
+    """
+    if not password_confirmation:
+        raise HTTPException(status_code=422, detail=f"password_confirmation required for {reason}")
+    actor_id = admin.get("id")
+    if actor_id and actor_id != "admin-001":
+        actor_row = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("admin_staff", {"id": actor_id}, limit=1)
+        )
+        if not actor_row:
+            raise HTTPException(status_code=401, detail="Actor not found")
+        ok, _ = verify_password(password_confirmation, actor_row.get("password_hash", ""))
+        if not ok:
+            raise HTTPException(status_code=401, detail="Incorrect password — request denied")
 
 
 @router.get("/staff")
 async def list_staff(
     response: Response,
-    admin: dict = Depends(get_admin_user),
+    admin: dict = Depends(require_role("super_admin")),
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
@@ -146,6 +177,14 @@ async def list_staff(
     response-shape change. Default limit is 500 to preserve the legacy
     "return everything" behaviour for the current admin dashboard, which
     does not yet paginate this endpoint.
+
+    Admin RBAC audit finding W3 (docs/audit/2026-09-10-admin-portal-security-
+    rbac-audit.md): the "staff" module's own AVAILABLE_MODULES comment says
+    "Only super_admin can access this", but this route was gated only by
+    require_module("staff") at the router mount — a custom-role admin
+    mistakenly (or deliberately) granted just that one module could read
+    every staff member's email/role/modules. require_role("super_admin")
+    enforces the comment's actual stated intent.
     """
     staff = await db_supabase.get_rows("admin_staff", limit=limit, offset=offset)
     total = await db_supabase.count_documents("admin_staff")
@@ -186,6 +225,16 @@ async def create_staff(req: StaffCreateRequest, admin: dict = Depends(require_ro
     else:
         modules = ["dashboard"]
 
+    # W4: a brand-new "custom" role account granted every AVAILABLE_MODULES
+    # string is super_admin-equivalent access without ever being flagged
+    # role=="super_admin" — see _require_actor_password_confirmation.
+    _is_super_admin_equivalent = req.role != "super_admin" and set(modules) == set(AVAILABLE_MODULES)
+    if _is_super_admin_equivalent:
+        await _require_actor_password_confirmation(
+            admin, req.password_confirmation, reason="a custom role granting every available module"
+        )
+        logger.info(f"custom role granted super_admin-equivalent modules: new staff actor={admin.get('id')}")
+
     staff = {
         "id": str(uuid.uuid4()),
         "email": req.email.lower(),
@@ -215,6 +264,7 @@ async def create_staff(req: StaffCreateRequest, admin: dict = Depends(require_ro
                 "email_masked": _redact_email(staff["email"]),
                 "role": staff["role"],
                 "modules": staff["modules"],
+                "super_admin_equivalent": _is_super_admin_equivalent,
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
@@ -233,8 +283,12 @@ async def list_modules():
 
 
 @router.get("/staff/{staff_id}")
-async def get_staff(staff_id: str):
-    """Get a single staff member."""
+async def get_staff(staff_id: str, admin: dict = Depends(require_role("super_admin"))):
+    """Get a single staff member.
+
+    See list_staff above for the W3 audit finding this closes — same
+    roster-disclosure gap, single-record instead of the full list.
+    """
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
@@ -255,22 +309,8 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
 
     # A-P3-6: promotion to super_admin requires password re-entry.
     if req.role == "super_admin" and s.get("role") != "super_admin":
-        if not req.password_confirmation:
-            raise HTTPException(
-                status_code=422,
-                detail="password_confirmation required for super_admin promotion",
-            )
-        actor_id = admin.get("id")
-        if actor_id and actor_id != "admin-001":
-            actor_row = (lambda _r: _r[0] if _r else None)(
-                await db_supabase.get_rows("admin_staff", {"id": actor_id}, limit=1)
-            )
-            if not actor_row:
-                raise HTTPException(status_code=401, detail="Actor not found")
-            ok, _ = verify_password(req.password_confirmation, actor_row.get("password_hash", ""))
-            if not ok:
-                raise HTTPException(status_code=401, detail="Incorrect password — promotion denied")
-        logger.info(f"super_admin promotion: target={staff_id} actor={actor_id}")
+        await _require_actor_password_confirmation(admin, req.password_confirmation, reason="super_admin promotion")
+        logger.info(f"super_admin promotion: target={staff_id} actor={admin.get('id')}")
 
     if req.role is not None and req.role != "super_admin" and s.get("role") == "super_admin":
         count = await db_supabase.count_documents("admin_staff", {"role": "super_admin", "is_active": True})
@@ -295,6 +335,24 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
             updates["modules"] = ROLE_PRESETS[req.role]
     if req.modules is not None:
         updates["modules"] = [m for m in req.modules if m in AVAILABLE_MODULES]
+
+    # W4: a "custom" role whose modules cover every AVAILABLE_MODULES string
+    # is super_admin-equivalent access without ever being flagged
+    # role=="super_admin" — see _require_actor_password_confirmation. Only
+    # gates the TRANSITION into full parity (mirrors the promotion check
+    # above), not every subsequent edit of an already-full-parity account.
+    _resulting_role = updates.get("role", s.get("role"))
+    _resulting_modules = set(updates.get("modules", s.get("modules") or []))
+    _prior_modules = set(s.get("modules") or [])
+    _full_modules = set(AVAILABLE_MODULES)
+    _is_super_admin_equivalent = (
+        _resulting_role != "super_admin" and _resulting_modules == _full_modules and _prior_modules != _full_modules
+    )
+    if _is_super_admin_equivalent:
+        await _require_actor_password_confirmation(
+            admin, req.password_confirmation, reason="a custom role granting every available module"
+        )
+        logger.info(f"custom role granted super_admin-equivalent modules: target={staff_id} actor={admin.get('id')}")
 
     # Admin access tokens carry role/modules as trusted JWT claims (see
     # dependencies.get_admin_user — unlike rider/driver, they are NOT
@@ -323,7 +381,10 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
                 "action": "staff_updated",
                 "entity_type": "staff",
                 "entity_id": staff_id,
-                "details": {k: v for k, v in updates.items() if k != "updated_at"},
+                "details": {
+                    **{k: v for k, v in updates.items() if k != "updated_at"},
+                    **({"super_admin_equivalent": True} if _is_super_admin_equivalent else {}),
+                },
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )

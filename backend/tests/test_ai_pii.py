@@ -144,10 +144,14 @@ class TestCoordinates:
         # /mcp serializer. Enumerate every mention of the policy member in
         # non-test source: ai/pii.py defines it, and the only opt-ins are the
         # authenticated chat path (orchestrator: user message + persisted
-        # reply) and the model-facing tool-result cap (tools.py). The word is
-        # matched bare (not the `ScrubPolicy.AI_CHAT` spelling) so an alias
-        # or a re-export can't dodge the check; the cost is that comments
-        # outside these files must not use the token either.
+        # reply), its streamed-output filter (stream_filter.py -- same
+        # authenticated-chat boundary as orchestrator.py, applied to the
+        # chunks before the persisted reply exists, per "fix(ai): filter
+        # streamed AI output before delivery, not only on persistence"), and
+        # the model-facing tool-result cap (tools.py). The word is matched
+        # bare (not the `ScrubPolicy.AI_CHAT` spelling) so an alias or a
+        # re-export can't dodge the check; the cost is that comments outside
+        # these files must not use the token either.
         import re as _re
         from pathlib import Path
 
@@ -162,7 +166,7 @@ class TestCoordinates:
                 continue
             if _re.search(r"\bAI_CHAT\b", path.read_text(encoding="utf-8", errors="ignore")):
                 opt_in_files.add(path.relative_to(backend).as_posix())
-        assert opt_in_files == {"ai/pii.py", "ai/orchestrator.py", "ai/tools.py"}
+        assert opt_in_files == {"ai/pii.py", "ai/orchestrator.py", "ai/tools.py", "ai/stream_filter.py"}
 
 
 class TestPostalCodes:

@@ -8,6 +8,44 @@ long-standing problem.
 audit; see "Recommendations" for what should be fixed and by whom.
 **Tracked as:** `ACTION_ITEMS.md` C97.
 
+## Correction (2026-09-10, same day, before any fix shipped for finding #9)
+
+Follow-up direct reading of `backend/features.py::_deliver_push_now` (not part of either
+original research pass, done while scoping the client-side fix) narrows finding #9 below
+significantly. **Only `new_ride_assignment` and `live_activity` are sent as data-only FCM
+messages** (`is_data_only = is_dispatch or is_live_activity`, `features.py:1310-1315`) — every
+other type (`ride_cancelled`, `subscription_expiring`, `document_expiry_warning`,
+`auto_offline`, and any other generic driver notification) carries a real
+`messaging.Notification(title=title, body=body)` block, targeting a channel
+(`android_channel = "ride-offers"` for driver, `features.py:1320`) that **is confirmed to exist**
+on-device — created reliably at cold start via `expo-notifications`' own
+`Notifications.setNotificationChannelAsync('ride-offers', {...})` (`driver-app/app/_layout.tsx:449`,
+plus a `'default'` channel at `:460`), independent of the Notifee channels used for the
+data-only dispatch path.
+
+**Practical effect:** for background/killed app state, Android's own FCM SDK auto-displays a
+message that carries a real `notification` block, with no app JS code needing to run at all —
+so finding #9's "background handler only branches on 3 types, else returns" is true of the
+*custom* handling that function does (offer persistence, in-process event bridging), but does
+**not** mean these notifications are invisible in background/killed state, since the OS handles
+display for them independently of that function. **This significantly weakens finding #9 as an
+explanation for "notifications not visible" in background/killed state specifically.**
+
+Finding #7 (foreground) is **not** weakened by this — Android does not auto-display a
+`notification`-block FCM message while the app is in the foreground by default; that part of the
+original finding holds. What's now clear is more precise than the original framing: for the 4
+types the foreground handler already special-cases (`new_ride_assignment`, `auto_offline`,
+`ride_cancelled`, `subscription_expiring`, `document_expiry_warning`), the app shows an in-app
+Alert/Toast — a real, if different-in-kind, form of visibility while the driver is actively in
+the app. The genuine, narrower gap is: **a message type not in that explicit list falls through
+to a silent `router.push` with no toast/alert at all** — a driver not already looking at the
+right screen would not notice anything happened. This is the gap the driver-app fix in this
+audit's follow-up PR actually closes; the broader "everything but ride offers is silently
+dropped, foreground and background alike" framing in the original findings below overstated the
+background/killed portion specifically. Left the original finding tables below unedited (rather
+than rewritten) so the correction is visible against what was originally claimed, per this
+project's own convention of correcting transparently rather than silently.
+
 ## Executive summary
 
 There is **not one root cause** — the two research passes independently confirmed **two

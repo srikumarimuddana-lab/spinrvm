@@ -23824,9 +23824,22 @@ how much they de-risk a public launch._
 
 ### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
 
-- [ ] **Status:** OPEN — full audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`),
-  no code changed. Recommendations ready; priority needs the user's input on which symptom
-  matches what they're actually seeing (see fork below) before picking which fix to ship first.
+- [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
+  Backend fix (loud Firebase Admin SDK init failure) and a narrowed client-side fix (foreground
+  fallback toast) shipped as follow-up PRs — see below. Ops check (confirm the Firebase
+  credential on Fly/Railway) and the metric/iOS recommendations remain open.
+- **Correction (same day, before the client-side fix shipped):** the client-side finding below
+  originally read as "every notification type except ride offers is silently dropped, foreground
+  and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
+  overstated for background/killed state: only `new_ride_assignment`/`live_activity` are sent
+  data-only — every other type carries a real FCM `notification` block targeting a channel
+  confirmed to exist on-device (`'ride-offers'`, created at cold start via `expo-notifications`,
+  `driver-app/app/_layout.tsx:449`), so Android auto-displays those in background/killed state
+  with no app JS code needing to run. The foreground gap is real but narrower than originally
+  framed: only a message type outside the app's existing explicit list falls through to a silent
+  navigation with no toast — that's what the shipped client-side fix actually closes. Full
+  correction in the audit doc's own "Correction" section, left visible against the original
+  claim rather than silently rewritten.
 - **Two independent findings, either explains the symptom, both may be true at once:**
   1. **Backend (infra-shaped):** Firebase Admin SDK init falls through to Application Default
      Credentials on a non-GCP host (Fly/Railway) with the failure wrapped in a bare

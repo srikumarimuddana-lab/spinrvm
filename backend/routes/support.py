@@ -86,8 +86,8 @@ async def support_chat(
     Why a stub rather than a delegation to the central engine: delegating was
     tried first and quietly WIDENED this endpoint. The pre-F04 route was a
     prompt-only FAQ bot with no tools, no stored conversation and no cache
-    participation. Routing it through ``run_chat_turn`` handed a legacy client
-    the full authenticated rider/driver tool set — including
+    participation. Routing it through the central engine's turn handler handed
+    a legacy client the full authenticated rider/driver tool set — including
     ``propose_ride_booking`` and ``escalate_to_support``, whose side effects
     (a real Zoho ticket) would fire while the resulting ``action`` frame was
     dropped, because this response shape has nowhere to put a card. It also

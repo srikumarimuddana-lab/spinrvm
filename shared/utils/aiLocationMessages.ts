@@ -47,16 +47,11 @@ export function buildLocationChoiceMessage(
 
 type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 
-/** The message a tapped quote option sends back to the assistant. The next
- * turn sees only message text, so this must be self-contained — and it must
- * carry the quote's exact [lat,lng] coordinates and vehicle id verbatim so
- * the model books THE priced trip instead of re-geocoding the addresses (the
- * old prose-only message caused a third independent geocode, moving pins and
- * prices between the quote and the confirm card). Shared by the rider app's
- * chat (`bookingProposal.ts` re-exports this) and the admin AI console, which
- * mirrors the rider card so the console shows exactly what the rider would
- * see. */
-export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuoteOption): string {
+function _buildQuoteMessage(
+  quote: FareQuoteAction,
+  option: FareQuoteOption,
+  includeVehicleId: boolean,
+): string {
   const endpoint = (label: 'from' | 'to', address?: string, lat?: number, lng?: number): string => {
     const coords =
       typeof lat === 'number' && typeof lng === 'number'
@@ -66,7 +61,7 @@ export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuo
     return place ? ` ${label} ${place}` : '';
   };
   const vehicle = option.vehicle_type ?? 'recommended option';
-  const vehicleId = option.vehicle_type_id ? ` (vehicle id ${option.vehicle_type_id})` : '';
+  const vehicleId = includeVehicleId && option.vehicle_type_id ? ` (vehicle id ${option.vehicle_type_id})` : '';
   const promo = option.promo_code ? ` with promo ${option.promo_code}` : '';
   const total = option.final_total ? `, total $${option.final_total}` : '';
   return (
@@ -75,4 +70,31 @@ export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuo
     `${endpoint('to', quote.dropoff_address, quote.dropoff_lat, quote.dropoff_lng)}` +
     `${promo}${total}.`
   );
+}
+
+/** The message a tapped quote option sends back to the assistant. The next
+ * turn sees only message text, so this must be self-contained — and it must
+ * carry the quote's exact [lat,lng] coordinates and vehicle id verbatim so
+ * the model books THE priced trip instead of re-geocoding the addresses (the
+ * old prose-only message caused a third independent geocode, moving pins and
+ * prices between the quote and the confirm card). Shared by the rider app's
+ * chat (`bookingProposal.ts` re-exports this) and the admin AI console, which
+ * mirrors the rider card so the console shows exactly what the rider would
+ * see.
+ *
+ * This is what actually reaches the model as the message `content` — never
+ * change what this returns. For what the rider/admin see on screen, pair it
+ * with `buildQuoteBookingDisplayMessage` (AI17/F2): same trip, no raw id. */
+export function buildQuoteBookingMessage(quote: FareQuoteAction, option: FareQuoteOption): string {
+  return _buildQuoteMessage(quote, option, true);
+}
+
+/** AI17/F2: the rider-visible/admin-visible twin of `buildQuoteBookingMessage`
+ * — identical trip, promo and total, but omits the "(vehicle id <uuid>)"
+ * suffix that has no meaning to a human. Use this ONLY for what's rendered
+ * in the chat bubble; the model still needs the id, so the actual message
+ * sent to the backend must keep using `buildQuoteBookingMessage`'s output
+ * unchanged (see `AiChatMessage.displayContent`). */
+export function buildQuoteBookingDisplayMessage(quote: FareQuoteAction, option: FareQuoteOption): string {
+  return _buildQuoteMessage(quote, option, false);
 }

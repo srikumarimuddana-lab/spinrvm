@@ -19,7 +19,8 @@ import {
 // admin AI console (AI9) can send the same self-contained [lat,lng]+vehicle-id
 // message a rider's quote-card tap does, instead of its own prose-only copy.
 // Re-exported here so existing rider-app imports/call sites are unchanged.
-export { buildQuoteBookingMessage } from '@shared/utils/aiLocationMessages';
+// buildQuoteBookingDisplayMessage (AI17/F2) is its rider-visible twin.
+export { buildQuoteBookingMessage, buildQuoteBookingDisplayMessage } from '@shared/utils/aiLocationMessages';
 
 /** Quotes auto-refresh on this cadence so a stale estimate_token (surge
  * lock) is never submitted. Matches the booking screens' refresh habit. */

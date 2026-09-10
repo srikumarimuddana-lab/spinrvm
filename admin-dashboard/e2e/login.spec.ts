@@ -19,9 +19,18 @@ test.describe('Login page', () => {
         // mount, which re-writes the admin_token cookie from this response.
         // A non-JWT placeholder here clobbers a real login's cookie moments
         // later and bounces every post-login navigation back to /login.
+        //
+        // W6 (2026-09-10 RBAC/security audit): set-cookie now requires a
+        // matching spinr_admin_csrf cookie + X-CSRF-Token header (real
+        // /api/admin/auth/refresh sets this cookie on every response
+        // alongside the same csrf_token in the JSON body) — this mock must
+        // simulate that Set-Cookie side effect too, or setAuthCookie's
+        // fire-and-forget POST here 403s and the admin_token cookie is
+        // never refreshed.
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
+          headers: { 'set-cookie': 'spinr_admin_csrf=test-csrf; Path=/' },
           body: JSON.stringify({ token: TEST_ADMIN_JWT, access_expires_at: '2100-01-01T00:00:00Z', csrf_token: 'test-csrf', user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }),
         });
       }
@@ -79,6 +88,15 @@ test.describe('Login page', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
+        // W6 (2026-09-10 RBAC/security audit): the real /api/admin/auth/login
+        // route sets spinr_admin_csrf as a Set-Cookie header alongside the
+        // same csrf_token in the JSON body. login/page.tsx now sends that
+        // token back as X-CSRF-Token on the /api/auth/set-cookie POST below,
+        // and that route requires the cookie to actually be present and
+        // match — without this header the browser never has the cookie, so
+        // set-cookie 403s, the awaited fetch throws, and the redirect to
+        // /dashboard never happens (this is what broke this test).
+        headers: { 'set-cookie': 'spinr_admin_csrf=test-csrf; Path=/' },
         body: JSON.stringify({
           // Middleware validates the cookie as a real JWT (aud/exp claims) —
           // an opaque placeholder string gets rejected and bounced back to /login.

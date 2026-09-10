@@ -100,6 +100,23 @@ class TestStaffModuleEnforcement:
             resp = client.get("/api/admin/staff")
         assert resp.status_code != 403
 
+    def test_custom_role_with_staff_module_still_cannot_list_staff(self, app, client):
+        """Admin RBAC audit finding W3 (docs/audit/2026-09-10-admin-portal-
+        security-rbac-audit.md): AVAILABLE_MODULES' own comment says "staff"
+        is "Only super_admin can access this", but the route was gated only
+        by require_module("staff") — a custom-role admin holding just that
+        one module (unlike support/finance above, which don't hold it) used
+        to pass the mount and read the full staff roster. Now blocked by
+        list_staff's own require_role("super_admin") dependency."""
+        _set_admin(app, _make_admin("custom", ["staff"]))
+        resp = client.get("/api/admin/staff")
+        assert resp.status_code == 403
+
+    def test_custom_role_with_staff_module_still_cannot_get_staff(self, app, client):
+        _set_admin(app, _make_admin("custom", ["staff"]))
+        resp = client.get("/api/admin/staff/some-staff-id")
+        assert resp.status_code == 403
+
 
 # ── Settings (module: "settings") ────────────────────────────────────────────
 

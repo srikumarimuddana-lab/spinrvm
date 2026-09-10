@@ -655,6 +655,9 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+    # W5 (2026-09-10 RBAC audit): required when the account has MFA
+    # enrolled — see the mfa_enabled check below.
+    totp_code: Optional[str] = None
 
 
 @admin_auth_router.post("/change-password")
@@ -676,51 +679,38 @@ async def change_password(
     DB write.
 
     Rate-limited to 3 attempts per minute per IP.
+
+    W5 (2026-09-10 RBAC audit): previously resolved the caller with a bare
+    ``jwt.decode()`` instead of ``_require_staff_from_token`` — the shared
+    helper every other authenticated admin action in this file goes
+    through — so this endpoint alone skipped the ``is_active`` check, the
+    per-JTI ``admin:revoked:{jti}`` denylist, and the ``token_version``
+    revocation gate (the field ``/admin/auth/logout-all`` bumps). A stale-
+    but-unexpired captured token could keep working here even after the
+    account owner force-invalidated every session. Now goes through the
+    same helper, and — mirroring ``admin_mfa_disable``'s posture — also
+    requires a fresh TOTP code when the account has MFA enrolled, so a
+    captured token can't complete a credential change without proving
+    possession of the second factor too.
     """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    # Decode the JWT to find the staff member.
-    try:
-        scheme, token = authorization.split()
-        if scheme.lower() != "bearer":
-            raise HTTPException(status_code=401, detail="Invalid auth scheme")
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET,
-            algorithms=[settings.ALGORITHM],
-            audience=JWT_AUD_ADMIN,
-        )
-    except (ValueError, jwt.InvalidTokenError) as e:
-        # B-P3-leak-cleanup: JWT library error strings carry hints
-        # about token shape (algorithm, kid, exp, audience). Don't
-        # ship them to the client — log server-side and surface a
-        # generic "Invalid token" so the auth path can't be
-        # fingerprinted by sending malformed tokens and reading the
-        # rejection reasons.
-        logger.error(
-            "Admin auth rejected malformed token",
-            exc_info=True,
-            extra={"domain": "admin"},
-        )
-        raise HTTPException(status_code=401, detail="Invalid token") from e
-
-    user_id = payload.get("user_id")
-    if not user_id or user_id == "admin-001":
-        # admin-001 is the super-admin; their password lives in env vars.
-        raise HTTPException(
-            status_code=400,
-            detail="Super admin password cannot be changed here. Update ADMIN_PASSWORD in the environment.",
-        )
-
-    staff = await db.find_one("admin_staff", {"id": user_id})
-    if not staff:
-        raise HTTPException(status_code=404, detail="Staff member not found")
+    staff = await _require_staff_from_token(
+        authorization,
+        admin001_detail="Super admin password cannot be changed here. Update ADMIN_PASSWORD in the environment.",
+    )
+    user_id = staff["id"]
 
     # Verify current password (supports both bcrypt and legacy SHA256).
     ok, _ = verify_password(body.current_password, staff.get("password_hash", ""))
     if not ok:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    if staff.get("mfa_enabled"):
+        if not body.totp_code:
+            raise HTTPException(
+                status_code=422, detail="TOTP code required to change password on an MFA-enrolled account"
+            )
+        if not pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1):
+            raise HTTPException(status_code=400, detail="Invalid TOTP code")
 
     # Enforce minimum length on the new password.
     if len(body.new_password) < 12:
@@ -839,6 +829,7 @@ async def _require_staff_from_token(
     *,
     allow_enroll_token: bool = False,
     return_payload: bool = False,
+    admin001_detail: str = "MFA is not available for the super admin env account. Use a staff account.",
 ) -> dict:
     """Resolve the admin_staff row from a Bearer token.
 
@@ -851,6 +842,10 @@ async def _require_staff_from_token(
     can tell which audience authenticated (e.g. /mfa/confirm only mints a
     new session for the enroll-token / forced-login flow, not for a
     Settings-page re-enrollment that already holds a session).
+
+    ``admin001_detail`` lets a non-MFA caller (e.g. change_password) supply
+    a message that actually fits its own endpoint rather than the MFA-
+    flavored default.
     """
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -879,10 +874,7 @@ async def _require_staff_from_token(
         raise HTTPException(status_code=401, detail="Invalid token")
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
-        raise HTTPException(
-            status_code=400,
-            detail="MFA is not available for the super admin env account. Use a staff account.",
-        )
+        raise HTTPException(status_code=400, detail=admin001_detail)
     # Mirror _verify_admin_payload's per-JTI denylist: /admin/auth/logout
     # revokes a single access token by writing admin:revoked:{jti} WITHOUT
     # bumping token_version, so the version gate below doesn't catch it. A

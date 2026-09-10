@@ -33,6 +33,18 @@ router = APIRouter()
 MAX_ZIP_BYTES = 200_000_000  # 200 MB — bundles carry document files, unlike the 1MB CSV imports
 
 
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as every other PII-export/import
+    router in this package does.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every sibling super_admin-class router uses, so
+    the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Data Transfer import requires super_admin")
+
+
 async def _read_zip_bytes(bundle_zip: UploadFile) -> bytes:
     raw = await bundle_zip.read()
     if len(raw) > MAX_ZIP_BYTES:
@@ -65,6 +77,7 @@ async def validate_bundle_import(
 ):
     """Dry-run: parse the bundle ZIP and report new/existing/conflicting
     entities. No writes."""
+    _require_super_admin(admin)
     raw = await _read_zip_bytes(bundle_zip)
     try:
         entities = import_svc.parse_bundle_zip(raw)
@@ -91,6 +104,7 @@ async def commit_bundle_import(
     entity_import_service.commit_plan's update path) — the operator's way
     to pull a refreshed export from the source environment into an
     already-onboarded record instead of only ever creating net-new ones."""
+    _require_super_admin(admin)
     raw = await _read_zip_bytes(bundle_zip)
     try:
         entities = import_svc.parse_bundle_zip(raw)

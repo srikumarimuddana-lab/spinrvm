@@ -18389,24 +18389,41 @@ mechanical follow-up work, prioritizable independently.
     function/constant; a documented duration/easing convention exists for
     new motion work.
 
-- [ ] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
+- [x] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
   that match neither the current nor the previous theme tokens, and has no
-  dark-mode awareness** — **Status:** open, identified 2026-09-10. This one
-  is a live bug, not just adoption debt — flagging distinctly from UX1–UX4.
+  dark-mode awareness** — **Status:** closed 2026-09-10, same session that
+  filed it. This one was a live bug, not just adoption debt — flagged
+  distinctly from UX1–UX4.
   - **Issue/gap:** `driver-app/components/toastConfig.tsx:8-11`'s
-    `VARIANT_CONFIG` hardcodes `success:'#0d9f6e'`, `error:'#dc2626'`,
-    `warning:'#d97706'`, `info:'#1a73e8'` — none of these match
-    `shared/theme/index.ts`'s current values, and the file has no
-    `useTheme()` call at all, so toast colors never adapt to dark mode.
-  - **Why it matters:** toast notifications (a frequent, high-visibility UI
-    element) render with off-brand, theme-incorrect colors for every driver,
-    in both light and dark mode, today.
-  - **Action:** rewrite `VARIANT_CONFIG` to read from `useTheme()`'s
-    `colors.success`/`colors.error`/`colors.warning`/`colors.info` (and dark
-    variants) like the rest of the app.
-  - **Files:** `driver-app/components/toastConfig.tsx`.
+    `VARIANT_CONFIG` hardcoded `success:'#0d9f6e'`, `error:'#dc2626'`,
+    `warning:'#d97706'`, `info:'#1a73e8'` — none of these matched
+    `shared/theme/index.ts`'s current values, and the file had no
+    `useTheme()` call at all, so toast colors never adapted to dark mode.
+  - **Why it mattered:** toast notifications (a frequent, high-visibility UI
+    element) rendered with off-brand, theme-incorrect colors for every
+    driver, in both light and dark mode.
+  - **Fix:** `SpinrToast` now calls `useTheme()` and resolves background via
+    `colors.success`/`colors.error`/`colors.warning`/`colors.info` per
+    variant, replacing the static hex `VARIANT_CONFIG` bg map (icon glyph
+    names, which aren't a color-drift concern, stay a static lookup).
+  - **Files:** `driver-app/components/toastConfig.tsx`;
+    `driver-app/__tests__/components/toastConfig.theme.test.tsx` (new
+    regression test — light-mode tokens + dark-mode adaptation via a real
+    `ThemeProvider`).
+  - **Verification:** `npx jest __tests__/components/toastConfig` (5/5
+    passing, including the pre-existing a11y suite), `npx tsc --noEmit`
+    clean, `npx eslint` — the 4 `no-restricted-syntax` hardcoded-hex
+    warnings on the old `VARIANT_CONFIG` bg values are gone (14 → 11
+    warnings on the file; the remaining 11 are pre-existing, out of scope —
+    fixed-contrast white text/icon on a colored surface, a documented
+    exception, and padding/fontSize literals, which is UX2's territory, not
+    this item's).
+  - **Not fixed here:** rider-app's `components/Toast.tsx` has the
+    identical hardcoded `VARIANT_CONFIG` (confirmed byte-for-byte same
+    stale hex values) but was not in this item's stated file scope —
+    worth a follow-up item if picked up.
   - **Acceptance:** driver-app toast colors match the current theme tokens
-    in both light and dark mode.
+    in both light and dark mode. Met.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 

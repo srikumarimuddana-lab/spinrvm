@@ -32,15 +32,32 @@ export interface IssueTableProps<T> {
     /** Column header for the ref column, e.g. "old_driver_id" or "Row". */
     refLabel: string;
     explain?: (message: string) => IssueExplanation | null;
+    /** Optional second identifier column (e.g. a booking code or a wallet
+     * entry id) for tools whose report items carry one, between the ref and
+     * field columns. */
+    extraColumn?: {
+        label: string;
+        getValue: (item: T) => string;
+    };
 }
 
-export function IssueTable<T>({ items, getRowKey, getRef, getField, getMessage, refLabel, explain }: IssueTableProps<T>) {
+export function IssueTable<T>({
+    items,
+    getRowKey,
+    getRef,
+    getField,
+    getMessage,
+    refLabel,
+    explain,
+    extraColumn,
+}: IssueTableProps<T>) {
     return (
         <div className="overflow-x-auto rounded-md border">
             <Table>
                 <TableHeader>
                     <TableRow>
                         <TableHead className="w-40">{refLabel}</TableHead>
+                        {extraColumn ? <TableHead className="w-40">{extraColumn.label}</TableHead> : null}
                         <TableHead className="w-48">Field</TableHead>
                         <TableHead>Message</TableHead>
                     </TableRow>
@@ -52,6 +69,11 @@ export function IssueTable<T>({ items, getRowKey, getRef, getField, getMessage, 
                         return (
                             <TableRow key={getRowKey(item, i)}>
                                 <TableCell className="font-mono text-xs align-top">{getRef(item)}</TableCell>
+                                {extraColumn ? (
+                                    <TableCell className="font-mono text-xs align-top">
+                                        {extraColumn.getValue(item)}
+                                    </TableCell>
+                                ) : null}
                                 <TableCell className="font-mono text-xs align-top">{getField(item)}</TableCell>
                                 <TableCell className="text-sm">
                                     <p>{message}</p>

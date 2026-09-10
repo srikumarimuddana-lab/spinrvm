@@ -18,8 +18,12 @@ import {
     type DriverImportReport,
     type DriverImportReportItem,
 } from "@/lib/api";
+import { explainDriverImportIssue } from "@/lib/bulk-import-error-help";
 import { PageHeader } from "@/components/page-header";
 import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable } from "@/components/bulk-import/issue-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,14 +40,6 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableHead,
-    TableRow,
-    TableCell,
-} from "@/components/ui/table";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -123,28 +119,17 @@ const REPORT_COLUMNS = [
     { key: "message", label: "message" },
 ];
 
-function IssueTable({ items }: { items: DriverImportReportItem[] }) {
+function DriverIssueTable({ items }: { items: DriverImportReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-40">Row (old_driver_id)</TableHead>
-                        <TableHead className="w-48">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.old_driver_id}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.old_driver_id}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
+        <IssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.old_driver_id}-${it.field}-${i}`}
+            getRef={(it) => it.old_driver_id}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="old_driver_id"
+            explain={explainDriverImportIssue}
+        />
     );
 }
 
@@ -292,13 +277,51 @@ export default function BulkImportPage() {
                 title="Bulk Driver Import"
                 description={
                     <>
-                        Upload a CSV of drivers to create their accounts and profiles. Validate first, review
-                        the report, then commit. Document files are uploaded per-driver afterwards from the
-                        driver&apos;s page. Importing the previous app&apos;s raw MongoDB export instead? Use{" "}
+                        Upload a CSV of new driver recruits to create their Spinr accounts and
+                        profiles. Importing the previous app&apos;s raw MongoDB export instead?
+                        Use{" "}
                         <a href="/dashboard/drivers/legacy-import" className="underline">
                             Legacy Driver Import
                         </a>{" "}
                         — a different CSV shape, a different driver population.
+                    </>
+                }
+            />
+
+            <WhatThisToolDoes
+                what={
+                    <>
+                        Creates a Spinr driver account and profile for each row in a CSV of newly
+                        recruited drivers (the Saskatoon recruitment sheet format) — not a
+                        migration from the previous app.
+                    </>
+                }
+                why={
+                    <>
+                        New driver recruits are onboarded in a batch from a recruitment
+                        spreadsheet rather than one at a time — this tool turns that spreadsheet
+                        into real Spinr accounts, ready for document review.
+                    </>
+                }
+                whichFiles={
+                    <>
+                        A single CSV in the Saskatoon recruitment sheet&apos;s own column format
+                        — start from the downloadable template below, which lists every required
+                        and optional column.
+                    </>
+                }
+                value={
+                    <>
+                        A batch of new recruits becomes real, reviewable driver profiles in one
+                        upload instead of manual one-by-one account creation.
+                    </>
+                }
+                safetyNote={
+                    <>
+                        Document files (license, insurance, etc.) are uploaded per-driver
+                        afterwards from the driver&apos;s own page, not from this CSV — a
+                        documents row in this file is rejected with a clear message rather than
+                        silently ignored.
                     </>
                 }
             />
@@ -416,12 +439,12 @@ export default function BulkImportPage() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-                            <Stat label="Rows" value={counts?.rows ?? 0} />
-                            <Stat label="To create" value={counts?.drivers ?? 0} />
-                            <Stat label="To update" value={counts?.updated ?? 0} />
-                            <Stat label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
-                            <Stat label="Warnings" value={report.warnings.length} tone="warn" />
-                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                            <StatTile label="Rows" value={counts?.rows ?? 0} />
+                            <StatTile label="To create" value={counts?.drivers ?? 0} />
+                            <StatTile label="To update" value={counts?.updated ?? 0} />
+                            <StatTile label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
+                            <StatTile label="Warnings" value={report.warnings.length} tone="warn" />
+                            <StatTile label="Errors" value={report.errors.length} tone="error" />
                         </div>
 
                         <div className="flex justify-end">
@@ -455,7 +478,7 @@ export default function BulkImportPage() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <DriverIssueTable items={report.errors} />
                             </div>
                         )}
 
@@ -464,7 +487,7 @@ export default function BulkImportPage() {
                                 <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                                     <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
                                 </h3>
-                                <IssueTable items={report.warnings} />
+                                <DriverIssueTable items={report.warnings} />
                             </div>
                         )}
 
@@ -489,29 +512,6 @@ export default function BulkImportPage() {
                     </CardContent>
                 </Card>
             )}
-        </div>
-    );
-}
-
-function Stat({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-}) {
-    const toneCls =
-        tone === "error" && value > 0
-            ? "text-destructive"
-            : tone === "warn" && value > 0
-              ? "text-warning"
-              : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
 }

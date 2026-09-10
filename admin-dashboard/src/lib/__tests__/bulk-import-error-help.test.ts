@@ -4,6 +4,13 @@ import {
   explainSinDobIssue,
   explainVehicleHistoryIssue,
   explainSavedAddressIssue,
+  explainWalletImportIssue,
+  explainBookingImportIssue,
+  explainLegacyDriverImportIssue,
+  explainDriverImportIssue,
+  explainRiderImportIssue,
+  explainStripeMappingIssue,
+  explainRouteRegenIssue,
 } from '../bulk-import-error-help';
 
 describe('createIssueExplainer', () => {
@@ -27,6 +34,20 @@ describe('createIssueExplainer', () => {
       ['bar:', { cause: 'prefix', fix: 'prefix' }],
     ]);
     expect(explain('bar: exact')).toEqual({ cause: 'exact', fix: 'exact' });
+  });
+
+  it('matches a suffix rule for a message with a dynamic prefix', () => {
+    const explain = createIssueExplainer({}, [], [['is already mapped', { cause: 'c', fix: 'f' }]]);
+    expect(explain('acct_123 is already mapped')).toEqual({ cause: 'c', fix: 'f' });
+  });
+
+  it('prefers a prefix match over a suffix match', () => {
+    const explain = createIssueExplainer(
+      {},
+      [['foo', { cause: 'prefix', fix: 'prefix' }]],
+      [['bar', { cause: 'suffix', fix: 'suffix' }]],
+    );
+    expect(explain('foo bar')).toEqual({ cause: 'prefix', fix: 'prefix' });
   });
 });
 
@@ -68,5 +89,152 @@ describe('explainSavedAddressIssue', () => {
 
   it('does not carry driver-crosswalk messages', () => {
     expect(explainSavedAddressIssue('no Spinr driver with this phone number')).toBeNull();
+  });
+});
+
+describe('explainWalletImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainWalletImportIssue('no matching rider/driver account found')).not.toBeNull();
+    expect(explainWalletImportIssue('pre-launch (before 2026-03-30); skipped as test data')).not.toBeNull();
+  });
+
+  it('matches the dynamic unrecognized-type/status prefixes', () => {
+    expect(explainWalletImportIssue("unrecognized legacy wallet type 'foo'")).not.toBeNull();
+    expect(explainWalletImportIssue("unrecognized legacy wallet status 'bar'")).not.toBeNull();
+  });
+
+  it('does not carry booking-import messages', () => {
+    expect(explainWalletImportIssue('booking is missing its legacy _id')).toBeNull();
+  });
+});
+
+describe('explainBookingImportIssue', () => {
+  it('matches its own messages', () => {
+    expect(explainBookingImportIssue('fees + tax + tip exceed the total charged')).not.toBeNull();
+    expect(explainBookingImportIssue('no legacy earnings row; using booking you_earn')).not.toBeNull();
+  });
+
+  it('does not carry wallet-import messages', () => {
+    expect(explainBookingImportIssue('wallet entry is missing its legacy _id')).toBeNull();
+  });
+});
+
+describe('explainLegacyDriverImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainLegacyDriverImportIssue('duplicate _id')).not.toBeNull();
+    expect(explainLegacyDriverImportIssue('already imported/linked by a previous run of this importer')).not.toBeNull();
+  });
+
+  it('matches the dynamic blank-name and duplicate-batch prefixes', () => {
+    expect(
+      explainLegacyDriverImportIssue(
+        'row has no name (abandoned onboarding in source app, set_up_profile=false; never linked to any ride); imported with placeholder name, forced needs_review',
+      ),
+    ).not.toBeNull();
+    expect(
+      explainLegacyDriverImportIssue(
+        'matches a driver created earlier in this same import batch (old_driver_id=abc123); merged into that row\'s history instead of creating a duplicate',
+      ),
+    ).not.toBeNull();
+  });
+
+  it('does not carry booking/wallet messages', () => {
+    expect(explainLegacyDriverImportIssue('booking is missing its legacy _id')).toBeNull();
+  });
+});
+
+describe('explainDriverImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainDriverImportIssue('duplicate old_driver_id')).not.toBeNull();
+    expect(
+      explainDriverImportIssue('matching user or driver already exists; handle manually before import'),
+    ).not.toBeNull();
+    expect(
+      explainDriverImportIssue('VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)'),
+    ).not.toBeNull();
+  });
+
+  it('matches the dynamic vehicle-type and already-imported-update prefixes', () => {
+    expect(explainDriverImportIssue("no vehicle_types row matched 'suv'")).not.toBeNull();
+    expect(
+      explainDriverImportIssue('driver already imported; updating 2 changed vehicle field(s)'),
+    ).not.toBeNull();
+  });
+
+  it('does not carry Legacy Driver Import messages', () => {
+    expect(explainDriverImportIssue('row has no _id')).toBeNull();
+  });
+});
+
+describe('explainRiderImportIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainRiderImportIssue('duplicate phone in CSV')).not.toBeNull();
+    expect(
+      explainRiderImportIssue('phone matches existing user — will update fields if provided'),
+    ).not.toBeNull();
+  });
+
+  it('matches the dynamic phone-format, customer_id, and protected-skip prefixes', () => {
+    expect(
+      explainRiderImportIssue('invalid phone format (expected +1XXXXXXXXXX): 555-1234'),
+    ).not.toBeNull();
+    expect(
+      explainRiderImportIssue("customer_id 'abc123' doesn't look like a Stripe ID (expected cus_…)"),
+    ).not.toBeNull();
+    expect(
+      explainRiderImportIssue(
+        "SKIPPED — matched account status is 'pending_deletion'; no fields were modified. Requires manual review before this row can be imported.",
+      ),
+    ).not.toBeNull();
+  });
+
+  it('does not carry driver-import messages', () => {
+    expect(explainRiderImportIssue('duplicate old_driver_id')).toBeNull();
+  });
+});
+
+describe('explainStripeMappingIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainStripeMappingIssue('stripe_account_id must look like acct_...')).not.toBeNull();
+    expect(explainStripeMappingIssue('no user matches this row')).not.toBeNull();
+    expect(explainStripeMappingIssue('customer is deleted in Stripe')).not.toBeNull();
+  });
+
+  it('matches the dynamic-suffix prefixes from the live-Stripe-validation phase', () => {
+    expect(explainStripeMappingIssue('account country is US, expected CA')).not.toBeNull();
+    expect(explainStripeMappingIssue('account is disabled (rejected.fraud)')).not.toBeNull();
+    expect(
+      explainStripeMappingIssue('object is test-mode but the configured Stripe key is live-mode'),
+    ).not.toBeNull();
+  });
+
+  it('matches the dynamic-prefix suffixes for duplicate/taken Stripe IDs', () => {
+    expect(explainStripeMappingIssue('acct_abc123 appears on multiple CSV rows')).not.toBeNull();
+    expect(explainStripeMappingIssue('acct_abc123 is already mapped to another driver')).not.toBeNull();
+    expect(explainStripeMappingIssue('cus_abc123 is already mapped to another user')).not.toBeNull();
+    expect(
+      explainStripeMappingIssue('acct_abc123 does not exist on this platform or is not accessible'),
+    ).not.toBeNull();
+  });
+
+  it('does not carry Bulk Rider Import messages', () => {
+    expect(explainStripeMappingIssue('duplicate phone in CSV')).toBeNull();
+  });
+});
+
+describe('explainRouteRegenIssue', () => {
+  it('matches its own exact messages', () => {
+    expect(explainRouteRegenIssue('missing coordinates')).not.toBeNull();
+    expect(explainRouteRegenIssue('render returned None')).not.toBeNull();
+    expect(explainRouteRegenIssue('no route from OSRM or Google Directions')).not.toBeNull();
+  });
+
+  it('matches the dynamic-suffix upload/db-update prefixes', () => {
+    expect(explainRouteRegenIssue('upload: The resource was not found')).not.toBeNull();
+    expect(explainRouteRegenIssue('db update: connection timed out')).not.toBeNull();
+  });
+
+  it('does not carry Stripe Mapping messages', () => {
+    expect(explainRouteRegenIssue('customer is deleted in Stripe')).toBeNull();
   });
 });

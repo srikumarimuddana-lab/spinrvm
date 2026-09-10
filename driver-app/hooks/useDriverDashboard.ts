@@ -1899,7 +1899,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           ]
         );
       } else if (data?.type) {
-        console.warn('[Push] Unknown notification type — navigating to notifications list:', data.type);
+        // C97: this used to silently navigate with no toast/alert — a driver
+        // looking at any other part of the app while foregrounded would
+        // never notice anything happened. The backend already sends a real
+        // FCM `notification` block (title/body) for every type that isn't
+        // new_ride_assignment/live_activity (see backend/features.py's
+        // is_data_only), so remoteMessage.notification is populated here;
+        // surface it instead of only a console.warn. Falls back to a
+        // generic line if the payload ever arrives without one.
+        console.warn('[Push] Unknown notification type — showing fallback toast:', data.type);
+        showToast(
+          'info',
+          remoteMessage?.notification?.title || 'New notification',
+          remoteMessage?.notification?.body || 'Tap to view details in your notifications list.',
+        );
         router.push('/driver/notifications' as any);
       }
     });

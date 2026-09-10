@@ -3,6 +3,7 @@ import { Animated, Easing, Platform, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
+    coalescePlaybackBearing,
     distanceMeters,
     selectBearing,
     shortestArcRotationTarget,
@@ -464,21 +465,21 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
 
             // Bearing priority: route segment → spline tangent / direction of
             // travel → reported GPS heading (cold start only). See
-            // selectBearing() for why movement outranks the reported heading
-            // (Android's placeholder 0). The spline tangent (p.bearing) is
-            // preferred over the chord between tick targets when available —
-            // it rotates through turns instead of kinking at fixes.
-            const selected = selectBearing({
-                snap,
-                movedMeters: movedM,
-                from,
-                to: target,
-                heading: headingRef.current,
-                hasMovementBearing: hasMovementBearingRef.current,
-                minMoveMeters: MIN_BEARING_MOVE_M,
-            });
-            const bearing =
-                selected.source === 'travel' && p.bearing != null ? p.bearing : selected.bearing;
+            // selectBearing() / coalescePlaybackBearing() — per-tick chords
+            // are often < 3 m even while driving.
+            const selected = coalescePlaybackBearing(
+                selectBearing({
+                    snap,
+                    movedMeters: movedM,
+                    from,
+                    to: target,
+                    heading: headingRef.current,
+                    hasMovementBearing: hasMovementBearingRef.current,
+                    minMoveMeters: MIN_BEARING_MOVE_M,
+                }),
+                { bearing: p.bearing, mode: p.mode },
+            );
+            const bearing = selected.bearing;
             prevTargetRef.current = target;
             if (bearing != null) {
                 if (selected.source === 'route' || selected.source === 'travel') {
@@ -662,6 +663,28 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         transform: [{ scale: mountAnim }],
     };
 
+    // iOS Apple Maps ignores Marker.rotation (no-op on MKAnnotationView),
+    // so heading must be applied as a view transform on the image wrapper.
+    // Android uses Marker.rotation natively — no view transform needed.
+    /* eslint-disable react-hooks/refs -- rotationAnim is the stable Animated.Value from useRef(...).current */
+    const iosRotateStyle = isAndroid
+        ? null
+        : {
+              width: size,
+              height: size,
+              alignItems: 'center' as const,
+              justifyContent: 'center' as const,
+              transform: [
+                  {
+                      rotate: rotationAnim.interpolate({
+                          inputRange: [-360000, 360000],
+                          outputRange: ['-360000deg', '360000deg'],
+                      }),
+                  },
+              ],
+          };
+    /* eslint-enable react-hooks/refs */
+
     // Ring geometry: the static ring sits at ~1.35x the car icon; the pulse
     // (when present) scales up to ~1.7x THAT, so the outer wrapper needs
     // ~2.3x the icon size to avoid clipping the pulse at its largest frame.
@@ -693,10 +716,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         : null;
     /* eslint-enable react-hooks/refs */
     const outerSize = ring ? ringMaxDiameter : size;
-    // Only forced while the ring actually loops — a static ring (in-trip,
-    // steady-state) is a one-time render, same settle-then-freeze lifecycle
-    // as everything else in this file.
-    const effectiveTracksViewChanges = ring?.pulsing ? true : tracksViewChanges;
+    // Android: freeze the custom-view snapshot after image loads (rotation
+    // is a native Marker prop, independent of the bitmap). iOS Apple Maps
+    // ignores Marker.rotation, so heading is a view transform — freezing
+    // the snapshot would pin the PNG north forever.
+    const effectiveTracksViewChanges = isAndroid
+        ? (ring?.pulsing ? true : tracksViewChanges)
+        : true;
 
     return (
         <MarkerComponent
@@ -736,18 +762,23 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 )}
                 {/* eslint-disable-next-line react-hooks/refs -- mountAnimatedStyle is a plain object computed above from the stable mountAnim ref value, not a fresh ref read */}
                 <Animated.View style={mountAnimatedStyle}>
-                    <ExpoImage
-                        source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
-                        onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
-                        onLoad={handleImageLoaded}
-                        contentFit="contain"
-                        cachePolicy="disk"
-                        style={{
-                            width: size,
-                            height: size,
-                            backgroundColor: 'transparent',
-                        }}
-                    />
+                    <Animated.View
+                        pointerEvents="none"
+                        style={iosRotateStyle ?? { width: size, height: size }}
+                    >
+                        <ExpoImage
+                            source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
+                            onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
+                            onLoad={handleImageLoaded}
+                            contentFit="contain"
+                            cachePolicy="disk"
+                            style={{
+                                width: size,
+                                height: size,
+                                backgroundColor: 'transparent',
+                            }}
+                        />
+                    </Animated.View>
                 </Animated.View>
             </View>
         </MarkerComponent>

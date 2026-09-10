@@ -19,12 +19,28 @@ from utils.sin import validate_sin
 
 @pytest.fixture
 def super_admin_override():
-    """Admin routes here sit behind require_module("drivers"); a super_admin
-    passes that gate regardless of the modules claim."""
+    """Writes a government ID (SIN) — this router sits behind
+    require_super_admin, not a plain module grant."""
     from backend.server import app
     from dependencies import get_admin_user
 
     app.dependency_overrides[get_admin_user] = lambda: {"id": "admin_1", "role": "super_admin"}
+    yield
+    app.dependency_overrides.pop(get_admin_user, None)
+
+
+@pytest.fixture
+def regular_admin_override():
+    """A non-super_admin holding the ordinary "drivers" module grant —
+    must be rejected now that this router requires super_admin."""
+    from backend.server import app
+    from dependencies import get_admin_user
+
+    app.dependency_overrides[get_admin_user] = lambda: {
+        "id": "admin_2",
+        "role": "admin",
+        "modules": ["drivers"],
+    }
     yield
     app.dependency_overrides.pop(get_admin_user, None)
 
@@ -376,3 +392,28 @@ def test_requires_admin_auth(test_client):
         _drivers_csv(_good_driver_row()),
     )
     assert resp.status_code in (401, 403)
+
+
+def test_regular_admin_with_drivers_module_forbidden(test_client, regular_admin_override):
+    """A "drivers"-module admin (e.g. the operations preset) must not be able
+    to commit a SIN/DOB backfill — this endpoint writes a government ID and
+    requires super_admin, same posture as reveal-sin/update-sin/tax_id_import."""
+    resp = _post(
+        test_client,
+        "/api/admin/legacy-drivers/sin-dob-backfill/validate",
+        _banks_csv(_good_bank_row()),
+        _drivers_csv(_good_driver_row()),
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_regular_admin_forbidden_from_commit(test_client, regular_admin_override):
+    resp = test_client.post(
+        "/api/admin/legacy-drivers/sin-dob-backfill/commit",
+        files={
+            "banks_csv": ("banks.csv", _banks_csv(_good_bank_row()), "text/csv"),
+            "drivers_csv": ("drivers.csv", _drivers_csv(_good_driver_row()), "text/csv"),
+        },
+        data={"batch": "b1", "validation_token": "irrelevant-should-403-before-token-check"},
+    )
+    assert resp.status_code == 403, resp.text

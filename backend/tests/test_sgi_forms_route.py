@@ -591,6 +591,21 @@ def test_package_requires_a_reason(admin_client):
     assert resp.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_removal_queue_rejects_non_super_admin_even_if_mount_is_bypassed():
+    """Admin RBAC audit finding W2: this router is mounted require_super_admin
+    but had no independent per-handler check. Direct call (skipping FastAPI's
+    dependency injection) proves the new _require_super_admin() guard fires
+    on its own."""
+    from fastapi import HTTPException
+
+    from backend.routes.admin.sgi_forms import sgi_removal_queue
+
+    with pytest.raises(HTTPException) as exc_info:
+        await sgi_removal_queue(admin={"id": "admin-2", "role": "admin"})
+    assert exc_info.value.status_code == 403
+
+
 def test_package_rejects_an_empty_selection(admin_client):
     resp = admin_client.post(_PKG_PATH, json={"driver_ids": [], "reason": _PKG_REASON})
     assert resp.status_code == 400

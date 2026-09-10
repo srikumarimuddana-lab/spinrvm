@@ -18043,25 +18043,62 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 
 - [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
   found while root-causing AI16, deliberately not shipped in that PR; each
-  is its own scoped change. (F1) `filter_tool_leakage` runs on the
-  *persisted* reply only (`orchestrator.py`) — a tool name or internal
-  identifier the model prints is seen live by the rider; needs a
-  word-boundary-buffered stream filter in `ai/pii.py` applied at the token
-  yield, behind a `settings` flag (migration + `schemas.py` +
-  `routes/admin/settings.py` + `test_admin_settings_write_allowlist_drift`),
-  default off. (F2) `shared/utils/aiLocationMessages.ts` embeds the raw
-  `vehicle_type_id` UUID in the rider-visible tapped-quote bubble — add a
-  `displayContent` on the local echo (store + screen + admin console
-  mirror) so the model still gets the id and the rider sees prose. (F3)
-  `rider-app/store/aiChatStore.ts` renders the raw server `message` for any
-  unmapped error code — map `conversation_busy`, `provider_error`,
-  `ai_misconfigured`, `not_found` and drop the passthrough. (F4) the
-  assistant hides the fare entirely when no drivers are online, while
-  `rider-app/app/ride-options.tsx` shows prices under a "No cars available"
-  banner — product decision on parity (backend `tools_booking.py` +
-  `FareQuoteCard.tsx` + shared types + prompt, flagged). (F5) nothing clears
-  `ai:quote:{conversation_id}` on "new conversation" or
-  `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
+  is its own scoped change. **Re-verified 2026-09-10 (this session, while
+  picking up the admin-portal-relevant F1/F2 pieces)** — 3 of the 5
+  sub-items were already done by other work and this entry had simply never
+  been updated to say so; only F4 is genuinely still open. Re-checked each
+  sub-item directly against current code (not just trusting this file):
+  - **(F1) DONE — already superseded by F08/PR #5138, unconditionally
+    (better than what this item asked for).** `backend/ai/stream_filter.py`
+    is exactly the "word-boundary-buffered stream filter" this item wanted
+    — `StreamingOutputFilter`, whole-buffer re-scrub with a holdback sized
+    above the longest matchable pattern, extensively documented (its own
+    module docstring explains why a naive split-and-scrub is unsound) and
+    covered by `backend/tests/test_ai_stream_filter.py`. It's wired into
+    the live token-yield loop at `backend/ai/orchestrator.py:476-487`
+    (`out_filter = StreamingOutputFilter(...)`, `out_filter.feed()` per
+    chunk, `out_filter.flush()` at turn end) — every token reaching the
+    rider is filtered before delivery, not just the persisted copy.
+    **Not** behind a settings flag as this item requested — it runs
+    unconditionally for every AI chat turn. Decided not to retrofit a flag:
+    a default-off toggle would mean the leak protection does nothing until
+    someone remembers to flip it on, and an admin-facing switch to *disable*
+    a leak filter is added attack surface, not a safety improvement. Ran
+    `backend/ai/pii.py` as the item literally named it — that file predates
+    this fix and doesn't contain the stream filter; `stream_filter.py` is
+    the correct real home for it and imports `pii.py`'s `scrub_pii`/
+    `filter_tool_leakage`, so the item's file path was aspirational, not a
+    missed requirement.
+  - **(F2) DONE — PR #5177, commit `fc4bfeb`.** Verified directly:
+    `shared/utils/aiLocationMessages.ts:88-100` has both
+    `buildQuoteBookingMessage` (raw, sent to the model) and
+    `buildQuoteBookingDisplayMessage` (no UUID, rendered); `AiChatMessage`
+    (`shared/types/ai.ts:161-167`) carries `content` + `displayContent?`;
+    wired through `rider-app/store/aiChatStore.ts:151,224-238`,
+    `rider-app/app/ai-assistant.tsx:400-409,442-446`, and the admin console
+    mirror `admin-dashboard/src/app/dashboard/ai-console/page.tsx:43-55,
+    148-153,387-399,556-560`.
+  - **(F3) MOSTLY DONE — safety goal met, minor polish still open.**
+    `rider-app/store/aiChatStore.ts`'s `ERROR_MESSAGES` map (~L118-126) has
+    a `default` fallback and never passes a raw backend string to the
+    rider — the actual "drop the passthrough" safety property this item
+    exists for. But only 2 of the 4 named codes got a tailored message
+    (`ai_misconfigured`, `provider_error`); `conversation_busy` and
+    `not_found` still fall through to the generic `default` string instead
+    of a code-specific one. Cosmetic gap, not a safety one — leaving open
+    as a trivial pickup (add 2 map entries) rather than re-closing this
+    whole item over it.
+  - **(F4) STILL OPEN — the only real remaining work, and it's rider-app
+    product/UX, not admin-portal.** The assistant hides the fare entirely
+    when no drivers are online, while `rider-app/app/ride-options.tsx`
+    shows prices under a "No cars available" banner — product decision on
+    parity (backend `tools_booking.py` + `FareQuoteCard.tsx` + shared types
+    + prompt, flagged). Needs a product-owner call on which behavior is
+    right before any code changes.
+  - **(F5) DONE — PR #5177, commit `fc4bfeb`.** Verified directly:
+    `backend/ai/conversations.py`'s `delete_conversation` (~L165-182) calls
+    `redis_delete(_QUOTE_PIN_KEY_FMT.format(...))`, clearing the
+    `ai:quote:{conversation_id}` pin on `DELETE /ai/conversations/{id}`.
 
 - [x] **AI18. Anonymous web assistant's tool path is dead in production** —
   found during AI16's review round, pre-existing and unrelated to that fix.

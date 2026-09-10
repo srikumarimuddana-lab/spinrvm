@@ -23887,6 +23887,52 @@ how much they de-risk a public launch._
   against a real build; (6) either wire `expo-notifications`' handler into the real path or
   remove the now-misleading dead code.
 
+### C98. No Fly.io or Railway CLI/MCP access from any Claude Code session in this repo — blocks verifying prod secrets directly, including C97's own top recommendation
+
+- [ ] **Status:** OPEN — setup gap, needs a human to grant access; not fixable
+  by any session. Surfaced 2026-09-10 when the user asked this session to
+  check whether `FIREBASE_SERVICE_ACCOUNT_JSON` is valid on both Fly.io
+  and Railway — the #1 recommendation in **C97** (driver-app push
+  notifications), which flagged confirming this credential as the fastest,
+  cheapest way to resolve its two-root-cause fork.
+- **What's missing, confirmed directly:** `which flyctl fly railway` finds
+  none of the three installed in this session's shell; no `mcp__fly*` or
+  `mcp__railway*` tools appear anywhere in this session's tool list
+  (contrast with Vercel, Supabase, GitHub, Figma, which are all connected
+  here). `FIREBASE_SERVICE_ACCOUNT_JSON` lives as a secret inside each
+  platform's own vault (per `CLAUDE.md`'s Deployment section — backend
+  ships to both Fly `yyz` primary and Railway standby), not in this repo,
+  so there is no file this session could read to check it either.
+- **Consequence:** the exact same gap almost certainly blocks
+  `session_012kZfwCw2q9T5T1HjvdXyAK` (C97's own owning session) from
+  confirming its own top recommendation — that session's post-turn status
+  as of 2026-09-10 explicitly reads "need Firebase credential check" as
+  its blocker. Two independent sessions hit the identical wall.
+- **What a human can do right now, without waiting on this being fixed**
+  (commands handed to the user directly, not run here):
+  ```bash
+  # Fly.io — confirms the secret exists + last-set date (never shows the value)
+  flyctl secrets list -a <fly-app-name>
+  # Railway — same idea
+  railway variables --service <service-name>
+  # To actually validate the JSON parses and shows the right project/service-account
+  # (still never prints the private key):
+  flyctl ssh console -a <fly-app-name> -C "python3 -c \"import json,os; d=json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT_JSON']); print(d['project_id'], d['client_email'])\""
+  # railway run <same python one-liner> for the Railway side
+  ```
+- **Fix, if the user wants sessions to do this directly in future:** grant
+  Fly.io and Railway CLI credentials (or connect their respective MCP
+  servers, if/when one exists) to this repo's Claude Code environment —
+  scoped to this project specifically, per the user's own stated policy
+  on project-scoped tool access (never account-wide/all-projects) for
+  CLI-based tech-stack components. This is a connector/environment
+  configuration change, not a code change — no PR can close this item by
+  itself the way most items here are closed.
+- **Not investigated:** whether this account has Fly.io/Railway access
+  configured for *other* repos' Claude Code environments (would confirm
+  this is a per-repo scoping gap rather than a full account-level absence)
+  — out of scope to check from this session, which only sees this repo.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

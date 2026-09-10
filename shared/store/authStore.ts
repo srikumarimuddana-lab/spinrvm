@@ -671,7 +671,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // comment above warns about — for no benefit.
     if (options?.revokeServerSession !== false && token) {
       try {
-        await api.post('/auth/logout');
+        // F02 (2026-09-08 AI security assessment): this used to POST with no
+        // body. The server revokes a refresh token only if one arrives in a
+        // cookie or the body, and native clients do not reliably send the
+        // cookie — so a probe confirmed logout succeeding with NO refresh
+        // revocation at all, leaving a 30-day credential live. Send it
+        // explicitly rather than depending on cookie transport.
+        //
+        // Read from the store rather than storage: the wipe below has not run
+        // yet, and `get()` is the same source the rest of this function uses.
+        const currentRefreshToken = get().refreshToken ?? (await storage.getItem('refresh_token'));
+        await api.post('/auth/logout', currentRefreshToken ? { refresh_token: currentRefreshToken } : {});
       } catch (error) {
         // Best-effort: the local session still ends. A failure here leaves the
         // refresh token live until its own expiry, which is the pre-existing

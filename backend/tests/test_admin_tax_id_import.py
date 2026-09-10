@@ -254,6 +254,130 @@ class TestCommitBackgroundPush:
         spawned.call_args.args[0].close()
 
 
+PREPARE_VALIDATE = "/api/admin/tax-ids/import/prepare-validate"
+PREPARE_COMMIT = "/api/admin/tax-ids/import/prepare-commit"
+
+BANKS_HEADER = "driver_id,sin,gst,updated_at"
+DRIVERS_HEADER = "_id,phone"
+MONGO_DRIVER_ID = "6923ea32d1bde481895439f4"
+
+
+def _banks_csv(*rows: str) -> bytes:
+    return ("\n".join([BANKS_HEADER, *rows]) + "\n").encode()
+
+
+def _drivers_csv(*rows: str) -> bytes:
+    return ("\n".join([DRIVERS_HEADER, *rows]) + "\n").encode()
+
+
+def _good_bank_row(sin: str = VALID_SIN, gst: str = "123456789RT0001") -> str:
+    return f"{MONGO_DRIVER_ID},{sin},{gst},2026-01-01T00:00:00.000"
+
+
+def _good_driver_row(phone: str = "3065551234") -> str:
+    return f"{MONGO_DRIVER_ID},{phone}"
+
+
+def _post_pair(test_client, path, banks_bytes, drivers_bytes, **extra_data):
+    return test_client.post(
+        path,
+        files={
+            "banks_csv": ("banks.csv", banks_bytes, "text/csv"),
+            "drivers_csv": ("drivers.csv", drivers_bytes, "text/csv"),
+        },
+        data=extra_data,
+    )
+
+
+def _validate_then_commit_pair(test_client, banks_bytes, drivers_bytes):
+    validate_resp = _post_pair(test_client, PREPARE_VALIDATE, banks_bytes, drivers_bytes)
+    assert validate_resp.status_code == 200, validate_resp.text
+    report = validate_resp.json()
+    return _post_pair(
+        test_client,
+        PREPARE_COMMIT,
+        banks_bytes,
+        drivers_bytes,
+        batch=report["batch"],
+        validation_token=report["validation_token"],
+    )
+
+
+class TestPrepareFromLegacyExport:
+    """The banks.csv + drivers.csv raw-upload path -- PII never has to leave
+    the admin's machine for anywhere but this endpoint (no chat, no manual
+    CSV-building step)."""
+
+    def test_validate_joins_and_reports_no_pii_in_response(self, test_client, super_admin_override):
+        ps = _patches([_driver()])
+        with ps[0], ps[1], ps[2], ps[3], ps[4]:
+            resp = _post_pair(
+                test_client, PREPARE_VALIDATE, _banks_csv(_good_bank_row()), _drivers_csv(_good_driver_row())
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["can_commit"] is True
+        assert body["counts"]["to_write"] == 1
+        assert "validation_token" in body
+        assert body["join_stats"]["banks_rows"] == 1
+        assert VALID_SIN not in resp.text
+        assert PHONE not in resp.text
+
+    def test_no_matching_rows_is_422(self, test_client, super_admin_override):
+        """banks.csv with no SIN/GST at all, or nothing that joins to a
+        driver, must not silently report an empty-but-successful plan."""
+        ps = _patches([])
+        with ps[0], ps[1], ps[2], ps[3], ps[4]:
+            resp = _post_pair(test_client, PREPARE_VALIDATE, _banks_csv(_good_bank_row(sin="", gst="")), _drivers_csv())
+        assert resp.status_code == 422
+
+    def test_commit_writes_via_the_same_apply_plan_as_the_single_csv_path(self, test_client, super_admin_override):
+        upd = AsyncMock()
+        ps = _patches([_driver()], update_mock=upd)
+        with ps[0], ps[1], ps[2], ps[3], ps[4]:
+            resp = _validate_then_commit_pair(
+                test_client, _banks_csv(_good_bank_row()), _drivers_csv(_good_driver_row())
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["committed"] is True
+        assert body["written_sin"] == 1
+        assert body["written_gst"] == 1
+        assert upd.await_count == 2
+
+    def test_commit_without_validation_token_is_422(self, test_client, super_admin_override):
+        ps = _patches([_driver()])
+        with ps[0], ps[1], ps[2], ps[3], ps[4]:
+            resp = _post_pair(test_client, PREPARE_COMMIT, _banks_csv(_good_bank_row()), _drivers_csv())
+        assert resp.status_code == 422, resp.text
+
+    def test_commit_with_token_from_different_files_is_400(self, test_client, super_admin_override):
+        """A token minted for one banks.csv/drivers.csv pair does not
+        authorize a commit against different file contents."""
+        ps = _patches([_driver()])
+        with ps[0], ps[1], ps[2], ps[3], ps[4]:
+            validate_resp = _post_pair(
+                test_client,
+                PREPARE_VALIDATE,
+                _banks_csv(_good_bank_row(sin=VALID_SIN)),
+                _drivers_csv(_good_driver_row()),
+            )
+            report = validate_resp.json()
+            resp = _post_pair(
+                test_client,
+                PREPARE_COMMIT,
+                _banks_csv(_good_bank_row(gst="987654321RT0001")),  # different bytes
+                _drivers_csv(_good_driver_row()),
+                batch=report["batch"],
+                validation_token=report["validation_token"],
+            )
+        assert resp.status_code == 400, resp.text
+
+    def test_regular_admin_forbidden(self, test_client, regular_admin_override):
+        resp = _post_pair(test_client, PREPARE_VALIDATE, _banks_csv(_good_bank_row()), _drivers_csv())
+        assert resp.status_code == 403
+
+
 class TestCommitRaceGuard:
     def test_driver_who_entered_sin_mid_commit_is_not_clobbered(self, test_client, super_admin_override):
         """The plan validates against a snapshot; if the driver self-enters

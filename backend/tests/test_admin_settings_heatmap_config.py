@@ -86,6 +86,10 @@ def test_empty_allowlist_is_savable():
     [
         ("heatmap_k_floor", 0),  # would disable the k-anonymity floor entirely
         ("heatmap_k_floor", -1),
+        # 1 and 2 used to pass this model and fail on migration 397's CHECK —
+        # a 500 where the operator deserved a 422 naming the PIPEDA floor.
+        ("heatmap_k_floor", 1),
+        ("heatmap_k_floor", 2),
         ("heatmap_k_floor", 51),
         ("heatmap_refresh_seconds", 1),  # fleet-wide 1s polling = self-DoS
         ("heatmap_refresh_seconds", 0),

@@ -18,9 +18,9 @@ import {
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
-  DemandLegend,
   ForecastStrip,
   HeatmapCells,
+  HeatmapGradientOverlay,
   HotspotChips,
 } from '../../../components/dashboard';
 import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
@@ -337,12 +337,8 @@ function DriverDashboard() {
   // v2 adds layer selection (HM-12) and surge mirror (HM-11)
   const {
     cells: heatmapCells,
-    status: heatmapStatus,
-    visible: heatmapVisible,
     surge: heatmapSurge,
     isV2: heatmapIsV2,
-    layer: heatmapLayer,
-    setLayer: setHeatmapLayer,
     forecast: heatmapForecast,
     hotspots: heatmapHotspots,
     cellLatDeg: heatmapCellLat,
@@ -362,6 +358,17 @@ function DriverDashboard() {
   const [heatmapRegion, setHeatmapRegion] = useState<
     { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number } | null
   >(null);
+
+  // iOS Skia gradient overlay (HM-32) needs two things HeatmapCells' own
+  // Android/iOS-fallback paths don't: a region that updates DURING a drag
+  // (not just on settle, per the user's explicit "best-effort follow"
+  // choice — onRegionChange is a JS-bridge event, not frame-synced, so this
+  // will visibly lag/stutter on fast pans rather than track perfectly; see
+  // the HM-32 change-log for why true frame sync isn't achievable through
+  // react-native-maps' public API here), and the map container's own pixel
+  // size, to project cells' lat/lng into the overlay canvas's screen space.
+  const [liveHeatmapRegion, setLiveHeatmapRegion] = useState<typeof heatmapRegion>(null);
+  const [mapViewport, setMapViewport] = useState({ width: 0, height: 0 });
 
   // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
   const { zones: airportZones, activeZone: activeAirportZone } = useAirportZones(
@@ -584,7 +591,13 @@ function DriverDashboard() {
     // to us instead of running a second timer against the same endpoint.
     const releasePublisher = registerLiveRoutePublisher();
     fetchLiveRoute();
-    const id = setInterval(fetchLiveRoute, 20000);
+    // Shortened from 20s to 6s (2026-09-09) — live-testing report: the route
+    // line/ETA visibly lagged the car through turns. Must match
+    // lib/androidAuto/useCarLiveRoute.ts's POLL_MS (see its own comment for
+    // why this is safe: self-hosted OSRM absorbs the extra load as infra
+    // cost, and the metered Google Directions fallback stays behind its own
+    // daily-budget circuit breaker regardless of poll frequency).
+    const id = setInterval(fetchLiveRoute, 6000);
     return () => {
       cancelled = true;
       releasePublisher();
@@ -955,7 +968,21 @@ function DriverDashboard() {
       )}
 
       {/* Map */}
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <View
+        style={StyleSheet.absoluteFill}
+        pointerEvents="box-none"
+        // iOS-only: measures the map container so the Skia gradient overlay
+        // (HM-32, rendered as a sibling below, not a MapView child — Skia
+        // draws to its own canvas view, not a react-native-maps annotation)
+        // can project cells' lat/lng into this exact pixel space. This View
+        // and the MapView both use styles.map === StyleSheet.absoluteFill,
+        // so they always occupy identical bounds.
+        onLayout={
+          Platform.OS === 'ios'
+            ? (e) => setMapViewport({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })
+            : undefined
+        }
+      >
       <MapView
         key={mapKey}
         ref={mapRef}
@@ -1018,6 +1045,11 @@ function DriverDashboard() {
             latitudeDelta: region.latitudeDelta,
             longitudeDelta: region.longitudeDelta,
           };
+          // iOS-only: feeds the Skia gradient overlay's best-effort drag
+          // tracking (HM-32). Android never reads liveHeatmapRegion (it
+          // gets a real native gradient layer, no Skia overlay at all), so
+          // skip the extra re-render there entirely.
+          if (Platform.OS === 'ios') setLiveHeatmapRegion(region);
         }}
         onPanDrag={() => {
           // Driver is exploring (heatmap, hotspots) — stop the follow camera
@@ -1203,13 +1235,28 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Demand heatmap — cross-platform cell polygons (HM-05) */}
-        {heatmapCells.length > 0 && Platform.OS !== 'web' && (
+        {/* Demand heatmap — Android only here (HM-05). react-native-maps'
+            native <Heatmap> gradient layer (which HeatmapCells uses on
+            Android) must be a MapView child to render as a map annotation.
+            iOS gets the Skia gradient overlay instead (HM-32, rendered as a
+            sibling below MapView — Skia draws to its own canvas view, not a
+            map annotation, so it can't live in here). Explicitly gated on
+            rideState === 'idle' (not just heatmapCells.length), matching
+            every sibling heatmap widget below: useDemandHeatmap already
+            clears `cells` to [] outside idle, but that gate lived only in
+            the hook, not here — this render had no guard of its own, so the
+            "idle only" invariant held incidentally rather than by
+            construction. driverLocation lets HeatmapCells drop any cell
+            centered close enough to overlap the driver's own CarMarker (see
+            its prop doc — root cause of the "concentric circles around the
+            car icon" report on iOS). */}
+        {rideState === 'idle' && heatmapCells.length > 0 && (
           <HeatmapCells
             cells={heatmapCells}
             region={heatmapRegion}
             cellLatDeg={heatmapCellLat}
             cellLngDeg={heatmapCellLng}
+            driverLocation={location?.coords ?? null}
           />
         )}
 
@@ -1227,6 +1274,47 @@ function DriverDashboard() {
           )
         ))}
       </MapView>
+
+      {/* Demand heatmap — iOS Skia gradient overlay (HM-32). A sibling of
+          MapView, not a child: Skia renders to its own canvas view, which
+          react-native-maps has no slot for as a map annotation (unlike
+          <Heatmap>/<Circle> above, which the native map SDK positions in
+          geo-space itself). Positioned absolutely over the same bounds via
+          mapViewport (measured by the wrapping View's onLayout above), and
+          projects cells into that pixel space itself (utils/
+          heatmapProjection.ts) since it has no native map to anchor to.
+          Same idle-only + driverLocation-exclusion gating as the Android
+          branch above. */}
+      {/* DISABLED 2026-09-10 (incident): driver-app 2.0.03 100% crash on iOS,
+          `TurboModuleRegistry.getEnforcing(...): 'RNSkiaModule' could not be
+          found` — an OTA-pushed JS bundle referencing @shopify/react-native-
+          skia reached iOS binaries that predate the native module. The
+          existing try/catch-around-require() guard in loadSkia() should have
+          caught this (verified: TurboModuleRegistry.getEnforcing's failure
+          is a plain, synchronous, catchable JS throw — confirmed by reading
+          the actual invariant/TurboModuleRegistry source, and this repo's
+          own existing test simulating the identical throw already passes
+          against the unmodified code) — so the exact mechanism is NOT yet
+          confirmed. Rather than trust an unverified guess under incident
+          pressure, this removes the entire require('@shopify/react-native-
+          skia') call from ever executing again: HeatmapCells' Android-only
+          gate above was lifted back to all platforms, restoring its
+          original, Skia-free iOS circle-fallback rendering (safe, unchanged
+          since before HM-32). Re-enable only after: (1) the real Sentry
+          stack trace confirms the actual throw site, and (2) a real EAS
+          native-build device test confirms no crash on both pre- and
+          post-Skia binaries. See
+          docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md. */}
+      {false && Platform.OS === 'ios' && rideState === 'idle' && heatmapCells.length > 0 && (
+        <HeatmapGradientOverlay
+          cells={heatmapCells}
+          region={liveHeatmapRegion ?? heatmapRegion}
+          cellLatDeg={heatmapCellLat}
+          cellLngDeg={heatmapCellLng}
+          driverLocation={location?.coords ?? null}
+          viewport={mapViewport}
+        />
+      )}
       </View>
 
       {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}
@@ -1241,25 +1329,6 @@ function DriverDashboard() {
       {rideState === 'idle' && surgeMultiplier > 1.0 && (
         <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
           <Text style={{ color: colors.surface, fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
-        </View>
-      )}
-
-      {/* Demand legend toggle (HM-04 + HM-12 layer selector) — a small
-          top-right icon the driver taps to reveal the legend/layer picker,
-          not a pill sitting open over the map. Top-right is free during
-          `idle` (the only state this renders in): the SOS shield/button use
-          the same corner but only during navigating_to_pickup /
-          arrived_at_pickup / trip_in_progress, which are mutually exclusive
-          with idle. */}
-      {rideState === 'idle' && heatmapVisible && (
-        <View style={{ position: 'absolute', top: insets.top + 4, right: 16, zIndex: 60 }}>
-          <DemandLegend
-            status={heatmapStatus}
-            visible={heatmapVisible}
-            isV2={heatmapIsV2}
-            layer={heatmapLayer}
-            onLayerChange={setHeatmapLayer}
-          />
         </View>
       )}
 

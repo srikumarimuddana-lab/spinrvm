@@ -134,6 +134,31 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
 
 ## P0 — Launch gating (code)
 
+> **Filing note (2026-09-08):** four items that are P0-severity in substance
+> physically live under the `## P4` header at the end of this file, not here
+> — a backlog-manifest review flagged this. They landed there purely because
+> each was appended chronologically to whatever section header was current
+> when the finding was made, the same append-only convention this file uses
+> everywhere else (see A34's own note on its duplicate heading number for
+> the same "don't renumber/relocate, annotate instead" precedent). Rather
+> than physically move ~250 lines of already-cross-referenced entries this
+> late in the file's life, they're flagged here so a top-to-bottom P0 read
+> doesn't miss them:
+> - **A43** — PR #5048 merged a 34-file rides/payments/auth batch 47 seconds
+>   after opening, bypassing every CI check (governance/rides/payments/auth).
+> - **B42** — `payment_failed` Stripe webhook events silently dropped for
+>   ~36 minutes during #5048's live window; no data remediation done yet
+>   (payments/money).
+> - **C73** — `main`'s merge path doesn't wait for `backend-test` or block
+>   on an already-failed check — the mechanical cause of A43 (governance/infra).
+> - **C43** — RLS disabled on 4 production tables, including the one holding
+>   Stripe/Twilio/Google Maps keys (security/infra) — deliberately deferred
+>   by the product owner until A41 concludes, but still P0-severity, not
+>   P4, while it's true.
+>
+> Treat these four as P0 for prioritization purposes regardless of where
+> they physically sit in the file.
+
 ### A40. Whole-app fleet audit (2026-08-18, Part A) — 3-day drift check vs. 2026-08-15 baseline — CLOSED (2026-09-04 status correction), 2 named residual follow-ups remain
 > **Regression note (2026-09-04):** the fix for this audit's ranked blocker
 > #5/#6 (`scrub_pii_deep` wired into `tools.py::_cap_result`) also scrubbed
@@ -5490,18 +5515,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   this item's acceptance).
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-29) — R-A through R-F all DONE/resolved.
-  The dual-approval gate itself is now DONE (shipped as part of B10 above,
-  PRs #2819/#2820 — Data Transfer's `export_entities` route is wired through
-  the same shared gate as Compliance). Only R-G remains open, and only
-  because it genuinely requires a human privacy/legal determination — a
-  self-contained request package for that
-  review has been prepared at `reports/legal/data-transfer-implied-consent-review.md`
-  (2026-07-28), but the actual determination is still pending a named
-  reviewer. Plus the still-open AI-3 dual-approval wiring (shared with B10,
-  not specific to this item). The module's P0 gaps (access-control, missing
-  PIA) were fixed 2026-07-28 (PRs #2685, #2687); this item tracks the PIA's
-  own follow-up recommendations.
+- [ ] **Status:** in progress (2026-09-08) — R-A through R-G all
+  DONE/resolved. The dual-approval gate itself is DONE (shipped as part of
+  B10 above, PRs #2819/#2820 — Data Transfer's `export_entities` route is
+  wired through the same shared gate as Compliance). **Only remaining open
+  work:** (1) R-G's own follow-up — drafting and publishing the disclosure
+  language R-G's determination calls for (see R-G entry below for the
+  exact tracking pointer), and (2) A41's separately-tied consent-
+  sufficiency question (see its own note below — not resolved by R-G).
+  The module's P0 gaps (access-control, missing PIA) were fixed 2026-07-28
+  (PRs #2685, #2687); this item tracks the PIA's own follow-up
+  recommendations.
   - **2026-09-07:** the product owner directed that A41's legacy-migration
     consent-legal-sufficiency question (whether the old app's consent basis
     was sufficient for the 2026-07-29 migration — fact sheet already
@@ -5523,6 +5547,34 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     record the determination in the PIA's Section 8/9 sign-off table per
     the request package's own "what a closed-out review looks like"
     instructions, and update this item's Status line when done.
+  - **R-G RESOLVED 2026-09-08 (Spinr Team, Product Owner).** Determination:
+    **option (a) — this secondary use needs a distinct privacy-policy
+    disclosure**, not left as implied consent alone. Recorded in
+    `docs/privacy/2026-07-28-pia-data-transfer-export.md` Section 8 (R-G)
+    and Section 9 (Reviewed by: Spinr Team, Product Owner, 2026-09-08); the
+    request package's own Status table
+    (`reports/legal/data-transfer-implied-consent-review.md`) updated to
+    match. **Follow-up still open** (this determination records the
+    decision, it does not itself draft or publish new legal text): add
+    disclosure language naming the Data Transfer module's internal
+    cross-environment data movement to `docs/legal/privacy-policy.md` —
+    tracked as a new open row in `docs/legal/legal-text-publication-
+    checklist.md`'s `privacy-policy.md` gating-conditions list. That
+    document is **already live in production** (published 2026-08-17,
+    ahead of its own required Saskatchewan/Canada counsel review, with
+    several other gaps already open — signed Supabase DPA, unverified
+    Railway data-region env var, a 2yr-vs-3yr GPS-retention contradiction
+    against `docs/data-classification.md`, and an unprovisioned
+    `accessibility@spinr.ca` contact) — this new disclosure sentence should
+    land at that document's next reviewed/re-published version, not as a
+    standalone unreviewed edit to the already-live text.
+  - **A41's tied-in legacy-migration consent-sufficiency question remains
+    separately open** — the 2026-09-07 entry above grouped it with R-G for
+    reviewer convenience (same blocker: no named reviewer), but it is a
+    different factual/legal question (whether the *old app's* consent
+    basis was sufficient for the 2026-07-29 migration, not this module's
+    ongoing secondary-use question) and was not addressed in this pass. See
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -19357,6 +19409,9 @@ how much they de-risk a public launch._
 
 ### C43. RLS disabled on 4 production tables — including `settings` (holds Stripe/Twilio/Google Maps keys)
 
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
+
 - [ ] **Status:** open, deliberately deferred by the user (2026-08-25) until
   the legacy-migration work (A41-family, this item's own §"related work"
   below) concludes — not fixed, not forgotten. Found via the Supabase MCP
@@ -22057,8 +22112,87 @@ how much they de-risk a public launch._
 - **Files:** `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_db_errors.py`,
   `backend/tests/test_dispatch_match_attempt_branches.py`.
 
-### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue
+### HM-32. iOS demand heatmap: true raster-gradient renderer (Skia) — implemented, awaiting device/EAS verification
+- [ ] **Status:** code implemented and merged to this session's branch 2026-09-09, same day
+  it was scoped — the user asked to proceed immediately rather than wait for a separate
+  sprint. **Still open**, not closed: nothing in this feature has run on a real device,
+  simulator, or EAS build (this agent environment has neither) — see the full write-up,
+  `docs/change-log/2026-09-09-hm32-skia-gradient-heatmap-ios.md`, whose own "What was NOT
+  verified" section is the actual remaining acceptance-criteria checklist. Do not close
+  this item until an EAS native build has been produced and the heatmap visually confirmed
+  on a real iOS device or simulator.
+  Originally scoped after the user shared a reference screenshot (Uber driver-app demand
+  heatmap: a soft, blurred, continuous gradient) and asked for a recommendation. An
+  immediate incremental improvement shipped the same session first (see
+  `docs/change-log/2026-09-09-heatmap-soft-gradient-style-ios.md`) — this item tracked the
+  fuller fix, which the user then chose to build immediately rather than defer ("do both").
+- **Issue/gap:** Android already renders a true GPU-blended gradient via
+  `react-native-maps`' native `<Heatmap>` layer. iOS (deliberately Apple Maps, not Google
+  Maps — see `driver-app/app.config.ts`'s comment on why switching would be a much bigger
+  change than this one feature warrants) has no native equivalent — the same limitation
+  `HM-GRAD-1` originally worked around. The 2026-09-09 fix (`BLOB_LAYERS` layered circles +
+  `rampColorForRatio` continuous color interpolation in `HeatmapCells.tsx`) is a real,
+  tested improvement but is explicitly a hand-rolled approximation, not a real Gaussian
+  blur — it will still read as "layered circles" up close on iOS, not the seamless blurred
+  raster look in the reference screenshot.
+- **Approach taken:** `@shopify/react-native-skia@2.11.2` added (peer-compatibility verified
+  against this app's real installed `react-native-reanimated`/`react-native-worklets`/React/
+  RN versions, not assumed). New `HeatmapGradientOverlay` component renders each visible
+  cell as a fully-opaque screen-space `Circle` inside one Skia `Group` whose `layer` applies
+  a real image-space Gaussian blur to the rasterized composite — overlapping cells actually
+  merge into one continuous field. Renders as a `MapView` **sibling** (not a child — Skia
+  has no map-annotation slot), positioned via a newly-measured `mapViewport` and a
+  continuously-updating `liveHeatmapRegion` (best-effort drag-follow — true frame sync isn't
+  achievable through `react-native-maps`' public iOS API without a custom native module,
+  confirmed via `react-native-maps#5086`/`#4762`, not assumed). Imported via a lazy
+  `require()`-in-try/catch (matching `carSurface.tsx`'s existing pattern for risky imports)
+  so a stale native binary degrades to "no gradient" instead of crashing.
+- **Why still open despite the code landing same-day:** this is **not OTA-eligible** — a
+  new native dependency needs a full EAS native build + device/App-Store cycle before any
+  driver sees it, and this agent session had no EAS credentials or device/simulator to
+  verify against. Every check that COULD be done without one was: `tsc --noEmit` against
+  the actually-installed package's real type declarations, unit tests against mocked Skia
+  components (including a dedicated test proving the graceful-degradation path), and a
+  researched (not assumed) confirmation of the drag-tracking limitation before committing
+  to an implementation approach.
+- **Acceptance (unchanged, still the bar to close this item):** iOS heatmap reads as a
+  continuous blurred gradient (no visible individual circle/layer edges at normal zoom); no
+  dropped frames panning/zooming with a full-size cell set on a mid-tier iOS device; overlay
+  stays correctly positioned/scaled through zoom and pan; the native module actually links
+  successfully in a real EAS build.
+- **Owner / follow-up:** needs a human with EAS build access to run a native build on this
+  branch and verify on a real device or simulator (this repo's agent sessions cannot trigger
+  EAS builds themselves — see the PR template's own "Native build verification" field).
+  Once verified, flip this item's checkbox and note the build/device result here.
+- **Files:** `driver-app/utils/heatmapColor.ts` (new), `driver-app/hooks/useVisibleHeatmapCells.ts`
+  (new), `driver-app/utils/heatmapProjection.ts` (new),
+  `driver-app/components/dashboard/HeatmapGradientOverlay.tsx` (new),
+  `driver-app/components/dashboard/HeatmapCells.tsx` (refactored), `driver-app/package.json`,
+  `driver-app/app/driver/(tabs)/index.tsx`. Full list and rationale:
+  `docs/change-log/2026-09-09-hm32-skia-gradient-heatmap-ios.md`.
 
+### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue — CLOSED (2026-09-08)
+
+- [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c72-fingerprint`.
+  Implemented fix option 1 from below: `compute_fingerprint()` now also
+  hashes a normalized `log_excerpt` per error, not just `job::category::
+  description`. Normalization (`_normalize_excerpt`, new helper) collapses
+  digit runs to `#` so trivial run-to-run noise (failure counts, line
+  numbers, durations) doesn't fragment the fingerprint for a genuinely
+  recurring failure, while the excerpt's actual test/assertion/error text
+  — the part that actually distinguishes two different bugs sharing the
+  same fixed description template, exactly what #4925 (see below) showed
+  missing — now flows into the hash. Added 3 new tests: distinct excerpts
+  in the same job/category/description bucket now diverge; digit-only
+  excerpt differences still dedupe onto one fingerprint; `_normalize_excerpt`
+  handles empty/missing input. All 7 tests in
+  `test_create_github_issue.py` pass (4 pre-existing, unaffected in
+  behavior; 3 new). Options 2 and 3 below were not implemented — option 1
+  alone directly closes the finding (a title/severity staying accurate
+  follows from failures no longer being merged in the first place), and
+  adding label-reconciliation on top would be a second, separable change
+  to the same file, not needed to close this specific gap.
+- **Original status (superseded by "closed" above):**
 - [ ] **Status:** open — found 2026-09-04 while root-causing what first
   looked like a gap in C21's 2026-09-04 follow-up (see that entry's
   same-day correction for the full investigation trail; this item is the
@@ -22114,6 +22248,9 @@ how much they de-risk a public launch._
 
 ### A43. #5048 merged a 34-file security/money batch 47 seconds after opening, before CI finished, bypassing CLAUDE.md's own escalation gate — directly caused B42 and a live OTP-regex defect
 
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
+
 - [ ] **Status:** open — found 2026-09-07 while compiling a PR/backlog
   status review of 2026-09-06 activity (PR #5048, #5050). Not a code
   finding — a process/governance gap in how a live-tested-surface PR got
@@ -22167,6 +22304,9 @@ how much they de-risk a public launch._
   audit log, which this session also cannot read).
 
 ### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
+
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
 
 - [ ] **Status:** open, blocked on data access — found 2026-09-07 while
   reviewing PR #5050's own body, which disclosed the defect and fixed the
@@ -22268,6 +22408,9 @@ how much they de-risk a public launch._
   not be read as "no events were affected."
 
 ### C73. `main`'s merge path doesn't wait for `backend-test` (or block on an already-failed check) — #5048 merged while both were still failing/in-flight
+
+> **P0-severity, filed here only by chronology** — see the note at the top of
+> the `## P0` section above.
 
 - [x] **Status:** root cause CONFIRMED 2026-09-07 via `mcp__github__
   pull_request_read(method="get_check_runs")` against PR #5048's actual
@@ -22541,19 +22684,34 @@ how much they de-risk a public launch._
   about it was already correct.
 - **Found during:** PR #5085's validation of PR #5079's maintainability
   finding (documentation drift).
+- **Follow-up (2026-09-08):** the 2026-09-08 closure was incomplete — grep
+  found 2 more "16 startup loops" instances the original fix missed
+  (`AGENTS.md`'s "Background task safety" line and its "Background Loop
+  Recipe" section header line) plus one dead `graphify-out/GRAPH_REPORT.md`
+  reference in a "Graphify coverage" bullet under the `agents/` role table
+  — inconsistent with this same fix's own removal of the `## graphify`
+  section for citing a directory that never existed. All 3 corrected in
+  place; verified no remaining "16 loops"/"18 loops" or `graphify-out`
+  references anywhere in `AGENTS.md`. Status stays closed; this is a
+  same-item correction, not a reopen.
 
-### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed
+### C85. `docs/audit/2026-09-05-engineering-director-review-round3.md` cited but never committed — CLOSED (2026-09-08)
 
-- [x] **Status:** partially closed 2026-09-08 on
+- [x] **Status:** CLOSED 2026-09-08. Originally partially closed on
   `claude/pr-5085-5079-hardening-5a2aj7` — 8 `docs/change-log/2026-09-05-*.md`
-  files cite this document by section number (§1.6–§1.11) and it does not
-  exist anywhere in `docs/audit/` or in git history. Added a one-line note
-  under each citation pointing here instead of recovering the document
-  (the finding text each log describes is reproduced in full in that log's
-  own §1, so nothing depends on the missing file to be understood).
-  **Still open:** recovering the actual document from its author's machine
-  (if it still exists) would let readers see the original's other
-  findings in context — human action, not something this session can do.
+  files cite this document by section number (§1.6–§1.11) and it did not
+  exist anywhere in `docs/audit/` or in git history at the time. A one-line
+  note was added under each citation pointing here instead of recovering the
+  document.
+  **Fully resolved:** the actual document was recovered and committed —
+  `docs/audit/2026-09-05-engineering-director-review-round3.md` landed via
+  PR #5033 ("Engineering Director Review Round 3 (2026-09-05)"), merged
+  2026-09-08 16:21:54 UTC, 945 lines. Confirmed present on `main` and
+  content-verified against a separately-read export used to build a
+  cross-reference report the same day — byte-identical. The 8 "missing
+  document" notes added by the original partial-close are now themselves
+  stale (they assert the file doesn't exist, which is no longer true) and
+  were corrected in the same commit that closes this entry.
 - **Found during:** PR #5085's validation of PR #5079's finding.
 
 ### C86. F8's 9 secondary bare synchronous Stripe SDK call sites (background loops, admin routes)
@@ -22646,7 +22804,10 @@ how much they de-risk a public launch._
 
 ### C88. `rides.refund_amount` has no committed schema definition anywhere in this repo, and is missing entirely on `spinrmobileapp`
 
-- [ ] **Status:** open — found 2026-09-08 while attempting the mandatory
+- [x] **Status:** CLOSED 2026-09-08 — all three action items complete. See
+  "Closed" entry below the original write-up for the final state; the
+  original write-up is kept as-is for the investigation history.
+- [ ] **Status (original, superseded by "Closed" below):** open — found 2026-09-08 while attempting the mandatory
   post-merge verification step for PR #5088's F1 fix (the `charge.refunded`
   compare-and-swap on `rides.refund_amount`, `docs/change-log/
   2026-09-08-charge-refunded-cas-ledger-dedupe.md`). Two distinct findings:
@@ -22699,26 +22860,111 @@ how much they de-risk a public launch._
      mandatory pre-merge verification step from PR #5088's Tier 7 was
      never actually performed against a database that has the column in
      question, on either side of the merge.
-- **Action:** (1) a human with `Spinr-Prod` access should run the actual
-  round-trip check (`SELECT id, refund_amount FROM rides WHERE
-  refund_amount = <a real value read back> AND id = <that row's id>`,
-  confirm it returns that exact row) against the real column — if it
-  doesn't round-trip cleanly, the F1 CAS filter needs the `$lte`-based
-  fallback documented in the change-log referenced above. (2) Add the
-  missing `ALTER TABLE rides ADD COLUMN IF NOT EXISTS refund_amount
-  NUMERIC(8,2) DEFAULT 0` as a proper new-numbered migration (append-only;
-  never edit history) so `spinrmobileapp` and any future environment
-  bootstrapped from `backend/migrations/` alone actually has this column,
-  and so it's no longer solely dependent on undocumented manual DDL. (3)
-  Re-scope this session's Supabase connector (or add a second one) to
-  reach `Spinr-Prod` if ongoing production verification access is wanted —
-  a decision `.claude/context/connector-scoping.md` already flags as "not
-  yet made."
+- **CORRECTION (2026-09-08, human-confirmed): `spinrmobileapp`
+  (`soavhtdhefowwvforzwb`) IS production.** Every "the real column is
+  presumably on `Spinr-Prod`, which we can't reach" framing below (in this
+  item and the original write-up above) was built on an unverified
+  name-based assumption — see `.claude/context/connector-scoping.md`'s
+  Supabase row for the full corrected account. This does **not** change
+  finding #2 above; it changes what that finding means: the column is
+  confirmed missing on **the real production database**, re-confirmed
+  live again on 2026-09-08 (empty `information_schema.columns` result),
+  not on some pre-production stand-in. Practical implication worth
+  stating plainly: if this column has truly never existed on production,
+  every real `charge.refunded` Stripe webhook hitting production would
+  have failed at the `db_supabase.update_one(..., {"refund_amount": ...})`
+  call — this code path's own error handling raises loudly rather than
+  swallowing (`if cas_updated is None: ... raise HTTPException(500, ...)`),
+  so this should have been visible (failed webhook retries in Stripe's
+  dashboard, 500s in logs/Sentry) if any real refund has actually occurred
+  against this project. Not yet investigated whether any has.
+- **Action, corrected:** (1) run the round-trip check directly — no longer
+  blocked, since production is the project this session's connector
+  already reaches. Blocked instead on step (2): the column has to exist
+  first. ~~a human with `Spinr-Prod` access~~ not needed. (2)
+  `backend/migrations/408_rides_refund_amount.sql` (added 2026-09-08,
+  reviewed by `spinr-migration-reviewer`, merged) has **not yet been
+  applied to `spinrmobileapp`** — this is now a write to a confirmed
+  production database and needs the user's explicit go-ahead before
+  running it from a session, not something to apply unilaterally. (3)
+  ~~Re-scope the connector to reach `Spinr-Prod`~~ **moot** — production
+  was already reachable the whole time. C89 (below) is superseded by this
+  correction.
+- **Closed 2026-09-08 (human-directed).** The user gave explicit,
+  documented authorization to apply migration 408 directly to production
+  and to keep the Supabase connector at full read/write/other permissions
+  (not narrowed to read-only) through **October 31, 2026** as a time-boxed
+  exception — see `.claude/context/connector-scoping.md`'s Supabase row for
+  the exact wording and the revisit trigger. All three action items are
+  now done:
+  1. **Migration applied.** `backend/migrations/408_rides_refund_amount.sql`
+     applied to `spinrmobileapp` (`soavhtdhefowwvforzwb`) via
+     `mcp__Supabase__apply_migration`. `rides.refund_amount NUMERIC(8,2)
+     DEFAULT 0` now exists on production, re-confirmed via
+     `information_schema.columns`. A matching row was inserted into that
+     project's own `schema_migrations` table (`filename`, `checksum` =
+     sha256 of the file bytes) so this repo's own
+     `backend/scripts/run_migrations.py --status` will show 408 as applied,
+     not pending, the next time it runs against this project — reconciling
+     the two separate tracking mechanisms (Supabase's native
+     `supabase_migrations` from the MCP tool, and this repo's
+     `schema_migrations`) rather than leaving them to drift apart.
+  2. **Live round-trip verification performed, safely.** Ran the exact
+     write → CAS-filter → read sequence `routes/webhooks.py`'s F1 fix
+     depends on, against a real production `rides` row
+     (`261cd5f1-7c67-44bf-84bd-09a06206123a`), wrapped in
+     `BEGIN; UPDATE ...; SELECT ...; ROLLBACK;` so no production data was
+     actually left changed. Confirmed: writing `refund_amount` and then
+     re-reading it with an equality filter on the just-written value
+     matches the same row (the exact pattern `webhooks.py`'s
+     `update_one({"id": ride_id, "refund_amount": prev_refund_amount_raw},
+     ...)` CAS check relies on) — no float/Decimal round-trip mismatch.
+     Post-rollback re-read confirmed `refund_amount` back at its default
+     `0.00`, proving the transaction left no trace. This supersedes the
+     earlier `area_fees_total` proxy verification with a direct check on
+     the real column.
+  3. **Connector re-scoping:** explicitly deferred, not skipped — the user
+     decided to keep full read/write/other permissions (not narrow to
+     read-only) until October 31, 2026, to retain write access for
+     migration work like this one. Recorded as a dated, time-boxed
+     exception in `.claude/context/connector-scoping.md`, not a silent
+     "won't fix."
+  - **Not verified:** whether any real `charge.refunded` webhook ever hit
+    production before today while the column was missing (the "every real
+    refund webhook would have 500'd" implication raised above). Out of
+    scope for this closure — would require a Stripe dashboard / Sentry
+    log review, not a schema check. If this matters, it's a follow-up, not
+    part of C88.
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
 ### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
 
-- [ ] **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
+- [x] **Status:** SUPERSEDED 2026-09-08 (human-confirmed) — the entire
+  premise was wrong. `spinrmobileapp` (`soavhtdhefowwvforzwb`, org
+  `Spinr_MobileApp`) IS production; it was never a pre-production stand-in
+  needing a second connector to reach the "real" database. `Spinr-Prod`
+  (`cfrazforbupizntxvvtp`) / `MobileAppStaging` (`mvmyygoinicjdpqprizr`),
+  under `swarnkiran88@gmail.com's Org`, remain completely unidentified —
+  the only fact ever recorded about them is a project name seen once via
+  a live API call on 2026-09-07 — and are **not being pursued**; the human
+  confirmed `spinrmobileapp` is the project to work with, full stop. No
+  second connector is needed. See `.claude/context/connector-scoping.md`'s
+  Supabase row for the corrected account and the real, more urgent
+  follow-up this correction raises: the *existing* connector carries
+  full read/write/admin tools (including `pause_project`/`restore_project`)
+  against what is now confirmed to be production, which the row's own
+  previously-written policy already says should be narrowed to read-only
+  — not yet done, flagged to the user, awaiting their call on timing.
+  **Resolved 2026-09-08:** the user's call was to keep full read/write/other
+  permissions (explicitly declining to narrow to read-only right now,
+  since write access was still needed for C88's migration apply) through
+  **October 31, 2026**, as an explicit, dated, time-boxed exception — not a
+  silent "leave it broad." See `.claude/context/connector-scoping.md`'s
+  Supabase row for the exact text and the revisit trigger that date sets
+  up. No second connector was needed or created.
+- **Original (superseded) framing below, kept for the record — do not act
+  on it, it assumes production was unreachable, which is now known false:**
+- [ ] (superseded) **Status:** open — a decision, not a bug. `.claude/context/connector-scoping.md`'s
   Supabase row already flags this as "a separate, still-open decision, not
   yet made"; recorded here as its own tracked item so it doesn't stay
   buried inside a connector-audit doc, and because C88 just hit its real
@@ -22762,6 +23008,55 @@ how much they de-risk a public launch._
   account/org memberships should pick one of the options above (or reject
   the need entirely, if C88-style live verification isn't considered worth
   the access it requires).
+- **Recommendation (2026-09-08): Option 2** — a second, separately-scoped
+  Supabase connector dedicated to `Spinr-Prod`/`MobileAppStaging`, kept
+  read-only, never the same connector used for routine `spinrmobileapp`
+  dev work. Reasoning: Option 1 (invite the current account into the other
+  org) directly contradicts the narrowest-scope principle
+  `.claude/context/connector-scoping.md` itself states — it would hand
+  *every* future session using the existing dev connector standing reach
+  into production, for the sake of an occasional verification need. Option
+  3 (do nothing) is the safest in isolation but means C88-style questions
+  keep stalling on a human every time; not worth foreclosing entirely when
+  Option 2 gets the same safety at a one-time setup cost. A second,
+  narrowly-scoped, read-only connector is the one path that gets
+  verification capability without ever widening what a routine dev session
+  can reach or mutate in production.
+  **Concrete steps for whoever owns the Supabase account (human action,
+  not executable from a session):**
+  1. In the Supabase dashboard, under the account that is a member of
+     `swarnkiran88@gmail.com's Org` (the org holding `Spinr-Prod` /
+     `cfrazforbupizntxvvtp` and `MobileAppStaging` / `mvmyygoinicjdpqprizr`),
+     open **Account → Access Tokens** and check whether a token can be
+     scoped to a specific project/org there (Supabase has been adding
+     scoped-PAT support in its dashboard; confirm current availability
+     rather than assuming — this doc can't verify a UI it can't reach).
+     If scoped tokens are available, generate one restricted to
+     `Spinr-Prod` only (add `MobileAppStaging` only if verification work
+     genuinely needs it too — don't grant both by default).
+  2. In claude.ai → **Settings → Connectors**, add a **second** Supabase
+     connector (do not edit/reuse the existing `spinrmobileapp` one) using
+     that scoped token. If the MCP integration exposes URL params, also
+     append `?project_ref=cfrazforbupizntxvvtp&read_only=true` so the
+     restriction holds even if the token itself turns out to be broader
+     than intended.
+  3. Label the two connectors distinguishably in the Connectors UI (e.g.
+     "Supabase — spinrmobileapp (dev)" vs. "Supabase — Spinr-Prod
+     (read-only verification)") so nobody attaches the wrong one to a
+     routine session by mistake.
+  4. **Verify live before trusting it**: from a session using only the new
+     connector, call `list_projects` and confirm it returns exactly
+     `Spinr-Prod` (and `MobileAppStaging` only if deliberately included) —
+     per this doc's own "verified live, not assumed" standard. If it
+     returns more than intended, the token/connector is broader than
+     configured and needs fixing before use.
+  5. Update `.claude/context/connector-scoping.md`'s Supabase row (or add a
+     second row for this new connector) recording the mechanism, scope,
+     and verification date, same as every other entry in that table.
+  This mirrors the user's own stated project-specific-access guardrail
+  (never grant account-/org-wide reach when a narrower scope will do), so
+  it should be the default answer for any future connector-scoping
+  decision in this repo, not just this one.
 - **Found during:** C88's investigation, PR #5088 F1's post-merge
   verification attempt.
 
@@ -22813,7 +23108,59 @@ how much they de-risk a public launch._
   `docs/change-log/2026-09-07-rider-app-ring-freeze-fix.md`.
 
 ### C91. admin-dashboard's `dashboard-monitoring` visual-regression baseline never actually renders a driver marker — a marker-rendering regression on that page would not be caught by CI
-- [ ] **Status:** open — found 2026-09-08 while auditing admin-dashboard for any
+- [x] **Status:** code fix done 2026-09-08 on
+  `claude/pr-5085-5079-hardening-c91-monitoring-baseline`; one step remains
+  and needs a human (see below) — not fully closed until that runs.
+  **Correction to the original root-cause below: driver markers are NOT
+  WebSocket-only.** `page.tsx`'s `loadData()` also fetches
+  `GET /api/admin/monitoring/drivers` (`getMonitoringDrivers()`) on mount
+  and every poll interval, independent of WS health, and feeds the exact
+  same `applyDriver()` path the WS `drivers_snapshot` event does. The real
+  gap was simpler than first diagnosed: `admin-mocks.ts`'s generic `/api/**`
+  fallback returns an **object** shape (`{items:[], data:[], ...}`), but
+  `getMonitoringDrivers()`/`getMonitoringRides()` both expect a **bare
+  array** — `loadData()`'s `Array.isArray(rawDriversResult) ? ... : []`
+  guard silently turned that mismatch into "zero drivers," on every poll,
+  which is why no marker ever appeared. Fixed by adding one `extra` mock
+  case to `visual-regression.spec.ts`'s existing `setupAdminMocks()` call
+  (mirroring `monitoring.spec.ts`'s already-working `mockMonitoring()`
+  pattern for the same two endpoints) returning one fixture driver — no
+  WebSocket mocking needed at all; verified locally that the WS still fails
+  to connect exactly as before (same "Live data paused" banner already in
+  the committed baseline) and the REST mock alone is sufficient. An initial
+  attempt at this fix used `page.routeWebSocket()` to fake the WS handshake
+  end-to-end — it worked for the handshake itself but the driver_snapshot
+  it seeded was then swept away by this same REST-poll gap moments later;
+  diagnosed by tracing actual message delivery with a scratch Playwright
+  script rather than guessing, found the REST path was both the real gap
+  *and* a strictly simpler fix, and the WS-mock code was removed entirely
+  rather than kept alongside a redundant fix.
+  **Verified locally** (this environment's preinstalled Chromium via
+  `LOCAL_CHROMIUM_PATH`, temporary — not committed): built the app with
+  CI's exact env (`NEXT_PUBLIC_API_URL=http://localhost:8000`), ran the
+  real `visual-regression` Playwright project against the committed
+  baseline (not just a scratch script) — `dashboard-monitoring` fails
+  against the *old* baseline exactly as expected, with a diff showing
+  **only** a new green driver marker at the map's center plus the
+  online-count changing from 0 to 1; visually confirmed via the actual
+  diff/actual PNGs. `tsc --noEmit` and `eslint` both clean on the changed
+  file. The dashboard-home/dashboard-rides/dashboard-settings baselines
+  *also* failed in this same local run, on an unrelated ~32px page-height
+  mismatch (font-metric difference between this sandbox's Chromium build
+  and whatever produced the committed baselines) — confirmed pre-existing
+  and unrelated by checking those pages' mocks are untouched by this diff;
+  not something this fix caused or can fix, and not new information beyond
+  what CLAUDE.md §6 already says about baseline recapture needing a real
+  CI runner.
+  **Remaining step (needs a human):** re-capture the `dashboard-monitoring`
+  baseline via `update-visual-baselines.yml` (Actions-dispatch access this
+  session doesn't have) so the committed PNG reflects the fixture marker —
+  `visual-regression-test` in `ci.yml` **will show a real, expected diff on
+  this PR** for that one page until that runs; this is not a spurious CI
+  failure to chase, per CLAUDE.md §6's own guidance for this exact
+  scenario.
+- **Status (original, superseded by "code fix done" above):** open — found
+  2026-09-08 while auditing admin-dashboard for any
   vehicle-icon-related settings/rendering, as a follow-up to the rider-app/
   driver-app marker fixes in C90 above.
 - **Issue/gap:** `admin-dashboard/e2e/visual-regression.spec.ts`'s
@@ -22855,6 +23202,690 @@ how much they de-risk a public launch._
   `admin-dashboard/e2e/admin-mocks.ts`,
   `admin-dashboard/src/app/dashboard/monitoring/monitoring-map.tsx`,
   `admin-dashboard/src/app/dashboard/monitoring/page.tsx`.
+
+### C92. `ci.yml`'s `visual-regression-test` job silently never runs on any PR that doesn't also touch `backend/` — contradicts its own "deliberately NOT gated on detect-changes" comment
+- [x] **Status:** CLOSED 2026-09-08 on `claude/pr-5085-5079-hardening-c92-visual-regression-gate`.
+  Found while investigating why PR #5123 (the C91 fix)'s own CI run showed
+  `visual-regression-test` as `skipped`, not the expected real diff against
+  the old baseline documented in that PR's own risk log.
+- **Issue/gap:** `visual-regression-test` (`ci.yml` line ~528) has
+  `needs: [backend-test]` and its own `if:` is a plain
+  `github.ref == 'refs/heads/main' || github.event_name == 'pull_request'`
+  — no `always()`. `backend-test` itself is deliberately path-filtered
+  (skipped when a PR touches neither `backend/**` nor `.github/workflows/**`).
+  GitHub Actions' default dependency semantics apply an implicit
+  `success()` to any `needs` a job's own `if:` doesn't explicitly override
+  with `always()`/`failure()`/`cancelled()` — so whenever `backend-test` is
+  skipped, `visual-regression-test` is skipped too, **regardless of what
+  its own `if:` condition evaluates to.** Confirmed directly against PR
+  #5123's own `detect-changes` job log: `backend=false` (only
+  `admin-dashboard/e2e/visual-regression.spec.ts` and `ACTION_ITEMS.md`
+  changed) → `backend-test` skipped → `visual-regression-test` skipped,
+  even though its own condition (a plain `pull_request` check) was true.
+- **Root cause:** the job's own comment directly above the `if:` line says
+  "Phase 2 ... deliberately NOT gated on detect-changes, unlike e2e-test
+  above" — but `e2e-test` (the job right next to it) guards against this
+  *exact* failure mode with `always() && (...)` in its own `if:`, and
+  `visual-regression-test` was simply missing that same guard. Not a new
+  regression — this has silently been true since the job was made
+  blocking (2026-09-04, ACTION_ITEMS.md B38), meaning **this "fully active
+  and merge-blocking" gate CLAUDE.md's pre-merge release gates §6
+  documents has likely never actually run on any PR that changed
+  admin-dashboard without also touching backend/ or a workflow file** —
+  probably the large majority of real admin-dashboard-only PRs, including
+  PR #5123 itself.
+- **Why this is worse than a normal CI bug:** it fails silent-green, not
+  red — the check shows as `skipped`, which GitHub does not treat as a
+  failing required status the way a red check is, so it would not have
+  been noticed by normal "is CI green" triage. Same failure class as C74
+  (`security-gates.yml`/`ci-guardrails.yml` summary jobs never failing
+  regardless of gate results) — a gate that looks like it's enforcing
+  something but silently isn't for a subset of triggering conditions.
+- **Fix:** added `always() &&` to `visual-regression-test`'s `if:`
+  condition, exactly matching the pattern `e2e-test`'s own `if:` already
+  uses one job above it for the identical purpose. One-line change; no
+  other job in `ci.yml` has this gap — checked every job's `needs:` +
+  `if:` pair. `docker-image-scan`'s own cascade-from-`backend-test` skip
+  is explicitly documented as intentional-and-correct in its own comment
+  (it only ever needs to run when backend changed, since it builds and
+  scans the backend Docker image) — not the same bug, left unchanged.
+  `python-dependency-audit`/`driver-app-test`/`rider-app-test`/`admin-test`
+  all correctly use `always()` already, gated on `detect-changes` directly
+  rather than transitively through `backend-test`.
+- **Verification performed:** `actionlint` clean before and after the
+  change (`/tmp/actionlint .github/workflows/ci.yml`, exit 0 both times).
+  Could not re-run the actual GitHub Actions job in this session (would
+  require pushing and waiting on a real workflow run) — the fix mirrors an
+  already-proven-working pattern (`e2e-test`'s identical `always()` guard)
+  rather than introducing new untested logic, but this specific
+  `if:`-evaluates-correctly-now claim is reasoned from GitHub Actions'
+  documented `needs`/`if` semantics, not observed directly in this session.
+  **Not yet observed**: whether PR #5123 (or this PR) actually shows
+  `visual-regression-test` running (not skipped) in its next CI run —
+  worth a human spot-check once either PR's CI completes.
+- **Files:** `.github/workflows/ci.yml` (`visual-regression-test`'s `if:`
+  condition only — one line changed, comment expanded).
+
+### C93. `ci.yml`'s `detect-changes` job fails on every PR — `pulls.listFiles` 403s for lack of `pull-requests: read`
+- [x] **Status:** CLOSED 2026-09-08 on `claude/ci-token-permissions-c93-c94`.
+  Found 2026-09-08 investigating a `check_run.completed`
+  failure wake on PR #5128 (a 2-file docs-only PR — no plausible causal link
+  to a CI token-permissions error, so the root cause was traced instead of
+  assumed innocent).
+- **Issue/gap:** the `detect-changes / Detect changed surfaces` job (shared
+  by `ci.yml`, `ci-guardrails.yml`, `security-gates.yml` via
+  `workflow_call`) fails on every PR run **of `ci.yml` specifically**. Job
+  log: `dorny/paths-filter`'s `listFiles(pull_number, per_page: 100)`
+  GitHub API call returns `Resource not accessible by integration`,
+  immediately after the job's own token-permissions banner shows only
+  `Contents: read`, `Metadata: read`, `Packages: read` — no
+  `pull-requests: read`.
+- **Root cause (corrected 2026-09-08 — the original write-up above
+  overclaimed the scope):** only `ci.yml`'s invocation is missing the
+  permission — it has no top-level `permissions:` block and no job-level
+  override on `detect-changes` (`ci.yml:37-38`), so the job falls through
+  to this repo's restrictive default token scope. **`ci-guardrails.yml`
+  and `security-gates.yml` do NOT need a fix** — both already grant
+  `pull-requests: write` at the workflow level (`ci-guardrails.yml:25-27`,
+  `security-gates.yml:37-39`), and `write` is a superset of `read` for the
+  same scope. Confirmed directly, not assumed: pulled the job list for
+  `security-gates.yml`'s own run on this PR's head commit
+  (`f998b7d`/run `34252912555`) — its `detect-changes / Detect changed
+  surfaces` job shows `conclusion: "success"`, proving it does not
+  reproduce there. Every actual failure event received in this session
+  traced back to `ci.yml` (`workflow_name: "CI/CD Pipeline"`) specifically
+  — never to the other two callers. `dorny/paths-filter` needs
+  `pull-requests: read` to call the Files API on a shallow
+  (`fetch-depth: 1`) checkout, since it can't do a local `git diff` for a
+  merge-commit ref.
+- **Confirmed not this PR's (or any single PR's) fault:** same job, same
+  step, same error on PR #5128 (docs-only) — a two-file `AGENTS.md`/
+  `ACTION_ITEMS.md` change cannot alter a GitHub Actions token's granted
+  permission scopes. This is a workflow-config defect, reproducible on any
+  PR in the repo (in `ci.yml` specifically).
+- **Why it hasn't blocked merges:** `detect-changes.yml`'s own header
+  comment (lines 14-27) documents this exact failure mode as an accepted,
+  designed fallback — every caller treats `result != 'success'` as
+  fail-open ("run everything") rather than as a blocking failure. So this
+  bug currently only costs the fast-feedback optimization (every job in
+  `ci.yml` runs unfiltered on every PR, i.e. no time/cost saved by
+  path-scoping there) — it has never caused a false-skip or a false
+  merge-block. Distinct from C74 (summary jobs that never fail) and C92
+  (a job that silently skips when it shouldn't) — this is the filter
+  itself failing, in the direction that costs CI minutes, not correctness.
+- **Fix:** add a job-level `permissions:` block (`contents: read`,
+  `pull-requests: read`) to `ci.yml`'s `detect-changes` job only — a
+  4-line addition, no other file needs to change for this item. Filed and
+  fixed together as `docs/change-log/2026-09-08-c93-c94-ci-token-permissions.md`;
+  see that PR for the applied diff.
+- **Verification performed:** read `detect-changes.yml` in full (fail-open
+  design confirmed from its own comments); grepped `ci.yml` /
+  `ci-guardrails.yml` / `security-gates.yml` for `permissions:` blocks;
+  pulled `security-gates.yml`'s own job-run data for this PR's head commit
+  to directly confirm its `detect-changes` job succeeds (not just reasoned
+  about); traced every failure event's originating workflow via
+  `actions_get`/`get_workflow_run` rather than assuming from the shared
+  job display name.
+- **What was NOT verified:** did not check whether org-level default
+  workflow permissions (Settings → Actions → General) were recently
+  tightened, which would be an alternate/additional root cause reachable
+  only by a repo admin, not by reading files in this session; did not
+  independently reproduce on `ci-guardrails.yml` beyond the absence of any
+  failure event for it in this session (no direct job-run pull for that
+  workflow, unlike the one done for `security-gates.yml`).
+
+### C94. Every `codeql-action/upload-sarif` call site in the repo fails on every PR — `wait-for-processing` 403s for lack of `actions: read`, PLUS a deeper repo-setting blocker underneath
+- [ ] **Status:** PARTIALLY FIXED 2026-09-08 on `claude/ci-token-permissions-c93-c94`
+  (same PR as C93's fix) — reopened, not closed. The `actions: read` fix is real,
+  necessary, and verified working on PR #5131's own first CI run: the original
+  `##[error]Resource not accessible by integration - .../workflow-runs#get-a-workflow-run`
+  is confirmed **gone** from the `security-scan` job log after the fix. But the
+  job still fails end-to-end — a **separate, deeper blocker** surfaced right
+  behind it (see "New blocker" below), so the user-visible symptom (these jobs
+  going green) is **not yet achieved**. Do not re-close this without confirming
+  that blocker is also resolved. Found immediately after C93, same PR (#5128),
+  same investigation session — the `security-scan` check itself came back
+  `failure` right after `detect-changes` did. **Widened same day**: `G3 ·
+  Semgrep (Spinr rules + public)` in `security-gates.yml` failed on this
+  same PR with the identical `##[error]Resource not accessible by
+  integration - .../rest/actions/workflow-runs#get-a-workflow-run` after
+  its own `codeql-action/upload-sarif` step (`security-gates.yml:380`,
+  uploading `semgrep.sarif`) — proving this isn't isolated to
+  `security-scan`. Grepped every `codeql-action/upload-sarif` call site in
+  `.github/workflows/`: **4 total** — `security-gates.yml:380` (G3
+  semgrep), `security-gates.yml:676` (G6 container-scan), `ci.yml:958`
+  (security-scan/Trivy fs scan), `ci.yml:1079` (docker-image-scan/Trivy
+  image scan). Renamed this entry from "`security-scan`'s..." to "every
+  call site..." to reflect the full scope found — same ID, not a new one,
+  since it's one root cause.
+- **Correction (2026-09-08, before filing the fix):** the original
+  write-up below said all 4 sites were missing `security-events: write`
+  too — **that was wrong.** Re-read every enclosing job/workflow block
+  directly: `ci.yml`'s `security-scan` job already has `security-events:
+  write` at `:919` (a `-A 3` grep context cut it off the first time,
+  producing the false "`contents: read` only" claim); `ci.yml`'s
+  `docker-image-scan` job (the real home of the `:1079` call — not
+  `security-scan`, another correction to the original site list above)
+  already has it at `:981`; `security-gates.yml`'s workflow-level block
+  already has it at `:40`. **`security-events: write` is present
+  everywhere it's used. The only permission actually missing at all 4
+  sites is `actions: read`**, needed for `wait-for-processing: true`'s own
+  workflow-run status poll — a different scope than the one that
+  authorizes the SARIF upload itself.
+- **Issue/gap:** `ci.yml`'s `security-scan` job (`:915-919`, `permissions:
+  contents: read` + `security-events: write`, no `actions: read`) runs
+  `github/codeql-action/upload-sarif@...` with `wait-for-processing: true`
+  (`:958`). Job log shows the SARIF file itself gets built, validated and
+  fingerprinted successfully, then:
+  `##[warning] Failed to gather information for telemetry: Resource not
+  accessible by integration - .../rest/actions/workflow-runs#get-a-workflow-run.
+  Will skip sending status report.` (non-fatal, x2), followed by
+  `##[error] Resource not accessible by integration -
+  .../rest/actions/workflow-runs#get-a-workflow-run` — the same call,
+  logged as a hard error rather than a warning, which is what turns the
+  job `failure`. Same root cause class as C93: `actions: read` is missing
+  everywhere `wait-for-processing: true` is used.
+- **Separate incidental finding, same job, non-fatal:** the `trufflehog`
+  step (`:~940`) also logs `error trufflehog encountered errors during
+  scan {... "unable to resolve ref: no base refs succeeded for base:
+  \"origin/main\""}` — the shallow/multi-branch checkout this job uses
+  doesn't give trufflehog a resolvable `origin/main` ref for its
+  `--since-commit` diff scan. This one does **not** fail the job (trufflehog
+  reports `chunks: 0` and exits clean) — noted here only because it's in
+  the same job and looks alarming in the log; not itself C94's cause, and
+  not filed separately since it has zero observed effect on job outcome.
+- **Confirmed not this PR's:** same causal-impossibility argument as C93 —
+  a 2-file `AGENTS.md`/`ACTION_ITEMS.md` diff cannot alter a workflow
+  job's declared `permissions:` block or GitHub App installation scopes.
+- **Why it hasn't silently corrupted security posture:** the Trivy scan
+  itself ran and produced real results (`trivy-results.sarif` built,
+  validated, fingerprinted) — the failure is in *uploading/confirming* the
+  scan's own results to GitHub's code-scanning UI, not in running the
+  scan. Whether the SARIF actually reached Code Scanning despite the
+  `wait-for-processing` failure was **not verified** in this session (would
+  need to check the repo's Security → Code scanning alerts tab, which this
+  session has no browsing access to) — flagging this as the one part of
+  C94 that needs a human check, since a scan that silently never uploads
+  would be worse than one that fails loudly.
+- **Fix:** add `actions: read` (only — `security-events: write` needs no
+  change) to the enclosing scope at all 4 sites: `ci.yml`'s `security-scan`
+  job (`:917-919`) and `docker-image-scan` job (`:979-983`); one addition
+  to `security-gates.yml`'s workflow-level `permissions:` block
+  (`:37-40`), which covers both `semgrep` (G3) and `container-scan` (G6)
+  since neither declares its own job-level override. Considered dropping
+  `wait-for-processing: true` instead (removes the failing poll entirely)
+  but rejected it — that would remove real verification that the SARIF
+  upload actually completed, trading a loud failure for a silent unknown;
+  granting the missing permission is the smaller, more correct fix. Filed
+  and fixed together — see
+  `docs/change-log/2026-09-08-c93-c94-ci-token-permissions.md` for the
+  applied diff.
+- **New blocker found 2026-09-08, confirmed on PR #5131's own first CI run
+  after the `actions: read` fix landed:** the `actions: read` fix works —
+  the original `Resource not accessible by integration -
+  .../workflow-runs#get-a-workflow-run` error is confirmed gone from
+  `security-scan`'s job log. But the job still fails, now on a different,
+  deeper error: `##[warning]Code scanning is not enabled for this
+  repository. Please enable code scanning in the repository settings.`
+  immediately followed by `##[error]Please verify that the necessary
+  features are enabled: Code scanning is not enabled for this repository.`
+  This is **not** a GITHUB_TOKEN permission scope — it's a repository-level
+  GitHub feature toggle (Settings → Code security and analysis → Code
+  scanning), and for a private repo it may require GitHub Advanced
+  Security (a paid add-on) to even be enableable. No workflow YAML change
+  can fix this. It also means the earlier "considered dropping
+  `wait-for-processing`" reasoning above was based on incomplete
+  information: the failure is on the SARIF upload's own precondition
+  check, not on the `wait-for-processing` poll specifically, so dropping
+  that flag would not have helped either. **Confirmed on all 4 sites**
+  (2026-09-08, later same day): `security-scan`, `G6`/`container-scan`,
+  `G3`/`semgrep`, and `docker-image-scan` all show the identical
+  `Code scanning is not enabled for this repository` error — this is
+  conclusively repo-wide, not specific to any one job.
+- **Human/admin action needed:** a repo admin must enable Code scanning
+  under Settings → Code security and analysis (and, if this is a private
+  repo without GitHub Advanced Security, that may need enabling/purchasing
+  first) before any of these 4 `codeql-action/upload-sarif` steps can
+  succeed. Until then, C94 stays open — the `actions: read` fix is real,
+  correct, and should still merge (it fixes a genuine defect and is a
+  prerequisite for these jobs ever going green), but it does not alone
+  close this item.
+- **Mitigation added 2026-09-08 (`claude/pr-5085-5079-hardening-b11-rg-determination`,
+  found while `security-scan` blocked an unrelated docs-only PR #5134):**
+  with the admin toggle's timeline unknown, every PR touching any file was
+  being blocked on a required check that no PR diff can fix — added
+  `continue-on-error: true` to `ci.yml`'s `security-scan` job's "Upload
+  Trivy results to GitHub Security" step (`:975-988`) only, so this one
+  known, repo-wide, non-diff-caused failure stops blocking merges while
+  the admin action above is still pending. This restores that job's actual
+  gating behavior to what it was before this upload step started failing:
+  the filesystem Trivy scan feeding it has no `exit-code` set (unlike
+  `docker-image-scan`'s image scan, which does, at `:1071`, and is
+  unaffected by this — its own upload-sarif call still fails today, just
+  no longer the thing enforcing anything), so this upload was never the
+  thing gating `security-scan` pass/fail even when it worked. **Deeper
+  finding this surfaces, not fixed here:** with Code Scanning disabled,
+  the filesystem Trivy scan's findings currently reach no enforcement path
+  at all — a real security-posture gap, not just a CI-noise one, tracked
+  as its own open thread below rather than fixed unilaterally (adding
+  `exit-code: '1'` to a scan with an unknown-sized existing findings set
+  could immediately red-line `main`; needs a baseline/suppression pass
+  first, a bigger, separate decision). **Second site fixed same day, same
+  PR:** `security-gates.yml`'s G3/Semgrep upload-sarif step (`:386-397`)
+  hit the identical failure, which flipped that job's overall conclusion
+  to `failure` (even though its own Semgrep scan and the SR-03
+  money-safety gate both passed) and cascaded into the required "Security
+  gates summary" check — concretely blocking this PR's mergeability, not
+  just a `main`-branch nuisance. Same `continue-on-error: true` mitigation
+  applied there too; confirmed the underlying gate (SR-03's own
+  `sys.exit(1)` on a real finding) is independent of the upload step and
+  still enforces regardless. **Third and fourth sites fixed same PR, same
+  day:** touching `.github/workflows/**` itself made path-filtering run
+  `security-gates.yml`'s G6/container-scan on this PR too (previously
+  observed `skipped`) — it hit the identical failure and, being in
+  "Security gates summary"'s `needs:` list, would have blocked the PR the
+  same way G3 did. Fixed identically (`:682-685`), confirmed the real
+  enforcing scan (`exit-code: '1'`) and the SARIF-generating trivy-action
+  run both already succeeded before this upload step's failure. Applied
+  the same fix pre-emptively to the 4th and last known site,
+  `ci.yml`'s `docker-image-scan` (`:1109-1122`), for the same reason
+  (workflow-file changes make it run too) rather than wait for a third
+  round-trip to discover it failing. **All 4 known
+  `codeql-action/upload-sarif` call sites in the repo now have this
+  mitigation.**
+- **Verification performed:** read the full `security-scan` and `G3 ·
+  Semgrep` job logs for both original failures; re-read every enclosing
+  `permissions:` block directly (not via a context-truncated grep this
+  time) for all 4 sites, catching the `security-events: write`
+  misdiagnosis above before shipping a fix based on it; traced the failing
+  API call to the exact `codeql-action/upload-sarif` step via log line
+  ordering in both cases; grepped `.github/workflows/` for every
+  `codeql-action/upload-sarif` call site to confirm the full set of 4;
+  after pushing the fix, pulled the actual job log from PR #5131's own
+  first CI run to confirm the original error is gone and to find the new
+  blocker; after that, pulled job logs for the other 3 sites too and
+  confirmed each independently — not assumed from the first one.
+- **What was NOT verified:** whether the SARIF results actually landed in
+  GitHub's Code Scanning UI despite the reported failures, before this
+  fix, at any of the 4 sites (moot now — Code Scanning being disabled
+  repo-wide means the answer is almost certainly "no" for all of them).
+
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — fix merged to `main`, verification blocked on C96
+- [x] **Status:** FIX APPLIED 2026-09-08 on `claude/label-run-maestro-contents-perm`,
+  at the user's explicit request to apply the same-shape fix already
+  described below ("Not fixed here" section — since superseded). Added
+  `contents: read` to `label-run-maestro.yml:59-60`'s `permissions:` block,
+  identical in kind to the C93/C94 fix. **This closes the item on
+  hypothesis 1 (real gap) without independently ruling out hypothesis 2**
+  (see below) — the fix is correct either way it turns out (a real gap: it
+  directly fixes it; a pure race: it's a harmless no-op, since `contents:
+  read` was always the correct minimum scope for `actions/checkout`
+  regardless of which hypothesis explained the specific failures observed).
+  Verification of whether this actually resolves the failures needs a real
+  PR run of this workflow (its own PR's checks, or the next `rider-app`/
+  `driver-app`-touching PR) — not yet observed as of this fix.
+- **Verification attempt that didn't work, corrected rather than left
+  standing (2026-09-08):** tried marking PR #5133 (this fix's own PR) ready
+  for review, assuming that would re-trigger `label-run-maestro.yml`'s job
+  and let the `if: github.event.pull_request.draft == false` gate finally
+  pass. It didn't — checked the workflow's actual trigger afterward:
+  `on: pull_request: types: [opened, synchronize, reopened]`.
+  `ready_for_review` is not one of those three event types, so converting
+  a PR out of draft does not itself fire this workflow at all; only a
+  genuine `opened`/`synchronize` (a new commit)/`reopened` event does.
+  **Still not independently confirmed as of this note.** Real confirmation
+  needs either a new commit pushed to this PR while it's non-draft, or
+  observation on the next real PR touching `rider-app/**`/`driver-app/**`
+  after this fix merges to `main`.
+- **First real synchronize-triggered test, inconclusive (2026-09-08):** the
+  correction commit above (`671fb00`) landed as a genuine `synchronize`
+  event on the now-non-draft PR — `label-run-maestro.yml`'s job ran for
+  real and failed, but **not diagnostically**: `status: completed`,
+  `conclusion: failure`, empty `output.title`/`summary`/`text`, no `steps`
+  array in the job listing, and `get_job_logs` 404'd on every attempt
+  (log content never became available). Before concluding the fix failed,
+  checked whether this was isolated to this one job: **all 6 jobs of the
+  wholly unrelated `pr-checks.yml` workflow failed identically, at the
+  same push, with the same empty-output/404-logs signature** —
+  `pr-checks.yml` already declares `contents: read` explicitly
+  (`pr-checks.yml:18-20`), so a permissions gap cannot explain its
+  failure. A correctly-permissioned workflow failing in the identical
+  shape at the identical moment is strong evidence this specific failure
+  wave is a transient, repo-wide GitHub Actions platform hiccup at that
+  push (job logs never materializing is consistent with runs that never
+  really executed), not a defect in the C95 fix itself. Could not spend
+  another re-run to confirm (this session's own GitHub integration lacks
+  rerun permission, established earlier on this same item). **Still not
+  cleanly confirmed either way** — the next real `synchronize`/`opened`
+  event on this branch, or the next real PR touching
+  `rider-app/**`/`driver-app/**` after merge, is the next opportunity to
+  observe a clean pass or a genuine repeat of the original
+  `Repository not found` error.
+- **Original investigation (2026-09-08, before the fix), preserved below for
+  the record:** Found
+  2026-09-08 as a `check_run.completed` failure wake on PR #5131 — a PR
+  that does not touch `label-run-maestro.yml` at all, so not this PR's
+  regardless of cause. **Reproduced a second time** ~4 minutes later on a
+  different commit (`f9754b3`'s merge ref `09225e8`, vs. the first
+  occurrence on `6980eb3`'s merge ref) — same 3-retry `Repository not
+  found` pattern, same `Metadata: read` / `PullRequests: write`-only token
+  banner. Two independent occurrences on two different underlying commits,
+  each with 3 retries spanning ~30s, makes a one-off GitHub-side ref-
+  propagation race (hypothesis 2 below) less likely as the *sole*
+  explanation — a real, reproducible `contents: none` permissions gap
+  (hypothesis 1) is now the better-supported read, though still not
+  confirmed by a source outside this session's own observations.
+- **Issue/gap:** `actions/checkout`'s 3 retries of
+  `git fetch ... origin +<merge-sha>:refs/remotes/pull/5131/merge` all
+  returned `remote: Repository not found.` /
+  `fatal: repository 'https://github.com/srikumarimuddana-lab/spinrvm/' not
+  found` — a 404-class failure, not the 403-class `Resource not accessible
+  by integration` failures C93/C94 are about. The job's own token banner
+  showed only `Metadata: read`, `PullRequests: write` — no `contents` at
+  all, consistent with `label-run-maestro.yml:59-60`'s workflow-level
+  `permissions: pull-requests: write` (only key present, so every other
+  scope including `contents` implicitly becomes `none`, not the org
+  default).
+- **Context — this contradicts an earlier same-day finding, not
+  independently new:** a `spinr-cicd-infra-reviewer` pass on the C93/C94
+  diff flagged this exact file as a *theoretical* risk for exactly this
+  reason. At the time, pulled `label-run-maestro.yml`'s own recent run
+  history and found multiple real `conclusion: "success"` runs, and
+  concluded (reported to the user as) a "false alarm" — checkout evidently
+  worked in practice despite the theory. This C95 failure is the first
+  *direct, current* contradiction of that conclusion: same workflow, same
+  permissions block, now actually failing — on the exact PR whose own
+  merge commit triggered it.
+- **Two live hypotheses, not disambiguated:**
+  1. **Real, intermittent permissions gap** — `actions/checkout` on a
+     private repo with `contents: none` can produce `Repository not
+     found` (GitHub's documented behavior: a token with no read access to
+     a private repo gets a 404-shaped "not found" rather than a 403, to
+     avoid leaking the repo's existence) rather than always failing
+     outright — would explain both the historical successes and this
+     failure without contradiction if success depends on some other
+     factor (fork vs. same-repo PR, event type, timing) not yet isolated.
+  2. **Transient GitHub-side ref-propagation race** — fetching
+     `refs/pull/5131/merge` immediately after a push that created a new
+     merge commit (`6980eb3`, itself a `git merge origin/main` this
+     session pushed seconds earlier) is a known class of flake: GitHub
+     recomputes the PR's merge ref asynchronously after a push, and a
+     workflow triggered too soon can 404 on a ref that hasn't finished
+     recomputing yet. 3 retries over ~34 seconds could still be inside
+     that window on a slow recompute.
+- **Attempted to disambiguate, blocked:** tried one re-run
+  (`rerun_failed_jobs` via `mcp__github__actions_run_trigger`) to rule out
+  hypothesis 2 per the flake-triage allowance for a job that died at
+  checkout before any real step ran. **This session's own GitHub
+  integration lacks permission to trigger it**: `403 Resource not
+  accessible by integration` — a different token/permission surface than
+  the workflow's own `GITHUB_TOKEN`, so this is not itself evidence for or
+  against either hypothesis above. No further disambiguation possible from
+  this session.
+- **Originally not fixed in #5131** (superseded): `label-run-maestro.yml`
+  was unrelated to that PR's actual diff — widening it to touch a third,
+  unrelated workflow file over one then-unconfirmed failure would have
+  violated the "don't widen the PR" rule. Fixed separately, in its own PR,
+  once the user explicitly asked for it.
+- **Verification performed (original investigation):** pulled the full job
+  log directly (not inferred from the check-run summary alone); compared
+  the token permissions banner against the file's own `permissions:`
+  block; searched for a rerun mechanism and attempted it before concluding
+  no disambiguation was possible from that session.
+- **Verification performed (fix):** re-read the file after editing to
+  confirm no other job in it declares its own `permissions:` override that
+  would also need the addition (only one `permissions:` block exists,
+  workflow-level, covering the file's single job); `yaml.safe_load`
+  validated. No `actionlint` available in this sandboxed session (no
+  Docker daemon), same disclosed gap as C93/C94's fix.
+- **What was NOT verified:** which of the two original hypotheses was
+  actually correct (moot for correctness — the fix is right either way —
+  but left unresolved as a fact about what was actually happening); a real
+  post-fix PR run of this exact job confirming it now succeeds; whether
+  GitHub Advanced Security or private-repo status affects the 404-vs-403
+  behavior claimed in hypothesis 1 for this specific repo (asserted from
+  general GitHub documentation, not confirmed against this repo's actual
+  settings).
+- **Merged to `main` 2026-09-08 21:20 UTC as `64ebc7e` (PR #5133, merged by
+  the user directly) while still in this unconfirmed state.** The merge
+  itself was not blocked by a passing check — it landed during the C96
+  repo-wide GitHub Actions outage (see C96: every job across every
+  workflow rejected at queue time, `runner_id: 0`, no logs, ~20:23 UTC
+  onward), so there was no green run to wait for. Confirmed `main`'s own
+  post-merge run (`64ebc7e`, run `34280021844`) shows the identical C96
+  signature (`conclusion: failure`, 8s wall-clock) rather than either a
+  clean pass or a genuine repeat of the original `Repository not found`
+  error — so this merge adds no new evidence either way. **C95's fix is
+  on `main` and believed correct, but remains unverified by any real CI
+  run; that verification is now blocked entirely on C96 clearing, not on
+  anything specific to this file.** Re-check on the first `main` push or
+  `rider-app`/`driver-app`-touching PR after C96 is confirmed resolved.
+
+### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session — CLOSED (cleared 2026-09-09, exact time unconfirmed)
+
+- **Resolution confirmed 2026-09-10, checking `main`'s tip:** the outage is
+  over. `main`'s newest push at the time of this check (commit `746af5f`,
+  PR #5149, `Security Gates` run `34419182471`) shows real CI again: every
+  job has a genuine `runner_id`, multi-second-to-multi-minute step timings
+  (e.g. Semgrep scan 1m44s, admin-dashboard build 69s, pip-audit 47s), and
+  substantive pass/fail results — including real findings (`G4b`/`G4c`
+  yarn/npm audit failures on actual CVEs, not the C96 instant-reject
+  signature). This is the first clean/real run this thread directly
+  observed; the exact clear time is bounded only to "sometime between
+  ~03:49 UTC 2026-09-09 (last confirmed-still-ongoing check, on PR #5143)
+  and ~23:57 UTC 2026-09-09 (this clean run)" — no session watched the
+  transition happen. Total outage duration: **at least ~19.5 hours,
+  possibly up to ~27.5 hours** (from ~20:23 UTC Sep 8) depending where in
+  that ~20-hour window it actually cleared.
+- **Root cause: still not billing-confirmed, but a strong circumstantial
+  candidate exists.** PR #5141 (merged 21:22 UTC Sep 8, mid-outage, by a
+  concurrent session) added a `concurrency:` cancellation group to
+  `ci.yml` — the one heavy 16-job workflow in the repo that had no such
+  group, so every push queued a full new run stacked on any still in
+  flight instead of superseding it. That PR explicitly flagged this as "a
+  plausible contributor... consistent with a spend limit or included-
+  minutes cap... not root-cause-confirmed (that needs GitHub billing/
+  usage access no session here has)." The ~20-27 hour outage window is
+  also consistent with a **daily** Actions spend/minutes cap that resets
+  on a schedule, rather than a one-off platform incident (which would
+  more typically clear on the order of minutes-to-hours, per GitHub's own
+  incident history) — this remains circumstantial, not confirmed, since
+  no session in this repo has GitHub Actions billing/usage-dashboard
+  access to check directly.
+- **Consequence still standing:** PRs #5133, #5134, #5136, #5137, and
+  #5143 (this item's own tracking PR) were all merged by the repo owner
+  during the outage with no real CI evidence — see the update below for
+  detail. None have since been re-verified against a real CI run; if any
+  of their changes need debugging later, remember they were never
+  actually machine-checked before merging, only reasoned about.
+- **Not further investigated:** the exact clear timestamp (would need
+  combing every intermediate `main` push between 03:49 and 23:57 UTC Sep 9
+  — dozens of commits — for the first one with real job durations; not
+  done here since the outage being over is what matters going forward,
+  not the precise minute it ended); whether PR #5141's concurrency fix
+  actually caused the recovery or was coincidental to an independent
+  billing-cap reset.
+- **Update 2026-09-09 ~03:00 UTC:** still OPEN — re-confirmed on `main`'s
+  newest pushes (commits `8faa99b`, `e30fed9`, ~02:52-02:53 UTC), same
+  instant-fail (2-10s), no-logs signature, now **~6.5 hours** of continuous
+  outage. In the meantime the repo owner directly merged 3 PRs (#5134,
+  #5136, #5137) with CI still fully red the whole time — a deliberate,
+  reasonable call given each was independently reviewed as low-risk/
+  docs-or-additive and unrelated to the outage, but it means **none of the
+  fixes/changes in those 3 PRs have any real CI evidence behind them** —
+  including C95's `contents: read` fix (#5133, merged earlier at 21:20 UTC,
+  also during the outage) — treat their correctness as "reasoned, not
+  CI-verified" until a clean run is observed. 3 separate sessions were
+  independently polling GitHub for this same fact on staggered schedules;
+  consolidated into one shared check 2026-09-08 ~22:00 UTC (one session
+  checks, wakes the others only if the fact changes) to stop the redundant
+  polling — see that session's own trigger history if resuming this thread.
+- [x] **Status (historical):** OPEN at the time this line was written —
+  escalated to the user; needs a human with GitHub
+  org/repo billing or Actions-admin access. Found while investigating a CI
+  failure wake on PR #5134 (a docs-only B11/R-G recording PR, whose only
+  code touch is `continue-on-error: true` additions to `ci.yml`/
+  `security-gates.yml` for C94). PR #5134's own CI showed **every single
+  job failing** — not just the 4 known C94 SARIF-upload sites, but
+  `detect-changes`, `security-scan`, `backend-test`, `rider-app-test`,
+  `admin-test`, `driver-app-test`, `python-dependency-audit`, every `G1`-
+  `G7b` job in `security-gates.yml`, `Rider/Driver app E2E tests
+  (Playwright)`, `Visual regression (Playwright)`, `E2E tests
+  (Playwright)` — 12+ distinct jobs across both required workflows, all
+  `conclusion: failure`, most completing in **2-40 seconds** (implausible
+  for real test suites that normally run minutes).
+- **Confirmed NOT this PR's diff, and NOT any single PR's diff** — checked
+  `main`'s own last 3 merge-commit CI runs via `list_workflow_runs`
+  (branch: main, event: push):
+  - PR #5132's merge (`03dfb9f`, ~20:44 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `failure`.
+  - PR #5131's merge (`4fcbecc`, ~20:19-20:40 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `cancelled`.
+  - PR #5128's merge (`1306f01`, ~18:12-18:16 UTC): `Security Gates` →
+    `failure`.
+  Three independent merges to `main` itself, by different sessions, all
+  red on both required workflows — this is base-branch-red at the widest
+  possible scope, not a single PR's regression.
+- **Escalating in scale from C94/C47, not the same root cause:**
+  - C94 (still valid, separately) is 4 specific `codeql-action/upload-
+    sarif` steps failing on a repo-setting gap ("Code scanning is not
+    enabled"). That's a narrow, understood, already-mitigated (`continue-
+    on-error: true`) failure mode — it does not explain `backend-test`,
+    `rider-app-test`, `admin-test`, `driver-app-test`, or E2E jobs failing,
+    none of which touch `codeql-action` at all.
+  - C47 (2026-08-27, closed) documented a *similar-shaped* but narrower
+    anomaly: `ci-guardrails.yml` coverage jobs externally cancelled
+    mid-suite (`exit 143`, "runner has received a shutdown signal"),
+    `get_workflow_run_usage` reporting `duration_ms: 0` for every job
+    despite real multi-minute wall-clock execution — flagged then as
+    "GitHub-side runner preemption and an Actions-minutes/spend-limit
+    cutoff are both plausible externally-caused candidates, neither
+    confirmed," with no billing-API access from that session to
+    investigate further. **This looks like the same class of problem,
+    now far more severe**: instead of one job being killed mid-suite
+    after several minutes, essentially *every* job across *every*
+    workflow is failing within seconds, with **zero log content
+    retrievable** (`mcp__github__get_job_logs` returns HTTP 404 for every
+    job ID tried, including `detect-changes`, `security-scan`, and all 4
+    `-test` jobs) — consistent with jobs failing before a runner ever
+    picked them up (queue rejection / spend-limit block), not mid-run.
+  - `mcp__github__pull_request_read` method `get_status` (combined commit
+    status) itself 403'd — `Resource not accessible by integration` —
+    a token-permission gap on this session's GitHub MCP integration
+    specifically, separate from (and not the cause of) the underlying
+    Actions failures themselves (confirmed via `get_check_runs`, which
+    does work and shows the same failures).
+- **What this session could not do:** confirm the root cause. No access
+  from this session to GitHub's own Actions-usage/billing dashboard
+  (`Settings → Billing → Actions` or the org's usage page), no access to
+  the GitHub Status page (`githubstatus.com` — blocked by this session's
+  own network egress proxy, `EGRESS_BLOCKED`), and no permission to
+  trigger a re-run (`actions_run_trigger` 403's the same way it did for
+  C95). Two leading hypotheses, same as C47's, now with much stronger
+  signal toward the first:
+  1. **GitHub Actions spend limit / included-minutes cap reached** for
+     this account — would explain near-instant failure with no logs
+     (jobs rejected at queue time, before a runner is assigned) far
+     better than C47's "cancelled mid-run" pattern did.
+  2. **A GitHub-side platform incident** (Actions infra outage) —
+     unverifiable from this session; a human should check
+     `githubstatus.com` directly, which this session cannot reach.
+- **Action needed (human, not code):** whoever owns this GitHub
+  organization's billing/admin settings should check
+  `https://github.com/organizations/<org>/settings/billing` (or the
+  personal-account equivalent) for an Actions spend-limit/usage-cap hit,
+  and check `githubstatus.com` for an active incident. Until one of those
+  is confirmed and resolved, **every open PR in this repo will show every
+  CI check failing, and this is not a signal about any individual PR's
+  code** — do not merge-block-triage individual PRs' "failures" as if
+  they were real defects until this is ruled out or fixed.
+- **Not fixed here, cannot be fixed from this session:** this is
+  infra/billing, not a workflow YAML defect — no `continue-on-error:`,
+  permissions grant, or code change addresses a spend-limit block or a
+  GitHub-side outage. Flagging per CLAUDE.md's pre-merge release gate #9
+  ("Escalate, don't silently ship, when in doubt") and #8 ("a CI check
+  that's red for a reason unrelated to your diff is a signal the gate
+  itself has decayed, not 'not my problem'").
+- **Verification performed:** `get_check_runs` on PR #5134 (45 check runs,
+  overwhelming majority `failure`); `list_workflow_runs` filtered to
+  `branch: main, event: push` showing 3 independent recent merge commits
+  all red; `list_workflow_jobs` on the specific run confirming job-level
+  timestamps (2-40s durations); `get_job_logs` with `failed_only: true`
+  attempted on all 12 failed jobs in the run — 100% HTTP 404.
+- **What was NOT verified:** the actual root cause (spend-limit vs.
+  platform incident vs. a third unconsidered cause); whether this started
+  exactly between PR #5131's own successful partial run (~20:23 UTC,
+  where `security-scan`'s `actions:read` fix was confirmed working with
+  real log output, before hitting the separate "Code scanning not
+  enabled" error) and this discovery (~21:09-21:11 UTC) — bounded to that
+  ~45-minute window by the available evidence, not narrowed further;
+  whether the same failure is hitting *every* repo under this account or
+  is scoped to this one.
+
+### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
+
+- [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
+  Backend fix (loud Firebase Admin SDK init failure) and a narrowed client-side fix (foreground
+  fallback toast) shipped as follow-up PRs — see below. Ops check (confirm the Firebase
+  credential on Fly/Railway) and the metric/iOS recommendations remain open.
+- **Correction (same day, before the client-side fix shipped):** the client-side finding below
+  originally read as "every notification type except ride offers is silently dropped, foreground
+  and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
+  overstated for background/killed state: only `new_ride_assignment`/`live_activity` are sent
+  data-only — every other type carries a real FCM `notification` block targeting a channel
+  confirmed to exist on-device (`'ride-offers'`, created at cold start via `expo-notifications`,
+  `driver-app/app/_layout.tsx:449`), so Android auto-displays those in background/killed state
+  with no app JS code needing to run. The foreground gap is real but narrower than originally
+  framed: only a message type outside the app's existing explicit list falls through to a silent
+  navigation with no toast — that's what the shipped client-side fix actually closes. Full
+  correction in the audit doc's own "Correction" section, left visible against the original
+  claim rather than silently rewritten.
+- **Two independent findings, either explains the symptom, both may be true at once:**
+  1. **Backend (infra-shaped):** Firebase Admin SDK init falls through to Application Default
+     Credentials on a non-GCP host (Fly/Railway) with the failure wrapped in a bare
+     `except Exception: pass` (`backend/core/security.py:12-29`) — zero log, no startup failure,
+     no metric. The app boots looking healthy; the SDK only visibly fails per-push, later, as a
+     scattered log line with no metric or alert tied to it (`spinr_dispatch_offer_sent_total` is
+     incremented at offer-*claim* time, `routes/rides/matching.py:1270`, not at push-send
+     outcome). This would silently break **every** push type, including ride offers, on whichever
+     host has the gap.
+  2. **Client (code-structural):** on Android, `@react-native-firebase/messaging`'s manifest
+     service takes priority over `expo-notifications`' for the same FCM intent-filter, so
+     `expo-notifications`' handler (`driver-app/app/_layout.tsx:219-243`) is dead code for
+     FCM-originated messages. The app's real foreground listener
+     (`driver-app/hooks/useDriverDashboard.ts:1812-1838`) only branches on
+     `new_ride_assignment`; the background/killed handler
+     (`driver-app/services/backgroundMessaging.ts:159-259`) only branches on
+     `new_ride_assignment`/`ride_cancelled`/`location_health`. Every other data-only type (chat,
+     document/license expiry reminders, generic alerts, promos) is silently dropped, no display,
+     no error. **Ride-offer notifications specifically are confirmed correctly built and
+     displayed end-to-end** — this gap is scoped to every *other* notification type.
+- **The fork that determines priority:** if ride offers themselves are invisible → points at
+  finding 1 (infra), since the client-side ride-offer path is confirmed correct. If ride offers
+  arrive but other types (chat/reminders/alerts) never show → finding 2 (client) alone explains
+  it, no infra involvement needed. Not resolvable from code alone — needs the user to say which
+  they're actually observing.
+- **Verification performed:** two parallel subagent passes, each reading real source and citing
+  file:line for every claim (not inferred from symptoms) — one on the backend send pipeline
+  (re-audited every driver-facing `send_push_notification` call site for a recurrence of the
+  2026-08-11 N3 ID-mismatch bug class; found none), one on the driver-app client pipeline (FCM
+  token registration/refresh, foreground/background handlers, Android notification channel,
+  iOS background-mode config, error-swallowing). Full finding tables with severity ratings in the
+  audit doc.
+- **What was NOT verified:** live production state (whether `FIREBASE_SERVICE_ACCOUNT_JSON` is
+  actually set/valid on Fly and/or Railway today — needs ops access this session doesn't have);
+  whether Sentry is actually receiving the relevant error-level logs via the loguru→Sentry bridge
+  and whether an alert exists on them; the iOS `UIBackgroundModes` finding (flagged SUSPECTED —
+  no compiled iOS build available to confirm against); which of the two findings is the one the
+  user is actually experiencing (the fork above).
+- **Recommendations, in leverage order** (full detail in the audit doc): (1) ops check —
+  confirm the Firebase service-account credential on both hosts, costs nothing, resolves the fork
+  fastest; (2) make the SDK init failure loud instead of silent; (3) add a real
+  `spinr_push_send_total{outcome=...}` delivery-outcome metric, since none exists today; (4) add
+  an explicit fallback-notification path for unhandled FCM message types on the client, closing
+  the silent-drop gap for everything except ride offers; (5) confirm the iOS background-mode gap
+  against a real build; (6) either wire `expo-notifications`' handler into the real path or
+  remove the now-misleading dead code.
 
 ## Recently completed (do not redo)
 

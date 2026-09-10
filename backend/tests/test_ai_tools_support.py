@@ -469,6 +469,27 @@ class TestEscalation:
         assert ticket.await_args.kwargs["transcript"] is None
 
     @pytest.mark.anyio
+    async def test_reason_pii_is_scrubbed_before_reaching_zoho(self):
+        """`reason` is model-relayed free text from the rider/driver's own
+        conversation and can carry PII (e.g. a phone number mentioned while
+        explaining a billing issue) -- it must never reach Zoho Desk verbatim,
+        same as the transcript already does."""
+        ticket = AsyncMock(return_value={"ticketNumber": "T-125"})
+        with (
+            _settings(ai_escalation_creates_ticket=True),
+            patch("backend.services.zoho_desk_integration.create_support_ticket", ticket),
+        ):
+            result, ok = await execute_tool(
+                "escalate_to_support",
+                {"reason": "call me at 306-555-0199 to fix my billing", "category": "payment_issue"},
+                user=RIDER,
+            )
+        assert ok and result["ticket_number"] == "T-125"
+        assert (
+            ticket.await_args.kwargs["message"] == "[AI escalation:payment_issue] call me at [PHONE] to fix my billing"
+        )
+
+    @pytest.mark.anyio
     async def test_ticket_includes_conversation_transcript(self):
         ticket = AsyncMock(return_value={"ticketNumber": "T-124"})
         history = AsyncMock(

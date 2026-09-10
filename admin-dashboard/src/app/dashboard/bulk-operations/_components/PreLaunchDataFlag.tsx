@@ -24,13 +24,15 @@
  */
 
 import { useState } from "react";
-import { CheckCircle2, Copy, Info, Loader2, Tag } from "lucide-react";
+import { CheckCircle2, Copy, Loader2, Tag } from "lucide-react";
 import {
     adminCommitPreLaunchFlag,
     adminPreviewPreLaunchFlag,
     type PreLaunchFlagCommitResult,
     type PreLaunchFlagReport,
 } from "@/lib/api";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,15 +40,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/components/ui/use-toast";
 
 const CONFIRM_PHRASE = "FLAG";
-
-function Stat({ label, value }: { label: string; value: number }) {
-    return (
-        <div className="rounded-md border p-3">
-            <div className="text-2xl font-semibold text-foreground">{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
-    );
-}
 
 // Compact, copy-pasteable markdown table mirroring the stat tiles below.
 function buildSummaryText(report: PreLaunchFlagReport): string {
@@ -141,28 +134,43 @@ export function PreLaunchDataFlag() {
                 </CardTitle>
                 <CardDescription>
                     Flag already-migrated driver profiles and rides that predate Spinr&apos;s
-                    2026-03-30 public launch, so admin views/KPIs can filter them out. No CSV
-                    needed — this reads directly from production.
+                    public launch.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-                <div className="flex gap-2 rounded-md border border-muted bg-muted/30 p-3 text-sm">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="space-y-1 text-muted-foreground">
-                        <p>
-                            <span className="font-medium text-foreground">Additive only</span> — sets
-                            one new metadata flag per matched row. Never deletes or deactivates
-                            anything.
-                        </p>
-                        <p>
-                            A driver is only flagged if created before launch{" "}
-                            <span className="font-medium text-foreground">and</span> has never driven a
-                            ride or held an insurance period — a driver who onboarded pre-launch but
-                            has since driven a real ride is left untouched. Every ride created before
-                            launch is flagged (no real customer base existed before launch).
-                        </p>
-                    </div>
-                </div>
+                <WhatThisToolDoes
+                    what={
+                        <>
+                            Marks already-migrated driver profiles and rides that predate
+                            Spinr&apos;s 2026-03-30 public launch as pre-launch test data, so admin
+                            views/KPIs can filter them out.
+                        </>
+                    }
+                    why={
+                        <>
+                            Data imported from before launch was never real production activity —
+                            without this flag, it would inflate driver counts, ride counts, and
+                            other KPIs with rows that never represented a real customer.
+                        </>
+                    }
+                    whichFiles={<>No file upload — this reads directly from production data already in Spinr.</>}
+                    value={
+                        <>
+                            Admin dashboards and KPI reports show real activity numbers, not
+                            numbers padded with pre-launch test data.
+                        </>
+                    }
+                    safetyNote={
+                        <>
+                            Additive only — sets one new metadata flag per matched row, never
+                            deletes or deactivates anything. A driver is only flagged if created
+                            before launch <span className="font-medium">and</span> has never driven
+                            a ride or held an insurance period — a driver who onboarded pre-launch
+                            but has since driven a real ride is left untouched. Every ride created
+                            before launch is flagged (no real customer base existed before launch).
+                        </>
+                    }
+                />
 
                 <div className="space-y-3">
                     <h3 className="text-sm font-medium">1. Preview</h3>
@@ -183,8 +191,8 @@ export function PreLaunchDataFlag() {
                         <h3 className="text-sm font-medium">2. Review and commit</h3>
 
                         <div className="grid grid-cols-2 gap-3 md:grid-cols-2">
-                            <Stat label="Dormant pre-launch drivers" value={c.driver_candidates} />
-                            <Stat label="Pre-launch rides" value={c.ride_candidates} />
+                            <StatTile label="Dormant pre-launch drivers" value={c.driver_candidates} />
+                            <StatTile label="Pre-launch rides" value={c.ride_candidates} />
                         </div>
 
                         <p className="text-xs text-muted-foreground">

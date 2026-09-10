@@ -26,18 +26,11 @@ import {
     type DataQualityScanCommitResult,
     type DataQualityScanReport,
 } from "@/lib/api";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/use-toast";
-
-function Stat({ label, value }: { label: string; value: number }) {
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${value > 0 ? "text-warning" : "text-foreground"}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
-    );
-}
 
 // Compact, copy-pasteable markdown table mirroring the stat tiles below.
 function buildSummaryText(report: DataQualityScanReport): string {
@@ -126,11 +119,8 @@ export function DataQualityScan() {
                     Migration data quality scan
                 </CardTitle>
                 <CardDescription>
-                    Find completed rides with a missing driver, a missing rider, a placeholder
-                    address, or a \$0.00 fare, and tag them so the Rides page&apos;s
-                    &quot;Needs Review&quot; filter can surface them. No CSV needed — this reads
-                    directly from production. Read the full breakdown of what each finding means
-                    and why in{" "}
+                    Find completed rides with a data-quality issue and flag them for review. Read
+                    the full breakdown of what each finding means and why in{" "}
                     <a
                         href="https://github.com/srikumarimuddana-lab/spinrvm/blob/main/docs/runbooks/migration-data-quality-strategy.md"
                         target="_blank"
@@ -143,6 +133,41 @@ export function DataQualityScan() {
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+                <WhatThisToolDoes
+                    what={
+                        <>
+                            Scans completed rides for a missing driver, a missing rider, a
+                            placeholder pickup/dropoff address, or a $0.00 fare, and tags each
+                            finding so it&apos;s visible on the Rides page&apos;s &quot;Needs
+                            Review&quot; filter.
+                        </>
+                    }
+                    why={
+                        <>
+                            These are the data-shape issues most likely to have slipped through
+                            the migration importers — surfacing them lets an operator find and fix
+                            the underlying rows deliberately, instead of a rider/driver noticing a
+                            broken-looking ride first.
+                        </>
+                    }
+                    whichFiles={<>No file upload — this reads directly from production data already in Spinr.</>}
+                    value={
+                        <>
+                            Migration data-quality problems get a visible, filterable badge instead
+                            of hiding until someone stumbles on them.
+                        </>
+                    }
+                    safetyNote={
+                        <>
+                            Additive only — it never deletes, never reassigns a driver/rider, and
+                            never touches a ride&apos;s status. Applying this doesn&apos;t change
+                            what any admin view shows by default; it only adds a badge visible on
+                            the &quot;Needs Review&quot; filter, which is why this tool skips the
+                            type-to-confirm gate other production-writing tools on this page use.
+                        </>
+                    }
+                />
+
                 <div className="space-y-3">
                     <h3 className="text-sm font-medium">1. Preview</h3>
                     <Button onClick={handlePreview} disabled={previewing}>
@@ -162,10 +187,10 @@ export function DataQualityScan() {
                         <h3 className="text-sm font-medium">2. Review and flag</h3>
 
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                            <Stat label="Missing driver" value={c.missing_driver} />
-                            <Stat label="Missing rider" value={c.missing_rider} />
-                            <Stat label="Placeholder address" value={c.placeholder_address} />
-                            <Stat label="$0.00 fare" value={c.zero_fare} />
+                            <StatTile label="Missing driver" value={c.missing_driver} tone="warn" />
+                            <StatTile label="Missing rider" value={c.missing_rider} tone="warn" />
+                            <StatTile label="Placeholder address" value={c.placeholder_address} tone="warn" />
+                            <StatTile label="$0.00 fare" value={c.zero_fare} tone="warn" />
                         </div>
 
                         <p className="text-xs text-muted-foreground">

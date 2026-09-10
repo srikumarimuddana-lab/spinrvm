@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Image, View } from 'react-native';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
+    coalescePlaybackBearing,
     distanceMeters,
     selectBearing,
     shortestArcRotationTarget,
     snapToRoute,
+    visualRotationDegrees,
     type TrackingLatLng,
 } from '@shared/utils/vehicleTracking';
 import {
@@ -17,6 +19,7 @@ import {
 } from '@shared/utils/markerPlayback';
 import { smoothFix, isImplausibleJump, type SmoothingState } from '@shared/utils/gpsSmoothing';
 import type { FixFeed, MarkerFix } from '@shared/utils/fixFeed';
+import { captureException } from '@shared/services/errorReporting';
 
 const CAR_IMAGES = {
     standard: require('../assets/images/car_marker.png'),
@@ -147,6 +150,15 @@ interface CarMarkerProps {
      * selectBearing() call below), same cadence as the icon's own rotation.
      */
     onBearingChange?: (bearing: number) => void;
+    /**
+     * Live map-camera heading in degrees (0 = north-up). Read from `.current`
+     * inside the playback ticker — pass a stable ref, not state, so the
+     * parent can update it without re-rendering this marker. Used only on
+     * iOS: Apple Maps ignores Marker.rotation, so the car PNG is rotated via
+     * a view transform of (worldBearing − mapHeading). Android ignores this
+     * (Google Maps applies Marker.rotation in world space itself).
+     */
+    mapHeadingRef?: React.MutableRefObject<number> | null;
 }
 
 // Playback tick: the marker re-targets its position animation this often,
@@ -166,6 +178,16 @@ const MAX_ROUTE_SNAP_M = 35;
 // Cap on the rotation tween so the car visibly turns rather than snapping,
 // without lagging a full position-animation behind sharp turns.
 const MAX_ROTATE_MS = 600;
+// A car-icon Image that fails to decode (transient OOM/codec glitch on a
+// low-end device — live-testing report 2026-09-09: "green circle, never a
+// car" persisting indefinitely) previously had no way back: onError only
+// ever toggled the custom-vs-bundled image choice, which is a no-op when
+// there was no custom image to begin with, so a bundled-asset failure left
+// hasLoadedImageRef permanently false and the marker froze at the mount
+// effect's 5s hard cap showing the ring only, forever. Retrying up to this
+// many times (remounting the Image via a bumped key) gives a transient
+// failure a chance to self-heal within that same 5s window.
+const MAX_IMAGE_RETRIES = 3;
 
 /**
  * Top-down car marker using the transparent PNG from shared/assets.
@@ -202,14 +224,13 @@ const MAX_ROTATE_MS = 600;
  * teleport the marker back to its mount position. iOS keeps Marker.Animated
  * + AnimatedRegion.timing, which is smooth there.
  *
- * Rotation: animated through an Animated.Value along the shortest arc, so
- * the car turns smoothly instead of snapping its angle. Bearing source
- * priority: route-segment direction (when `routeCoordinates` is provided and
- * the played-back position snaps onto the route) → direction of travel →
- * the reported GPS heading, used only until movement has established a
- * bearing. Movement deliberately outranks the reported heading; see
- * selectBearing() for why a reported heading of 0 cannot be trusted on
- * Android.
+ * Rotation: bearing is selected in JS (route → travel/spline → heading).
+ * Android applies it via Marker.rotation (Google Maps). iOS uses Apple Maps,
+ * where Marker.rotation is a documented no-op (`@platform iOS: Google Maps
+ * only`); the car PNG is rotated with a view transform instead, offset by
+ * mapHeadingRef so course-up does not double-rotate a screen-upright
+ * annotation. See coalescePlaybackBearing() for why a 500 ms tick's chord
+ * can be < 3 m while the car is still moving.
  *
  * Mount animation: a one-shot spring scale+opacity "pop in" plays every time
  * this component mounts — first appearance, and any full remount (e.g. the
@@ -237,6 +258,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     ring,
     onPositionChange,
     onBearingChange,
+    mapHeadingRef,
 }) => {
     const markerRef = useRef<any>(null);
     // Stable Animated holders created once; reading .current at init is safe.
@@ -329,6 +351,18 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // can no longer override it — see the priority note in the position
     // effect below.
     const hasMovementBearingRef = useRef(false);
+    // Last world-space course applied (not the iOS screen-space visual).
+    // Re-read on parked ticks so a course-up toggle still retargets the
+    // Apple Maps view transform without waiting for the next GPS move.
+    const lastWorldBearingRef = useRef<number | null>(
+        heading != null && Number.isFinite(heading) && heading >= 0 ? heading : null,
+    );
+    // Parent's camera-heading ref: captured by identity on mount (stable
+    // useRef from the dashboard). Synced so a late-bound prop still works.
+    const mapHeadingRefInternal = useRef(mapHeadingRef);
+    useEffect(() => {
+        mapHeadingRefInternal.current = mapHeadingRef;
+    }, [mapHeadingRef]);
 
     // Stable by construction — reads only refs and the stable Animated value.
     const animateRotationTo = useCallback(
@@ -364,12 +398,69 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // Marker here.
     const isAndroid = Platform.OS === 'android';
     const [androidCoord, setAndroidCoord] = useState(coordinate);
-    // Android rotation steps per tick (the rotation prop is not animatable on
-    // a plain Marker). The spline bearing is C¹-continuous, so consecutive
-    // steps are a few degrees — visually smooth at 2 steps/second.
+    // Android's rotation is a plain native prop (not an Animated.Value — see
+    // the Marker.Animated/animateMarkerToCoordinate conflict noted above), so
+    // it can't be tweened via Animated.timing the way iOS's rotationAnim is.
+    // On a straight road that's fine (the spline bearing is C¹-continuous, so
+    // consecutive TARGETS a tick apart are close), but a turn's angular RATE
+    // can still exceed 30–90° within one 500ms tick — a rotation prop that
+    // jumps straight to that step, with nothing tweening the frames in
+    // between, reads as a visible snap through the corner even though
+    // position (animated natively via animateMarkerToCoordinate) stays
+    // smooth: live-testing report 2026-09-09, "no smooth animation." This
+    // requestAnimationFrame loop below interpolates androidRotation along the
+    // shortest arc from wherever it currently is toward the newest target,
+    // over the same duration position animates over, so rotation keeps pace
+    // with position instead of jumping ahead of it.
     const [androidRotation, setAndroidRotation] = useState(
         heading != null && Number.isFinite(heading) && heading >= 0 ? heading : 0,
     );
+    const androidRotationCurrentRef = useRef(rotationValueRef.current);
+    const androidRotationFromRef = useRef(rotationValueRef.current);
+    const androidRotationTargetRef = useRef(rotationValueRef.current);
+    const androidRotationStartRef = useRef(0);
+    const androidRotationDurationRef = useRef(TICK_MS);
+    const androidRotationRafRef = useRef<number | null>(null);
+    const stepAndroidRotation = useCallback(() => {
+        const elapsed = Date.now() - androidRotationStartRef.current;
+        const duration = androidRotationDurationRef.current;
+        const t = duration > 0 ? Math.min(1, elapsed / duration) : 1;
+        const from = androidRotationFromRef.current;
+        const to = androidRotationTargetRef.current;
+        const value = from + (to - from) * t;
+        androidRotationCurrentRef.current = value;
+        setAndroidRotation(((value % 360) + 360) % 360);
+        if (t < 1) {
+            androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
+        } else {
+            androidRotationRafRef.current = null;
+        }
+    }, []);
+    // Stable by construction — reads/writes only refs and the stable
+    // stepAndroidRotation callback.
+    const animateAndroidRotationTo = useCallback(
+        (bearing: number, duration: number) => {
+            const target = shortestArcRotationTarget(rotationValueRef.current, bearing);
+            if (target === rotationValueRef.current) return;
+            rotationValueRef.current = target;
+            hasBearingRef.current = true;
+            // Start the new tween from wherever the current tween actually
+            // is right now (not its old target) — else an in-flight tween
+            // would visibly jump to its previous target before starting the
+            // next leg.
+            androidRotationFromRef.current = androidRotationCurrentRef.current;
+            androidRotationTargetRef.current = target;
+            androidRotationStartRef.current = Date.now();
+            androidRotationDurationRef.current = Math.min(duration, MAX_ROTATE_MS);
+            if (androidRotationRafRef.current == null) {
+                androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
+            }
+        },
+        [stepAndroidRotation],
+    );
+    useEffect(() => () => {
+        if (androidRotationRafRef.current != null) cancelAnimationFrame(androidRotationRafRef.current);
+    }, []);
     const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
@@ -487,36 +578,56 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 from.latitude, from.longitude, target.latitude, target.longitude,
             );
             if (movedM < 0.5 && p.mode !== 'interpolating' && p.mode !== 'extrapolating') {
-                return; // parked — no animation churn, no rotation churn
+                // Parked — skip position churn, but still retarget the iOS
+                // view transform if the map camera heading changed (compass
+                // toggle) so north-up ↔ course-up does not leave the hood
+                // pointing at the last screen-space angle.
+                if (!isAndroid && lastWorldBearingRef.current != null) {
+                    const parkedVisual = visualRotationDegrees(
+                        lastWorldBearingRef.current,
+                        mapHeadingRefInternal.current?.current ?? 0,
+                    );
+                    animateRotationTo(parkedVisual, 400);
+                }
+                return;
             }
 
             // Bearing priority: route segment → spline tangent / direction of
             // travel → reported GPS heading (cold start only). See
-            // selectBearing() for why movement outranks the reported heading
-            // (Android's placeholder 0). The spline tangent (p.bearing) is
-            // preferred over the chord between tick targets when available —
-            // it rotates through turns instead of kinking at fixes.
-            const selected = selectBearing({
-                snap,
-                movedMeters: movedM,
-                from,
-                to: target,
-                heading: headingRef.current,
-                hasMovementBearing: hasMovementBearingRef.current,
-                minMoveMeters: MIN_BEARING_MOVE_M,
-            });
-            const bearing =
-                selected.source === 'travel' && p.bearing != null ? p.bearing : selected.bearing;
+            // selectBearing() / coalescePlaybackBearing() — per-tick chords
+            // are often < 3 m even while driving.
+            const selected = coalescePlaybackBearing(
+                selectBearing({
+                    snap,
+                    movedMeters: movedM,
+                    from,
+                    to: target,
+                    heading: headingRef.current,
+                    hasMovementBearing: hasMovementBearingRef.current,
+                    minMoveMeters: MIN_BEARING_MOVE_M,
+                }),
+                { bearing: p.bearing, mode: p.mode },
+            );
+            const bearing = selected.bearing;
             prevTargetRef.current = target;
             if (bearing != null) {
                 if (selected.source === 'route' || selected.source === 'travel') {
                     hasMovementBearingRef.current = true;
                 }
+                lastWorldBearingRef.current = bearing;
+                // World-space course — the follow camera must get this, not
+                // the iOS screen-space visual, or course-up would lock at 0.
                 onBearingChangeRef.current?.(bearing);
                 if (isAndroid) {
-                    setAndroidRotation(((bearing % 360) + 360) % 360);
+                    animateAndroidRotationTo(bearing, TICK_MS);
                 } else {
-                    animateRotationTo(bearing, TICK_MS);
+                    animateRotationTo(
+                        visualRotationDegrees(
+                            bearing,
+                            mapHeadingRefInternal.current?.current ?? 0,
+                        ),
+                        TICK_MS,
+                    );
                 }
             }
 
@@ -670,9 +781,55 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // back to the bundled variant. Reset when the URL changes so a fixed
     // upload is retried.
     const [imageFailed, setImageFailed] = useState(false);
+    // Bumped on every onError, up to MAX_IMAGE_RETRIES — included in the
+    // <Image>'s key below so a failed decode gets a fresh native Image
+    // instance to retry with, instead of the bundled fallback (which has
+    // nowhere further to fall back to) simply staying broken. See
+    // MAX_IMAGE_RETRIES' own doc comment for why this exists.
+    const [imageAttempt, setImageAttempt] = useState(0);
+    const imageRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Reported to error tracking at most once per mount — a flapping image
+    // must not spam Sentry every retry cycle.
+    const imageErrorReportedRef = useRef(false);
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    useEffect(() => setImageFailed(false), [imageUri]);
+    useEffect(() => {
+        setImageFailed(false);
+        setImageAttempt(0);
+        imageErrorReportedRef.current = false;
+    }, [imageUri]);
+    useEffect(() => () => {
+        if (imageRetryTimerRef.current) clearTimeout(imageRetryTimerRef.current);
+    }, []);
     const useCustomImage = !!imageUri && !imageFailed;
+
+    // Do not silently swallow a decode failure (CLAUDE.md: DB/auth/payment
+    // errors must surface loudly — the same applies here, since a silently
+    // broken car icon is a live-testing-confirmed regression with no other
+    // signal). Retries with backoff first (transient OOM/codec glitches on
+    // low-end devices self-heal); once retries are exhausted, report once so
+    // this is visible in production monitoring instead of a driver silently
+    // shipping with no vehicle icon for the rest of their session.
+    const handleImageError = useCallback(() => {
+        setImageFailed(true);
+        setTracksViewChanges(true);
+        setImageAttempt((attempt) => {
+            if (attempt >= MAX_IMAGE_RETRIES) {
+                if (!imageErrorReportedRef.current) {
+                    imageErrorReportedRef.current = true;
+                    captureException(
+                        new Error('CarMarker: car icon image failed to decode after retries'),
+                        { domain: 'drivers', surface: 'driver-app' },
+                    );
+                }
+                return attempt;
+            }
+            if (imageRetryTimerRef.current) clearTimeout(imageRetryTimerRef.current);
+            imageRetryTimerRef.current = setTimeout(() => {
+                setImageAttempt((n) => n + 1);
+            }, 300 * (attempt + 1));
+            return attempt;
+        });
+    }, []);
 
     // Android: plain Marker + native animator (see the teleport-guard note
     // above). iOS: Marker.Animated + AnimatedRegion, which is smooth there.
@@ -689,6 +846,27 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         opacity: mountAnim,
         transform: [{ scale: mountAnim }],
     };
+    // Separate view from mountAnimatedStyle: opacity/scale use the native
+    // driver; Marker.rotation's Animated.Value is JS-driven. Combining both
+    // on one view throws. iOS only — Android rotates via Marker.rotation.
+    /* eslint-disable react-hooks/refs -- rotationAnim is the stable Animated.Value from useRef(...).current */
+    const iosRotateStyle = isAndroid
+        ? null
+        : {
+              width: size,
+              height: size,
+              alignItems: 'center' as const,
+              justifyContent: 'center' as const,
+              transform: [
+                  {
+                      rotate: rotationAnim.interpolate({
+                          inputRange: [-360000, 360000],
+                          outputRange: ['-360000deg', '360000deg'],
+                      }),
+                  },
+              ],
+          };
+    /* eslint-enable react-hooks/refs */
 
     // Ring geometry: the static ring sits at ~1.35x the car icon; the pulse
     // (when present) scales up to ~1.7x THAT, so the outer wrapper needs
@@ -721,10 +899,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         : null;
     /* eslint-enable react-hooks/refs */
     const outerSize = ring ? ringMaxDiameter : size;
-    // Only forced while the ring actually loops — a static ring (in-trip,
-    // steady-state) is a one-time render, same settle-then-freeze lifecycle
-    // as everything else in this file.
-    const effectiveTracksViewChanges = ring?.pulsing ? true : tracksViewChanges;
+    // Android: freeze the custom-view snapshot after the image loads (rotation
+    // is a native GMSMarker prop, independent of the bitmap). iOS Apple Maps
+    // ignores Marker.rotation, so heading is a view transform — freezing the
+    // snapshot would pin the PNG north forever. Single marker on this screen.
+    const effectiveTracksViewChanges = isAndroid
+        ? (ring?.pulsing ? true : tracksViewChanges)
+        : true;
 
     return (
         <MarkerComponent
@@ -764,17 +945,24 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 )}
                 {/* eslint-disable-next-line react-hooks/refs -- mountAnimatedStyle is a plain object computed above from the stable mountAnim ref value, not a fresh ref read */}
                 <Animated.View style={mountAnimatedStyle}>
-                    <Image
-                        source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
-                        onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
-                        onLoad={handleImageLoaded}
-                        resizeMode="contain"
-                        style={{
-                            width: size,
-                            height: size,
-                            backgroundColor: 'transparent',
-                        }}
-                    />
+                    <Animated.View
+                        testID={isAndroid ? undefined : 'car-marker-ios-rotate'}
+                        pointerEvents="none"
+                        style={iosRotateStyle ?? { width: size, height: size }}
+                    >
+                        <Image
+                            key={imageAttempt}
+                            source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
+                            onError={handleImageError}
+                            onLoad={handleImageLoaded}
+                            resizeMode="contain"
+                            style={{
+                                width: size,
+                                height: size,
+                                backgroundColor: 'transparent',
+                            }}
+                        />
+                    </Animated.View>
                 </Animated.View>
             </View>
         </MarkerComponent>
@@ -794,6 +982,7 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.variant === next.variant &&
         prev.imageUri === next.imageUri &&
         prev.routeCoordinates === next.routeCoordinates &&
+        prev.mapHeadingRef === next.mapHeadingRef &&
         // Compared by value, not reference: callers commonly pass a fresh
         // `{ color, pulsing }` object literal each render, which would
         // otherwise defeat memoization for every ring-using call site.

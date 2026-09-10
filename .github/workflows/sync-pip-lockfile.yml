@@ -24,6 +24,10 @@ on:
       - .github/workflows/sync-pip-lockfile.yml
   workflow_dispatch:
 
+concurrency:
+  group: sync-pip-lockfile-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 

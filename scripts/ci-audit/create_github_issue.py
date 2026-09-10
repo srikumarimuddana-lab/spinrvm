@@ -8,10 +8,11 @@ De-duplicates two ways:
      script re-ran for the same workflow run), updates that issue in place.
   2. Cross-run (CR #4112, step 1 of the implementation plan): a fingerprint is
      computed from (workflow name, sorted failing job names, classified error
-     category+signature from error_classifier.py) -- deliberately NOT the run
-     ID, so the same recurring failure across many different runs collapses
-     onto one issue instead of spawning a new one every run. The fingerprint
-     is stored as a hidden HTML-comment marker in the issue body (the same
+     category+signature from error_classifier.py, and a normalized log
+     excerpt -- see ACTION_ITEMS.md C72) -- deliberately NOT the run ID, so
+     the same recurring failure across many different runs collapses onto
+     one issue instead of spawning a new one every run. The fingerprint is
+     stored as a hidden HTML-comment marker in the issue body (the same
      "hidden marker" pattern other GitHub bots, e.g. Vercel's, use to encode
      bookkeeping data invisibly in a comment/issue body). Before creating a
      new issue, open `ci-audit`-labeled issues are searched for a matching
@@ -49,21 +50,51 @@ FINGERPRINT_MARKER_RE = re.compile(
 )
 
 
+_DIGITS_RE = re.compile(r"\d+")
+
+
+def _normalize_excerpt(excerpt: str) -> str:
+    """Collapse digit runs in a log excerpt before hashing it.
+
+    Log excerpts otherwise carry the exact failure text (test name, assertion
+    message, error class) that genuinely distinguishes two different bugs in
+    the same job/category -- see ACTION_ITEMS.md C72, where 14 unrelated
+    `backend-test` failures (2 stale mocks + a real loguru bug) all shared one
+    fixed `description` template and so collapsed onto a single stale issue.
+    But excerpts can also carry incidental counts/line numbers/timestamps
+    (e.g. "5 failed, 120 passed" vs "3 failed, 118 passed") that vary between
+    runs of the *same* recurring failure -- collapsing digit runs to a single
+    placeholder keeps those runs deduping onto one issue while still letting
+    genuinely different failure text (different test names, different
+    assertion messages) produce a different fingerprint.
+    """
+    return _DIGITS_RE.sub("#", excerpt or "")
+
+
 def compute_fingerprint(workflow: str, errors_data: dict) -> str:
     """Hash a CI failure down to its recurring "shape".
 
-    Deliberately keyed on (workflow name, sorted failing job names, classified
-    error category+description signature) -- NOT run ID, NOT raw log excerpts,
-    NOT the specific matched substring (`raw_message`) -- so the fingerprint
-    stays stable across separate runs of the *same* underlying failure while
-    still varying with the actual bucket `error_classifier.py` assigned it
-    (category + its fixed description template), so two failures classified
-    into different categories/descriptions are never conflated.
+    Keyed on (workflow name, sorted failing job names, classified error
+    category+description+normalized-log-excerpt signature) -- NOT run ID, NOT
+    the specific matched substring (`raw_message`), NOT the excerpt's raw
+    digit content (see `_normalize_excerpt`) -- so the fingerprint stays
+    stable across separate runs of the *same* underlying failure while still
+    varying with the actual failure text, not just the coarse
+    category/description bucket `error_classifier.py` assigned it. Two
+    failures sharing a category and description template but with distinct
+    excerpt text (different test names, different assertion messages) are no
+    longer conflated into the same fingerprint -- the gap ACTION_ITEMS.md C72
+    found, where a description template alone was too coarse to tell two
+    unrelated bugs apart.
     """
     errors = errors_data.get("errors", [])
     jobs = sorted({e.get("job", "") for e in errors})
     signatures = sorted(
-        {f"{e.get('job', '')}::{e.get('category', '')}::{e.get('description', '')}" for e in errors}
+        {
+            f"{e.get('job', '')}::{e.get('category', '')}::{e.get('description', '')}"
+            f"::{_normalize_excerpt(e.get('log_excerpt', ''))}"
+            for e in errors
+        }
     )
     payload = json.dumps(
         {"workflow": workflow, "jobs": jobs, "signatures": signatures},

@@ -34,9 +34,13 @@ import {
     type SavedAddressBackfillReport,
     type SavedAddressBackfillReportItem,
 } from "@/lib/api";
+import { explainSavedAddressIssue } from "@/lib/bulk-import-error-help";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
 import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable } from "@/components/bulk-import/issue-table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -46,14 +50,6 @@ import {
     CardDescription,
     CardContent,
 } from "@/components/ui/card";
-import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableHead,
-    TableRow,
-    TableCell,
-} from "@/components/ui/table";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -82,51 +78,17 @@ const REPORT_COLUMNS = [
     { key: "message", label: "message" },
 ];
 
-function IssueTable({ items }: { items: SavedAddressBackfillReportItem[] }) {
+function SavedAddressIssueTable({ items }: { items: SavedAddressBackfillReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-24">Row</TableHead>
-                        <TableHead className="w-48">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.row_num}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.row_num}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
-    );
-}
-
-function Stat({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-}) {
-    const toneCls =
-        tone === "error" && value > 0
-            ? "text-destructive"
-            : tone === "warn" && value > 0
-              ? "text-warning"
-              : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
+        <IssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.row_num}-${it.field}-${i}`}
+            getRef={(it) => String(it.row_num)}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="Row"
+            explain={explainSavedAddressIssue}
+        />
     );
 }
 
@@ -280,33 +242,56 @@ export default function LegacySavedAddressBackfillPage() {
                 title="Legacy Saved-Address Backfill"
                 description={
                     <>
-                        Backfill rider <span className="font-mono">saved_addresses</span> — the same
-                        self-service &quot;home&quot;/&quot;work&quot; address book riders already use — from
-                        the previous app&apos;s raw Mongo export, for riders already in{" "}
+                        Backfill rider saved addresses for riders already in{" "}
                         <Link href="/dashboard/records?tab=bulk-operations" className="underline">
                             Bulk Rider Import
                         </Link>
-                        . Only rows within a Saskatchewan bounding box are considered; every other row
-                        is excluded automatically, not imported and flagged for review.
+                        .
                     </>
                 }
             />
 
-            <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                <div className="space-y-1">
-                    <p className="font-medium">
+            <WhatThisToolDoes
+                what={
+                    <>
+                        Fills in a rider&apos;s saved &quot;home&quot;/&quot;work&quot; addresses —
+                        the same address book a rider can build themselves in the app — from the
+                        previous app&apos;s raw Mongo export, for riders already created by Bulk
+                        Rider Import.
+                    </>
+                }
+                why={
+                    <>
+                        Without this backfill, a migrated rider would need to re-type every saved
+                        address by hand after moving to Spinr, even though they already gave us
+                        that information once.
+                    </>
+                }
+                whichFiles={
+                    <>
+                        The same raw MongoDB export&apos;s{" "}
+                        <span className="font-mono">customer_addresses.csv</span> (lat/lng/address
+                        text/type, keyed by customer_id) and{" "}
+                        <span className="font-mono">customers.csv</span> (used only to resolve
+                        customer_id to a phone number).
+                    </>
+                }
+                value={
+                    <>
+                        A rider&apos;s home and work addresses are already there the first time
+                        they book a ride on Spinr — no re-entry needed.
+                    </>
+                }
+                safetyNote={
+                    <>
                         A row is only skipped, never fabricated — and only real Spinr riders are
-                        touched.
-                    </p>
-                    <p className="text-muted-foreground">
-                        A row outside Saskatchewan, with no matching customer row, or with no
-                        matching Spinr rider account is skipped and reported, not written. An
+                        touched. A row outside Saskatchewan, with no matching customer row, or with
+                        no matching Spinr rider account is skipped and reported, not written. An
                         address already saved for that rider (same text) is skipped too — safe to
                         re-run.
-                    </p>
-                </div>
-            </div>
+                    </>
+                }
+            />
 
             <Card>
                 <CardHeader>
@@ -393,26 +378,26 @@ export default function LegacySavedAddressBackfillPage() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                            <Stat label="Address rows" value={counts?.address_rows ?? 0} />
-                            <Stat label="Addresses to insert" value={counts?.addresses_to_insert ?? 0} />
-                            <Stat
+                            <StatTile label="Address rows" value={counts?.address_rows ?? 0} />
+                            <StatTile label="Addresses to insert" value={counts?.addresses_to_insert ?? 0} />
+                            <StatTile
                                 label="Skipped (out of province)"
                                 value={counts?.skipped_out_of_province ?? 0}
                                 tone="warn"
                             />
-                            <Stat
+                            <StatTile
                                 label="Skipped (unmatched customer)"
                                 value={counts?.skipped_unmatched_customer ?? 0}
                                 tone="warn"
                             />
-                            <Stat
+                            <StatTile
                                 label="Skipped (no matching rider)"
                                 value={counts?.skipped_no_rider ?? 0}
                                 tone="warn"
                             />
-                            <Stat label="Skipped (already imported)" value={counts?.skipped_already_imported ?? 0} />
-                            <Stat label="Warnings" value={report.warnings.length} tone="warn" />
-                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                            <StatTile label="Skipped (already imported)" value={counts?.skipped_already_imported ?? 0} />
+                            <StatTile label="Warnings" value={report.warnings.length} tone="warn" />
+                            <StatTile label="Errors" value={report.errors.length} tone="error" />
                         </div>
 
                         <div className="flex justify-end">
@@ -449,7 +434,7 @@ export default function LegacySavedAddressBackfillPage() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <SavedAddressIssueTable items={report.errors} />
                             </div>
                         )}
 
@@ -458,7 +443,7 @@ export default function LegacySavedAddressBackfillPage() {
                                 <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                                     <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
                                 </h3>
-                                <IssueTable items={report.warnings} />
+                                <SavedAddressIssueTable items={report.warnings} />
                             </div>
                         )}
 

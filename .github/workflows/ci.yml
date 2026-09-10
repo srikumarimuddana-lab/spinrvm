@@ -14,6 +14,50 @@ on:
   # Auto-deploy on every push to main was hitting Vercel's deployment limit;
   # Vercel deploys now only happen when this workflow is run by hand.
   workflow_dispatch:
+  # 2026-09-09 CI smart-execution audit, Track D: a nightly consolidated
+  # safety-net run. This file carries the genuinely expensive full-matrix
+  # jobs (4x Playwright E2E, Docker build + Trivy image scan) that
+  # detect-changes already keeps off most single-surface PRs -- this just
+  # adds one more full run per day, on `main`, independent of PR volume.
+  # `schedule` is never the `pull_request` event, so every detect-changes-
+  # gated job below runs unfiltered here, same as push/merge_group already
+  # do -- no other change needed. Mirrors security-gates.yml's own
+  # `schedule: - cron: '0 2 * * *'`, a pattern already proven working in
+  # this repo, rather than a separate dispatcher workflow (the more
+  # obvious-looking alternative, rejected: triggering another workflow's
+  # workflow_dispatch via the API using the default GITHUB_TOKEN is
+  # documented as not reliably creating a new run -- GitHub's recursive-
+  # run guard -- which would have made that approach a silent no-op).
+  # 08:00 UTC = 2:00 AM in Saskatchewan, which runs CST year-round (no
+  # DST), so this offset doesn't drift across the year.
+  schedule:
+    - cron: '0 8 * * *'
+
+# C96 mitigation: this was the one heavy workflow in the repo with no
+# concurrency group at all -- security-gates.yml, pr-checks.yml, and
+# ci-guardrails.yml all already cancel superseded runs; this file (16 jobs:
+# 4 test suites, 3 Playwright E2E suites, security-scan, docker-image-scan,
+# mobile-build, deploy-admin, smoke test, detect-changes,
+# python-dependency-audit) did not. Every push to a PR queued a brand new
+# full run stacked on top of any still in flight for the same PR, instead
+# of superseding it -- on a PR pushed to repeatedly in a short window (this
+# repo saw several today), that multiplies Actions-minute consumption for
+# no benefit, since only the latest commit's result matters. Combined with
+# detect-changes' own pull-requests:read gap (C93, fixed today) having
+# fail-open'd every job unfiltered on every PR for an unknown prior period,
+# this is a plausible contributor to whatever tripped the C96 outage
+# (GitHub Actions rejecting jobs at queue time, consistent with a spend
+# limit or included-minutes cap) -- not root-cause-confirmed (that needs
+# GitHub billing/usage access this session doesn't have), but a real,
+# verifiable inefficiency worth closing regardless of whether it was the
+# actual trigger. `cancel-in-progress` is gated to `pull_request` only --
+# never cancel a `push`-triggered run to main/staging, since that path
+# includes deploy-admin and mobile-build; cancelling a deploy mid-flight
+# because a second commit landed seconds later is a worse failure mode
+# than a few extra minutes of redundant CI.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHON_VERSION: '3.12'
@@ -35,6 +79,18 @@ jobs:
   # leak in any file type, including a workflow file itself. Same
   # reasoning as G3/G5a in security-gates.yml.
   detect-changes:
+    # C93: ci.yml has no top-level `permissions:` block, so without this
+    # override the job falls through to the repo's restrictive default
+    # token scope (contents/metadata/packages read only -- no
+    # pull-requests). dorny/paths-filter needs pull-requests: read to call
+    # the Files API on this shallow (fetch-depth: 1) checkout; without it
+    # every run of this job 403s and every caller in this file falls back
+    # to its fail-open "run everything" leg (see the comment above) --
+    # correct behavior, but it silently loses the fast-feedback
+    # path-filtering optimization on every single PR.
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/detect-changes.yml
 
   # Backend Tests
@@ -133,10 +189,21 @@ jobs:
           # real-Postgres step immediately below provides. Keep those steps in
           # sync with these --ignore flags -- an --ignore added here without a
           # matching step silently drops that suite from CI.
+          #
+          # tests/test_schemathesis_fuzz.py is excluded for a different reason:
+          # not an invocation mismatch, but runtime cost. It's a pilot
+          # (docs/audit/2026-09-08-agentic-tooling-atlas.md) that fuzzes all
+          # 532 of the app's GET operations -- @pytest.mark.slow alone doesn't
+          # keep it out, since this step never passes `-m "not slow"`. Run it
+          # on demand locally (`pytest -m slow tests/test_schemathesis_fuzz.py`)
+          # until its stability/runtime is proven; wiring it into CI as its own
+          # step (blocking or scheduled) is a separate follow-up decision, not
+          # something to default into via this ignore staying here forever.
           CI_PG_DSN="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
           export DATABASE_URL="$CI_PG_DSN"
           pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 \
-            --ignore=tests/direct_pool --ignore=tests/rls -v
+            --ignore=tests/direct_pool --ignore=tests/rls \
+            --ignore=tests/test_schemathesis_fuzz.py -v
 
       # C50 Phase 1 (T11, docs/audit/2026-09-02-pgbouncer-direct-pool-
       # migration-plan.md): real-Postgres tests for the (currently unused --
@@ -535,7 +602,15 @@ jobs:
     # All 6 baselines are seeded and this job is blocking (2026-09-04) --
     # a real visual regression on any admin-dashboard page is exactly the
     # kind of change path-filtering would risk skipping.
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    #
+    # always() is required here (ACTION_ITEMS.md C92) -- without it, a PR
+    # that doesn't touch backend/ (so backend-test is itself skipped by its
+    # own path-filtered `if:`) skips this job too via GitHub Actions'
+    # default "needs must succeed" propagation, silently defeating the
+    # "deliberately NOT gated" comment above for every admin-dashboard-only
+    # PR. e2e-test below already guards against the exact same failure mode
+    # with the same always() pattern -- this job was just missing it.
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     defaults:
       run:
         working-directory: admin-dashboard
@@ -855,7 +930,7 @@ jobs:
           node-version: 22
 
       - name: Setup EAS
-        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
@@ -909,6 +984,12 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: codeql-action/upload-sarif's wait-for-processing: true polls
+      # GET /repos/.../actions/runs/{run_id} to confirm the SARIF finished
+      # processing -- a different scope than the security-events:write
+      # that authorizes the upload itself. Without this the poll 403s and
+      # fails the whole job even though the SARIF upload already succeeded.
+      actions: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -953,6 +1034,20 @@ jobs:
         # second, misleading "file not found" failure here instead of a clean
         # single point of failure.
         if: always() && hashFiles('trivy-results.sarif') != ''
+        # C94: this upload has been failing every run (main included, not just
+        # PR branches) with "Code scanning is not enabled for this repository"
+        # -- a repo-settings gap (Settings -> Code security and analysis ->
+        # Code scanning), not a workflow defect, and not fixable from a
+        # session with no repo-admin access. continue-on-error here restores
+        # the job's actual behavior before this started failing: the
+        # filesystem Trivy scan above has no exit-code set, so it was never
+        # the thing gating this job pass/fail in the first place -- this
+        # step is a best-effort publish to GitHub's Security tab, and its
+        # failure was blocking every PR's required check for a reason no PR
+        # diff can fix. See ACTION_ITEMS.md C94 for the more important
+        # finding this surfaced: with code scanning disabled, this scan's
+        # findings currently reach no enforcement path at all.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -971,6 +1066,9 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # C94: same wait-for-processing gap as security-scan above -- see
+      # its comment for why this is a separate scope from security-events.
+      actions: read
       packages: write    # GHCR push (main only, see "Push image to GHCR" step)
       id-token: write    # cosign keyless OIDC signing (main only)
 
@@ -1069,6 +1167,12 @@ jobs:
         # cascade into a second, misleading "file not found" failure here.
         if: always() && hashFiles('trivy-image.sarif') != ''
         uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+        # C94: same repo-wide "Code scanning is not enabled" failure as the
+        # other 3 upload-sarif call sites. This job's real enforcement is the
+        # separate "Scan image with Trivy" step above (`exit-code: '1'`,
+        # format: table) -- independent of this SARIF upload, so this
+        # mitigation doesn't weaken it.
+        continue-on-error: true
         with:
           sarif_file: 'trivy-image.sarif'
 
@@ -1080,11 +1184,16 @@ jobs:
       #     --certificate-identity-regexp 'github.com/srikumarimuddana-lab/spinrvm' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Install cosign
-        if: github.ref == 'refs/heads/main'
+        # != 'schedule': the new nightly consolidation run (Track D, 2026-09-09
+        # CI smart-execution audit) also has github.ref == refs/heads/main, but
+        # there's no new commit/image to push or sign on a schedule firing --
+        # without this, GHCR gets a re-push and cosign a re-sign of the exact
+        # same image every night for no reason.
+        if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Log in to GHCR
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -1092,7 +1201,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push image to GHCR
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
         run: |
           docker tag spinr-backend:ci-${{ github.sha }} \
             ghcr.io/${{ github.repository }}/spinr-backend:${{ github.sha }}
@@ -1102,7 +1211,7 @@ jobs:
           docker push ghcr.io/${{ github.repository }}/spinr-backend:latest
 
       - name: Sign image with cosign (keyless OIDC)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |

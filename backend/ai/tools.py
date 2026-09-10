@@ -239,6 +239,26 @@ def validate_args(schema: Dict[str, Any], args: Dict[str, Any]) -> List[str]:
 # explicitly told not to act on.
 _GUARDRAIL_KEYS = ("note", "needs_confirmation", "needs_correction", "imprecise_address", "error")
 
+# Orchestrator-only metadata: popped before the result is serialized into the
+# model context (orchestrator.py's tool loop, public_assistant.py::_strip_meta),
+# so it is not model-facing content at all.
+#
+# F05 (AI security assessment (PR #5138)): these MUST survive _cap_result. They
+# used to be ordinary keys, so a result over TOOL_RESULT_MAX_CHARS was rebuilt
+# as {_truncated, preview, **_GUARDRAIL_KEYS} and the flag vanished with
+# everything else not on that list. The orchestrator then saw an ordinary
+# FAQ-only turn and could store it in the cross-user (audience, question)
+# response cache — replaying one service area's policy answer to another
+# area's rider with the identical opener. The bug was invisible below the
+# threshold and only appeared on long results, which is exactly the shape of
+# an area-scoped FAQ turn.
+#
+# Handled like _client_action rather than added to _GUARDRAIL_KEYS: a cache
+# decision is security metadata, not model-facing text, so it belongs outside
+# the truncation path entirely instead of being budgeted and scrubbed as
+# content.
+_META_KEYS = ("_no_cache",)
+
 
 def _policy_for_audience(audience: str) -> ScrubPolicy:
     """Which scrub policy the MODEL-facing portion of a tool result gets.
@@ -282,13 +302,25 @@ def _cap_result(result: Dict[str, Any], *, policy: ScrubPolicy = ScrubPolicy.AI_
     place scrub of one would corrupt the other."""
     if isinstance(result, dict):
         client_action = result.get("_client_action")
-        result = scrub_pii_deep({k: v for k, v in result.items() if k != "_client_action"}, policy=policy)
+        meta = {k: result[k] for k in _META_KEYS if k in result}
+        result = scrub_pii_deep(
+            {k: v for k, v in result.items() if k != "_client_action" and k not in _META_KEYS},
+            policy=policy,
+        )
     else:
         client_action = None
+        meta = {}
     serialized = json.dumps(result, default=str)
     if len(serialized) > TOOL_RESULT_MAX_CHARS:
         preserved = {k: result[k] for k in _GUARDRAIL_KEYS if isinstance(result, dict) and k in result}
         result = {"_truncated": True, "preview": serialized[:TOOL_RESULT_MAX_CHARS], **preserved}
+    # Re-attach AFTER truncation, for the same reason _client_action is: these
+    # never reach the model, so they must neither count against the budget nor
+    # be destroyed by the rebuild. Guarded like _client_action below: a non-dict
+    # result (a tool returning a list) has no meta to restore and cannot be
+    # subscripted.
+    if meta:
+        result.update(meta)
     if client_action is not None:
         result["_client_action"] = client_action
     return result

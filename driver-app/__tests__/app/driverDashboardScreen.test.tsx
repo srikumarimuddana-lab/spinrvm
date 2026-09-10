@@ -33,7 +33,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { Text, TouchableOpacity, Linking } from 'react-native';
+import { Text, TouchableOpacity, Linking, Platform } from 'react-native';
 
 const appStateListeners: Array<(state: string) => void> = [];
 jest.mock('react-native/Libraries/AppState/AppState', () => ({
@@ -266,6 +266,9 @@ jest.mock('../../components/dashboard', () => {
     DemandLegend: (props: any) => <RNText accessibilityLabel="demand-legend">{`layer:${props.layer}`}</RNText>,
     ForecastStrip: (props: any) => <RNText accessibilityLabel="forecast-strip">{`forecast:${props.forecast.length}`}</RNText>,
     HeatmapCells: (props: any) => <RNText accessibilityLabel="heatmap-cells">{`cells:${props.cells.length}`}</RNText>,
+    HeatmapGradientOverlay: (props: any) => (
+      <RNText accessibilityLabel="heatmap-gradient-overlay">{`cells:${props.cells.length}`}</RNText>
+    ),
     HotspotChips: (props: any) => (
       <RNTouchableOpacity accessibilityLabel="hotspot-chip" onPress={() => props.onPress(52.15, -106.65)}>
         <RNText>{`hotspots:${props.hotspots.length}`}</RNText>
@@ -560,25 +563,57 @@ describe('DriverDashboardScreen', () => {
 });
 
 describe('demand heatmap overlay (idle only)', () => {
-  it('renders HeatmapCells when cells are present', async () => {
+  // HeatmapGradientOverlay (the Skia gradient overlay, HM-32) is kill-switched
+  // as of 2026-09-10 pending investigation of a driver-app 2.0.03 100% iOS
+  // crash (TurboModuleRegistry.getEnforcing 'RNSkiaModule') — see the
+  // driver dashboard screen's render-site comment and
+  // docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md. HeatmapCells
+  // (react-native-maps' native <Heatmap> on Android, a Skia-free Circle
+  // fallback on iOS — pre-dates HM-32) is back to rendering on both
+  // platforms, exactly as it did before HM-32 ever touched this screen.
+  const originalPlatformOS = Platform.OS;
+  afterEach(() => {
+    Platform.OS = originalPlatformOS;
+  });
+
+  it('renders HeatmapCells on Android when cells are present', async () => {
+    Platform.OS = 'android';
     mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
     expect(r.root.findByProps({ accessibilityLabel: 'heatmap-cells' })).toBeTruthy();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
   });
 
-  it('omits HeatmapCells with zero cells', async () => {
+  it('omits HeatmapCells with zero cells (Android)', async () => {
+    Platform.OS = 'android';
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
   });
 
-  it('renders the DemandLegend only when visible', async () => {
-    mockHeatmapState.visible = true;
+  it('renders HeatmapCells on iOS too when cells are present, never HeatmapGradientOverlay (Skia kill-switched)', async () => {
+    Platform.OS = 'ios';
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
-    expect(r.root.findByProps({ accessibilityLabel: 'demand-legend' })).toBeTruthy();
+    expect(r.root.findByProps({ accessibilityLabel: 'heatmap-cells' })).toBeTruthy();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
   });
 
-  it('omits the DemandLegend when not visible', async () => {
-    mockHeatmapState.visible = false;
+  it('omits HeatmapCells with zero cells (iOS)', async () => {
+    Platform.OS = 'ios';
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
+  });
+
+  it('never renders HeatmapGradientOverlay at all, on any platform (Skia kill-switch, 2026-09-10)', async () => {
+    Platform.OS = 'ios';
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
+  });
+
+  it('never renders the DemandLegend pill — removed entirely (was overlapping the SOS button)', async () => {
+    mockHeatmapState.visible = true;
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
   });
@@ -616,6 +651,15 @@ describe('demand heatmap overlay (idle only)', () => {
     mockHeatmapState.isV2 = true;
     mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
     const r = await renderScreen();
+    // HeatmapCells/HeatmapGradientOverlay are asserted here too, not just
+    // their sibling widgets: the render site itself must gate on
+    // rideState === 'idle' rather than relying only on useDemandHeatmap
+    // clearing `cells` internally — see the driver dashboard screen's
+    // comment at this render site for why (this exact test previously
+    // mocked non-empty cells during an active ride without ever checking
+    // heatmap-cells stayed absent).
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'hotspot-chip' })).toHaveLength(0);
   });

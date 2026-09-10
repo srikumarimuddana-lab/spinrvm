@@ -93,6 +93,7 @@ Do not rely on "commit, observe, roll back if broken" for anything touching a li
   4. Commit + push fixes to the PR's feature branch; the PR updates automatically.
 - Treat a verified Codex finding the same as any task: write/extend a regression test for it, run the affected tests, and keep the commit scoped to one logical change.
 - Only escalate via `AskUserQuestion` when a fix is architecturally significant or genuinely ambiguous; otherwise just do it.
+- **Same discipline applies to any other automated-fix source** — notably Sentry's Seer, piloted 2026-09-08 (`.claude/context/connector-scoping.md`'s Sentry row, `docs/audit/2026-09-08-agentic-tooling-atlas.md`): a Seer-suggested fix gets the same verify-then-fix-or-explain treatment as a Codex comment, and is never applied or merged without going through the normal Change Impact Log gate. Automation drafting a fix does not waive review.
 
 ## Context Imports
 
@@ -372,11 +373,12 @@ Test tiers:
   pytest tests/rls -c /dev/null --confcutdir=tests/rls
   ```
   `-c /dev/null --confcutdir=tests/rls` stops pytest from also loading `backend/tests/conftest.py` (and `pytest.ini`'s coverage gate), which these tests don't use. Currently covers 5 of the ~127 tracked `CREATE POLICY` statements (`users`, `drivers`, `rides`, `financial_events`, `driver_insurance_periods`) — a start, not full coverage. See `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`.
+- **Property-based fuzz (pilot, `test_schemathesis_fuzz.py`)**: Schemathesis generates adversarial inputs against the app's own OpenAPI schema, GET-only for now (532 operations), checking only for 5xx responses. On-demand, not wired into CI's main step — see `docs/audit/2026-09-08-agentic-tooling-atlas.md` for scope, findings, and why. Run via `pytest -m slow tests/test_schemathesis_fuzz.py`.
 
 Coverage minimums (per domain):
 - `routes/payments.py`, `services/fare_service.py`, `utils/crypto.py`: ≥ 90%
 - `routes/rides.py`, `services/dispatch_service.py`: ≥ 80%
-- `routes/corporate_*.py`, `services/corporate_*.py`: **target ≥ 80%**, now met (same tier as rides/dispatch — moves real money via `corporate_wallet_apply_delta`). As of 2026-08-02 the module averages ~92% aggregate across `routes/corporate_accounts.py` (97%), `routes/corporate_company.py` (88%), `routes/corporate_company_bookings.py` (91%), `routes/corporate_company_kyb.py` (98%), `routes/corporate_rider.py` (97%), `routes/corporate_signup.py` (89%), `routes/corporate_subscriptions.py` (93%), `routes/corporate_wallet.py` (88%), and the `services/corporate_*.py` files (79–100%) — the earlier gap (2026-07-28: ~52% aggregate, `corporate_accounts.py` at 39%, `corporate_signup.py`/`corporate_rider.py`/`corporate_company_kyb.py` at 32–33%) closed as round-2 corporate/admin review work added tests alongside each fix. Not yet enforced by a `--cov-fail-under` gate on this module specifically.
+- `routes/corporate_*.py`, `services/corporate_*.py`: **target ≥ 80%**, now met (same tier as rides/dispatch — moves real money via `corporate_wallet_apply_delta`). As of 2026-08-02 the module averages ~92% aggregate across `routes/corporate_accounts.py` (97%), `routes/corporate_company.py` (88%), `routes/corporate_company_bookings.py` (91%), `routes/corporate_company_kyb.py` (98%), `routes/corporate_rider.py` (97%), `routes/corporate_signup.py` (89%), `routes/corporate_subscriptions.py` (93%), `routes/corporate_wallet.py` (88%), and the `services/corporate_*.py` files (79–100%) — the earlier gap (2026-07-28: ~52% aggregate, `corporate_accounts.py` at 39%, `corporate_signup.py`/`corporate_rider.py`/`corporate_company_kyb.py` at 32–33%) closed as round-2 corporate/admin review work added tests alongside each fix. Enforced by a real, blocking `--cov-fail-under` gate — `corporate-coverage-floor-gate` in `ci-guardrails.yml` (line ~445) — since the prior audit's Phase 3 (this line previously said "not yet enforced"; corrected 2026-09-09, see the CI smart-execution audit's change-log entry).
 - Admin routes, utilities: ≥ 70%
 
 What must have a test:

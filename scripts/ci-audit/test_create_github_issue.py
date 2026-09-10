@@ -214,3 +214,36 @@ def test_fingerprint_marker_roundtrip():
     assert marker == "<!-- ci-audit-fingerprint: abc123 -->"
     assert cgi.extract_fingerprint(f"some issue body\n\n{marker}") == "abc123"
     assert cgi.extract_fingerprint("no marker here") is None
+
+
+def test_fingerprint_distinguishes_same_bucket_different_excerpt():
+    """ACTION_ITEMS.md C72: same job/category/description (a fixed template)
+    but genuinely different underlying failures (different test/assertion
+    text in the log excerpt) must NOT collapse onto the same fingerprint."""
+    base = {"job": "backend-test", "category": "test", "description": "assertion error in test"}
+    fp_a = cgi.compute_fingerprint("CI/CD Pipeline", {
+        "errors": [{**base, "log_excerpt": "FAILED tests/test_mocks.py::test_stale_mock - AssertionError"}]
+    })
+    fp_b = cgi.compute_fingerprint("CI/CD Pipeline", {
+        "errors": [{**base, "log_excerpt": "FAILED tests/test_matching.py::test_loguru_bug - AssertionError"}]
+    })
+    assert fp_a != fp_b, "distinct excerpts in the same job/category/description bucket must diverge"
+
+
+def test_fingerprint_normalizes_digits_in_excerpt():
+    """Trivial run-to-run count/line-number noise in the same recurring
+    failure must not fragment the fingerprint (the flip side of the above:
+    don't over-tighten past the point of losing legitimate dedup)."""
+    base = {"job": "backend-test", "category": "test", "description": "pytest: N tests failed"}
+    fp_a = cgi.compute_fingerprint("CI/CD Pipeline", {
+        "errors": [{**base, "log_excerpt": "===== 5 failed, 120 passed in 12.34s ====="}]
+    })
+    fp_b = cgi.compute_fingerprint("CI/CD Pipeline", {
+        "errors": [{**base, "log_excerpt": "===== 3 failed, 118 passed in 9.01s ====="}]
+    })
+    assert fp_a == fp_b, "digit-only differences in the excerpt must still dedupe onto one issue"
+
+
+def test_normalize_excerpt_handles_missing_field():
+    assert cgi._normalize_excerpt("") == ""
+    assert cgi._normalize_excerpt(None) == ""

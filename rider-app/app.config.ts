@@ -25,8 +25,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '2.1.0', // bump from 2.0.0 (SDK 57 dependency alignment, 2026-08-11): react-native-gesture-handler 2.31→2.32, react-native-safe-area-context 5.6→5.7, netinfo 11→12 are all NATIVE-module changes, and @react-native-community/datetimepicker + react-native-modal-datetime-picker were removed from autolinking — JS built against these must never OTA onto pre-alignment binaries. Prior: 2.0.0 fenced the New Architecture switch (old-arch installs must not pull that OTA).
+    // Kept in sync with the expo-splash-screen plugin block below, which is
+    // what prebuild actually reads; this legacy key is still what Expo Go and
+    // Constants.expoConfig.splash report. imageWidth lives on the plugin only.
     splash: {
-        image: './assets/images/splash-blank.png',
+        image: './assets/images/splash/native-splash.png',
         resizeMode: 'contain',
         backgroundColor: '#FFFFFF',
     },
@@ -161,8 +164,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             microphonePermission: 'Spinr uses the microphone so you can dictate messages to the AI assistant.',
             speechRecognitionPermission: 'Spinr uses speech recognition to turn your voice into text for the AI assistant.',
         }],
+        // The launch frame: the halo plus the bullseye mark rotated half a turn.
+        // BrandSplash paints exactly this as its first JS frame and then unwinds
+        // the rotation, so the native -> JS handoff has nothing to see. Was a
+        // deliberately blank white image until 2026-09-07; the first ~300-800ms
+        // of every cold start was unbranded. imageWidth 200 matches GLOW_DP in
+        // constants/splash.ts — change the two together.
         ['expo-splash-screen', {
-            image: './assets/images/splash-blank.png',
+            image: './assets/images/splash/native-splash.png',
+            imageWidth: 200,
             resizeMode: 'contain',
             backgroundColor: '#FFFFFF',
         }],

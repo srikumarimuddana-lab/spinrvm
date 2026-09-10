@@ -970,6 +970,11 @@ class TestPerAreaHeatmapConfig:
         "key,value",
         [
             ("k_floor", 0),  # would disable the k-anonymity floor
+            # 1 and 2 are the real gap: below the PIPEDA floor but inside the
+            # old spec bound, so this validator used to accept them and the
+            # JSONB column has no value CHECK to catch them either.
+            ("k_floor", 1),
+            ("k_floor", 2),
             ("k_floor", 51),
             ("refresh_seconds", 1),  # would make the fleet poll every second
             ("refresh_seconds", 601),
@@ -1032,7 +1037,10 @@ class TestPerAreaHeatmapConfig:
         assert result["overrides"] == {"k_floor": 9}
         assert result["inherited"]["k_floor"] == 4
         # Bounds are served, not duplicated in the frontend, so they can't drift.
-        assert result["spec"]["k_floor"]["min"] == 1
+        # 3, matching migration 397's CHECK — the admin form reads its bounds
+        # from here, so a stale 1 would invite an operator to set a value the
+        # resolver now floors anyway.
+        assert result["spec"]["k_floor"]["min"] == 3
         assert result["spec"]["k_floor"]["max"] == 50
 
     @pytest.mark.anyio

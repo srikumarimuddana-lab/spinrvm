@@ -232,14 +232,23 @@ with each OS release. `@logrocket/react-native`'s session-replay view serializer
 into framework-internal fields (here `PorterDuffColorFilter.mColor`) to record colors. On
 Android 16 / targetSdk 36 that field is on the `max-target-o` blocklist, so the reflection
 is denied on the UI thread during view serialization. That wedges startup: React never
-renders its first frame, so `SplashScreen.hideAsync()` (called from `BrandSplash`'s
-`onLayout`) never runs and the native splash stays up forever.
+renders its first frame, so `SplashScreen.hideAsync()` (called from `_layout.tsx` when
+`BrandSplash` reports its mark has painted) never runs and the native splash stays up
+forever.
 
 **Fix (shipped):** LogRocket is gated OFF on Android by default in both apps'
 `app/_layout.tsx`. Override per build with `EXPO_PUBLIC_ENABLE_LOGROCKET` (`'true'` /
-`'false'`); unset = iOS on, Android off. A 10s splash watchdog in `_layout.tsx` is the
-backstop — it force-hides the native splash and reports the stall (Sentry warning) so a
-future non-critical init can't silently brick cold start.
+`'false'`); unset = iOS on, Android off. A splash watchdog in `_layout.tsx` is the
+backstop — after `NATIVE_SPLASH_WATCHDOG_MS` (2.5s, `constants/splash.ts`) it force-hides
+the native splash and reports the stall (Sentry warning) so a future non-critical init
+can't silently brick cold start.
+
+**Corrected 2026-09-07:** this section previously described a `hideAsync()` call and a 10s
+watchdog that did not exist in either app — `expo-splash-screen` was installed but never
+imported, and `BrandSplash`'s `onLayout` was a no-op. Both are real as of the brand-splash
+rework (`docs/change-log/2026-09-07-brand-splash-premium-rider-driver.md`); the watchdog is
+2.5s, not 10s, because the native and JS frames are now the same picture, so there is no
+longer any reason to sit through a longer stall.
 
 **Re-enable Android when:** LogRocket ships a release that no longer reflects into blocked
 hidden APIs at the targetSdk we ship. Verify on a physical Android 16+ device (the hang is

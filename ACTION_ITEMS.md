@@ -13118,6 +13118,45 @@ record of what was assumed vs. what was actually true</summary>
     `main` as ambiguous) but may still matter for confirming `staging`'s
     current/intended behavior before the conditional logic ships.
 
+### C100. `driver-app/__tests__/components/CarMarker.test.tsx` — 7 tests broken by a prior `expo-image` migration the test was never updated for
+- [ ] **Status:** open, found 2026-09-10 while investigating an unrelated
+  CI failure on PR #5200 (a driver-app toast-color fix).
+- **Issue/gap:** `CarMarker.tsx:3` imports `Image as ExpoImage` from
+  `expo-image` and renders `<ExpoImage>` (line ~963) as the car icon — but
+  the test file (`CarMarker.test.tsx:3`) still imports `Image` from
+  `'react-native'` and locates the car icon via
+  `UNSAFE_getByType(Image)`/`findByType(Image)`. Since the rendered tree no
+  longer contains a React Native core `Image` node, every one of these
+  lookups throws `No instances found with node type: "Image"`. 7 tests fail
+  in the suite (retry/backoff-then-report, ring-freeze re-arm ×3, iOS
+  rotation-transform), all downstream of the same lookup bug.
+- **Root cause:** a prior commit switched `CarMarker.tsx`'s rendered image
+  element from RN's `Image` to `expo-image`'s (likely the same change as
+  "fix(driver-app): switch CarMarker to ExpoImage for Android marker
+  visibility", visible in recent `main` history) without updating this
+  test file's `Image` lookups to match.
+- **Confirmed not caused by PR #5200**: PR #5200's diff touches only
+  `driver-app/components/toastConfig.tsx`,
+  `driver-app/__tests__/components/toastConfig.theme.test.tsx`, and
+  `ACTION_ITEMS.md` — none of which `CarMarker.tsx`/`CarMarker.test.tsx`
+  import or are imported by. Reproduced identically (`7 failed, 18 passed`)
+  standalone on that PR's branch AND on a clean `git worktree` checkout of
+  `origin/main` at the exact commit PR #5200 is based on
+  (`f9f52c7`) — this is a pre-existing base-branch failure, not something
+  this PR introduced.
+- **Action:** update `CarMarker.test.tsx` to locate the car icon via
+  `expo-image`'s `Image` export (`import { Image as ExpoImage } from
+  'expo-image'`, then `UNSAFE_getByType(ExpoImage)`/`findByType(ExpoImage)`)
+  instead of React Native's core `Image`. No production code change
+  expected — this is a test-only fix for a lookup that fell out of sync
+  with a real, intentional rendering change.
+- **Files:** `driver-app/__tests__/components/CarMarker.test.tsx` (test-only
+  fix expected; `driver-app/components/CarMarker.tsx` itself is not
+  believed to need changes, since its `expo-image` migration was
+  deliberate).
+- **Acceptance:** `npx jest __tests__/components/CarMarker.test.tsx` passes
+  25/25 on `main`.
+
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
 ### C1. Failover drill — Railway ↔ Fly

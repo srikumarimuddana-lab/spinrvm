@@ -119,6 +119,12 @@ const ERROR_MESSAGES: Record<string, string> = {
   ai_disabled: 'The AI assistant is currently unavailable.',
   daily_cap: "You've reached today's AI assistant limit — try again tomorrow.",
   not_authenticated: 'Please sign in again to use the AI assistant.',
+  // orchestrator.py: another reply for this conversation is already
+  // in-flight (e.g. a double send) — rider should just wait, not retry hard.
+  conversation_busy: "Still working on your last message — give it a moment before sending another.",
+  // orchestrator.py: the conversation id no longer resolves (deleted,
+  // expired, or not this rider's) — nothing to recover, only a fresh one.
+  not_found: "This conversation isn't available anymore — start a new one to keep chatting.",
   // Matches orchestrator.py's GENERIC_ERROR_MESSAGE wording verbatim so this
   // fix doesn't change what the rider already sees for these two codes.
   ai_misconfigured: 'Something went wrong on our side — please try again in a moment.',

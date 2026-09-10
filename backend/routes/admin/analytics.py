@@ -128,9 +128,11 @@ async def get_cancellation_breakdown(
     """
     import json as _json
 
-    # `v2` marks the America/Regina hour bucketing (migration 350) — see
-    # the same note on /overview.
-    cache_key = f"analytics:cancellation-reasons:v2:{date_range}:{service_area_id or 'all'}"
+    # `v3` marks the structured cancelled_by/cancellation_type attribution +
+    # rider_reasons breakdown (migration 411) — bumped from v2 because the
+    # RPC's response shape changed and a stale v2-cached body would be
+    # missing the new keys. See the same note on /overview for the v2 bump.
+    cache_key = f"analytics:cancellation-reasons:v3:{date_range}:{service_area_id or 'all'}"
     cached = await redis_get(cache_key)
     if cached:
         try:
@@ -178,6 +180,18 @@ async def get_cancellation_breakdown(
     hourly_map = bd.get("hourly") or {}
     hourly = [{"hour": h, "count": int(hourly_map.get(str(h), 0) or 0)} for h in range(24)]
 
+    total_rider_cancellations = int(bd.get("total_rider_cancellations") or 0)
+    rider_reasons = [
+        {
+            "reason": row.get("reason"),
+            "count": int(row.get("count") or 0),
+            "pct": round(int(row.get("count") or 0) / total_rider_cancellations * 100, 1)
+            if total_rider_cancellations > 0
+            else 0,
+        }
+        for row in (bd.get("rider_reasons") or [])
+    ]
+
     result = {
         "total_cancellations": total,
         "date_range": date_range,
@@ -186,6 +200,8 @@ async def get_cancellation_breakdown(
         "reasons": reasons,
         "by_party": by_party,
         "hourly_distribution": hourly,
+        "total_rider_cancellations": total_rider_cancellations,
+        "rider_reasons": rider_reasons,
     }
     try:
         await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)

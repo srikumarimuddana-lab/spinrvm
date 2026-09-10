@@ -17,7 +17,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Copy, Info, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Copy, Loader2, Upload } from "lucide-react";
 import {
     adminCommitBookingImport,
     adminValidateBookingImport,
@@ -26,6 +26,10 @@ import {
     type BookingImportReport,
     type BookingImportReportItem,
 } from "@/lib/api";
+import { explainBookingImportIssue } from "@/lib/bulk-import-error-help";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable } from "@/components/bulk-import/issue-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,14 +40,6 @@ import {
     CardHeader,
     CardTitle,
 } from "@/components/ui/card";
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
 import { useToast } from "@/components/ui/use-toast";
 import { exportToCsv } from "@/lib/export-csv";
 
@@ -75,44 +71,22 @@ const FILE_FIELDS = [
 
 type FileState = Partial<Record<keyof BookingImportFiles, File | null>>;
 
-function IssueTable({ items }: { items: BookingImportReportItem[] }) {
+function BookingIssueTable({ items }: { items: BookingImportReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-24">Row</TableHead>
-                        <TableHead className="w-40">Booking</TableHead>
-                        <TableHead className="w-40">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.row_num}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.row_num}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.booking_code}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
+        <IssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.row_num}-${it.field}-${i}`}
+            getRef={(it) => String(it.row_num)}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="Row"
+            extraColumn={{ label: "Booking", getValue: (it) => it.booking_code }}
+            explain={explainBookingImportIssue}
+        />
     );
 }
 
-function Stat({
-    label,
-    value,
-    tone,
-    money,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-    money?: boolean;
-}) {
+function MoneyStatTile({ label, value, tone }: { label: string; value: number; tone?: "warn" | "error" }) {
     const toneCls =
         tone === "error" && value > 0
             ? "text-destructive"
@@ -121,9 +95,7 @@ function Stat({
               : "text-foreground";
     return (
         <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>
-                {money ? `$${value.toFixed(2)}` : value}
-            </div>
+            <div className={`text-2xl font-semibold ${toneCls}`}>${value.toFixed(2)}</div>
             <div className="text-xs text-muted-foreground">{label}</div>
         </div>
     );
@@ -283,23 +255,53 @@ export function LegacyBookingImport() {
                     Legacy booking import
                 </CardTitle>
                 <CardDescription>
-                    Import completed rides from the previous app into ride history. Riders and
-                    drivers are matched by phone number; a booking whose party is not in Spinr
-                    imports unlinked and can be re-linked by a later run.
+                    Import ride history from the previous app.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-                <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                    <div className="space-y-1">
-                        <p className="font-medium">Driver payouts were already settled off-platform.</p>
-                        <p className="text-muted-foreground">
-                            Each matched driver also gets one offsetting payout record so imported
-                            earnings never become withdrawable a second time. Net payable change per
-                            driver is $0.00. Always run the dry run first and check the offset total.
-                        </p>
-                    </div>
-                </div>
+                <WhatThisToolDoes
+                    what={
+                        <>
+                            Imports a rider or driver&apos;s past trips from the previous app into
+                            Spinr&apos;s ride history, matched to their Spinr account by phone
+                            number.
+                        </>
+                    }
+                    why={
+                        <>
+                            Riders and drivers expect their trip history to carry over when they
+                            move to a new app — without this import, a migrated account would show
+                            no past rides at all.
+                        </>
+                    }
+                    whichFiles={
+                        <>
+                            Four files from the raw MongoDB export:{" "}
+                            <span className="font-mono">bookings.csv</span> (one row per legacy
+                            trip), <span className="font-mono">customers.csv</span> and{" "}
+                            <span className="font-mono">drivers.csv</span> (used to resolve each
+                            booking&apos;s parties by phone number), and{" "}
+                            <span className="font-mono">driverearnings.csv</span> (actual payout
+                            per booking).
+                        </>
+                    }
+                    value={
+                        <>
+                            A migrated rider or driver&apos;s ride history is already there —
+                            nobody has to explain why their trip list starts empty.
+                        </>
+                    }
+                    safetyNote={
+                        <>
+                            Driver payouts for these trips were already settled off-platform. Each
+                            matched driver also gets one offsetting payout record so imported
+                            earnings never become withdrawable a second time — net payable change
+                            per driver is $0.00. A booking whose party isn&apos;t in Spinr yet
+                            imports unlinked and can be re-linked by a later run. Always run the
+                            dry run first and check the offset total.
+                        </>
+                    }
+                />
 
                 {/* 1. Files */}
                 <div className="space-y-3">
@@ -414,16 +416,16 @@ export function LegacyBookingImport() {
                         <h3 className="text-sm font-medium">3. Review and commit</h3>
 
                         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                            <Stat label="TOTAL rides to import" value={c.total_rides_planned} />
-                            <Stat label="— completed" value={c.rides_planned} />
-                            <Stat label="— cancelled/failed" value={c.cancelled_failed_rides_planned} />
-                            <Stat label="Offset payouts" value={c.payouts_planned} />
-                            <Stat label="Unmatched riders" value={c.unmatched_riders + c.cancelled_failed_unmatched_riders} tone="warn" />
-                            <Stat label="Unmatched drivers" value={c.unmatched_drivers + c.cancelled_failed_unmatched_drivers} tone="warn" />
-                            <Stat label="Rider paid (total)" value={c.sum_rider_paid} money />
-                            <Stat label="Driver earnings" value={c.sum_driver_total} money />
-                            <Stat label="Offset total" value={c.sum_offset_payouts} money />
-                            <Stat
+                            <StatTile label="TOTAL rides to import" value={c.total_rides_planned} />
+                            <StatTile label="— completed" value={c.rides_planned} />
+                            <StatTile label="— cancelled/failed" value={c.cancelled_failed_rides_planned} />
+                            <StatTile label="Offset payouts" value={c.payouts_planned} />
+                            <StatTile label="Unmatched riders" value={c.unmatched_riders + c.cancelled_failed_unmatched_riders} tone="warn" />
+                            <StatTile label="Unmatched drivers" value={c.unmatched_drivers + c.cancelled_failed_unmatched_drivers} tone="warn" />
+                            <MoneyStatTile label="Rider paid (total)" value={c.sum_rider_paid} />
+                            <MoneyStatTile label="Driver earnings" value={c.sum_driver_total} />
+                            <MoneyStatTile label="Offset total" value={c.sum_offset_payouts} />
+                            <StatTile
                                 label="Already imported"
                                 value={c.skipped_already_imported + c.cancelled_failed_skipped_already_imported}
                             />
@@ -488,7 +490,7 @@ export function LegacyBookingImport() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <BookingIssueTable items={report.errors} />
                             </div>
                         ) : null}
 
@@ -497,7 +499,7 @@ export function LegacyBookingImport() {
                                 <p className="text-sm font-medium text-warning">
                                     {report.warnings.length} warning(s) — these do not block the import
                                 </p>
-                                <IssueTable items={report.warnings} />
+                                <BookingIssueTable items={report.warnings} />
                             </div>
                         ) : null}
 

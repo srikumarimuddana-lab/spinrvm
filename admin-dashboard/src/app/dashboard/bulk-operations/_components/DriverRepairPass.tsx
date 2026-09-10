@@ -26,13 +26,15 @@
  */
 
 import { useState } from "react";
-import { CheckCircle2, Copy, Info, Loader2, Wrench } from "lucide-react";
+import { CheckCircle2, Copy, Loader2, Wrench } from "lucide-react";
 import {
     adminCommitDriverRepair,
     adminPreviewDriverRepair,
     type DriverRepairCommitResult,
     type DriverRepairReport,
 } from "@/lib/api";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,15 +42,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/components/ui/use-toast";
 
 const CONFIRM_PHRASE = "REPAIR";
-
-function Stat({ label, value }: { label: string; value: number }) {
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${value > 0 ? "text-warning" : "text-foreground"}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
-    );
-}
 
 // Compact, copy-pasteable markdown table mirroring the stat tiles below.
 function buildSummaryText(report: DriverRepairReport): string {
@@ -147,34 +140,47 @@ export function DriverRepairPass() {
                 </CardTitle>
                 <CardDescription>
                     Re-check rides still missing a driver against the drivers table as it stands
-                    today — recovers rides whose driver was imported in a later batch than the
-                    ride itself. No CSV needed — this reads directly from production. Driver-side
-                    only; see the notice below for why there is no rider-side version yet.
+                    today.
                 </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-                <div className="flex gap-2 rounded-md border border-muted bg-muted/30 p-3 text-sm">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                    <div className="space-y-1 text-muted-foreground">
-                        <p>
-                            <span className="font-medium text-foreground">Not additive-only</span> —
-                            commit sets the ride&apos;s driver, reconstructs its insurance-period
-                            audit rows, and writes one offsetting payout per driver so their
-                            payable balance isn&apos;t inflated by a trip already settled in the
-                            old app.
-                        </p>
-                        <p>
-                            An old driver id claimed by more than one current driver is never
-                            guessed at — it&apos;s excluded as ambiguous, not linked to either.
-                        </p>
-                        <p>
-                            <span className="font-medium text-foreground">No rider-side version</span>{" "}
-                            exists yet — no old-system customer id is stored on any rider account
-                            in Supabase. That needs either the raw customers.csv export or the
-                            (currently empty) legacy_id_crosswalk table backfilled first.
-                        </p>
-                    </div>
-                </div>
+                <WhatThisToolDoes
+                    what={
+                        <>
+                            Re-checks completed rides flagged by the Data Quality Scan as
+                            &quot;missing driver&quot; against the drivers table as it stands
+                            today, and links the ride to its driver where a match is now found.
+                        </>
+                    }
+                    why={
+                        <>
+                            A ride can end up missing its driver simply because that driver was
+                            imported in a later batch than the ride itself — the ride never had a
+                            chance to match at its own import time. This tool recovers exactly that
+                            case.
+                        </>
+                    }
+                    whichFiles={<>No file upload — this reads directly from production data already in Spinr.</>}
+                    value={
+                        <>
+                            A ride&apos;s driver history is complete without anyone manually
+                            cross-referencing old driver IDs by hand.
+                        </>
+                    }
+                    safetyNote={
+                        <>
+                            Not additive-only — commit sets the ride&apos;s driver, reconstructs
+                            its insurance-period audit rows, and writes one offsetting payout per
+                            driver so their payable balance isn&apos;t inflated by a trip already
+                            settled in the old app. An old driver id claimed by more than one
+                            current driver is never guessed at — it&apos;s excluded as ambiguous,
+                            not linked to either. Driver-side only: no old-system customer id is
+                            stored on any rider account in Supabase, so a rider-side version needs
+                            either the raw customers.csv export or the (currently empty)
+                            legacy_id_crosswalk table backfilled first.
+                        </>
+                    }
+                />
 
                 <div className="space-y-3">
                     <h3 className="text-sm font-medium">1. Preview</h3>
@@ -195,10 +201,10 @@ export function DriverRepairPass() {
                         <h3 className="text-sm font-medium">2. Review and repair</h3>
 
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                            <Stat label="Repairable now" value={c.repairable} />
-                            <Stat label="Still unmatched" value={c.still_unmatched} />
-                            <Stat label="Ambiguous (skipped)" value={c.ambiguous_old_driver_id_skipped} />
-                            <Stat label="Candidates scanned" value={c.rides_missing_driver_with_old_id} />
+                            <StatTile label="Repairable now" value={c.repairable} tone="warn" />
+                            <StatTile label="Still unmatched" value={c.still_unmatched} tone="warn" />
+                            <StatTile label="Ambiguous (skipped)" value={c.ambiguous_old_driver_id_skipped} tone="warn" />
+                            <StatTile label="Candidates scanned" value={c.rides_missing_driver_with_old_id} tone="warn" />
                         </div>
 
                         <p className="text-xs text-muted-foreground">

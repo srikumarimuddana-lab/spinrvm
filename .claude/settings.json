@@ -105,7 +105,7 @@
           },
           {
             "type": "command",
-            "command": "bash -c 'cd backend && python3 -m pip install -q -r requirements.txt 2>/dev/null && echo \"backend deps ok\" || echo \"backend pip install skipped (no venv?)\"'"
+            "command": "bash -c 'cd backend && python3 -m pip install -q --ignore-installed -r requirements.txt 2>/dev/null && echo \"backend deps ok\" || echo \"backend pip install failed — run without 2>/dev/null to see why\"'"
           },
           {
             "type": "command",

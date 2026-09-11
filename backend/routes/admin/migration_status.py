@@ -12,7 +12,7 @@ as pre_launch_flag_router/wallet_import_router.
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 try:
     from ...dependencies import get_admin_user
@@ -26,9 +26,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as every other Bulk Operations tool
+    in this package does.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every sibling super_admin-class router uses, so
+    the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Migration status requires super_admin")
+
+
 @router.get("/migration-status")
 async def admin_get_migration_status(admin: dict = Depends(get_admin_user)):
     """Read-only. Returns all 19 tool statuses in dependency order."""
+    _require_super_admin(admin)
     report = svc.get_migration_status()
     return {
         "tools": [

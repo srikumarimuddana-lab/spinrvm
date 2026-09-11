@@ -29,7 +29,7 @@ import { recordNonFatal } from '../utils/crashlytics';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Analytics } from '@shared/analytics';
-import { useResponsive } from '@shared/utils/responsive';
+import { useResponsive, SPACING } from '@shared/utils/responsive';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
 import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
@@ -657,7 +657,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       backgroundColor: colors.surface,
       borderBottomWidth: 1,
@@ -723,7 +723,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       color: colors.primary,
     },
     routeContainer: {
-      paddingTop: 16,
+      paddingTop: SPACING.md,
       borderTopWidth: 1,
       borderTopColor: colors.border,
     },
@@ -735,7 +735,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       width: 12,
       height: 12,
       borderRadius: 6,
-      marginTop: 4,
+      marginTop: SPACING.xs,
       marginRight: 12,
     },
     routeLine: {
@@ -774,12 +774,12 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       fontSize: sf(16),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     paymentOption: {
       flexDirection: 'row',
       alignItems: 'center',
-      padding: 16,
+      padding: SPACING.md,
       marginBottom: 12,
       backgroundColor: colors.surfaceLight,
       borderRadius: 12,
@@ -852,12 +852,12 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.primary,
-      marginLeft: 8,
+      marginLeft: SPACING.sm,
     },
     footer: {
       backgroundColor: colors.surface,
       paddingHorizontal: 20,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       borderTopWidth: 1,
       borderTopColor: colors.border,
     },
@@ -865,7 +865,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     totalLabel: {
       fontSize: sf(16),
@@ -895,7 +895,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     discountLabel: {
       fontSize: sf(14),
@@ -970,7 +970,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
     fareHeader: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
-      paddingVertical: 4,
+      paddingVertical: SPACING.xs,
     },
     fareToggleHint: {
       fontSize: sf(12),
@@ -990,7 +990,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
     },
     corporateSection: {
       backgroundColor: colors.surface,
-      padding: 16,
+      padding: SPACING.md,
       marginBottom: 12,
     },
     corporateRow: {

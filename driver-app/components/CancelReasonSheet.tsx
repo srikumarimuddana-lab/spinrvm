@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Text, TouchableOpacity, View, StyleSheet, Modal, TextInput,
+  TouchableOpacity, View, StyleSheet, Modal, TextInput,
   KeyboardAvoidingView, Platform, Pressable, ScrollView,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Default driver-facing cancellation reasons (last = free-text only).
 //
@@ -147,13 +149,13 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
-      paddingHorizontal: 24,
+      paddingHorizontal: SPACING.lg,
       paddingTop: 10,
       paddingBottom: 36,
     },
     handle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: 12 },
     title: { fontSize: 19, fontWeight: '700', color: colors.text, marginBottom: 6 },
-    message: { fontSize: 13, color: colors.textSecondary, lineHeight: 18, marginBottom: 12 },
+    message: { fontSize: FONT.bodySm, color: colors.textSecondary, lineHeight: 18, marginBottom: 12 },
     list: { maxHeight: 280, marginBottom: 12 },
     row: {
       flexDirection: 'row',
@@ -163,10 +165,10 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 12,
       borderRadius: 12,
       backgroundColor: colors.surfaceLight,
-      marginBottom: 4,
+      marginBottom: SPACING.xs,
     },
     rowActive: { backgroundColor: colors.primary + '18' },
-    rowText: { fontSize: 15, color: colors.textSecondary, flex: 1 },
+    rowText: { fontSize: FONT.bodyMd, color: colors.textSecondary, flex: 1 },
     note: {
       borderWidth: 1,
       borderColor: colors.border,
@@ -175,11 +177,11 @@ function createStyles(colors: ThemeColors) {
       minHeight: 56,
       color: colors.text,
       fontSize: 14,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
       textAlignVertical: 'top',
     },
-    button: { width: '100%', paddingVertical: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-    buttonText: { fontSize: 16, fontWeight: '600', color: '#fff' },
+    button: { width: '100%', paddingVertical: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: SPACING.sm },
+    buttonText: { fontSize: FONT.bodyLg, fontWeight: '600', color: '#fff' },
     destructiveButton: { backgroundColor: colors.error },
     cancelButton: { backgroundColor: colors.surfaceLight },
     cancelButtonText: { color: colors.textSecondary },

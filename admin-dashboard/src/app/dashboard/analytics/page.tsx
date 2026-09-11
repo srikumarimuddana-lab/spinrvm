@@ -81,6 +81,11 @@ function reasonColors(isDark: boolean): Record<string, string> {
     driver_cancelled: p[2],      // amber
     search_timeout: p[3],        // violet
     scheduled_cancelled: isDark ? "#6B7280" : "#9CA3AF",
+    // New as of migration 410 — admin force-cancels used to fall into
+    // "other" (fuzzy string matching couldn't distinguish them); now that
+    // they're their own structured-attribution bucket, give them a real
+    // slot instead of relying on the "unknown reason" grey fallback below.
+    admin_cancelled: p[1],
     unspecified: isDark ? "#4B5563" : "#D1D5DB",
     other: isDark ? "#52525B" : "#9CA3AF",
   };
@@ -92,9 +97,39 @@ const REASON_LABELS: Record<string, string> = {
   driver_cancelled: "Driver Cancelled",
   search_timeout: "Search Timeout",
   scheduled_cancelled: "Scheduled Cancelled",
+  admin_cancelled: "Admin Cancelled",
   unspecified: "Unspecified",
   other: "Other",
 };
+
+// Rider-picked reasons (migration 410's rider_reasons breakdown) — a
+// separate vocabulary from the reason/party buckets above, since those say
+// WHO cancelled while this says WHY a rider specifically did, straight from
+// CancelReasonSheet.tsx's presets.
+const RIDER_REASON_LABELS: Record<string, string> = {
+  driver_too_far_long_wait: "Driver Too Far / Long Wait",
+  booked_by_mistake: "Booked By Mistake",
+  found_another_ride: "Found Another Ride",
+  pickup_location_wrong: "Pickup Location Wrong",
+  changed_plans: "Changed Plans",
+  scheduled_pre_dispatch: "Scheduled — Cancelled Pre-Dispatch",
+  other_free_text: "Other (Free Text)",
+  unspecified: "Unspecified",
+};
+
+function riderReasonColors(isDark: boolean): Record<string, string> {
+  const p = isDark ? CHART_PALETTE_DARK : CHART_PALETTE_LIGHT;
+  return {
+    driver_too_far_long_wait: p[4],
+    booked_by_mistake: p[3],
+    found_another_ride: p[0],
+    pickup_location_wrong: p[2],
+    changed_plans: p[1],
+    scheduled_pre_dispatch: isDark ? "#6B7280" : "#9CA3AF",
+    other_free_text: isDark ? "#52525B" : "#9CA3AF",
+    unspecified: isDark ? "#4B5563" : "#D1D5DB",
+  };
+}
 
 /** Rendered in place of a chart whose request failed. Deliberately distinct
  *  from the empty state: "we don't know" and "there were none" are different
@@ -180,6 +215,7 @@ function AnalyticsPageInner() {
   const isDark = resolvedTheme === "dark";
   const c = useMemo(() => chartColors(isDark), [isDark]);
   const REASON_COLORS = useMemo(() => reasonColors(isDark), [isDark]);
+  const RIDER_REASON_COLORS = useMemo(() => riderReasonColors(isDark), [isDark]);
 
   // Buckets are America/Regina business time (migration 350), not UTC nor the
   // viewer's browser zone. Label it — a bare "14:00" is ambiguous, and it was
@@ -268,6 +304,8 @@ function AnalyticsPageInner() {
 
   const { sorted: sortedReasons, sort: reasonSort, toggle: toggleReason } =
     useTableSort<any>(cancellations?.reasons || []);
+  const { sorted: sortedRiderReasons, sort: riderReasonSort, toggle: toggleRiderReason } =
+    useTableSort<any>(cancellations?.rider_reasons || []);
   // Driver rows arrive already sorted + paged by the server — see fetchDrivers.
   const driverRows: any[] = driverRates?.drivers || [];
 
@@ -581,6 +619,52 @@ function AnalyticsPageInner() {
                   ))}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+
+          {/* Rider Cancellation Reasons — what riders actually picked in
+              CancelReasonSheet.tsx, scoped to rows attributed to the rider.
+              Separate from the table above: that one says WHO cancelled,
+              this one says WHY a rider did (migration 410). */}
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Rider Cancellation Reasons ({cancellations?.total_rider_cancellations || 0} total)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {cancelError ? (
+                <SectionError onRetry={fetchCore} />
+              ) : sortedRiderReasons.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  No rider cancellations in this period
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <SortableHead column="reason" sort={riderReasonSort} onSort={toggleRiderReason}>Reason</SortableHead>
+                      <SortableHead column="count" sort={riderReasonSort} onSort={toggleRiderReason} align="right">Count</SortableHead>
+                      <SortableHead column="pct" sort={riderReasonSort} onSort={toggleRiderReason} align="right">Percentage</SortableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedRiderReasons.map((r: any) => (
+                      <TableRow key={r.reason}>
+                        <TableCell className="flex items-center gap-2">
+                          <div
+                            className="w-3 h-3 rounded-full"
+                            style={{ backgroundColor: RIDER_REASON_COLORS[r.reason] || "#9CA3AF" }}
+                          />
+                          {RIDER_REASON_LABELS[r.reason] || r.reason}
+                        </TableCell>
+                        <TableCell className="font-mono">{r.count}</TableCell>
+                        <TableCell>{r.pct}%</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -1,6 +1,12 @@
 import { create } from 'zustand';
 import { showToast } from './toastStore';
-import api, { SpinrApiError, hasAuthToken, getApiErrorMessage } from '@shared/api/client';
+import api, {
+  SpinrApiError,
+  hasAuthToken,
+  getApiErrorMessage,
+  extractError,
+  type ApiErrorBody,
+} from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import { dropoffLikelyMisresolved } from '@shared/utils/bookingDistanceGuard';
 import type { SOSTriggerResult } from '@shared/types/safety';
@@ -802,7 +808,22 @@ export const useRideStore = create<RideState>((set, get) => ({
       return ride;
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'createRide' });
-      set({ isLoading: false, error: getApiErrorMessage(error, 'Failed to create ride') });
+      // B9: the backend rejects a booking whose typed address doesn't match
+      // the pinned map location (ADDRESS_COORDINATE_MISMATCH check). That's a
+      // rider mistake, not a system failure — give a retry prompt instead of
+      // the raw "Pickup address and location don't match: ..." server string.
+      const responseData = (error as { response?: { data?: ApiErrorBody; status?: number } } | null)?.response;
+      const { detailCode } = extractError(responseData?.data, responseData?.status);
+      const addressMismatchMessage: Record<string, string> = {
+        PICKUP_ADDRESS_MISMATCH:
+          "We couldn't confirm your pickup address matches the map pin. Please double-check the pickup location and try again.",
+        DROPOFF_ADDRESS_MISMATCH:
+          "We couldn't confirm your dropoff address matches the map pin. Please double-check the dropoff location and try again.",
+      };
+      const message =
+        (detailCode && addressMismatchMessage[detailCode]) ||
+        getApiErrorMessage(error, 'Failed to create ride');
+      set({ isLoading: false, error: message });
       throw error;
     }
   },

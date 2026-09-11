@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface LostFoundCase {
   id: string;
@@ -169,17 +170,17 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
     },
-    back: { padding: 4 },
+    back: { padding: SPACING.xs },
     title: { fontSize: 18, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },
-    emptyTitle: { fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACING.xl, gap: 12 },
+    emptyTitle: { fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     emptyHint: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
-    list: { padding: 16, gap: 12 },
+    list: { padding: SPACING.md, gap: 12 },
     card: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -201,12 +202,12 @@ function createStyles(colors: ThemeColors) {
     cardRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     description: {
       flex: 1,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
-    statusPill: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2 },
-    statusText: { fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold' },
-    meta: { fontSize: 13, color: colors.textDim },
+    statusPill: { borderRadius: 8, paddingHorizontal: SPACING.sm, paddingVertical: 2 },
+    statusText: { fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold' },
+    meta: { fontSize: FONT.bodySm, color: colors.textDim },
   });
 }

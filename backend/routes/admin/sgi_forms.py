@@ -59,6 +59,18 @@ router = APIRouter()
 _SGI_AUTHORITY = "SGI"
 
 
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as every other PII-export/import
+    router in this package does.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every sibling super_admin-class router uses, so
+    the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="SGI compliance forms require super_admin")
+
+
 def _out_of_scope_drivers(driver_rows: list[dict]) -> list[dict]:
     """Drivers whose `regulatory_authority` is not exactly `_SGI_AUTHORITY`
     — this now includes NULL/missing. ACTION_ITEMS.md B13 (round 2, 2026-08-22):
@@ -122,6 +134,7 @@ async def generate_sgi_form(
     """Fill the requested SGI form for the given drivers and return the PDF
     directly (small file, single request/response — no Storage upload needed
     unlike the ZIP/CSV export, which can be much larger)."""
+    _require_super_admin(admin)
     max_rows = sgi_form_filler.FORM_MAX_ROWS[body.form_type]
     if not body.driver_ids:
         raise HTTPException(status_code=400, detail="No drivers selected")
@@ -258,6 +271,7 @@ async def sgi_removal_queue(
     to match what the generate endpoint and the rest of the Data Transfer
     module take as `driver_ids`.
     """
+    _require_super_admin(admin)
     rows = await db_supabase.get_rows(
         "drivers",
         {"regulator_removal_required": True},
@@ -329,6 +343,7 @@ async def download_sgi_supporting_documents(
     SlowAPI requires a parameter named ``request`` typed as starlette
     Request; do not remove it.
     """
+    _require_super_admin(admin)
     if not body.driver_ids:
         raise HTTPException(status_code=400, detail="No drivers selected")
     if len(body.driver_ids) > MAX_DOCUMENT_BUNDLE_DRIVERS:
@@ -499,6 +514,7 @@ async def download_sgi_submission_package(
     because a regulator-facing document should be exactly what the driver
     submitted.
     """
+    _require_super_admin(admin)
     if not body.driver_ids:
         raise HTTPException(status_code=400, detail="No drivers selected")
     if len(body.driver_ids) > MAX_DOCUMENT_BUNDLE_DRIVERS:

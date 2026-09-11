@@ -12,7 +12,7 @@ visible page.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 try:
     from ... import db_supabase
@@ -28,6 +28,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_PAGE_SIZE = 200
+
+
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as every other PII-export/import
+    router in this package does.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every sibling super_admin-class router uses, so
+    the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Data Transfer search requires super_admin")
 
 
 def _text_filter(q: str, table: str) -> dict:
@@ -119,6 +131,7 @@ async def search_entities(
     """Search users (optionally scoped to drivers or riders) by fuzzy text +
     date range. Returns the current page plus a total_count for "select all
     matching filter" in the UI."""
+    _require_super_admin(admin)
     offset = (page - 1) * page_size
 
     if entity_type == "driver":

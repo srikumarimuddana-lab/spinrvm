@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Text, TouchableOpacity, View, StyleSheet, useWindowDimensions } from 'react-native';
+import { TouchableOpacity, View, StyleSheet, useWindowDimensions } from 'react-native';
+import { Text } from '@shared/components/Text';
 import BottomSheet, { BottomSheetView, BottomSheetBackdrop, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Default rider-facing cancellation reasons. The last entry is treated as the
 // "free text only" option, but a note can be added alongside any reason.
@@ -172,9 +174,9 @@ function createStyles(colors: ThemeColors) {
       elevation: 20,
     },
     handle: { backgroundColor: colors.border, width: 40 },
-    content: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 36 },
+    content: { paddingHorizontal: SPACING.lg, paddingTop: SPACING.sm, paddingBottom: 36 },
     title: { fontSize: 19, fontWeight: '700', color: colors.text, marginBottom: 6 },
-    message: { fontSize: 13, color: colors.textSecondary, lineHeight: 18, marginBottom: 12 },
+    message: { fontSize: FONT.bodySm, color: colors.textSecondary, lineHeight: 18, marginBottom: 12 },
     list: { gap: 4, marginBottom: 12 },
     row: {
       flexDirection: 'row',
@@ -186,7 +188,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceLight,
     },
     rowActive: { backgroundColor: colors.primary + '18' },
-    rowText: { fontSize: 15, color: colors.textSecondary, flex: 1 },
+    rowText: { fontSize: FONT.bodyMd, color: colors.textSecondary, flex: 1 },
     note: {
       borderWidth: 1,
       borderColor: colors.border,
@@ -195,11 +197,11 @@ function createStyles(colors: ThemeColors) {
       minHeight: 56,
       color: colors.text,
       fontSize: 14,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
       textAlignVertical: 'top',
     },
-    button: { width: '100%', paddingVertical: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-    buttonText: { fontSize: 16, fontWeight: '600', color: '#fff' },
+    button: { width: '100%', paddingVertical: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: SPACING.sm },
+    buttonText: { fontSize: FONT.bodyLg, fontWeight: '600', color: '#fff' },
     destructiveButton: { backgroundColor: colors.error },
     cancelButton: { backgroundColor: colors.surfaceLight },
     cancelButtonText: { color: colors.textSecondary },

@@ -73,6 +73,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as tax_id_import.py/stripe_import.py do.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every other SIN-writing route in this package
+    uses, so the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Legacy SIN/DOB backfill requires super_admin")
+
+
 # Guardrails for a synchronous request handler, one per uploaded file. The
 # real export's banks.csv/drivers.csv are small (hundreds of rows) — these
 # leave real headroom without letting a runaway upload block the event loop.
@@ -160,6 +172,7 @@ async def validate_legacy_sin_dob_backfill(
     sha256(banks_bytes + b"|" + drivers_bytes), admin.id) — /commit requires
     it, same gap-#45-shaped guarantee as the other admin import routes.
     """
+    _require_super_admin(admin)
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     bank_rows, driver_rows, csv_sha256 = await _read_csv_pair(banks_csv, drivers_csv)
     plan = await _build_plan(bank_rows, driver_rows)
@@ -185,6 +198,7 @@ async def commit_legacy_sin_dob_backfill(
     means either validate was never called or a file changed since, and is
     refused before any plan-building or writes happen.
     """
+    _require_super_admin(admin)
     batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     bank_rows, driver_rows, csv_sha256 = await _read_csv_pair(banks_csv, drivers_csv)
     try:

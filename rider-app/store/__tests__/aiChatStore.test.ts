@@ -283,6 +283,23 @@ describe('sendMessage', () => {
     expect(messages.every((m) => m.kind !== 'text' || m.content.length > 0)).toBe(true);
   });
 
+  // AI17/F3: conversation_busy and not_found used to fall through to the
+  // generic default message (still safe — never the raw backend string —
+  // but not the tailored text every other named code gets).
+  it('maps conversation_busy to a wait-and-retry message, not the generic default', async () => {
+    scriptStream([], 'conversation_busy');
+    await useAiChatStore.getState().sendMessage('hello');
+    const { messages } = useAiChatStore.getState();
+    expect(messages[1].content).toContain('Still working on your last message');
+  });
+
+  it('maps not_found to a start-a-new-conversation message, not the generic default', async () => {
+    scriptStream([], 'not_found');
+    await useAiChatStore.getState().sendMessage('hello');
+    const { messages } = useAiChatStore.getState();
+    expect(messages[1].content).toContain('start a new one');
+  });
+
   it('drops the assistant bubble entirely when the stream dies before any output', async () => {
     mockStream.mockImplementation(async () => undefined); // no events at all
     await useAiChatStore.getState().sendMessage('hello');

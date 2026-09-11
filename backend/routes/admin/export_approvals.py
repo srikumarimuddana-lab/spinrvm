@@ -28,6 +28,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as every other PII-export/import
+    router in this package does.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every sibling super_admin-class router uses, so
+    the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Export approvals require super_admin")
+
+
 class DecisionRequest(BaseModel):
     decision_note: str = Field("", max_length=500)
 
@@ -36,6 +48,7 @@ class DecisionRequest(BaseModel):
 @export_approvals_list_limit
 async def list_pending_export_approvals(request: Request, admin: dict = Depends(get_admin_user)):
     """The approval queue -- oldest pending request first."""
+    _require_super_admin(admin)
     return await approvals.list_pending()
 
 
@@ -47,6 +60,7 @@ async def approve_export_request(
     body: DecisionRequest,
     admin: dict = Depends(get_admin_user),
 ):
+    _require_super_admin(admin)
     try:
         result = await approvals.approve(request_id, decided_by=admin["id"], decision_note=body.decision_note or None)
     except approvals.RequestNotFound as e:
@@ -74,6 +88,7 @@ async def deny_export_request(
     body: DecisionRequest,
     admin: dict = Depends(get_admin_user),
 ):
+    _require_super_admin(admin)
     try:
         result = await approvals.deny(request_id, decided_by=admin["id"], decision_note=body.decision_note or None)
     except approvals.RequestNotFound as e:

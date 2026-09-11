@@ -35,7 +35,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { RiderSOS } from '../components/RiderSOS';
 import { CarMarker } from '@shared/components/CarMarker';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
-import { useResponsive } from '@shared/utils/responsive';
+import { useResponsive, SPACING, FONT } from '@shared/utils/responsive';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useTranslation } from '../i18n';
@@ -817,7 +817,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     floatingHeader: {
       position: 'absolute', left: 0, right: 0, zIndex: 20,
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
     },
     floatingBtn: {
       width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFF',
@@ -826,7 +826,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     },
     etaPill: {
       flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
-      paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24,
+      paddingHorizontal: SPACING.md, paddingVertical: 10, borderRadius: 24,
       shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6, elevation: 6,
     },
     greenDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success, marginRight: 8 },
@@ -843,7 +843,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     },
 
     // ── Searching state ──
-    searchingSection: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 },
+    searchingSection: { alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, paddingBottom: SPACING.sm },
     pulseRing: {
       position: 'absolute', top: 10, width: 80, height: 80, borderRadius: 40,
       backgroundColor: colors.primary + '20',
@@ -851,7 +851,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     searchingIcon: {
       width: 64, height: 64, borderRadius: 32,
       backgroundColor: colors.primary + '15',
-      justifyContent: 'center', alignItems: 'center', marginBottom: 16,
+      justifyContent: 'center', alignItems: 'center', marginBottom: SPACING.md,
     },
     searchingTitle: {
       fontSize: sf(20), fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, marginBottom: 6,
@@ -860,8 +860,8 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       fontSize: sf(14), fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginBottom: 20, textAlign: 'center',
     },
     cancelSearchBtn: {
-      paddingVertical: 14, paddingHorizontal: 32, borderRadius: 28,
-      borderWidth: 1.5, borderColor: colors.border, marginTop: 8,
+      paddingVertical: 14, paddingHorizontal: SPACING.xl, borderRadius: 28,
+      borderWidth: 1.5, borderColor: colors.border, marginTop: SPACING.sm,
     },
     cancelSearchText: {
       fontSize: sf(15), fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
@@ -869,7 +869,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
 
     // ── Driver card ──
     shareBanner: {
-      flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginTop: 12, marginBottom: 12,
+      flexDirection: 'row', alignItems: 'center', marginHorizontal: SPACING.md, marginTop: 12, marginBottom: 12,
       backgroundColor: '#FFF5F5', padding: 14, borderRadius: 14, borderWidth: 1, borderColor: '#FFE0E0', gap: 12,
     },
     shareBannerIcon: {
@@ -880,8 +880,8 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     shareBannerSub: { fontSize: sf(12), fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 1 },
 
     driverCard: {
-      marginHorizontal: 16, marginBottom: 12, backgroundColor: colors.surfaceLight,
-      borderRadius: 16, padding: 16,
+      marginHorizontal: SPACING.md, marginBottom: 12, backgroundColor: colors.surfaceLight,
+      borderRadius: 16, padding: SPACING.md,
     },
     driverCardHeader: {
       flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12,
@@ -918,7 +918,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
 
     // ── PIN ──
     pinCard: {
-      marginHorizontal: 16, marginBottom: 12, padding: 16, alignItems: 'center',
+      marginHorizontal: SPACING.md, marginBottom: 12, padding: SPACING.md, alignItems: 'center',
       backgroundColor: colors.surface, borderRadius: 16, borderWidth: 1, borderColor: '#EEE',
       shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 2,
     },
@@ -931,7 +931,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     pinDigit: { fontSize: sf(26), fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
 
     // ── Action buttons ──
-    actionRow: { flexDirection: 'row', gap: 10, marginHorizontal: 16, marginBottom: 14 },
+    actionRow: { flexDirection: 'row', gap: 10, marginHorizontal: SPACING.md, marginBottom: 14 },
     actionBtnPrimary: {
       flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
       backgroundColor: colors.primary, paddingVertical: 14, borderRadius: 28, gap: 8,
@@ -944,7 +944,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
 
     // ── Trip summary ──
     tripSummary: {
-      flexDirection: 'row', marginHorizontal: 16, marginBottom: 14, paddingVertical: 12,
+      flexDirection: 'row', marginHorizontal: SPACING.md, marginBottom: 14, paddingVertical: 12,
       paddingHorizontal: 14, backgroundColor: colors.surfaceLight, borderRadius: 14, gap: 12,
     },
     tripDotLine: { alignItems: 'center', paddingTop: 2 },
@@ -955,11 +955,11 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     // ── Dev ──
     devBar: {
       flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
-      marginHorizontal: 16, marginTop: 8, padding: 10,
+      marginHorizontal: SPACING.md, marginTop: SPACING.sm, padding: 10,
       backgroundColor: '#FEF3C7', borderRadius: 10, borderWidth: 1, borderColor: colors.warning,
     },
-    devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E' },
+    devLabel: { fontSize: FONT.label, fontWeight: '700', color: '#92400E' },
     devBtn: { backgroundColor: colors.warning, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
-    devBtnText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
+    devBtnText: { fontSize: FONT.label, fontWeight: '700', color: '#FFF' },
   });
 }

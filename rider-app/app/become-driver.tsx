@@ -35,6 +35,7 @@ import {
   isVehicleDetailsValid,
   getMissingDriverDocuments,
 } from '../utils/becomeDriverSchema';
+import { FONT } from '@shared/utils/responsive';
 
 const DRIVER_APP_SCHEME = 'spinr-driver://';
 const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id0000000000';
@@ -486,15 +487,15 @@ function createStyles(colors: ThemeColors) {
     title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
     stepIndicator: { color: colors.textDim, fontSize: 14 },
     scrollContent: { padding: 20, paddingBottom: 50 },
-    sectionTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: colors.text },
-    subtitle: { fontSize: 16, color: colors.textDim, marginBottom: 20, lineHeight: 22 },
+    sectionTitle: { fontSize: FONT.h3, fontWeight: 'bold', marginBottom: 15, color: colors.text },
+    subtitle: { fontSize: FONT.bodyLg, color: colors.textDim, marginBottom: 20, lineHeight: 22 },
 
     inputGroup: { marginBottom: 15 },
     label: { fontSize: 14, fontWeight: '600', marginBottom: 5, color: colors.textSecondary },
     subLabel: { fontSize: 12, color: colors.textDim, marginBottom: 5 },
     input: {
       borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 12,
-      fontSize: 16, color: colors.text, fontFamily: 'PlusJakartaSans'
+      fontSize: FONT.bodyLg, color: colors.text, fontFamily: 'PlusJakartaSans'
     },
     dateInput: {
       borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10,
@@ -535,6 +536,6 @@ function createStyles(colors: ThemeColors) {
     downloadLinkText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
 
     reviewCard: { padding: 20, backgroundColor: colors.surfaceLight, borderRadius: 12 },
-    reviewRow: { fontSize: 16, marginBottom: 10 }
+    reviewRow: { fontSize: FONT.bodyLg, marginBottom: 10 }
   });
 }

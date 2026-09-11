@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -12,6 +11,7 @@ import {
   ScrollView,
   Image,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -22,6 +22,7 @@ import { useLanguageStore } from '../store/languageStore';
 import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Written by otp.tsx on every successful authentication (new or returning).
 // Exported so otp.tsx's write uses one literal rather than its own copy.
@@ -344,8 +345,8 @@ function createStyles(colors: ThemeColors) {
     },
     topStrip: {
       backgroundColor: colors.surface,
-      paddingHorizontal: 24,
-      paddingBottom: 8,
+      paddingHorizontal: SPACING.lg,
+      paddingBottom: SPACING.sm,
     },
     brandRow: {
       flexDirection: 'row',
@@ -359,7 +360,7 @@ function createStyles(colors: ThemeColors) {
     driverBadge: {
       backgroundColor: `${colors.primary}14`,
       paddingHorizontal: 10,
-      paddingVertical: 4,
+      paddingVertical: SPACING.xs,
       borderRadius: 8,
     },
     driverBadgeText: {
@@ -372,16 +373,16 @@ function createStyles(colors: ThemeColors) {
     },
     content: {
       flexGrow: 1,
-      paddingHorizontal: 24,
+      paddingHorizontal: SPACING.lg,
       justifyContent: 'center',
     },
     welcomeSection: {
       marginBottom: 36,
     },
     greeting: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       color: colors.textDim,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
       fontWeight: '500',
     },
     title: {
@@ -389,22 +390,22 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '800',
       color: colors.text,
       letterSpacing: -0.5,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     subtitle: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       color: colors.textDim,
       lineHeight: 22,
     },
     inputSection: {
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
     inputLabel: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '700',
       color: colors.textDim,
       letterSpacing: 1,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     inputContainer: {
       flexDirection: 'row',
@@ -434,7 +435,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 20,
     },
     countryCode: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '600',
       color: colors.text,
     },
@@ -460,10 +461,10 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       gap: 6,
       marginTop: 10,
-      paddingHorizontal: 4,
+      paddingHorizontal: SPACING.xs,
     },
     devHint: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       color: colors.primary,
       fontWeight: '500',
     },
@@ -495,7 +496,7 @@ function createStyles(colors: ThemeColors) {
     },
     buttonText: {
       color: '#fff',
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '700',
     },
     buttonTextInactive: {
@@ -512,7 +513,7 @@ function createStyles(colors: ThemeColors) {
       color: colors.textDim,
     },
     terms: {
-      paddingHorizontal: 24,
+      paddingHorizontal: SPACING.lg,
       alignItems: 'center',
     },
     termsText: {

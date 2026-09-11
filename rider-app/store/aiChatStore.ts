@@ -110,10 +110,25 @@ export async function deviceLocation(): Promise<{ lat: number; lng: number } | n
   }
 }
 
+// AI17/F3: every `code` the backend's streamChat 'error' event can carry
+// (see backend/ai/orchestrator.py's `yield "error", {"code": ...}` sites)
+// must have an entry here — the lookup below never falls back to the raw
+// `event.data.message`, so an unmapped future code gets `default` instead
+// of a possibly-technical backend string leaking to the rider.
 const ERROR_MESSAGES: Record<string, string> = {
   ai_disabled: 'The AI assistant is currently unavailable.',
   daily_cap: "You've reached today's AI assistant limit — try again tomorrow.",
   not_authenticated: 'Please sign in again to use the AI assistant.',
+  // orchestrator.py: another reply for this conversation is already
+  // in-flight (e.g. a double send) — rider should just wait, not retry hard.
+  conversation_busy: "Still working on your last message — give it a moment before sending another.",
+  // orchestrator.py: the conversation id no longer resolves (deleted,
+  // expired, or not this rider's) — nothing to recover, only a fresh one.
+  not_found: "This conversation isn't available anymore — start a new one to keep chatting.",
+  // Matches orchestrator.py's GENERIC_ERROR_MESSAGE wording verbatim so this
+  // fix doesn't change what the rider already sees for these two codes.
+  ai_misconfigured: 'Something went wrong on our side — please try again in a moment.',
+  provider_error: 'Something went wrong on our side — please try again in a moment.',
   default: "I'm having trouble right now — please try again in a moment.",
 };
 
@@ -139,7 +154,7 @@ interface AiChatState {
 
   loadConfig: () => Promise<void>;
   loadHistory: () => Promise<void>;
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, displayText?: string) => Promise<void>;
   /** Return leg of the "Drop a pin" card: sends the confirmed map pin back
    * into the chat as a user message carrying exact [lat,lng] coordinates
    * (the bracketed format the model is instructed to pass through verbatim,
@@ -212,15 +227,19 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
     }
   },
 
-  sendMessage: async (text: string) => {
+  sendMessage: async (text: string, displayText?: string) => {
     const trimmed = text.trim();
     if (!trimmed || get().isStreaming) return;
 
+    // AI17/F2: `content` stays the full text the model needs (e.g. a
+    // quote-tap's "(vehicle id <uuid>)") — only `displayContent`, if given,
+    // changes what the bubble renders. streamChat below still sends `trimmed`.
     const userMessage: AiChatMessage = {
       id: newId(),
       role: 'user',
       kind: 'text',
       content: trimmed,
+      displayContent: displayText?.trim() || undefined,
       createdAt: Date.now(),
     };
     const assistantId = newId();
@@ -293,7 +312,9 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
           break;
         }
         case 'error':
-          appendToAssistant(ERROR_MESSAGES[event.data.code] ?? event.data.message ?? ERROR_MESSAGES.default);
+          // Never fall back to the raw event.data.message — an unmapped code
+          // must resolve to a known, rider-safe string, not backend text.
+          appendToAssistant(ERROR_MESSAGES[event.data.code] ?? ERROR_MESSAGES.default);
           break;
         case 'done':
           break;

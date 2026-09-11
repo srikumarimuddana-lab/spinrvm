@@ -26,6 +26,7 @@ const ROUTES = [
   '/dashboard/forecast',
   '/dashboard/heatmap',
   '/dashboard/monitoring',
+  '/dashboard/monitoring/dispatch-geo',
   '/dashboard/monitoring/redis',
   '/dashboard/notifications',
   '/dashboard/promotions',

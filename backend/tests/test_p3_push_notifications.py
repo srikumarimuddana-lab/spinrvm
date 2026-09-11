@@ -495,6 +495,139 @@ class TestNativePushDelivery:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# C97 recommendation #3: a real spinr_push_send_total{outcome=...} delivery
+# metric, since none existed before this fix — see
+# docs/change-log/2026-09-11-push-send-outcome-metric.md.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _outcome_count(outcome: str) -> int:
+    from backend.utils import metrics
+
+    key = (("outcome", outcome),)
+    return metrics.snapshot()["counters"].get("spinr_push_send_total", {}).get(key, 0)
+
+
+@pytest.mark.asyncio
+class TestPushSendOutcomeMetric:
+    """Pins _record_push_outcome, called from every _deliver_push_now /
+    _send_expo_push return point (backend/features.py)."""
+
+    async def test_successful_fcm_delivery_increments_success_outcome(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_messaging = MagicMock()
+        mock_messaging.send = MagicMock(return_value="projects/spinr/messages/ok")
+        mock_firebase = MagicMock()
+        mock_firebase.messaging = mock_messaging
+        user_row = {"id": USER_ID, "fcm_token": "fcm-token-abc"}
+
+        before = _outcome_count("success")
+        with (
+            patch.dict(sys.modules, {"firebase_admin": mock_firebase, "firebase_admin.messaging": mock_messaging}),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(user_id=USER_ID, title="Test", body="Test body")
+            await asyncio.sleep(0)
+
+        assert result is True
+        assert _outcome_count("success") == before + 1
+
+    async def test_stale_fcm_token_increments_stale_token_outcome(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_firebase = MagicMock()
+        mock_messaging = MagicMock()
+
+        class _FakeNotFoundError(Exception):
+            pass
+
+        mock_firebase.exceptions.NotFoundError = _FakeNotFoundError
+        mock_messaging.send = MagicMock(side_effect=_FakeNotFoundError("stale token"))
+        mock_firebase.messaging = mock_messaging
+        user_row = {"id": USER_ID, "fcm_token": "fcm-token-stale"}
+
+        before = _outcome_count("stale_token")
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "firebase_admin": mock_firebase,
+                    "firebase_admin.messaging": mock_messaging,
+                    "firebase_admin.exceptions": mock_firebase.exceptions,
+                },
+            ),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features.db.update_one", AsyncMock(return_value=None)),
+            patch("backend.features.db_supabase.get_rows", AsyncMock(return_value=[])),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(user_id=USER_ID, title="Test", body="Test body")
+            await asyncio.sleep(0)
+
+        assert result is False
+        assert _outcome_count("stale_token") == before + 1
+
+    async def test_generic_fcm_failure_increments_failed_outcome(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_firebase = MagicMock()
+        mock_messaging = MagicMock()
+        mock_messaging.send = MagicMock(side_effect=RuntimeError("FCM outage"))
+        mock_firebase.messaging = mock_messaging
+        # A real (unrelated) exception type so the NotFoundError except clause
+        # doesn't accidentally catch this generic failure.
+        mock_firebase.exceptions.NotFoundError = type("NotFoundError", (Exception,), {})
+        user_row = {"id": USER_ID, "fcm_token": "fcm-token-broken"}
+
+        before = _outcome_count("failed")
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "firebase_admin": mock_firebase,
+                    "firebase_admin.messaging": mock_messaging,
+                    "firebase_admin.exceptions": mock_firebase.exceptions,
+                },
+            ),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(user_id=USER_ID, title="Test", body="Test body")
+            await asyncio.sleep(0)
+
+        assert result is False
+        assert _outcome_count("failed") == before + 1
+
+    async def test_expo_success_increments_success_outcome(self):
+        from unittest.mock import AsyncMock as _AM
+        from unittest.mock import MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"data": {"status": "ok"}}
+        mock_client = MagicMock()
+        mock_client.post = _AM(return_value=mock_resp)
+        mock_client.__aenter__ = _AM(return_value=mock_client)
+        mock_client.__aexit__ = _AM(return_value=False)
+
+        before = _outcome_count("success")
+        with patch("httpx.AsyncClient", MagicMock(return_value=mock_client)):
+            from backend.features import _send_expo_push
+
+            result = await _send_expo_push("ExponentPushToken[abc]", "Test", "Test body")
+
+        assert result is True
+        assert _outcome_count("success") == before + 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Quiet-hours + daily-cap throttling (utils/notification_throttle.py), wired
 # into send_push_notification behind notification_throttling_enabled
 # (defaults False — migration 304). get_app_settings and should_throttle are

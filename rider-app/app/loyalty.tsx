@@ -1,14 +1,16 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList,
+  View, StyleSheet, TouchableOpacity, FlatList,
   ActivityIndicator, RefreshControl,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface LoyaltyData {
   points: number;
@@ -277,36 +279,36 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12,
+      paddingHorizontal: SPACING.md, paddingVertical: 12,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    list: { padding: 16, paddingBottom: 32 },
+    list: { padding: SPACING.md, paddingBottom: 32 },
 
     // Tier card
     tierCard: {
       backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 20, marginBottom: 12,
     },
-    tierTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
+    tierTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: SPACING.md },
     tierBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 5,
-      paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, alignSelf: 'flex-start', marginBottom: 10,
+      paddingHorizontal: 10, paddingVertical: SPACING.xs, borderRadius: 20, alignSelf: 'flex-start', marginBottom: 10,
     },
-    tierBadgeText: { fontSize: 13, fontWeight: '700', letterSpacing: 0.3 },
+    tierBadgeText: { fontSize: FONT.bodySm, fontWeight: '700', letterSpacing: 0.3 },
     tierPointsLabel: { fontSize: 12, color: colors.textDim, marginBottom: 2 },
     tierPointsValue: { fontSize: 36, fontWeight: '800', letterSpacing: -1 },
     multiplierBox: {
       alignItems: 'center',
-      backgroundColor: colors.surface, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 10,
+      backgroundColor: colors.surface, borderRadius: 14, paddingHorizontal: SPACING.md, paddingVertical: 10,
     },
     multiplierValue: { fontSize: 22, fontWeight: '800', color: colors.text },
-    multiplierLabel: { fontSize: 11, color: colors.textDim, marginTop: 2 },
+    multiplierLabel: { fontSize: FONT.label, color: colors.textDim, marginTop: 2 },
 
-    progressSection: { marginTop: 4 },
+    progressSection: { marginTop: SPACING.xs },
     progressLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-    progressLabel: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+    progressLabel: { fontSize: FONT.label, fontWeight: '600', color: colors.textDim },
     progressTrack: {
       height: 8, backgroundColor: colors.border, borderRadius: 4, overflow: 'hidden', marginBottom: 6,
     },
@@ -324,7 +326,7 @@ function createStyles(colors: ThemeColors) {
     infoLabel: { fontSize: 10, color: colors.textDim, textAlign: 'center' },
 
     sectionTitle: {
-      fontSize: 13, fontWeight: '700', color: colors.textDim,
+      fontSize: FONT.bodySm, fontWeight: '700', color: colors.textDim,
       letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 10,
     },
 
@@ -338,14 +340,14 @@ function createStyles(colors: ThemeColors) {
     },
     historyContent: { flex: 1 },
     historyDesc: { fontSize: 14, fontWeight: '500', color: colors.text, marginBottom: 2 },
-    historyDate: { fontSize: 11, color: colors.textDim },
-    historyPoints: { fontSize: 14, fontWeight: '700', marginLeft: 8 },
+    historyDate: { fontSize: FONT.label, color: colors.textDim },
+    historyPoints: { fontSize: 14, fontWeight: '700', marginLeft: SPACING.sm },
 
     empty: { alignItems: 'center', paddingVertical: 40 },
     emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 12 },
-    emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center' },
+    emptySub: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.xs, textAlign: 'center' },
     retryBtn: {
-      marginTop: 16,
+      marginTop: SPACING.md,
       paddingHorizontal: 20,
       paddingVertical: 10,
       borderRadius: 20,

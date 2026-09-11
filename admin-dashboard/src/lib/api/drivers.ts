@@ -26,6 +26,11 @@ export const getDrivers = (opts: {
     /** true = pre-launch-flagged drivers only, false = hide flagged, omitted = no filter.
      * See services/pre_launch_flag_service.py for what "flagged" means. */
     pre_launch?: boolean;
+    /** true = dormancy-flagged drivers only, false = hide flagged, omitted = no filter.
+     * See services/driver_dormancy_service.py for what "flagged" means and the two tiers. */
+    dormant?: boolean;
+    /** Narrows `dormant: true` to one tier ("dormant" | "long_dormant"); ignored otherwise. */
+    dormancy_tier?: string;
     /** true = real driver profiles only, false = only the abandoned-legacy-onboarding
      * shells, omitted = no filter. See services/driver_import_service.py's
      * is_incomplete_onboarding_row for why those rows exist. */
@@ -51,6 +56,8 @@ export const getDrivers = (opts: {
     if (opts.missing_license != null) sp.set("missing_license", String(opts.missing_license));
     if (opts.legacy_import != null) sp.set("legacy_import", String(opts.legacy_import));
     if (opts.pre_launch != null) sp.set("pre_launch", String(opts.pre_launch));
+    if (opts.dormant != null) sp.set("dormant", String(opts.dormant));
+    if (opts.dormancy_tier) sp.set("dormancy_tier", opts.dormancy_tier);
     if (opts.onboarding_complete != null) sp.set("onboarding_complete", String(opts.onboarding_complete));
     if (opts.legacy_review != null) sp.set("legacy_review", String(opts.legacy_review));
     if (opts.sort_by) sp.set("sort_by", opts.sort_by);

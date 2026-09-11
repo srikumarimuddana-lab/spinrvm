@@ -88,3 +88,18 @@ def test_requires_super_admin(test_client, staff_admin_override):
 def test_requires_admin_auth(test_client):
     resp = test_client.get("/api/admin/migration-status")
     assert resp.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_rejects_non_super_admin_even_if_mount_is_bypassed():
+    """Admin RBAC audit finding W2: this router is mounted require_super_admin
+    but had no independent per-handler check. Direct call (skipping FastAPI's
+    dependency injection) proves the new _require_super_admin() guard fires
+    on its own."""
+    from fastapi import HTTPException
+
+    from backend.routes.admin.migration_status import admin_get_migration_status
+
+    with pytest.raises(HTTPException) as exc_info:
+        await admin_get_migration_status(admin={"id": "admin_2", "role": "admin"})
+    assert exc_info.value.status_code == 403

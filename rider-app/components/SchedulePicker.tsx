@@ -1,11 +1,13 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Pressable,
+  View, StyleSheet, TouchableOpacity, Pressable,
   ScrollView, Animated, Dimensions,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
 
 const { height: SCREEN_H } = Dimensions.get('window');
@@ -345,9 +347,9 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
-      paddingBottom: 8,
-      paddingTop: 4,
+      paddingHorizontal: SPACING.md,
+      paddingBottom: SPACING.sm,
+      paddingTop: SPACING.xs,
     },
     iconBtn: {
       width: 36, height: 36,
@@ -355,30 +357,30 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center', alignItems: 'center',
     },
     title: { fontSize: 17, fontWeight: '700' },
-    scrollContent: { paddingBottom: 8 },
+    scrollContent: { paddingBottom: SPACING.sm },
 
     // Month nav
     monthRow: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       marginBottom: 10,
     },
     monthTitle: { fontSize: 17, fontWeight: '700' },
 
     // Week labels
-    weekRow: { flexDirection: 'row', paddingHorizontal: 8, marginBottom: 2 },
+    weekRow: { flexDirection: 'row', paddingHorizontal: SPACING.sm, marginBottom: 2 },
     weekLabel: {
       flex: 1, textAlign: 'center',
-      fontSize: 11, fontWeight: '700',
+      fontSize: FONT.label, fontWeight: '700',
       textTransform: 'uppercase',
       letterSpacing: 0.4,
-      paddingVertical: 4,
+      paddingVertical: SPACING.xs,
     },
 
     // Grid
-    gridWrap: { paddingHorizontal: 8 },
+    gridWrap: { paddingHorizontal: SPACING.sm },
     gridRow: { flexDirection: 'row' },
     dayCell: {
       flex: 1,
@@ -391,14 +393,14 @@ function createStyles(colors: ThemeColors) {
     dayText: { fontSize: 14, fontWeight: '500' },
 
     // Divider
-    divider: { height: StyleSheet.hairlineWidth, marginHorizontal: 16, marginTop: 16, marginBottom: 14 },
+    divider: { height: StyleSheet.hairlineWidth, marginHorizontal: SPACING.md, marginTop: SPACING.md, marginBottom: 14 },
 
     // Section label
     sectionLabel: {
-      fontSize: 11, fontWeight: '700',
+      fontSize: FONT.label, fontWeight: '700',
       textTransform: 'uppercase',
       letterSpacing: 0.6,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       marginBottom: 10,
     },
 
@@ -406,9 +408,9 @@ function createStyles(colors: ThemeColors) {
     timeRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       gap: 10,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
 
     // Hour spinner card
@@ -420,10 +422,10 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1.5,
       minWidth: 60,
     },
-    stepBtn: { paddingVertical: 4, paddingHorizontal: 8 },
+    stepBtn: { paddingVertical: SPACING.xs, paddingHorizontal: SPACING.sm },
     spinnerNum: { fontSize: 30, fontWeight: '800', lineHeight: 40, letterSpacing: -0.5 },
     spinnerLabel: { fontSize: 9, fontWeight: '700', letterSpacing: 0.5, marginTop: 2 },
-    colon: { fontSize: 26, fontWeight: '800', marginBottom: 12 },
+    colon: { fontSize: FONT.h2, fontWeight: '800', marginBottom: 12 },
 
     // Minute pills
     minuteGroup: {
@@ -436,12 +438,12 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
       alignItems: 'center',
       justifyContent: 'center',
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       borderRadius: 12,
       borderWidth: 1.5,
       minWidth: 38,
     },
-    minPillText: { fontSize: 15, fontWeight: '800', lineHeight: 18 },
+    minPillText: { fontSize: FONT.bodyMd, fontWeight: '800', lineHeight: 18 },
     minPillLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 0.4, marginTop: 1 },
 
     // AM / PM card
@@ -463,9 +465,9 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
-      marginHorizontal: 16,
+      marginHorizontal: SPACING.md,
       paddingVertical: 13,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       borderRadius: 14,
     },
     previewText: { fontSize: 14, fontWeight: '600', flex: 1 },
@@ -473,7 +475,7 @@ function createStyles(colors: ThemeColors) {
     // Footer + confirm
     footer: {
       borderTopWidth: StyleSheet.hairlineWidth,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingTop: 12,
       paddingBottom: 30,
     },
@@ -485,6 +487,6 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 17,
       borderRadius: 18,
     },
-    confirmText: { fontSize: 16, fontWeight: '700', color: '#FFF', letterSpacing: 0.2 },
+    confirmText: { fontSize: FONT.bodyLg, fontWeight: '700', color: '#FFF', letterSpacing: 0.2 },
   });
 }

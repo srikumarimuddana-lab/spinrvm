@@ -19,6 +19,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface Message {
   id: string;
@@ -308,13 +309,13 @@ function createStyles(colors: ThemeColors) {
       borderBottomColor: colors.border,
     },
     backButton: {
-      padding: 4,
+      padding: SPACING.xs,
     },
     driverHeader: {
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
-      marginLeft: 8,
+      marginLeft: SPACING.sm,
     },
     driverAvatar: {
       width: 44,
@@ -350,7 +351,7 @@ function createStyles(colors: ThemeColors) {
       color: colors.text,
     },
     vehicleInfo: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
     },
@@ -376,19 +377,19 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
     },
     messagesContent: {
-      padding: 16,
-      paddingBottom: 8,
+      padding: SPACING.md,
+      paddingBottom: SPACING.sm,
     },
     systemMessage: {
       alignSelf: 'center',
       backgroundColor: '#E8E8E8',
-      paddingHorizontal: 16,
-      paddingVertical: 8,
+      paddingHorizontal: SPACING.md,
+      paddingVertical: SPACING.sm,
       borderRadius: 16,
       marginBottom: 20,
     },
     systemMessageText: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
     },
@@ -407,11 +408,11 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: '#D4E4B4',
       justifyContent: 'center',
       alignItems: 'center',
-      marginRight: 8,
+      marginRight: SPACING.sm,
     },
     messageBubble: {
       maxWidth: 280,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       borderRadius: 20,
     },
@@ -424,7 +425,7 @@ function createStyles(colors: ThemeColors) {
       borderBottomLeftRadius: 6,
     },
     messageText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.text,
       lineHeight: 22,
@@ -433,7 +434,7 @@ function createStyles(colors: ThemeColors) {
       color: '#FFF',
     },
     messageTime: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
       marginTop: 4,
@@ -451,13 +452,13 @@ function createStyles(colors: ThemeColors) {
     },
     quickReplies: {
       flexDirection: 'row',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       gap: 8,
     },
     quickReplyButton: {
       backgroundColor: colors.surface,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 10,
       borderRadius: 20,
       borderWidth: 1,
@@ -498,12 +499,12 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
       backgroundColor: colors.surfaceLight,
       borderRadius: 24,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 10,
       maxHeight: 120,
     },
     textInput: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.text,
       maxHeight: 100,

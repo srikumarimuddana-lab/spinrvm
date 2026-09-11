@@ -537,6 +537,92 @@ class TestAreaTaxJustification:
         assert result["gst_rate"] == 5.0
 
 
+class TestPricingRouterModuleGating:
+    """Admin portal RBAC/security audit finding B2
+    (docs/audit/2026-09-10-admin-portal-security-rbac-audit.md): the
+    `pricing_router` fee-CRUD/driver-area routes were reachable by ANY admin
+    JWT with no module check and no audit log, unlike their UI-wired twins in
+    routes/admin/service_areas.py and routes/admin/drivers.py. Exercised via
+    a real HTTP request (not a direct function call) since the fix is a
+    route-level `dependencies=[Depends(require_module(...))]` addition,
+    which only runs on the actual FastAPI request path."""
+
+    @pytest.fixture(autouse=True)
+    def _client(self):
+        from backend.server import app
+        from dependencies import get_admin_user
+
+        self.app = app
+        self.get_admin_user = get_admin_user
+        yield
+        app.dependency_overrides.pop(get_admin_user, None)
+
+    def _override(self, **admin_fields):
+        self.app.dependency_overrides[self.get_admin_user] = lambda: {
+            "id": "admin-1",
+            "email": "admin@spinr.ca",
+            **admin_fields,
+        }
+
+    def test_create_fee_forbidden_without_service_areas_module(self, test_client):
+        self._override(role="admin", modules=["support"])
+        resp = test_client.post("/api/v1/areas/area-1/fees", json={"fee_name": "Airport surcharge"})
+        assert resp.status_code == 403, resp.text
+
+    def test_update_fee_forbidden_without_service_areas_module(self, test_client):
+        self._override(role="admin", modules=["support"])
+        resp = test_client.put("/api/v1/areas/area-1/fees/fee-1", json={"amount": 5.0})
+        assert resp.status_code == 403, resp.text
+
+    def test_delete_fee_forbidden_without_service_areas_module(self, test_client):
+        self._override(role="admin", modules=["support"])
+        resp = test_client.delete("/api/v1/areas/area-1/fees/fee-1")
+        assert resp.status_code == 403, resp.text
+
+    def test_assign_driver_area_forbidden_without_drivers_module(self, test_client):
+        self._override(role="admin", modules=["service_areas"])
+        resp = test_client.put("/api/v1/drivers/driver-1/area?service_area_id=area-1")
+        assert resp.status_code == 403, resp.text
+
+    def test_create_fee_succeeds_and_audits_with_service_areas_module(self, test_client):
+        self._override(role="admin", modules=["service_areas"])
+        log_admin_action = AsyncMock()
+        with (
+            patch("backend.features.db_supabase.get_rows", AsyncMock(return_value=[{"id": "area-1"}])),
+            patch("backend.features.db_supabase.insert_one", AsyncMock()),
+            patch("backend.features.log_admin_action", log_admin_action),
+        ):
+            resp = test_client.post("/api/v1/areas/area-1/fees", json={"fee_name": "Airport surcharge"})
+        assert resp.status_code == 200, resp.text
+        log_admin_action.assert_awaited_once()
+        assert log_admin_action.call_args.args[1] == "area_fee_created"
+
+    def test_assign_driver_area_succeeds_and_audits_with_drivers_module(self, test_client):
+        self._override(role="admin", modules=["drivers"])
+        log_admin_action = AsyncMock()
+        with (
+            patch(
+                "backend.features.db_supabase.get_rows", AsyncMock(return_value=[{"id": "area-1", "name": "Downtown"}])
+            ),
+            patch("backend.features.db_supabase.update_one", AsyncMock()),
+            patch("backend.features.log_admin_action", log_admin_action),
+        ):
+            resp = test_client.put("/api/v1/drivers/driver-1/area?service_area_id=area-1")
+        assert resp.status_code == 200, resp.text
+        log_admin_action.assert_awaited_once()
+        assert log_admin_action.call_args.args[1] == "driver_area_assigned"
+
+    def test_super_admin_bypasses_module_check(self, test_client):
+        self._override(role="super_admin")
+        with (
+            patch("backend.features.db_supabase.get_rows", AsyncMock(return_value=[{"id": "area-1"}])),
+            patch("backend.features.db_supabase.delete_one", AsyncMock()),
+            patch("backend.features.log_admin_action", AsyncMock()),
+        ):
+            resp = test_client.delete("/api/v1/areas/area-1/fees/fee-1")
+        assert resp.status_code == 200, resp.text
+
+
 class TestSavedAddresses:
     """Tests for saved addresses functionality."""
 

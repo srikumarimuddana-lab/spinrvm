@@ -1,10 +1,12 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface ScreenHeaderProps {
   title: string;
@@ -53,12 +55,12 @@ export function ScreenHeader({ title, subtitle, onBack, rightAction, children }:
 }
 
 const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: 16, paddingBottom: 18, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  wrap: { paddingHorizontal: SPACING.md, paddingBottom: 18, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
   row: { flexDirection: 'row', alignItems: 'center' },
   back: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
   title: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: '#fff' },
   right: { minWidth: 40, alignItems: 'flex-end' },
-  subtitle: { color: 'rgba(255,255,255,0.9)', fontSize: 13, lineHeight: 19, marginTop: 8, textAlign: 'center' },
+  subtitle: { color: 'rgba(255,255,255,0.9)', fontSize: FONT.bodySm, lineHeight: 19, marginTop: SPACING.sm, textAlign: 'center' },
 });
 
 export default ScreenHeader;

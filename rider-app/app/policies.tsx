@@ -1,11 +1,13 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { LEGAL_DOC_TITLES, legalDocTypesForAudience, type LegalDocType } from '@shared/config/legalDocs';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // One entry point for every rider-facing legal/policy page (see
 // shared/config/legalDocs.ts), navigating to legal.tsx?type=<slug> for
@@ -80,13 +82,13 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 20,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
             backgroundColor: colors.surface,
         },
         backButton: {
-            padding: 8,
+            padding: SPACING.sm,
             marginLeft: -8,
         },
         headerTitle: {
@@ -102,7 +104,7 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
         },
         contentContainer: {
-            padding: 16,
+            padding: SPACING.md,
             paddingBottom: 40,
         },
         card: {
@@ -113,7 +115,7 @@ function createStyles(colors: ThemeColors) {
         row: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
             paddingVertical: 14,
             gap: 12,
         },
@@ -125,7 +127,7 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
         },
         rowTitle: {
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '500',
             color: colors.text,
         },

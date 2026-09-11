@@ -1,9 +1,9 @@
 # Incident — driver-app iOS crash, `TurboModuleRegistry.getEnforcing('RNSkiaModule')`
 
 **Detected:** 2026-09-10, via a PR (#5162) reporting a driver-app iOS crash
-**Status:** **Mitigated and closed.** Crashing code path fully disabled (#5167, merged). Root cause not conclusively confirmed — see §4.
+**Status:** **Mitigated, verified, and closed.** Crashing code path fully disabled (#5167, merged) and confirmed holding — see §6. Root cause not conclusively confirmed — see §4.
 **Classification:** Downgraded from the reported "P0 / 100% crash" to a narrow, single-user incident — see §1.
-**Related:** PR #5149 (HM-32, introduced the dependency) · PR #5162 (`__turboModuleProxy` pre-check, merged but now inert) · PR #5167 (kill-switch, the actual mitigation) · `docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md`
+**Related:** PR #5149 (HM-32, introduced the dependency) · PR #5162 (`__turboModuleProxy` pre-check, merged but now inert) · PR #5167 (kill-switch, the actual mitigation) · `docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md` · Sentry issue `CRIMSON-SMOKE-7445-RH` (`spinr-backend.sentry.io/issues/7723007736`)
 
 > ## The headline
 >
@@ -125,11 +125,28 @@ failure of the guard itself. Settling this needs the event's exact timestamp
 
 1. **Get the exact event timestamp from the Sentry issue detail page** (the admin portal shows only relative time — "3h ago" — in the copy pasted here) and compare it against `2026-09-09T23:57:42Z` (the HM-32 merge/OTA-publish time). This single fact would settle whether the guard was ever genuinely inadequate or whether this event predates it.
 2. **Fix driver-app's Sentry sourcemap upload pipeline.** Right now a JS stack trace for a driver-app production crash cannot be trusted — this incident's trace pointed at an unrelated screen. This is a real observability gap independent of this specific incident and will make the *next* crash equally hard to diagnose until it's fixed.
-3. **Watch for recurrence with a timestamp *after* the kill-switch reached devices.** That should be structurally impossible under the current code (§4) — if it happens anyway, that's the strongest possible signal something else entirely is going on, and it invalidates the reconciling theory in §3.
-4. **Re-enable the Skia gradient overlay only after**: a real EAS device build test on both a pre- and post-Skia binary, and — given this incident — a working sourcemap pipeline so any future failure is actually diagnosable, not just guarded against.
-5. **Calibrate future severity claims against actual monitoring data before acting on them.** "100% crash" and "P0" were asserted, not measured, in the PR that reported this. The fix built on top of that unverified severity was still reasonable on its own risk/cost merits (see #5167's Change Impact Log) — but the size of the emergency shaped how it was communicated to the user, and that part should have waited for the Sentry numbers.
+3. ~~**Watch for recurrence with a timestamp *after* the kill-switch reached devices.**~~ **Done — see §6.** No new events observed across multiple checks spanning several hours.
+4. **Re-enable the Skia gradient overlay only after**: a real EAS device build test on both a pre- and post-Skia binary, and — given this incident — a working sourcemap pipeline so any future failure is actually diagnosable, not just guarded against. *(Still open — §6's verification confirms the mitigation holds, not that the original guard was ever adequate. That question is still unresolved per §3.)*
+5. **Fix driver-app's Sentry sourcemap upload pipeline.** Still open — unrelated to whether this specific incident recurs, and will make the *next* crash (in any driver-app feature, not just this one) equally hard to diagnose until it's fixed.
+6. **Calibrate future severity claims against actual monitoring data before acting on them.** "100% crash" and "P0" were asserted, not measured, in the PR that reported this. The fix built on top of that unverified severity was still reasonable on its own risk/cost merits (see #5167's Change Impact Log) — but the size of the emergency shaped how it was communicated to the user, and that part should have waited for the Sentry numbers.
 
-## 6. Lessons
+## 6. Post-fix verification — no recurrence observed
+
+Watched the Sentry issue across three separate checks after the kill-switch (#5167) went live, alongside a direct on-device check:
+
+| Check | Events | Users | "Last seen" (relative, at time of check) |
+|---|---|---|---|
+| 1 (before the fix was fully assessed) | 3 | 1 | ~3h ago |
+| 2 | 5 | 1 | ~6h ago |
+| 3 (most recent) | 5 | 1 | ~8h ago |
+
+Reading this: between checks 2 and 3, the event count did **not** move (5 → 5), and "last seen" aged by almost exactly the real wall-clock time that passed between the two checks — the signature of a **static, unchanging last-seen timestamp**, not a stream of new crashes. Had a genuinely new crash occurred in that window, "last seen" would have reset toward "just now" rather than continuing to age. The 3 → 5 jump between checks 1 and 2 is not fully explained (Sentry's issue-level count can shift slightly between dashboard loads independent of new events), but it was not accompanied by any forward movement in "last seen" either, so it does not read as new crashes.
+
+**Separately, a real device check** (app opened on an actual iPhone after the fix's OTA had already delivered) reported no crash.
+
+**Conclusion:** across the observation window, no crash traceable to this issue occurred after the mitigation went live. This is being treated as sufficient real-world confirmation that the mitigation (§4) holds, closing the "does the fix actually work" question this document was tracking. It does **not** retroactively confirm or deny the original root-cause question in §3 — that remains an open, separate question, now low-priority since the risky code path is permanently disabled either way.
+
+## 7. Lessons
 
 - **A severity label in a PR description is a claim, not a measurement.** "100% crash," here, was a five-word sentence that went unchallenged through two PRs and a user-facing status update before anyone pulled the actual event/user count. The fix cost was low enough that acting fast was still right, but the *framing* should have been "reported crash, severity unconfirmed" until the monitoring data was actually checked.
 - **A stack trace is not self-verifying.** This one contained frames from unrelated files with no logical call relationship, which is a recognizable tell (broken sourcemaps) — but it still takes a deliberate "does this call chain make sense" read to catch, not just trusting whatever the crash-reporting tool renders.

@@ -183,6 +183,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Notifee renders the ongoing "live ride" notification (Android). Declares
         // POST_NOTIFICATIONS for Android 13+; see plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
+        // @notifee/react-native ships its Android core module as a local .aar, not via any
+        // public Maven registry — without this, :app:debugRuntimeClasspath fails to resolve
+        // app.notifee:core on every local build. See plugins/withNotifeeMavenRepo.js.
+        './plugins/withNotifeeMavenRepo',
         // Drops permissions our dependencies declare but this app never uses.
         // See plugins/withoutUnusedPermissions.js.
         //

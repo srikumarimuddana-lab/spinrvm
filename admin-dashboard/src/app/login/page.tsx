@@ -59,7 +59,14 @@ function LoginForm() {
         // broken session — auth succeeded but the session cannot be persisted.
         const cookieRes = await fetch('/api/auth/set-cookie', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                // set-cookie/route.ts requires the double-submit CSRF token
+                // (W6, 2026-09-10 RBAC audit) — data.csrf_token is the same
+                // value the login/mfa-challenge response just set into the
+                // spinr_admin_csrf cookie.
+                'X-CSRF-Token': data.csrf_token || '',
+            },
             body: JSON.stringify({ token: data.token }),
         });
         if (!cookieRes.ok) {

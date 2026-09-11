@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
+  View, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +11,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface Promo {
   promo_id: string;
@@ -154,26 +156,26 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     list: { padding: 20 },
 
-    inputSection: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingVertical: 16 },
+    inputSection: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingVertical: SPACING.md },
     input: {
-      flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14,
-      fontSize: 16, fontWeight: '600', color: colors.text, letterSpacing: 1,
+      flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 14, paddingHorizontal: SPACING.md, paddingVertical: 14,
+      fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, letterSpacing: 1,
     },
-    applyBtn: { backgroundColor: colors.primary, borderRadius: 14, paddingHorizontal: 24, justifyContent: 'center' },
+    applyBtn: { backgroundColor: colors.primary, borderRadius: 14, paddingHorizontal: SPACING.lg, justifyContent: 'center' },
     applyText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 
-    sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: 12 },
+    sectionTitle: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: 12 },
 
     promoCard: {
       flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.surfaceLight, borderRadius: 16, padding: 16, marginBottom: 12,
+      backgroundColor: colors.surfaceLight, borderRadius: 16, padding: SPACING.md, marginBottom: 12,
       borderLeftWidth: 4, borderLeftColor: colors.primary,
     },
     promoLeft: { marginRight: 14 },
@@ -181,15 +183,15 @@ function createStyles(colors: ThemeColors) {
       width: 44, height: 44, borderRadius: 12, backgroundColor: colors.dangerBg,
       justifyContent: 'center', alignItems: 'center',
     },
-    codeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-    promoCode: { fontSize: 16, fontWeight: '800', color: colors.text, letterSpacing: 1 },
-    discountBadge: { backgroundColor: colors.successBg, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+    codeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: SPACING.xs },
+    promoCode: { fontSize: FONT.bodyLg, fontWeight: '800', color: colors.text, letterSpacing: 1 },
+    discountBadge: { backgroundColor: colors.successBg, paddingHorizontal: SPACING.sm, paddingVertical: 2, borderRadius: 6 },
     discountText: { fontSize: 12, fontWeight: '700', color: colors.success },
-    promoDesc: { fontSize: 13, color: colors.textDim, marginBottom: 2 },
-    promoExpiry: { fontSize: 11, color: colors.textDim },
+    promoDesc: { fontSize: FONT.bodySm, color: colors.textDim, marginBottom: 2 },
+    promoExpiry: { fontSize: FONT.label, color: colors.textDim },
 
     empty: { alignItems: 'center', paddingVertical: 40 },
     emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 12 },
-    emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center' },
+    emptySub: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.xs, textAlign: 'center' },
   });
 }

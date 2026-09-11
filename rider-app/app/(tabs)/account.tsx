@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
@@ -10,6 +9,7 @@ import {
   Alert,
   Modal,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,6 +20,7 @@ import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { useWorkProfileStore } from '../../store/workProfileStore';
 
 const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
@@ -406,7 +407,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.2, shadowRadius: 20,
     elevation: 10, zIndex: 10,
   },
-  avatarContainer: { position: 'relative', marginBottom: 16, marginTop: 10 },
+  avatarContainer: { position: 'relative', marginBottom: SPACING.md, marginTop: 10 },
   avatar: {
     width: 100, height: 100, borderRadius: 50,
     borderWidth: 4, borderColor: '#fff',
@@ -420,9 +421,9 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   photoViewerClose: { position: 'absolute', top: 56, right: 20 },
   signOutButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    alignSelf: 'center', gap: 8, paddingVertical: 14, marginTop: 4,
+    alignSelf: 'center', gap: 8, paddingVertical: 14, marginTop: SPACING.xs,
   },
-  signOutText: { fontSize: 15, fontWeight: '700', color: colors.error },
+  signOutText: { fontSize: FONT.bodyMd, fontWeight: '700', color: colors.error },
   avatarPlaceholder: {
     width: 100, height: 100, borderRadius: 50,
     justifyContent: 'center', alignItems: 'center',
@@ -442,28 +443,28 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 4,
   },
-  name: { color: '#fff', fontSize: 26, fontWeight: '900', letterSpacing: 0.5 },
+  name: { color: '#fff', fontSize: FONT.h2, fontWeight: '900', letterSpacing: 0.5 },
   subtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 2, fontWeight: '500' },
   ratingHeroContainer: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16,
-    marginTop: 20, paddingVertical: 12, paddingHorizontal: 24,
+    marginTop: 20, paddingVertical: 12, paddingHorizontal: SPACING.lg,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)',
   },
   ratingBox: { alignItems: 'center', paddingHorizontal: 12 },
   ratingDivider: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.3)', marginHorizontal: 12 },
-  ratingNumber: { color: '#fff', fontSize: 22, fontWeight: '900' },
-  ratingLabel: { color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: '600', marginTop: 2, letterSpacing: 1 },
-  starsRow: { flexDirection: 'row', marginTop: 4, gap: 2 },
+  ratingNumber: { color: '#fff', fontSize: FONT.h3, fontWeight: '900' },
+  ratingLabel: { color: 'rgba(255,255,255,0.8)', fontSize: FONT.label, fontWeight: '600', marginTop: 2, letterSpacing: 1 },
+  starsRow: { flexDirection: 'row', marginTop: SPACING.xs, gap: 2 },
   contentBody: { paddingTop: 10 },
-  section: { paddingHorizontal: 16, marginTop: 20 },
+  section: { paddingHorizontal: SPACING.md, marginTop: 20 },
   sectionHeaderRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    marginBottom: 12, paddingHorizontal: 4,
+    marginBottom: 12, paddingHorizontal: SPACING.xs,
   },
   sectionTitle: {
     color: colors.text, fontSize: 18, fontWeight: '800', letterSpacing: 0.2,
-    marginBottom: 12, paddingHorizontal: 4,
+    marginBottom: 12, paddingHorizontal: SPACING.xs,
   },
   editBtn: {
     backgroundColor: colors.surface, paddingHorizontal: 12, paddingVertical: 6,
@@ -472,7 +473,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   editBtnText: { color: colors.textDim, fontSize: 12, fontWeight: '700' },
   card: {
     backgroundColor: colors.surface, borderRadius: 24,
-    paddingHorizontal: 16, paddingVertical: 8,
+    paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
     borderWidth: 1, borderColor: 'rgba(0,0,0,0.02)',
     shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.04, shadowRadius: 16, elevation: 3,
   },
@@ -480,8 +481,8 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   cardDivider: { height: 1, backgroundColor: colors.surfaceLight, marginLeft: 50 },
   iconBox: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   cardInfo: { flex: 1 },
-  cardLabel: { color: colors.textDim, fontSize: 11, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
-  cardValue: { color: colors.text, fontSize: 15, fontWeight: '700', marginTop: 2 },
+  cardLabel: { color: colors.textDim, fontSize: FONT.label, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
+  cardValue: { color: colors.text, fontSize: FONT.bodyMd, fontWeight: '700', marginTop: 2 },
   emailVerifiedPill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: 'rgba(16, 185, 129, 0.1)', borderRadius: 12,
@@ -495,13 +496,13 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   emailVerifyPillText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   actionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 14 },
   actionContent: { flex: 1 },
-  actionText: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },
+  actionText: { flex: 1, color: colors.text, fontSize: FONT.bodyMd, fontWeight: '600' },
   actionSubtitle: { color: colors.textDim, fontSize: 12, fontWeight: '500', marginTop: 2 },
-  badge: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginRight: 8 },
+  badge: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: SPACING.sm, paddingVertical: 2, marginRight: SPACING.sm },
   badgeText: { fontSize: 10, fontWeight: '700', color: colors.surface },
   companySection: {
-    marginHorizontal: 16, marginTop: 24, marginBottom: 40, paddingTop: 16, alignItems: 'center',
+    marginHorizontal: SPACING.md, marginTop: SPACING.lg, marginBottom: 40, paddingTop: SPACING.md, alignItems: 'center',
   },
-  companyName: { color: colors.textDim, fontSize: 13, fontWeight: '700', marginBottom: 6 },
-  companyLine: { color: colors.textDim, fontSize: 11, marginTop: 2, textAlign: 'center' },
+  companyName: { color: colors.textDim, fontSize: FONT.bodySm, fontWeight: '700', marginBottom: 6 },
+  companyLine: { color: colors.textDim, fontSize: FONT.label, marginTop: 2, textAlign: 'center' },
 }); }

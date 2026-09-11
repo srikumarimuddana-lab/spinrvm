@@ -720,12 +720,18 @@ async def create_ride(
     if not _pickup_ok:
         raise HTTPException(
             status_code=400,
-            detail=f"Pickup address and location don't match: {_pickup_mismatch_reason}",
+            detail={
+                "code": "PICKUP_ADDRESS_MISMATCH",
+                "message": f"Pickup address and location don't match: {_pickup_mismatch_reason}",
+            },
         )
     if not _dropoff_ok:
         raise HTTPException(
             status_code=400,
-            detail=f"Dropoff address and location don't match: {_dropoff_mismatch_reason}",
+            detail={
+                "code": "DROPOFF_ADDRESS_MISMATCH",
+                "message": f"Dropoff address and location don't match: {_dropoff_mismatch_reason}",
+            },
         )
 
     # Vehicle types are also needed by fare building — fetch once, reuse.

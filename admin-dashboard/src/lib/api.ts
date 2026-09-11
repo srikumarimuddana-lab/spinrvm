@@ -279,6 +279,8 @@ export {
     adminCommitWalletImport,
     adminPreviewPreLaunchFlag,
     adminCommitPreLaunchFlag,
+    adminPreviewDriverDormancy,
+    adminCommitDriverDormancy,
     adminPreviewDataQualityScan,
     adminCommitDataQualityScan,
     adminPreviewDriverRepair,
@@ -336,6 +338,10 @@ export type {
     PreLaunchFlagReport,
     PreLaunchFlagCommitResult,
     PreLaunchFlagOptions,
+    DriverDormancyCounts,
+    DriverDormancyReport,
+    DriverDormancyCommitResult,
+    DriverDormancyOptions,
     DataQualityScanCounts,
     DataQualityScanReport,
     DataQualityScanCommitResult,
@@ -551,6 +557,8 @@ export {
     getRedisConnectivity,
     getInfrastructureStats,
     flushRedisPrefix,
+    getDispatchGeoStatus,
+    rebuildDispatchGeoIndex,
 } from "./api/live-monitoring";
 export type {
     AdminPlaceBias,
@@ -562,6 +570,11 @@ export type {
     InfrastructureStats,
     WebsocketHealth,
     RedisConnectivityProbe,
+    DispatchGeoProvider,
+    DispatchGeoEvent,
+    DispatchGeoLastServed,
+    DispatchGeoStatus,
+    DispatchGeoRebuildResult,
 } from "./api/live-monitoring";
 export {
     getDocumentRequirements,

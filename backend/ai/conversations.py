@@ -17,10 +17,17 @@ from typing import Any, Dict, List, Optional
 
 try:
     from .. import db_supabase
+    from ..utils.redis_client import redis_delete
 except ImportError:
     import db_supabase
+    from utils.redis_client import redis_delete
 
 logger = logging.getLogger(__name__)
+
+# Mirrors tools_booking.py's `_quote_pin_key` format. Not imported from there
+# to avoid coupling this module to the booking-tools module for one string;
+# the format is a stable, tested contract (see AI17/F5 change-log).
+_QUOTE_PIN_KEY_FMT = "ai:quote:{conversation_id}"
 
 _TITLE_MAX = 60
 
@@ -165,4 +172,14 @@ async def delete_conversation(conversation_id: str, user_id: str) -> bool:
     # the FK cascade when RLS service-role applies, so be explicit.
     await db_supabase.delete_many("ai_messages", {"conversation_id": conversation_id})
     await db_supabase.delete_one("ai_conversations", {"id": conversation_id})
+    # AI17/F5: a priced-quote pin (backend/ai/tools_booking.py's _pin_quote)
+    # can outlive the conversation it was quoted in by up to its 15-minute
+    # TTL. If this conversation_id is ever reused, load_pinned_quote() would
+    # hand the orchestrator a stale, already-deleted trip as bookable
+    # "LAST QUOTE" context. Best-effort, matching _pin_quote's own contract:
+    # a failed cleanup must never fail the delete itself.
+    try:
+        await redis_delete(_QUOTE_PIN_KEY_FMT.format(conversation_id=conversation_id))
+    except Exception:
+        logger.error("ai quote pin cleanup failed", exc_info=True, extra={"conversation_id": conversation_id})
     return True

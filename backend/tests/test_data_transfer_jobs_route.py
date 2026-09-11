@@ -128,3 +128,18 @@ class TestDownloadLink:
         ):
             resp = admin_client.get("/api/admin/data-transfer/jobs/job-1/download")
         assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_rejects_non_super_admin_even_if_mount_is_bypassed():
+    """Admin RBAC audit finding W2: this router is mounted require_super_admin
+    but had no independent per-handler check. Direct call (skipping FastAPI's
+    dependency injection) proves the new _require_super_admin() guard fires
+    on its own."""
+    from fastapi import HTTPException
+
+    from backend.routes.admin.data_transfer_jobs import list_data_transfer_jobs
+
+    with pytest.raises(HTTPException) as exc_info:
+        await list_data_transfer_jobs(request=None, admin={"id": "admin-2", "role": "admin"})
+    assert exc_info.value.status_code == 403

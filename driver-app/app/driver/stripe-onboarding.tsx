@@ -21,7 +21,8 @@
  * (d) surfaces HTTP / network / connect.js errors instead of swallowing them.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,6 +40,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { useDriverMe } from '@shared/hooks/queries';
 import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const EMBEDDED_URL = `${SpinrConfig.backendUrl}/api/v1/drivers/stripe-embedded`;
 // Restrict top-level navigation to our API origin + Stripe (defence-in-depth
@@ -282,17 +284,17 @@ export default function StripeOnboardingScreen() {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    header: { paddingBottom: 12, paddingHorizontal: 16 },
+    header: { paddingBottom: 12, paddingHorizontal: SPACING.md },
     headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     headerTitle: { fontSize: 18, fontWeight: '700' },
     backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACING.lg },
     overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
     loadingText: { marginTop: 12, fontSize: 14 },
     errText: { marginTop: 12, fontSize: 14, textAlign: 'center', lineHeight: 20 },
     debugBar: { borderTopWidth: 1, paddingHorizontal: 12, paddingTop: 6 },
-    debugLabel: { fontSize: 11, textAlign: 'center', marginTop: 8 },
-    debugUrl: { fontSize: 11, textAlign: 'center', marginTop: 2 },
-    retryBtn: { marginTop: 18, paddingHorizontal: 32, paddingVertical: 12, borderRadius: 12 },
-    retryText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+    debugLabel: { fontSize: FONT.label, textAlign: 'center', marginTop: SPACING.sm },
+    debugUrl: { fontSize: FONT.label, textAlign: 'center', marginTop: 2 },
+    retryBtn: { marginTop: 18, paddingHorizontal: SPACING.xl, paddingVertical: 12, borderRadius: 12 },
+    retryText: { color: '#fff', fontSize: FONT.bodyMd, fontWeight: '700' },
 });

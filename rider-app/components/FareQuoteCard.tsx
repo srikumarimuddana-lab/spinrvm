@@ -8,13 +8,15 @@
  * proposal card.
  */
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiAction, FareQuoteOption } from '@shared/types/ai';
 import { Card } from '@shared/components/Card';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 
@@ -88,6 +90,10 @@ export default function FareQuoteCard({ quote, onSelect, disabled }: Props) {
       {quote.quotes.map((option, index) => {
         const hasSavings = !!option.promo_savings && option.final_total !== option.total;
         const surge = option.surge_multiplier ?? 1;
+        // AI17/F4: absent/undefined means available — only an explicit
+        // `false` (set by the backend when the show-unavailable flag is on)
+        // marks an option as priced-but-not-currently-bookable.
+        const isUnavailable = option.available === false;
         const optionMeta = [
           option.eta_minutes != null
             ? `${option.eta_minutes} min${option.closest_driver_km != null ? ` (${option.closest_driver_km} km)` : ''} away`
@@ -99,16 +105,24 @@ export default function FareQuoteCard({ quote, onSelect, disabled }: Props) {
         return (
           <TouchableOpacity
             key={option.vehicle_type_id ?? `${option.vehicle_type}-${index}`}
-            style={styles.option}
+            style={[styles.option, isUnavailable && styles.optionUnavailable]}
             onPress={() => onSelect(option)}
-            disabled={disabled}
+            disabled={disabled || isUnavailable}
             accessibilityRole="button"
-            accessibilityLabel={`Book ${option.vehicle_type ?? 'this option'} for $${option.final_total}`}
+            accessibilityLabel={
+              isUnavailable
+                ? `${option.vehicle_type ?? 'This option'}, $${option.final_total} — no drivers nearby right now, not bookable`
+                : `Book ${option.vehicle_type ?? 'this option'} for $${option.final_total}`
+            }
           >
             <View style={styles.optionCopy}>
               <Text style={styles.vehicleName}>{option.vehicle_type ?? 'Ride'}</Text>
-              {optionMeta ? <Text style={styles.optionMeta}>{optionMeta}</Text> : null}
-              {hasSavings ? (
+              {isUnavailable ? (
+                <Text style={styles.noPromoText}>No drivers nearby</Text>
+              ) : optionMeta ? (
+                <Text style={styles.optionMeta}>{optionMeta}</Text>
+              ) : null}
+              {isUnavailable ? null : hasSavings ? (
                 <View style={styles.savingsPill}>
                   <Ionicons name="pricetag-outline" size={11} color={colors.success} />
                   <Text style={styles.savingsText}>
@@ -163,15 +177,19 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: 10,
       backgroundColor: colors.surfaceLight,
     },
+    // AI17/F4: same dim level as staleCard — a priced-but-unbookable option
+    // (no drivers online), distinct from the whole-card "conversation moved
+    // on" staleness above.
+    optionUnavailable: { opacity: 0.45 },
     optionCopy: { flex: 1, gap: 3 },
     vehicleName: { fontSize: 14, fontWeight: '700', color: colors.text },
     optionMeta: { fontSize: 12, color: colors.textDim },
     savingsPill: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-    savingsText: { fontSize: 11, fontWeight: '600', color: colors.success },
-    noPromoText: { fontSize: 11, color: colors.textDim, marginTop: 2 },
+    savingsText: { fontSize: FONT.label, fontWeight: '600', color: colors.success },
+    noPromoText: { fontSize: FONT.label, color: colors.textDim, marginTop: 2 },
     breakdownWrap: {
       gap: 4,
-      paddingTop: 8,
+      paddingTop: SPACING.sm,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
     },
@@ -180,10 +198,10 @@ const createStyles = (colors: ThemeColors) =>
     breakdownLabel: { flex: 1, fontSize: 12, color: colors.textDim },
     breakdownAmount: { fontSize: 12, color: colors.text },
     breakdownSavings: { fontSize: 12, fontWeight: '600', color: colors.success },
-    breakdownTotal: { fontSize: 13, fontWeight: '700', color: colors.text },
+    breakdownTotal: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.text },
     priceCol: { alignItems: 'flex-end', gap: 1 },
     strikePrice: { fontSize: 12, color: colors.textDim, textDecorationLine: 'line-through' },
-    finalPrice: { fontSize: 16, fontWeight: '700', color: colors.text },
-    surgeText: { fontSize: 11, fontWeight: '600', color: colors.warning },
-    fineprint: { fontSize: 11, color: colors.textDim, textAlign: 'center' },
+    finalPrice: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text },
+    surgeText: { fontSize: FONT.label, fontWeight: '600', color: colors.warning },
+    fineprint: { fontSize: FONT.label, color: colors.textDim, textAlign: 'center' },
   });

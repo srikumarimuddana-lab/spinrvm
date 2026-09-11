@@ -105,7 +105,7 @@
           },
           {
             "type": "command",
-            "command": "bash -c 'cd backend && python3 -m pip install -q -r requirements.txt 2>/dev/null && echo \"backend deps ok\" || echo \"backend pip install skipped (no venv?)\"'"
+            "command": "bash -c 'cd backend && python3 -m pip install -q --ignore-installed -r requirements.txt 2>/dev/null && echo \"backend deps ok\" || echo \"backend pip install failed — run without 2>/dev/null to see why\"'"
           },
           {
             "type": "command",
@@ -118,6 +118,10 @@
           {
             "type": "command",
             "command": "bash -c 'cd admin-dashboard && npm ci --silent && echo \"admin deps ok\"'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'cd shared && npm ci --silent && echo \"shared deps ok\"'"
           }
         ]
       }
@@ -141,12 +145,6 @@
     ]
   },
   "extraKnownMarketplaces": {
-    "karpathy-skills": {
-      "source": {
-        "source": "github",
-        "repo": "forrestchang/andrej-karpathy-skills"
-      }
-    },
     "claude-plugins-official": {
       "source": {
         "source": "github",
@@ -155,7 +153,6 @@
     }
   },
   "enabledPlugins": {
-    "andrej-karpathy-skills@karpathy-skills@2c60614": true,
     "feature-dev@claude-plugins-official@3ea32df": true
   }
 }

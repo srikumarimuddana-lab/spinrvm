@@ -34,12 +34,21 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
 import { Bot, Car, LifeBuoy, MapPin, MessageSquarePlus, Send, ShieldAlert, Tag, User as UserIcon } from "lucide-react";
 import type { AiAction } from "@spinr/shared/types/ai";
-import { buildLocationChoiceMessage, buildQuoteBookingMessage } from "@spinr/shared/utils/aiLocationMessages";
+import {
+    buildLocationChoiceMessage,
+    buildQuoteBookingMessage,
+    buildQuoteBookingDisplayMessage,
+} from "@spinr/shared/utils/aiLocationMessages";
 
 interface ChatBubble {
     id: string;
     role: "user" | "assistant";
     content: string;
+    /** AI17/F2: rendered instead of `content` when present, for a local echo
+     * whose real `content` carries machine-only text (e.g. a quote-tap's
+     * "(vehicle id <uuid>)") the model needs but nobody should have to read.
+     * Never sent to the backend. */
+    displayContent?: string;
     /** Rich client action (fare quote / location suggestions / booking
      * proposal) — rendered as the same card the rider sees in-app. */
     action?: AiAction;
@@ -55,7 +64,7 @@ function MapPinBubble({
     onQuickSend,
 }: {
     action: Extract<AiAction, { type: "open_map_picker" }>;
-    onQuickSend: (text: string) => void;
+    onQuickSend: (text: string, displayText?: string) => void;
 }) {
     const [coords, setCoords] = useState(
         action.approx_lat != null && action.approx_lng != null
@@ -106,7 +115,13 @@ function MapPinBubble({
 
 /** Mirrors the rider app's action cards so the console shows exactly what
  * the rider would see (shared/types/ai.ts is the contract for both). */
-function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: (text: string) => void }) {
+function ActionBubble({
+    action,
+    onQuickSend,
+}: {
+    action: AiAction;
+    onQuickSend: (text: string, displayText?: string) => void;
+}) {
     if (action.type === "fare_quote") {
         const meta = [
             action.distance_km != null ? `${action.distance_km} km` : null,
@@ -122,6 +137,13 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                 </div>
                 {action.quotes.map((q, i) => {
                     const hasSavings = !!q.promo_savings && q.final_total !== q.total;
+                    // AI17/F4: absent/undefined means available — only an
+                    // explicit `false` (set by the backend when the
+                    // show-unavailable flag is on) marks an option as
+                    // priced-but-not-currently-bookable. Mirrors
+                    // rider-app/components/FareQuoteCard.tsx's treatment —
+                    // this console uses the same shared get_fare_quote tool.
+                    const isUnavailable = q.available === false;
                     // Self-contained message carrying the quote's exact
                     // [lat,lng] and vehicle id verbatim (mirrors the rider
                     // app's quote-card tap) — a prose-only message forced a
@@ -130,23 +152,36 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                     return (
                         <button
                             key={q.vehicle_type_id ?? i}
-                            onClick={() => onQuickSend(buildQuoteBookingMessage(action, q))}
-                            className="w-full flex items-center justify-between gap-3 rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent"
+                            onClick={() =>
+                                onQuickSend(
+                                    buildQuoteBookingMessage(action, q),
+                                    buildQuoteBookingDisplayMessage(action, q),
+                                )
+                            }
+                            disabled={isUnavailable}
+                            title={isUnavailable ? "No drivers nearby right now — not bookable" : undefined}
+                            className={`w-full flex items-center justify-between gap-3 rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent ${
+                                isUnavailable ? "opacity-45 cursor-not-allowed hover:bg-background" : ""
+                            }`}
                         >
                             <span>
                                 <span className="font-medium">{q.vehicle_type ?? "Ride"}</span>
-                                <span className="block text-xs text-muted-foreground">
-                                    {[
-                                        q.eta_minutes != null
-                                            ? `${q.eta_minutes} min${q.closest_driver_km != null ? ` (${q.closest_driver_km} km)` : ""} away`
-                                            : null,
-                                        q.capacity != null ? `${q.capacity} seats` : null,
-                                        (q.surge_multiplier ?? 1) > 1 ? `${q.surge_multiplier}x surge` : null,
-                                    ]
-                                        .filter(Boolean)
-                                        .join(" · ")}
-                                </span>
-                                {hasSavings ? (
+                                {isUnavailable ? (
+                                    <span className="block text-xs text-muted-foreground">No drivers nearby</span>
+                                ) : (
+                                    <span className="block text-xs text-muted-foreground">
+                                        {[
+                                            q.eta_minutes != null
+                                                ? `${q.eta_minutes} min${q.closest_driver_km != null ? ` (${q.closest_driver_km} km)` : ""} away`
+                                                : null,
+                                            q.capacity != null ? `${q.capacity} seats` : null,
+                                            (q.surge_multiplier ?? 1) > 1 ? `${q.surge_multiplier}x surge` : null,
+                                        ]
+                                            .filter(Boolean)
+                                            .join(" · ")}
+                                    </span>
+                                )}
+                                {isUnavailable ? null : hasSavings ? (
                                     <span className="block text-xs font-medium text-success">
                                         {q.promo_code} · save ${q.promo_savings}
                                     </span>
@@ -364,14 +399,19 @@ export default function AiConsolePage() {
         setMessages([]);
     };
 
-    const send = async (textOverride?: string) => {
+    const send = async (textOverride?: string, displayOverride?: string) => {
         const text = (textOverride ?? input).trim();
         // Gate on `target` (resolved from the CURRENT results), not just the
         // stored id — never post into a user who dropped out of the search.
         if (!text || !target || sending) return;
         setSending(true);
         setInput("");
-        setMessages((prev) => [...prev, { id: `local-${Date.now()}`, role: "user", content: text }]);
+        // AI17/F2: `content` is what actually gets sent below (unchanged) —
+        // `displayContent`, if given, is only what this bubble renders.
+        setMessages((prev) => [
+            ...prev,
+            { id: `local-${Date.now()}`, role: "user", content: text, displayContent: displayOverride?.trim() || undefined },
+        ]);
         try {
             const res = await adminAiChat({
                 user_id: target.id,
@@ -523,12 +563,15 @@ export default function AiConsolePage() {
                                 <div key={m.id} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
                                     {m.role === "assistant" && <Bot className="h-5 w-5 text-primary shrink-0 mt-1" />}
                                     {m.action ? (
-                                        <ActionBubble action={m.action} onQuickSend={(text) => send(text)} />
+                                        <ActionBubble
+                                            action={m.action}
+                                            onQuickSend={(text, displayText) => send(text, displayText)}
+                                        />
                                     ) : (
                                         <div
                                             className={`max-w-[75%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
                                         >
-                                            {m.content}
+                                            {m.displayContent ?? m.content}
                                         </div>
                                     )}
                                     {m.role === "user" && <UserIcon className="h-5 w-5 text-muted-foreground shrink-0 mt-1" />}

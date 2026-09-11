@@ -81,7 +81,6 @@ Access tokens expire in 15 minutes; use `POST /auth/refresh` to renew.
 | GET  | `/rides/{ride_id}/messages` | ✓ | rider/driver | Fetch in-trip chat history |
 | POST | `/rides/{ride_id}/messages` | ✓ | rider/driver | Send an in-trip chat message |
 | GET  | `/rides/{ride_id}/chat-status` | ✓ | rider | Check whether chat is open |
-| GET  | `/rides/{ride_id}/call` | ✓ | rider | Get a masked phone number for in-trip calling |
 | GET  | `/rides/scheduled` | ✓ | rider | List upcoming scheduled rides |
 | DELETE | `/rides/scheduled/{ride_id}` | ✓ | rider | Cancel a scheduled ride |
 

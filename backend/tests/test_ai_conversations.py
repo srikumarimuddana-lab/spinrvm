@@ -149,3 +149,23 @@ class TestDelete:
             ok = await conversations.delete_conversation("conv-1", USER_ID)
         assert ok is False
         delete_one.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_delete_clears_quote_pin(self):
+        """AI17/F5: a stale priced-quote pin must not outlive the deleted
+        conversation — see tools_booking.py's _quote_pin_key format."""
+        redis_delete = AsyncMock()
+        with _db(), patch.object(conversations, "redis_delete", redis_delete):
+            ok = await conversations.delete_conversation("conv-1", USER_ID)
+        assert ok is True
+        redis_delete.assert_awaited_once_with("ai:quote:conv-1")
+
+    @pytest.mark.anyio
+    async def test_delete_survives_quote_pin_cleanup_failure(self):
+        """Matches _pin_quote's own best-effort contract: a Redis outage
+        must never block the (already-committed) DB delete from reporting
+        success."""
+        redis_delete = AsyncMock(side_effect=Exception("redis down"))
+        with _db(), patch.object(conversations, "redis_delete", redis_delete):
+            ok = await conversations.delete_conversation("conv-1", USER_ID)
+        assert ok is True

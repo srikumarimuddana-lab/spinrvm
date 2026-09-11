@@ -36,11 +36,14 @@ import {
   requestNotificationPermission,
   requestPushPermissionAndGetToken,
   onTokenRefresh,
+  onNotificationOpenedApp,
+  getInitialNotification,
   getAppCheckToken,
 } from '@shared/services/firebase';
 import { setAppCheckTokenProvider, setAppIdentity, onForceUpgrade, ensureFreshToken } from '@shared/api/client';
 import { ForceUpdateOverlay } from '@shared/components/ForceUpdateOverlay';
 import { setLogRocketInstance } from '@shared/services/logRocketInstance';
+import { routePushNotificationTap } from '../utils/pushNotificationRouting';
 
 // Arm the sign-out location teardown at module scope, before any screen mounts:
 // the API client's 401 interceptor can trigger a logout before the dashboard
@@ -213,9 +216,17 @@ setLogRocketInstance(LogRocket);
 
 // ── Module-level side effects (must run before React mounts) ──────────
 
-// 1. Foreground-notification presentation. Without this, FCM messages
-//    received while the app is in the foreground never render a banner /
-//    play a sound, so the driver silently misses ride offers.
+// 1. Foreground-notification presentation for expo-notifications' OWN
+//    locally-scheduled notifications (e.g. DriverIdlePanel.tsx's one-time
+//    "upload your documents" nudge via Notifications.scheduleNotificationAsync).
+//    This does NOT govern real FCM push notifications: RNFirebase's Android
+//    manifest service takes priority over expo-notifications' for the same
+//    FCM intent-filter, so RNFirebase — not expo-notifications — is what
+//    actually receives those (confirmed by comparing both packages'
+//    AndroidManifest.xml; see C97 rec #6, ACTION_ITEMS.md). The suppressTypes
+//    list below is inert dead weight for that reason (no FCM message reaches
+//    this handler to be suppressed) but is left as-is: harmless, and
+//    documents original intent if this ever changes.
 if (Notifications) {
   Notifications.setNotificationHandler({
     handleNotification: async (notification: any) => {
@@ -250,36 +261,42 @@ if (Notifications) {
 //    and the offer would be silently dropped. PENDING_ACTION_KEY is shared
 //    with the foreground listeners below.
 
-// DV-9: Route push-notification taps to the correct in-app screen.
-// new_ride_assignment → driver home (offer panel hydrates from AsyncStorage);
-// everything else → notifications inbox as the safe fallback so the driver
-// can read the notification content rather than landing on a random screen.
+// DV-9: Route push-notification taps to the correct in-app screen. The
+// actual routing decision lives in utils/pushNotificationRouting.ts (shared
+// by all four tap-detection listeners below, and unit-tested there) because
+// two separate libraries can be the one that actually saw the tap:
+// expo-notifications (only for the one notification it schedules itself —
+// DriverIdlePanel.tsx's welcome nudge) and Firebase (for every real FCM
+// push, which RNFirebase — not expo-notifications — receives; see C97
+// rec #6, ACTION_ITEMS.md, for why).
 function usePushNotificationRouter() {
   const router = useRouter();
 
-  // Foreground / backgrounded-tap listener (fires when app is already running).
+  // Foreground / backgrounded-tap listener (fires when app is already
+  // running). Only ever fires for the one notification expo-notifications
+  // itself posts (the welcome nudge) — see the module-level comment above.
   useEffect(() => {
     if (!Notifications) return;
     const sub = Notifications.addNotificationResponseReceivedListener(
       (response: any) => {
         const data = response?.notification?.request?.content?.data ?? {};
-        if (data?.type === 'new_ride_assignment') {
-          router.push('/driver/' as any);
-        } else if (data?.type === 'chat_message' && data?.ride_id) {
-          router.push(`/driver/chat?rideId=${data.ride_id}` as any);
-        } else if ((data?.type === 'lost_and_found' || data?.type === 'lost_and_found_message') && data?.case_id) {
-          router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId: data.case_id } } as any);
-        } else if (data?.type === 'license_backfill_prompt') {
-          // ACTION_ITEMS.md B14 self-serve nudge — send the driver straight
-          // to the Profile tab, where the missing-licence banner (see
-          // app/driver/(tabs)/profile.tsx) opens the entry modal.
-          router.push('/driver/profile' as any);
-        } else {
-          router.push('/driver/notifications');
-        }
+        routePushNotificationTap(router, data);
       },
     );
     return () => sub?.remove?.();
+  }, [router]);
+
+  // Firebase-side background-tap listener: fires when the app was
+  // backgrounded (not killed) and the driver tapped a real FCM push
+  // notification. This is the counterpart the expo-notifications listener
+  // above cannot be for FCM pushes — see C97 rec #6.
+  useEffect(() => {
+    const unsubscribe = onNotificationOpenedApp((message) => {
+      const data = message?.data ?? {};
+      console.log('[Push] Driver background-tap (Firebase) — routing from data:', data);
+      routePushNotificationTap(router, data as Record<string, any>);
+    });
+    return unsubscribe;
   }, [router]);
 
   // Notifee foreground event listener — fires when the user taps the
@@ -313,41 +330,53 @@ function usePushNotificationRouter() {
     return () => unsub?.();
   }, [router]);
 
-  // Killed-state deep linking — getInitialNotificationResponseAsync() returns
-  // the tapped notification when the app was fully killed. The routing call is
-  // deferred 100ms to ensure the Expo Router Stack is fully mounted before
-  // navigation is attempted — calls fired before hydration are silently dropped.
-  // This hook is only mounted after isAuthInitialized is true (the loading gate
-  // in RootLayout blocks DriverRootLayoutInner until then).
+  // Killed-state deep linking. Two independent sources can report "the
+  // notification that launched the app": Firebase's own API (populated for
+  // a real FCM push tapped from a fully-killed state — the common case for
+  // every push type except the local welcome nudge, since RNFirebase, not
+  // expo-notifications, actually receives and displays these — C97 rec #6)
+  // and expo-notifications' API (only ever populated for the one
+  // notification it schedules itself). Only one can plausibly be non-null
+  // for a given app launch, since only one notification was actually tapped.
+  // Firebase is checked first as the far more common real-world case. The
+  // routing call is deferred 100ms to ensure the Expo Router Stack is fully
+  // mounted before navigation is attempted — calls fired before hydration
+  // are silently dropped. This hook is only mounted after isAuthInitialized
+  // is true (the loading gate in RootLayout blocks DriverRootLayoutInner
+  // until then).
   useEffect(() => {
-    if (!canUseNotifications || !Notifications) return;
     let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
     (async () => {
       try {
-        const response = await Notifications.getInitialNotificationResponseAsync?.();
-        if (response?.notification?.request?.content?.data) {
-          const data = response.notification.request.content.data as Record<string, string>;
-          console.log('[Push] Driver killed-state notification tap — routing from data:', data);
-          // Add a small defer to ensure Stack is mounted
-          timer = setTimeout(() => {
-            if (data?.type === 'new_ride_assignment') {
-              router.push('/driver/' as any);
-            } else if (data?.type === 'chat_message' && data?.ride_id) {
-              router.push(`/driver/chat?rideId=${data.ride_id}` as any);
-            } else if ((data?.type === 'lost_and_found' || data?.type === 'lost_and_found_message') && data?.case_id) {
-              router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId: data.case_id } } as any);
-            } else if (data?.type === 'license_backfill_prompt') {
-              router.push('/driver/profile' as any);
-            } else {
-              router.push('/driver/notifications' as any);
-            }
-          }, 100);
+        const fbMessage = await getInitialNotification();
+        if (cancelled) return;
+        if (fbMessage?.data) {
+          const data = fbMessage.data as Record<string, any>;
+          console.log('[Push] Driver killed-state notification tap (Firebase) — routing from data:', data);
+          timer = setTimeout(() => routePushNotificationTap(router, data), 100);
+          return;
         }
       } catch (e) {
-        console.log('[Push] Driver getInitialNotification failed:', e);
+        console.log('[Push] Driver getInitialNotification (Firebase) failed:', e);
+      }
+
+      if (!canUseNotifications || !Notifications) return;
+      try {
+        const response = await Notifications.getInitialNotificationResponseAsync?.();
+        if (cancelled) return;
+        if (response?.notification?.request?.content?.data) {
+          const data = response.notification.request.content.data as Record<string, string>;
+          console.log('[Push] Driver killed-state notification tap (expo) — routing from data:', data);
+          timer = setTimeout(() => routePushNotificationTap(router, data), 100);
+        }
+      } catch (e) {
+        console.log('[Push] Driver getInitialNotification (expo) failed:', e);
       }
     })();
-    return () => clearTimeout(timer);
+
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [router]);
 }
 

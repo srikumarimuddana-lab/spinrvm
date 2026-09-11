@@ -105,8 +105,18 @@ async def _rows_for_ids(
     pickup_lat: float,
     pickup_lng: float,
     radius_km: float,
+    known_distance_km: Optional[dict[str, float]] = None,
 ) -> list[dict]:
-    """Eligibility first, then nearest ``limit``. Never slice the ID set first."""
+    """Eligibility first, then nearest ``limit``. Never slice the ID set first.
+
+    ``known_distance_km`` lets a caller that already has a per-id distance
+    (the PostGIS RPC's own ``ST_Distance``, computed in the same query that
+    produced ``ids``) skip recomputing haversine for those rows — the
+    eligibility re-fetch below can still drop or reorder rows, so distance is
+    still looked up per row and the result is still re-sorted; only the
+    redundant trig call is avoided. Callers with no such source (H3's
+    cell-based ids) omit it and behave exactly as before.
+    """
     if not ids:
         return []
     id_list = list(ids)
@@ -126,10 +136,13 @@ async def _rows_for_ids(
         rows = await db.get_rows("drivers", filters, columns=columns, limit=len(id_list))
     scored: list[tuple[float, dict]] = []
     for row in rows or []:
-        try:
-            dist = haversine_km(pickup_lat, pickup_lng, float(row["lat"]), float(row["lng"]))
-        except (TypeError, ValueError, KeyError):
-            continue
+        driver_id = row.get("id")
+        dist = known_distance_km.get(str(driver_id)) if known_distance_km and driver_id is not None else None
+        if dist is None:
+            try:
+                dist = haversine_km(pickup_lat, pickup_lng, float(row["lat"]), float(row["lng"]))
+            except (TypeError, ValueError, KeyError):
+                continue
         if dist > radius_km:
             continue
         scored.append((dist, row))
@@ -144,7 +157,14 @@ async def _postgis_ids(
     radius_km: float,
     limit: int,
     dispatch_filter: Optional[dict] = None,
-) -> list[str]:
+) -> tuple[list[str], dict[str, float]]:
+    """Nearest-first driver ids from the RPC, plus its own per-id distance.
+
+    ``drivers_nearby_location_geog`` (migration 398) already computes and
+    orders by ``ST_Distance`` — returning that alongside the ids lets
+    ``_rows_for_ids`` skip recomputing the same distance in Python via
+    haversine for every row it already has an answer for.
+    """
     params: dict[str, Any] = {
         "p_lat": float(lat),
         "p_lng": float(lng),
@@ -159,14 +179,20 @@ async def _postgis_ids(
         params["p_vehicle_type_id"] = vehicle_type_id
     rows = await db.rpc(POSTGIS_RPC, params)
     if not rows:
-        return []
+        return [], {}
     if isinstance(rows, dict):
         rows = [rows]
-    out: list[str] = []
+    ids: list[str] = []
+    distance_km: dict[str, float] = {}
     for row in rows:
-        if isinstance(row, dict) and row.get("driver_id"):
-            out.append(str(row["driver_id"]))
-    return out
+        if not (isinstance(row, dict) and row.get("driver_id")):
+            continue
+        driver_id = str(row["driver_id"])
+        ids.append(driver_id)
+        dist_m = row.get("distance_m")
+        if isinstance(dist_m, (int, float)):
+            distance_km[driver_id] = dist_m / 1000.0
+    return ids, distance_km
 
 
 async def _notify_admin_failover(event: dict) -> None:
@@ -406,7 +432,9 @@ async def _postgis_or_fallback(
     ride_id,
 ) -> tuple[list[dict], str]:
     try:
-        ids = await _postgis_ids(db, pickup_lat, pickup_lng, search_radius_km, limit, dispatch_filter=dispatch_filter)
+        ids, distance_km = await _postgis_ids(
+            db, pickup_lat, pickup_lng, search_radius_km, limit, dispatch_filter=dispatch_filter
+        )
         rows = await _rows_for_ids(
             db,
             dispatch_filter,
@@ -416,6 +444,7 @@ async def _postgis_or_fallback(
             pickup_lat=pickup_lat,
             pickup_lng=pickup_lng,
             radius_km=search_radius_km,
+            known_distance_km=distance_km,
         )
         return rows, "postgis"
     except Exception as exc:

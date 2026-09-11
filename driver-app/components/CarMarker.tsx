@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, Image, View } from 'react-native';
+import { Animated, Easing, Platform, View } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
     coalescePlaybackBearing,
@@ -484,16 +485,58 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             return;
         }
         lastAcceptedRawFixRef.current = { ...rawCoord, timestampMs: ts };
-        if (shouldResetBuffer(bufferRef.current, rawCoord, SNAP_DISTANCE_M)) {
+        // shouldResetBuffer only ever compares a new fix against an EXISTING
+        // last fix (it bails out with `if (!last) return false`), so the
+        // very first fix into a freshly-mounted/empty buffer can never
+        // trigger it — no matter how far the real position has moved since
+        // this component last rendered. That gap bites index.tsx's own
+        // mapKey remount-on-going-online (added to fix the marker never
+        // reappearing after offline→online, see that file's comment): the
+        // remount reseeds this component with a STALE mount coordinate and
+        // an empty buffer, so the first real GPS fix that then arrives —
+        // which can be a real few-hundred-metre jump if the driver moved
+        // while offline — gets treated as an ordinary ~500 ms tween target
+        // instead of a reset anchor, animating one fast straight-line glide
+        // across whatever lies between (buildings included) — live-testing
+        // report 2026-09-11: "icon moved through the building using
+        // shortest path" right after coming back online, following the
+        // separately-reported delay waiting for that first fix (GPS
+        // time-to-first-fix after being paused). Treating an empty buffer
+        // the same as a distance-triggered reset closes this: the first fix
+        // after any remount always snaps instead of gliding.
+        const isFirstFix = bufferRef.current.length === 0;
+        if (isFirstFix || shouldResetBuffer(bufferRef.current, rawCoord, SNAP_DISTANCE_M)) {
             bufferRef.current.length = 0;
             // Stale estimate would otherwise drag the newly-reset position
             // back toward wherever the car used to be — re-seed at the raw
             // (unsmoothed) fix instead.
             smoothingStateRef.current = null;
             hasMovementBearingRef.current = false;
+            // Reset on BOTH platforms — the ticker's next tick measures
+            // "moved" distance from this, so leaving it stale (as before,
+            // iOS-only) would still glide iOS from wherever it last was.
+            prevTargetRef.current = rawCoord;
             if (Platform.OS === 'android') {
                 setAndroidCoord(rawCoord);
-                prevTargetRef.current = rawCoord;
+            } else {
+                // iOS had no equivalent instant-seed here at all before this
+                // fix — animatedRegion.setValue() sets the underlying
+                // Animated.Values directly with no animation, so the very
+                // next tick's `.timing()` call starts FROM this raw fix
+                // instead of gliding in from wherever the marker's stale
+                // mount position was. Guarded the same way the Android
+                // animateMarkerToCoordinate call below falls back for a
+                // missing native method — if a future/older react-native-
+                // maps build ever lacks setValue, skip the seed rather than
+                // throw; the ticker still renders correctly, just glides.
+                if (typeof (animatedRegion as any).setValue === 'function') {
+                    animatedRegion.setValue({
+                        latitude: rawCoord.latitude,
+                        longitude: rawCoord.longitude,
+                        latitudeDelta: 0,
+                        longitudeDelta: 0,
+                    });
+                }
             }
         }
         smoothingStateRef.current = smoothFix(smoothingStateRef.current, { ...rawCoord, timestampMs: ts });
@@ -678,12 +721,18 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         };
     }, []);
     const handleImageLoaded = () => {
-        // Image bitmap is decoded — keep tracking through one more frame so the
-        // native Marker snapshot contains the car, then stop for perf.
+        // Image bitmap is decoded — force a tracksViewChanges false→true
+        // transition so Android Google Maps re-snapshots the marker with the
+        // car visible. setTracksViewChanges(true) when already true is a
+        // React no-op (no re-render, no bitmap re-capture). The brief false
+        // is invisible — the next-frame true commits a fresh snapshot.
         hasLoadedImageRef.current = true;
-        setTracksViewChanges(true);
-        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
-        settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        setTracksViewChanges(false);
+        requestAnimationFrame(() => {
+            setTracksViewChanges(true);
+            if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+            settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        });
     };
 
     // Re-arm the snapshot on ANY ring identity change (color or presence),
@@ -723,14 +772,17 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         // instead.
     }, [ringChangeKey]);
 
-    // One-shot "pop in" on mount — see the class doc comment above for why
-    // this is a single spring rather than a loop. Native-driven: opacity and
-    // transform:scale both support the native driver, so this costs nothing
-    // on the JS thread and doesn't compete with the (JS-driven, non-style)
-    // rotation animation above.
+    // One-shot "pop in" on mount (iOS only). On Android, Google Maps renders
+    // custom markers as a bitmap snapshot of the React view. Starting at
+    // opacity 0 / scale 0 means the first snapshot captures the ring (outside
+    // this wrapper) but not the car (inside it, invisible). Native-driver
+    // animations don't reliably trigger the re-snapshot mechanism, so the
+    // bitmap can freeze ring-only — the "green circle, no car" bug. Starting
+    // at 1 on Android ensures the car is visible from the very first frame.
     // eslint-disable-next-line react-hooks/refs
-    const mountAnim = useRef(new Animated.Value(0)).current;
+    const mountAnim = useRef(new Animated.Value(isAndroid ? 1 : 0)).current;
     useEffect(() => {
+        if (isAndroid) return;
         Animated.spring(mountAnim, {
             toValue: 1,
             friction: 6,
@@ -950,12 +1002,12 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                         pointerEvents="none"
                         style={iosRotateStyle ?? { width: size, height: size }}
                     >
-                        <Image
+                        <ExpoImage
                             key={imageAttempt}
                             source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
                             onError={handleImageError}
                             onLoad={handleImageLoaded}
-                            resizeMode="contain"
+                            contentFit="contain"
                             style={{
                                 width: size,
                                 height: size,

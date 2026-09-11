@@ -36,7 +36,7 @@ import { Button } from '@shared/components/Button';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
-import { useResponsive } from '@shared/utils/responsive';
+import { useResponsive, SPACING } from '@shared/utils/responsive';
 import api, { getApiErrorMessage, isEngineError } from '@shared/api/client';
 import { Analytics } from '@shared/analytics';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -1646,7 +1646,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       right: 16,
       backgroundColor: colors.surface,
       borderRadius: 22,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 10,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 2 },
@@ -1694,7 +1694,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       backgroundColor: '#E8F5E9',
       borderRadius: 12,
       paddingHorizontal: 10,
-      paddingVertical: 4,
+      paddingVertical: SPACING.xs,
     },
     commissionText: {
       fontSize: sf(12),
@@ -1706,8 +1706,8 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       alignItems: 'center',
       backgroundColor: colors.dangerBg,
       padding: 12,
-      marginHorizontal: 16,
-      marginBottom: 8,
+      marginHorizontal: SPACING.md,
+      marginBottom: SPACING.sm,
       borderRadius: 8,
       borderWidth: 1,
       borderColor: '#FCA5A5',
@@ -1749,7 +1749,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     optionCard: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
@@ -1828,7 +1828,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       gap: 2,
       backgroundColor: colors.surfaceLight,
       borderRadius: 8,
-      paddingHorizontal: 4,
+      paddingHorizontal: SPACING.xs,
       paddingVertical: 2,
     },
     capacityText: {
@@ -1876,8 +1876,8 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     promoEntryRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginHorizontal: 16,
-      marginTop: 8,
+      marginHorizontal: SPACING.md,
+      marginTop: SPACING.sm,
       marginBottom: 4,
       backgroundColor: colors.surfaceLight,
       borderRadius: 14,
@@ -1928,7 +1928,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     workBanner: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginHorizontal: 16,
+      marginHorizontal: SPACING.md,
       marginTop: 6,
       marginBottom: 4,
       backgroundColor: colors.infoBg,
@@ -1977,7 +1977,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       alignItems: 'flex-start',
       gap: 6,
       paddingHorizontal: 20,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
     },
     policyText: {
       flex: 1,
@@ -1989,8 +1989,8 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
 
     // ── Fare breakdown card ──
     fareBreakdownCard: {
-      marginHorizontal: 16,
-      marginVertical: 8,
+      marginHorizontal: SPACING.md,
+      marginVertical: SPACING.sm,
       backgroundColor: colors.surfaceLight,
       borderRadius: 12,
       paddingHorizontal: 14,
@@ -2055,8 +2055,8 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     fixedFooter: {
       borderTopWidth: 1,
       borderTopColor: colors.border,
-      paddingHorizontal: 16,
-      paddingTop: 8,
+      paddingHorizontal: SPACING.md,
+      paddingTop: SPACING.sm,
       backgroundColor: colors.surface,
     },
     actionRow: {
@@ -2106,13 +2106,13 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontSize: sf(18),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     paymentOption: {
       flexDirection: 'row',
       alignItems: 'center',
       padding: 14,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
       backgroundColor: colors.surfaceLight,
       borderRadius: 12,
       borderWidth: 2,
@@ -2235,8 +2235,8 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontFamily: 'PlusJakartaSans_700Bold',
       textTransform: 'uppercase',
       letterSpacing: 0.6,
-      marginTop: 8,
-      marginBottom: 8,
+      marginTop: SPACING.sm,
+      marginBottom: SPACING.sm,
     },
     promoRow: {
       flexDirection: 'row',
@@ -2245,7 +2245,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       paddingVertical: 13,
       paddingHorizontal: 12,
       borderRadius: 14,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
       backgroundColor: colors.surfaceLight,
       borderWidth: 1.5,
       borderColor: 'transparent',

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView, Modal,
+  View, StyleSheet, TouchableOpacity, Pressable, ScrollView, Modal,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -22,6 +23,7 @@ import {
   requestNotificationPermission,
   openNotificationSettings,
 } from '@shared/services/firebase';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -264,21 +266,21 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
     content: { padding: 20, paddingBottom: 40 },
-    sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: 8, marginTop: 20 },
+    sectionTitle: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: SPACING.sm, marginTop: 20 },
     card: { backgroundColor: colors.surfaceLight, borderRadius: 16, paddingHorizontal: 14 },
     row: {
       flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     rowIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
-    rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+    rowTitle: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.text },
     rowSub: { fontSize: 12, color: colors.textDim, marginTop: 1 },
-    version: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: 24 },
+    version: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: SPACING.lg },
 
     // Language modal
     langOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
@@ -286,16 +288,16 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
       paddingHorizontal: 20, paddingBottom: 40, paddingTop: 12,
     },
-    langHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: 16 },
-    langTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 16 },
+    langHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: SPACING.md },
+    langTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: SPACING.md },
     langRow: {
       flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 12,
-      borderRadius: 14, marginBottom: 8, backgroundColor: colors.surfaceLight,
+      borderRadius: 14, marginBottom: SPACING.sm, backgroundColor: colors.surfaceLight,
       borderWidth: 1.5, borderColor: 'transparent',
     },
     langRowActive: { borderColor: colors.primary, backgroundColor: `${colors.primary}10` },
     langFlag: { fontSize: 28 },
-    langNative: { fontSize: 16, fontWeight: '600', color: colors.text },
+    langNative: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text },
     langEnglish: { fontSize: 12, color: colors.textDim, marginTop: 1 },
   });
 }

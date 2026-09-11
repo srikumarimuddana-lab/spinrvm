@@ -125,7 +125,10 @@ def test_card_ride_without_card_on_file_gets_400_when_stripe_configured(rider_cl
             "backend.routes.rides.booking._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
-        patch("backend.routes.rides.booking._deps.db_supabase.get_rows", AsyncMock(side_effect=_no_active_or_unpaid_rides())),
+        patch(
+            "backend.routes.rides.booking._deps.db_supabase.get_rows",
+            AsyncMock(side_effect=_no_active_or_unpaid_rides()),
+        ),
     ):
         resp = rider_client.post("/api/v1/rides", json=_body(payment_method="card"))
     assert resp.status_code == 400
@@ -147,7 +150,10 @@ def test_card_ride_without_explicit_card_id_gets_400_even_with_card_on_file(ride
             "backend.routes.rides.booking._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
-        patch("backend.routes.rides.booking._deps.db_supabase.get_rows", AsyncMock(side_effect=_no_active_or_unpaid_rides())),
+        patch(
+            "backend.routes.rides.booking._deps.db_supabase.get_rows",
+            AsyncMock(side_effect=_no_active_or_unpaid_rides()),
+        ),
     ):
         resp = rider_client.post("/api/v1/rides", json=_body(payment_method="card"))
     assert resp.status_code == 400
@@ -165,7 +171,10 @@ def test_card_ride_skips_card_checks_when_stripe_unconfigured(rider_client):
             AsyncMock(return_value={"id": RIDER_ID, "status": "active"}),  # no stripe_customer_id
         ),
         patch("backend.routes.rides.booking._deps.get_app_settings", AsyncMock(return_value={})),
-        patch("backend.routes.rides.booking._deps.db_supabase.get_rows", AsyncMock(side_effect=_no_active_or_unpaid_rides())),
+        patch(
+            "backend.routes.rides.booking._deps.db_supabase.get_rows",
+            AsyncMock(side_effect=_no_active_or_unpaid_rides()),
+        ),
     ):
         resp = rider_client.post("/api/v1/rides", json=_body(payment_method="card"))
     # Not the 400 from either card check — whatever happens next (likely a
@@ -294,8 +303,9 @@ def test_pickup_address_confident_mismatch_gets_400(rider_client):
         resp = rider_client.post("/api/v1/rides", json=_body(payment_method="wallet"))
     assert resp.status_code == 400
     detail = resp.json()["detail"]
-    assert "pickup" in detail.lower()
-    assert "don't match" in detail.lower()
+    assert detail["code"] == "PICKUP_ADDRESS_MISMATCH"
+    assert "pickup" in detail["message"].lower()
+    assert "don't match" in detail["message"].lower()
 
 
 def test_dropoff_address_confident_mismatch_gets_400(rider_client):
@@ -326,8 +336,9 @@ def test_dropoff_address_confident_mismatch_gets_400(rider_client):
         resp = rider_client.post("/api/v1/rides", json=_body(payment_method="wallet"))
     assert resp.status_code == 400
     detail = resp.json()["detail"]
-    assert "dropoff" in detail.lower()
-    assert "don't match" in detail.lower()
+    assert detail["code"] == "DROPOFF_ADDRESS_MISMATCH"
+    assert "dropoff" in detail["message"].lower()
+    assert "don't match" in detail["message"].lower()
 
 
 def test_address_verification_fails_open_does_not_block_booking(rider_client):

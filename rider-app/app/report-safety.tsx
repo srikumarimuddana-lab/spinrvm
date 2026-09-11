@@ -1,13 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TextInput,
     TouchableOpacity,
     KeyboardAvoidingView,
     ScrollView,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +16,7 @@ import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Button } from '@shared/components/Button';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function ReportSafetyScreen() {
     const router = useRouter();
@@ -134,13 +135,13 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 20,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
             backgroundColor: colors.surface,
         },
         backButton: {
-            padding: 8,
+            padding: SPACING.sm,
             marginLeft: -8,
         },
         headerTitle: {
@@ -156,15 +157,15 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
         },
         content: {
-            padding: 24,
+            padding: SPACING.lg,
             flexGrow: 1,
         },
         warningBox: {
             flexDirection: 'row',
             backgroundColor: 'rgba(245,158,11,0.1)',
-            padding: 16,
+            padding: SPACING.md,
             borderRadius: 12,
-            marginBottom: 24,
+            marginBottom: SPACING.lg,
             alignItems: 'flex-start',
         },
         warningText: {
@@ -175,7 +176,7 @@ function createStyles(colors: ThemeColors) {
             lineHeight: 20,
         },
         label: {
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '500',
             color: colors.text,
             marginBottom: 12,
@@ -185,11 +186,11 @@ function createStyles(colors: ThemeColors) {
             borderWidth: 1,
             borderColor: colors.border,
             borderRadius: 12,
-            padding: 16,
-            fontSize: 16,
+            padding: SPACING.md,
+            fontSize: FONT.bodyLg,
             color: colors.text,
             minHeight: 160,
-            marginBottom: 24,
+            marginBottom: SPACING.lg,
         },
         // Only marginTop survives the Button extraction — see the load-bearing
         // comment at the call site (keyboard-avoidance on small screens).

@@ -437,6 +437,16 @@ export const extractError = (
     result.message = data.detail
       .map((d) => (typeof d === 'string' ? d : (d as { msg?: string })?.msg || JSON.stringify(d)))
       .join('; ');
+  } else if (data.detail && typeof data.detail === 'object') {
+    // A route-supplied structured detail, e.g.
+    // `detail={"code": "OUTSIDE_SERVICE_AREA", "message": "..."}`. Read the
+    // discriminator + message straight off `detail` — the server's
+    // `error.message` field is not reliable for this shape (it currently
+    // carries the raw dict object, not a string; see the `error_handling.py`
+    // `http_exception_handler`), so don't fall through to it below.
+    const d = data.detail as Record<string, unknown>;
+    if (typeof d.message === 'string') result.message = d.message;
+    if (typeof d.code === 'string') result.detailCode = d.code;
   } else if (data.error?.message) {
     result.message = data.error.message;
   } else if (data.error?.detail) {

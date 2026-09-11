@@ -1,17 +1,33 @@
 import React, { useEffect, useRef } from 'react';
-import { AccessibilityInfo, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, StyleSheet, View } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import type { ToastConfigParams } from 'react-native-toast-message';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
-// Shared color palette — must stay in sync with rider-app/components/Toast.tsx VARIANT_CONFIG
-const VARIANT_CONFIG = {
-  success: { bg: '#0d9f6e', icon: 'checkmark-circle' },
-  error:   { bg: '#dc2626', icon: 'alert-circle' },
-  warning: { bg: '#d97706', icon: 'warning' },
-  info:    { bg: '#1a73e8', icon: 'information-circle' },
+// Icon glyphs only — colors come from the live theme (see ICON_NAMES usage
+// below), so this stays in sync with `shared/theme/index.ts` automatically
+// instead of needing a second hardcoded palette kept in sync by hand.
+const ICON_NAMES = {
+  success: 'checkmark-circle',
+  error:   'alert-circle',
+  warning: 'warning',
+  info:    'information-circle',
 } as const;
 
-type VariantKey = keyof typeof VARIANT_CONFIG;
+type VariantKey = keyof typeof ICON_NAMES;
+
+function variantConfig(colors: ThemeColors, variant: VariantKey) {
+  const bgByVariant: Record<VariantKey, string> = {
+    success: colors.success,
+    error: colors.error,
+    warning: colors.warning,
+    info: colors.info,
+  };
+  return { bg: bgByVariant[variant], icon: ICON_NAMES[variant] };
+}
 
 // error toasts are urgent/failure content — interrupt whatever the screen
 // reader is currently announcing. success/warning/info are informational and
@@ -21,8 +37,9 @@ function liveRegionFor(type: VariantKey): 'assertive' | 'polite' {
 }
 
 function SpinrToast({ text1, text2, type }: ToastConfigParams<unknown>) {
-  const variant = (type as VariantKey) ?? 'info';
-  const config = VARIANT_CONFIG[variant] ?? VARIANT_CONFIG.info;
+  const { colors } = useTheme();
+  const variant = (type as VariantKey) in ICON_NAMES ? (type as VariantKey) : 'info';
+  const config = variantConfig(colors, variant);
 
   // Screen-reader announcement — fired imperatively (rather than relying
   // solely on the declarative accessibilityLiveRegion prop below) because a
@@ -67,9 +84,9 @@ export const toastConfig = {
 
 const styles = StyleSheet.create({
   container: {
-    marginHorizontal: 16,
+    marginHorizontal: SPACING.md,
     borderRadius: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -81,6 +98,6 @@ const styles = StyleSheet.create({
   },
   icon: { marginRight: 12 },
   textWrap: { flex: 1 },
-  title: { color: '#FFF', fontSize: 15, fontWeight: '600' },
-  message: { color: 'rgba(255,255,255,0.9)', fontSize: 13, marginTop: 2 },
+  title: { color: '#FFF', fontSize: FONT.bodyMd, fontWeight: '600' },
+  message: { color: 'rgba(255,255,255,0.9)', fontSize: FONT.bodySm, marginTop: 2 },
 });

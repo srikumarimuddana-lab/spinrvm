@@ -461,14 +461,17 @@ def _tool_14_and_15_route_tools(imported_rides: list[dict]) -> tuple[ToolStatus,
 
 def _tool_16_pre_launch_flag() -> ToolStatus:
     drivers_flagged = _count("drivers", {"legacy_import_metadata->>pre_launch_test": ("eq", "true")})
+    riders_flagged = _count("users", {"legacy_import_metadata->>pre_launch_test": ("eq", "true")})
     rides_flagged = _count("rides", {"legacy_import_metadata->>pre_launch_test": ("eq", "true")})
-    n = drivers_flagged + rides_flagged
+    n = drivers_flagged + riders_flagged + rides_flagged
     return ToolStatus(
         16,
         "pre_launch_flag",
         "Pre-Launch Legacy Data Flagging",
         "not_started" if n == 0 else "done",
-        f"{drivers_flagged} driver(s), {rides_flagged} ride(s) flagged" if n else "Nothing flagged yet",
+        f"{drivers_flagged} driver(s), {riders_flagged} rider(s), {rides_flagged} ride(s) flagged"
+        if n
+        else "Nothing flagged yet",
         "/dashboard/bulk-operations",
     )
 

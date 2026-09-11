@@ -3094,3 +3094,119 @@ class TestDriverStatsLegacyReviewCount:
         # Unchanged by flagging.
         assert stats["total"] == 3
         assert stats["onboarded_total"] == 3
+
+
+# ---------------------------------------------------------------------------
+# GET /drivers -- dormant / dormancy_tier filter (2026-09-11 dormancy
+# flagging tool)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminGetDriversDormancyFilter:
+    """legacy_import_metadata.dormant/dormancy_tier is set by
+    services/driver_dormancy_service.py. Same $in/$nin-against-id
+    compilation as the pre_launch filter above -- these mirror that test
+    class's coverage for the new param."""
+
+    def test_omitted_applies_no_filter(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_dormancy_flagged_ids") as fetch_flagged,
+        ):
+            resp = test_client.get("/api/admin/drivers")
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]
+        fetch_flagged.assert_not_called()  # never queried unless the param is actually passed
+
+    def test_true_shows_flagged_only(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_dormancy_flagged_ids", return_value={"drv-1", "drv-2"}) as fetch_flagged,
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"dormant": "true"})
+        assert resp.status_code == 200, resp.text
+        assert set(captured["filters"]["id"]["$in"]) == {"drv-1", "drv-2"}
+        # No tier requested -- passed through as None, not silently defaulted.
+        fetch_flagged.assert_called_once_with(None)
+
+    def test_true_with_tier_passes_tier_through(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_dormancy_flagged_ids", return_value={"drv-1"}) as fetch_flagged,
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"dormant": "true", "dormancy_tier": "long_dormant"})
+        assert resp.status_code == 200, resp.text
+        fetch_flagged.assert_called_once_with("long_dormant")
+
+    def test_true_with_nothing_flagged_returns_empty_without_querying_drivers(self, test_client, super_admin_override):
+        with (
+            patch("db_supabase.get_rows", AsyncMock()) as get_rows,
+            patch("routes.admin.drivers.fetch_dormancy_flagged_ids", return_value=set()),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"dormant": "true"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []
+        get_rows.assert_not_called()
+
+    def test_false_hides_flagged(self, test_client, super_admin_override):
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_dormancy_flagged_ids", return_value={"drv-1"}) as fetch_flagged,
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"dormant": "false"})
+        assert resp.status_code == 200, resp.text
+        assert captured["filters"]["id"] == {"$nin": ["drv-1"]}
+        # dormancy_tier is ignored on the exclusion path -- always the full
+        # flagged set (both tiers) gets excluded.
+        fetch_flagged.assert_called_once_with(None)
+
+    def test_false_with_nothing_flagged_applies_no_filter(self, test_client, super_admin_override):
+        """Nothing to exclude -- must not add a vacuous $nin: [] that could
+        be misread as excluding everything."""
+        captured = {}
+
+        async def rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                captured["filters"] = filters or {}
+                return []
+            return []
+
+        with (
+            patch("db_supabase.get_rows", AsyncMock(side_effect=rows)),
+            patch("routes.admin.drivers.fetch_dormancy_flagged_ids", return_value=set()),
+        ):
+            resp = test_client.get("/api/admin/drivers", params={"dormant": "false"})
+        assert resp.status_code == 200, resp.text
+        assert "id" not in captured["filters"]

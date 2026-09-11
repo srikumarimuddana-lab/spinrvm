@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     FlatList,
     TouchableOpacity,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Previous-app transfers get their own section below the Spinr list so the
 // two eras never interleave. Three payout_type values are previous-app
@@ -251,19 +252,19 @@ function createStyles(colors: ThemeColors) {
             borderTopColor: colors.border,
         },
         previousAppTitle: {
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '700',
             color: colors.text,
         },
         previousAppSub: {
             marginTop: 2,
-            fontSize: 11,
+            fontSize: FONT.label,
             lineHeight: 15,
             color: colors.textDim,
         },
         header: {
             paddingBottom: 12,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
         },
         headerRow: {
             flexDirection: 'row',
@@ -289,13 +290,13 @@ function createStyles(colors: ThemeColors) {
         filterRow: {
             flexDirection: 'row',
             flexWrap: 'wrap',
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
             gap: 8,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
         },
         filterPill: {
-            paddingHorizontal: 16,
-            paddingVertical: 8,
+            paddingHorizontal: SPACING.md,
+            paddingVertical: SPACING.sm,
             borderRadius: 20,
             backgroundColor: colors.surfaceLight,
             borderWidth: 1,
@@ -306,7 +307,7 @@ function createStyles(colors: ThemeColors) {
             borderColor: colors.primary,
         },
         filterPillText: {
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '600',
             color: colors.textDim,
         },
@@ -317,7 +318,7 @@ function createStyles(colors: ThemeColors) {
         payoutCard: {
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 16,
+            padding: SPACING.md,
             marginBottom: 12,
         },
         payoutHeader: {
@@ -340,7 +341,7 @@ function createStyles(colors: ThemeColors) {
             fontWeight: '700',
         },
         payoutStatus: {
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '600',
             marginTop: 2,
         },
@@ -352,19 +353,19 @@ function createStyles(colors: ThemeColors) {
         detailRow: {
             flexDirection: 'row',
             justifyContent: 'space-between',
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
         },
         detailLabel: {
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
         },
         detailValue: {
             color: colors.text,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '500',
         },
         errorRow: {
-            marginTop: 8,
+            marginTop: SPACING.sm,
             padding: 10,
             backgroundColor: 'rgba(255,71,87,0.1)',
             borderRadius: 8,
@@ -382,12 +383,12 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
             fontSize: 18,
             fontWeight: '600',
-            marginTop: 16,
+            marginTop: SPACING.md,
         },
         emptySub: {
             color: colors.textDim,
             fontSize: 14,
-            marginTop: 4,
+            marginTop: SPACING.xs,
         },
     });
 }

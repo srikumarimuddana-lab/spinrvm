@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
@@ -11,6 +10,7 @@ import {
     KeyboardAvoidingView,
     Alert,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +19,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { newPlacesSessionToken } from '@shared/utils/placesSession';
 import { isAddressInputValid, isGeocodeResultValid } from '../../utils/addressGeocodeSchema';
 
@@ -270,8 +271,8 @@ function createStyles(colors: ThemeColors) {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingHorizontal: 16,
-            paddingBottom: 16,
+            paddingHorizontal: SPACING.md,
+            paddingBottom: SPACING.md,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
         },
@@ -284,7 +285,7 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             alignItems: 'center',
         },
-        content: { flex: 1, padding: 16 },
+        content: { flex: 1, padding: SPACING.md },
         loadingContainer: {
             flex: 1,
             justifyContent: 'center',
@@ -297,10 +298,10 @@ function createStyles(colors: ThemeColors) {
             gap: 12,
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 16,
+            padding: SPACING.md,
             borderWidth: 1,
             borderColor: colors.border,
-            marginTop: 8,
+            marginTop: SPACING.sm,
         },
         statusIcon: {
             width: 40,
@@ -309,22 +310,22 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             alignItems: 'center',
         },
-        statusLabel: { fontSize: 15, fontWeight: '600', color: colors.text },
-        statusValue: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+        statusLabel: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.text },
+        statusValue: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: 2 },
         explainer: {
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             color: colors.textDim,
             lineHeight: 18,
-            marginTop: 16,
+            marginTop: SPACING.md,
             marginBottom: 20,
         },
         inputGroup: { marginBottom: 20 },
-        inputLabel: { fontSize: 14, fontWeight: '500', color: colors.text, marginBottom: 8 },
+        inputLabel: { fontSize: 14, fontWeight: '500', color: colors.text, marginBottom: SPACING.sm },
         input: {
             backgroundColor: colors.surface,
             borderRadius: 12,
             padding: 14,
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             color: colors.text,
             borderWidth: 1,
             borderColor: colors.border,
@@ -349,7 +350,7 @@ function createStyles(colors: ThemeColors) {
             borderColor: 'rgba(255,71,87,0.2)',
         },
         clearBtnText: { color: colors.error, fontSize: 14, fontWeight: '600' },
-        saveBtnText: { fontSize: 15, fontWeight: '600', color: '#fff' },
+        saveBtnText: { fontSize: FONT.bodyMd, fontWeight: '600', color: '#fff' },
         btnDisabled: { opacity: 0.6 },
     });
 }

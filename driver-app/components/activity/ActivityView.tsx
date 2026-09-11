@@ -1,19 +1,21 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   FlatList,
   ActivityIndicator,
   TouchableOpacity,
   useWindowDimensions,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from "expo-router/react-navigation";
 import { useDriverStore } from '../../store/driverStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Two accent colors with no equivalent in the shared theme token set (purple
 // for bonus/quest amounts, sky blue for the "Avg per Trip" stat) — matches
@@ -22,6 +24,13 @@ import type { ThemeColors } from '@shared/theme/index';
 // inventing new shared/theme tokens for two decorative icon accents; both
 // read fine against either surface color, unlike a background fill would.
 const BONUS_PURPLE = '#8B5CF6';
+// Product decision 2026-09-11 (live testing): drivers see only Total Trips
+// and Avg per Trip for now. The other six stat cards (Total KM Driven, the
+// per-day averages, online time, Avg Distance/Trip) are hidden — not removed —
+// so the derived values below keep computing and re-enabling them is flipping
+// this one flag.
+const SHOW_AVERAGE_STAT_CARDS = false;
+
 const AVG_TRIP_BLUE = '#38BDF8';
 
 const toMoney = (s: string | number | null | undefined): string => {
@@ -434,16 +443,23 @@ export default function ActivityView() {
           <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
           <Text style={styles.errorTitle}>Couldn&apos;t load your earnings</Text>
           <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
-          <TouchableOpacity
+          {/* UX3 (ACTION_ITEMS.md): migrated onto the shared Button (the
+              "retry pill") — variant="primary" size="md" already matches
+              this pill's fill/text; the corner radius moves from a 25px pill
+              to Button's 12px, the same kind of radius consolidation
+              Button.tsx's own doc comment describes doing for its other
+              migrated consumers. */}
+          <Button
+            variant="primary"
+            size="md"
+            fullWidth={false}
+            icon="refresh"
             style={styles.retryBtn}
-            activeOpacity={0.8}
             onPress={loadData}
-            accessibilityRole="button"
             accessibilityLabel="Retry loading earnings"
           >
-            <Ionicons name="refresh" size={18} color="#fff" />
-            <Text style={styles.retryBtnText}>Try Again</Text>
-          </TouchableOpacity>
+            Try Again
+          </Button>
         </View>
       ) : (
         <>
@@ -511,51 +527,61 @@ export default function ActivityView() {
                 <Text style={styles.statLabel}>Total Trips</Text>
               </View>
             </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.dangerBg }]}>
-                <MaterialCommunityIcons name="calendar-today" size={18} color={colors.danger} />
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: colors.dangerBg }]}>
+                  <MaterialCommunityIcons name="calendar-today" size={18} color={colors.danger} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{avgTripsPerDay.toFixed(1)}</Text>
+                  <Text style={styles.statLabel}>Avg Trips/Day</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statValue}>{avgTripsPerDay.toFixed(1)}</Text>
-                <Text style={styles.statLabel}>Avg Trips/Day</Text>
+            )}
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
+                  <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{totalDistanceKm.toFixed(1)}</Text>
+                  <Text style={styles.statLabel}>Total KM Driven</Text>
+                </View>
               </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
-                <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
+            )}
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
+                  <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{avgDistancePerDay.toFixed(1)} km</Text>
+                  <Text style={styles.statLabel}>Avg KM/Day</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statValue}>{totalDistanceKm.toFixed(1)}</Text>
-                <Text style={styles.statLabel}>Total KM Driven</Text>
-              </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
-                <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
-              </View>
-              <View>
-                <Text style={styles.statValue}>{avgDistancePerDay.toFixed(1)} km</Text>
-                <Text style={styles.statLabel}>Avg KM/Day</Text>
-              </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
-                <Ionicons name="time" size={18} color={colors.success} />
-              </View>
-              <View>
-                <Text style={styles.statValue}>{formatDurationMinutes(totalDurationMinutes)}</Text>
-                <Text style={styles.statLabel}>Total Online Time</Text>
-              </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
-                <Ionicons name="time-outline" size={18} color={colors.success} />
-              </View>
-              <View>
-                <Text style={styles.statValue}>{formatDurationMinutes(avgOnlineMinutesPerDay)}</Text>
-                <Text style={styles.statLabel}>Avg Online Time/Day</Text>
-              </View>
-            </View>
+            )}
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <>
+                <View style={styles.statCard}>
+                  <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
+                    <Ionicons name="time" size={18} color={colors.success} />
+                  </View>
+                  <View>
+                    <Text style={styles.statValue}>{formatDurationMinutes(totalDurationMinutes)}</Text>
+                    <Text style={styles.statLabel}>Total Online Time</Text>
+                  </View>
+                </View>
+                <View style={styles.statCard}>
+                  <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
+                    <Ionicons name="time-outline" size={18} color={colors.success} />
+                  </View>
+                  <View>
+                    <Text style={styles.statValue}>{formatDurationMinutes(avgOnlineMinutesPerDay)}</Text>
+                    <Text style={styles.statLabel}>Avg Online Time/Day</Text>
+                  </View>
+                </View>
+              </>
+            )}
             <View style={styles.statCard}>
               <View style={[styles.iconWrap, { backgroundColor: colors.infoBg }]}>
                 <Ionicons name="trending-up" size={18} color={AVG_TRIP_BLUE} />
@@ -565,15 +591,17 @@ export default function ActivityView() {
                 <Text style={styles.statLabel}>Avg per Trip</Text>
               </View>
             </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: `${BONUS_PURPLE}1A` }]}>
-                <MaterialCommunityIcons name="map-marker-distance" size={18} color={BONUS_PURPLE} />
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: `${BONUS_PURPLE}1A` }]}>
+                  <MaterialCommunityIcons name="map-marker-distance" size={18} color={BONUS_PURPLE} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{avgDistancePerTrip.toFixed(1)} km</Text>
+                  <Text style={styles.statLabel}>Avg Distance/Trip</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statValue}>{avgDistancePerTrip.toFixed(1)} km</Text>
-                <Text style={styles.statLabel}>Avg Distance/Trip</Text>
-              </View>
-            </View>
+            )}
           </View>
         </>
       )}
@@ -642,6 +670,13 @@ export default function ActivityView() {
       ListFooterComponent={
         !loading && canLoadMoreHistory ? (
           <View style={styles.ridesSection}>
+            {/* Not migrated (UX3, ACTION_ITEMS.md): this is a bordered
+                "outline" treatment (colors.primary border + text, colors.surface
+                fill) that none of Button's three variants (primary/secondary/
+                danger) reproduce, and it's the only call site in this
+                migration's scope wanting one — adding a 4th variant for a
+                single consumer would be speculative per CLAUDE.md's
+                "Simplicity first". Left as its own TouchableOpacity. */}
             <TouchableOpacity
               style={[styles.loadMoreButton, loadingMore && styles.loadMoreButtonDisabled]}
               activeOpacity={0.8}
@@ -679,14 +714,14 @@ function createStyles(colors: ThemeColors) {
       // Wrap so the last pill ("All Time") is never pushed off-screen and
       // untappable on a 360dp/375dp phone.
       flexWrap: 'wrap',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       gap: 10,
       marginTop: 12,
-      marginBottom: 4,
+      marginBottom: SPACING.xs,
     },
     pill: {
       paddingHorizontal: 18,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       borderRadius: 24,
       backgroundColor: colors.surfaceLight,
       borderWidth: 1,
@@ -709,7 +744,7 @@ function createStyles(colors: ThemeColors) {
     },
     pillText: {
       color: colors.textSecondary,
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '600',
     },
     pillTextCompact: {
@@ -729,47 +764,37 @@ function createStyles(colors: ThemeColors) {
     // rest of this file.
     errorState: {
       alignItems: 'center',
-      paddingHorizontal: 32,
-      paddingVertical: 48,
+      paddingHorizontal: SPACING.xl,
+      paddingVertical: SPACING.xxl,
     },
     errorTitle: {
       fontSize: 18,
       fontWeight: '700',
       color: colors.text,
-      marginTop: 16,
+      marginTop: SPACING.md,
       textAlign: 'center',
     },
     errorSub: {
       fontSize: 14,
       color: colors.textSecondary,
-      marginTop: 8,
+      marginTop: SPACING.sm,
       textAlign: 'center',
       lineHeight: 20,
     },
+    // Fill/radius/padding/text now come from the shared Button
+    // (variant="primary" size="md" icon="refresh") — this only supplies the
+    // spacing above it.
     retryBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      marginTop: 24,
-      backgroundColor: colors.primary,
-      paddingHorizontal: 24,
-      paddingVertical: 12,
-      borderRadius: 25,
-      minHeight: 44,
-    },
-    retryBtnText: {
-      color: '#fff',
-      fontSize: 16,
-      fontWeight: '600',
+      marginTop: SPACING.lg,
     },
     // Earnings card
     card: {
-      marginHorizontal: 16,
+      marginHorizontal: SPACING.md,
       marginTop: 12,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
       backgroundColor: colors.surface,
       borderRadius: 20,
-      padding: 16,
+      padding: SPACING.md,
       borderWidth: 1,
       borderColor: colors.border,
     },
@@ -784,7 +809,7 @@ function createStyles(colors: ThemeColors) {
       color: colors.textSecondary,
       fontSize: 12,
       fontWeight: '600',
-      marginBottom: 4,
+      marginBottom: SPACING.xs,
     },
     totalValue: {
       color: colors.success,
@@ -816,7 +841,7 @@ function createStyles(colors: ThemeColors) {
     },
     value: {
       color: colors.text,
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '800',
       marginLeft: 12,
     },
@@ -834,16 +859,16 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       flexWrap: 'wrap',
       gap: 12,
-      paddingHorizontal: 16,
-      paddingTop: 8,
-      marginBottom: 24,
+      paddingHorizontal: SPACING.md,
+      paddingTop: SPACING.sm,
+      marginBottom: SPACING.lg,
     },
     statCard: {
       flexBasis: '47%',
       flexGrow: 1,
       backgroundColor: colors.surface,
       borderRadius: 20,
-      padding: 16,
+      padding: SPACING.md,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 12,
@@ -864,13 +889,13 @@ function createStyles(colors: ThemeColors) {
     },
     statLabel: {
       color: colors.textSecondary,
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '600',
       marginTop: 1,
     },
     // Rides section
     ridesSection: {
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
     },
     ridesSectionHeader: {
       flexDirection: 'row',
@@ -885,7 +910,7 @@ function createStyles(colors: ThemeColors) {
     },
     rideCount: {
       color: colors.textDim,
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '600',
     },
     // Status filter pills
@@ -896,7 +921,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       flexWrap: 'wrap',
       gap: 8,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     statusPill: {
       paddingHorizontal: 14,
@@ -928,7 +953,7 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '600',
     },
     statusPillTextCompact: {
-      fontSize: 11,
+      fontSize: FONT.label,
     },
     statusPillTextActive: {
       color: '#fff',
@@ -954,7 +979,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     statusBadge: {
       flexDirection: 'row',
@@ -983,12 +1008,12 @@ function createStyles(colors: ThemeColors) {
     // Route
     routeContainer: {
       flexDirection: 'row',
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     routeDots: {
       alignItems: 'center',
       width: 20,
-      paddingTop: 4,
+      paddingTop: SPACING.xs,
     },
     dot: {
       width: 10,
@@ -999,11 +1024,11 @@ function createStyles(colors: ThemeColors) {
       width: 2,
       flex: 1,
       backgroundColor: colors.border,
-      marginVertical: 4,
+      marginVertical: SPACING.xs,
     },
     routeAddresses: {
       flex: 1,
-      marginLeft: 8,
+      marginLeft: SPACING.sm,
     },
     routeLabel: {
       fontSize: 10,
@@ -1035,7 +1060,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       gap: 4,
       backgroundColor: colors.surfaceLight,
-      paddingHorizontal: 8,
+      paddingHorizontal: SPACING.sm,
       paddingVertical: 5,
       borderRadius: 8,
     },
@@ -1051,13 +1076,13 @@ function createStyles(colors: ThemeColors) {
     },
     tipText: {
       color: colors.warning,
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '700',
       marginTop: 2,
     },
     cancelFeeText: {
       color: colors.warning,
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '600',
       marginTop: 2,
     },
@@ -1070,16 +1095,16 @@ function createStyles(colors: ThemeColors) {
       fontSize: 18,
       fontWeight: '800',
       color: colors.text,
-      marginTop: 16,
-      marginBottom: 8,
+      marginTop: SPACING.md,
+      marginBottom: SPACING.sm,
     },
     emptyDesc: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       color: colors.textDim,
       textAlign: 'center',
     },
     loadMoreButton: {
-      marginTop: 8,
+      marginTop: SPACING.sm,
       borderWidth: 1,
       borderColor: colors.primary,
       borderRadius: 14,

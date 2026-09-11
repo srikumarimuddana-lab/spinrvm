@@ -107,3 +107,18 @@ def test_export_approvals_require_super_admin(client, app_fixture):
     app_fixture.dependency_overrides[get_admin_user] = lambda: {"id": "admin-2", "role": "admin", "modules": []}
     resp = client.get("/api/admin/export-approvals/pending")
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_pending_rejects_non_super_admin_even_if_mount_is_bypassed():
+    """Admin RBAC audit finding W2: this router is mounted require_super_admin
+    but had no independent per-handler check. Direct call (skipping FastAPI's
+    dependency injection) proves the new _require_super_admin() guard fires
+    on its own."""
+    from fastapi import HTTPException
+
+    from backend.routes.admin.export_approvals import list_pending_export_approvals
+
+    with pytest.raises(HTTPException) as exc_info:
+        await list_pending_export_approvals(request=None, admin={"id": "admin-2", "role": "admin"})
+    assert exc_info.value.status_code == 403

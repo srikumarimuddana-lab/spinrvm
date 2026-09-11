@@ -63,6 +63,48 @@ class TestCancellationReasons:
         assert len(data["hourly_distribution"]) == 24
         assert data["hourly_distribution"][3]["count"] == 2
 
+    def test_rider_reasons_passed_through_with_pct(self, admin_client):
+        """Migration 411's new fields must reach the response, not just the
+        existing reason/party/hourly ones."""
+        bd = {
+            "total": 10,
+            "reasons": [{"reason": "rider_cancelled", "count": 10}],
+            "by_party": [{"party": "rider", "count": 10}],
+            "hourly": {},
+            "total_rider_cancellations": 4,
+            "rider_reasons": [
+                {"reason": "driver_too_far_long_wait", "count": 3},
+                {"reason": "booked_by_mistake", "count": 1},
+            ],
+        }
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[bd])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            resp = admin_client.get("/api/admin/analytics/cancellation-reasons")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_rider_cancellations"] == 4
+        by_reason = {r["reason"]: r for r in data["rider_reasons"]}
+        assert by_reason["driver_too_far_long_wait"]["count"] == 3
+        assert by_reason["driver_too_far_long_wait"]["pct"] == 75.0
+        assert by_reason["booked_by_mistake"]["pct"] == 25.0
+
+    def test_rider_reasons_zero_total_no_division_error(self, admin_client):
+        """No rider cancellations in the window must not 500 on the pct math."""
+        bd = {"total": 0, "reasons": [], "by_party": [], "hourly": {}}
+        with (
+            patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
+            patch("backend.routes.admin.analytics.db.rpc", AsyncMock(return_value=[bd])),
+            patch("backend.routes.admin.analytics.redis_set", AsyncMock()),
+        ):
+            resp = admin_client.get("/api/admin/analytics/cancellation-reasons")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_rider_cancellations"] == 0
+        assert data["rider_reasons"] == []
+
     def test_zero_total_no_division_error(self, admin_client):
         with (
             patch("backend.routes.admin.analytics.redis_get", AsyncMock(return_value=None)),
@@ -622,7 +664,14 @@ class TestAnalyticsAreaScopeAndTimezone:
         assert len(set(seen)) == 3, f"cache keys collided: {seen}"
 
     def test_cache_key_version_bumped_off_the_utc_buckets(self, admin_client):
-        """Entries cached under UTC bucketing must not be served after the switch."""
+        """Entries cached under UTC bucketing must not be served after the switch.
+
+        The two endpoints' versions moved independently since this test was
+        written: /overview is still on v2 (untouched by migration 411), while
+        /cancellation-reasons bumped to v3 when admin_cancellation_breakdown's
+        response shape changed (structured attribution + rider_reasons) — a
+        stale v2 cache entry there would be missing the new keys.
+        """
         seen = []
 
         async def _get(key):
@@ -636,7 +685,8 @@ class TestAnalyticsAreaScopeAndTimezone:
         ):
             admin_client.get("/api/admin/analytics/overview")
             admin_client.get("/api/admin/analytics/cancellation-reasons")
-        assert all(":v2:" in k for k in seen), seen
+        assert ":v2:" in seen[0], seen
+        assert ":v3:" in seen[1], seen
 
     def test_both_endpoints_report_the_bucketing_timezone(self, admin_client):
         """The UI renders bare hour labels; without this it cannot say which zone."""
@@ -1251,3 +1301,97 @@ class TestSecurityDefinerLockdownMigration:
         body = self._body()
         assert body.count("has_function_privilege('anon'") >= 2
         assert body.count("has_function_privilege('authenticated'") >= 2
+
+
+# ── cancellation breakdown: structured attribution + rider reasons (411) ──
+
+
+class TestCancellationBreakdownMigration411:
+    """Static checks on migration 411 — no database is available to run it.
+
+    admin_cancellation_breakdown (165, last amended 350) classified who
+    cancelled by fuzzy-matching the free-text cancellation_reason, even
+    though migration 38 added cancelled_by/cancellation_type expressly so
+    reports would not need to. That string match mis-attributed the rider
+    preset "Driver is too far / long wait" (CancelReasonSheet.tsx) as a
+    driver cancellation, because the string contains "driver". This
+    migration ports the same structured-first pattern already used by
+    admin_marketplace_funnel (351, see TestMarketplaceMigration351 above)
+    into admin_cancellation_breakdown, and adds a rider_reasons breakdown.
+
+    Originally authored as migration 410; renumbered to 411 before merge
+    because another PR merged a different migration 410
+    (410_ai_fare_quote_show_unavailable.sql) to main first — a genuine
+    cross-PR numbering race the migrations/CLAUDE.md convention resolves by
+    having the second PR take the next free slot.
+    """
+
+    @staticmethod
+    def _body() -> str:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[1] / "migrations" / "411_cancellation_breakdown_structured_attribution.sql"
+        return "\n".join(ln for ln in p.read_text().split("\n") if not ln.lstrip().startswith("--"))
+
+    def test_reason_prefers_structured_columns_over_string_matching(self):
+        body = self._body()
+        assert "WHEN cancellation_type = 'no_drivers_found' THEN 'no_drivers_available'" in body
+        assert "WHEN cancelled_by = 'rider'  THEN 'rider_cancelled'" in body
+        assert "WHEN cancelled_by = 'driver' THEN 'driver_cancelled'" in body
+        assert "WHEN cancelled_by = 'admin'  THEN 'admin_cancelled'" in body
+
+    def test_party_matches_marketplace_funnel_vocabulary(self):
+        """Must not drift from admin_marketplace_funnel's (351) classification."""
+        assert "cancelled_by IN ('rider', 'driver', 'admin', 'system')" in self._body()
+
+    def test_string_matching_survives_only_as_pre_38_fallback(self):
+        """Pre-migration-38 rows have no cancelled_by — the heuristic must
+        still run for them, just after the structured columns are checked."""
+        body = self._body()
+        assert "lower(cancellation_reason) LIKE '%rider%'" in body
+        assert "lower(cancellation_reason) LIKE '%driver%'" in body
+
+    def test_rider_reasons_cte_scoped_to_party_rider(self):
+        body = self._body()
+        assert "WHERE party = 'rider'" in body
+        assert "driver_too_far_long_wait" in body
+        assert "booked_by_mistake" in body
+        assert "found_another_ride" in body
+        assert "pickup_location_wrong" in body
+        assert "changed_plans" in body
+        assert "scheduled_pre_dispatch" in body
+        assert "other_free_text" in body
+
+    def test_response_has_rider_reasons_and_total_rider_cancellations_keys(self):
+        body = self._body()
+        assert "'total_rider_cancellations'" in body
+        assert "'rider_reasons'" in body
+
+    def test_existing_keys_are_preserved(self):
+        """reasons/by_party/hourly/total must not be dropped — the frontend
+        already reads them."""
+        body = self._body()
+        for key in ("'total'", "'reasons'", "'by_party'", "'hourly'"):
+            assert key in body
+
+    def test_still_locked_down(self):
+        body = self._body()
+        assert "SECURITY DEFINER" in body
+        assert "SET search_path = public, pg_catalog" in body
+        assert (
+            "REVOKE EXECUTE ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) FROM PUBLIC, anon, authenticated"
+            in body
+        )
+        assert (
+            "GRANT  EXECUTE ON FUNCTION public.admin_cancellation_breakdown(timestamptz, text) TO service_role" in body
+        )
+
+    def test_still_excludes_legacy_imports_and_scopes_by_area(self):
+        body = self._body()
+        assert "legacy_import_metadata = '{}'::jsonb" in body
+        assert "p_service_area_id IS NULL OR service_area_id::text = p_service_area_id" in body
+
+    def test_still_buckets_hourly_on_regina_not_utc(self):
+        body = self._body()
+        assert "AT TIME ZONE 'UTC'" not in body
+        assert "America/Regina" in body

@@ -54,6 +54,18 @@ reasoning and the AskUserQuestion exchange it came from.
   Every ride with ``created_at`` before 2026-03-30 is flagged (25 in the
   reference dataset, all status ``completed`` — real pre-launch test trips,
   not failed/cancelled noise).
+- **Riders, added 2026-09-10** (closing the gap found in
+  ``docs/change-log/2026-09-10-a34-pre-launch-data-contamination-check.md``):
+  a legacy-imported rider (``legacy_import_metadata->>'rider_csv_import'``,
+  the single marker key ``rider_import_service.py`` writes) is a candidate
+  if they have **zero rides ever** — the same zero-activity principle as
+  drivers, but with only one signal available: riders have no
+  ``driver_insurance_periods`` equivalent, and their ``created_at`` is not a
+  useful proxy either (confirmed live: only 5 of 1,132 legacy-imported
+  riders carry a pre-launch ``created_at`` — riders' import doesn't preserve
+  the original old-app signup date the way drivers' does). A rider who has
+  taken even one real ride is never a candidate, regardless of when their
+  account was created.
 
 Money-adjacent note: this module does NOT touch ``wallets``/
 ``wallet_transactions`` — the pre-launch wallet exclusion already lives in
@@ -107,10 +119,12 @@ _APPLY_POOL_WORKERS = 20
 
 FLAG_REASON = "created before Spinr's 2026-03-30 public launch; owner-confirmed pre-launch test data"
 
+RIDER_IMPORT_MARKER_KEY = "rider_csv_import"
+
 
 @dataclass
 class FlagCandidate:
-    table: str  # "drivers" | "rides"
+    table: str  # "drivers" | "rides" | "users"
     id: str
     legacy_import_metadata: dict[str, Any]
 
@@ -119,6 +133,7 @@ class FlagCandidate:
 class PreLaunchFlagPlan:
     driver_candidates: list[FlagCandidate] = field(default_factory=list)
     ride_candidates: list[FlagCandidate] = field(default_factory=list)
+    rider_candidates: list[FlagCandidate] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
 
 
@@ -211,6 +226,36 @@ def _fetch_pre_launch_ride_candidates() -> list[FlagCandidate]:
     ]
 
 
+def _fetch_pre_launch_rider_candidates() -> list[FlagCandidate]:
+    """Legacy-imported riders, not already flagged, with zero rides ever.
+    Read-only. Unlike drivers, riders have no driver_insurance_periods
+    equivalent -- zero rides ever is the only activity signal available
+    (see module docstring's "Riders, added 2026-09-10" note).
+    """
+    rows = (
+        supabase.table("users")
+        .select("id,legacy_import_metadata")
+        .filter(f"legacy_import_metadata->>{RIDER_IMPORT_MARKER_KEY}", "not.is", "null")
+        .filter("legacy_import_metadata->>pre_launch_test", "is", "null")
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return []
+
+    rider_ids = [r["id"] for r in rows if r.get("id")]
+    riders_with_rides = {
+        r["rider_id"] for r in _select_in("rides", "rider_id", "rider_id", rider_ids) if r.get("rider_id")
+    }
+
+    return [
+        FlagCandidate(table="users", id=r["id"], legacy_import_metadata=r.get("legacy_import_metadata") or {})
+        for r in rows
+        if r["id"] not in riders_with_rides
+    ]
+
+
 def fetch_pre_launch_flagged_ids(table: str) -> set[str]:
     """Every id in ``table`` currently flagged ``pre_launch_test = true``.
     Read-only.
@@ -238,9 +283,11 @@ def build_pre_launch_flag_plan() -> PreLaunchFlagPlan:
     plan = PreLaunchFlagPlan()
     plan.driver_candidates = _fetch_pre_launch_driver_candidates()
     plan.ride_candidates = _fetch_pre_launch_ride_candidates()
+    plan.rider_candidates = _fetch_pre_launch_rider_candidates()
     plan.stats = {
         "driver_candidates": len(plan.driver_candidates),
         "ride_candidates": len(plan.ride_candidates),
+        "rider_candidates": len(plan.rider_candidates),
     }
     return plan
 
@@ -277,8 +324,8 @@ def apply_pre_launch_flags(plan: PreLaunchFlagPlan, *, batch: str) -> dict[str, 
     overwritten. Safe to re-run: a re-plan after a partial apply only ever
     contains rows still missing the flag.
 
-    Returns {"drivers": [conflicted ids], "rides": [conflicted ids]} --
-    empty lists on a clean run.
+    Returns {"drivers": [conflicted ids], "rides": [conflicted ids],
+    "users": [conflicted ids]} -- empty lists on a clean run.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -292,11 +339,11 @@ def apply_pre_launch_flags(plan: PreLaunchFlagPlan, *, batch: str) -> dict[str, 
         conflict = _apply_flag_to_row(cand.table, cand.id, read_meta, batch=batch, now_iso=now_iso)
         return cand.table, conflict
 
-    all_candidates = plan.driver_candidates + plan.ride_candidates
+    all_candidates = plan.driver_candidates + plan.ride_candidates + plan.rider_candidates
     with ThreadPoolExecutor(max_workers=_APPLY_POOL_WORKERS, thread_name_prefix="pre-launch-flag-apply") as pool:
         results = [fut.result() for fut in [pool.submit(_apply_one, c) for c in all_candidates]]
 
-    conflicts: dict[str, list[str]] = {"drivers": [], "rides": []}
+    conflicts: dict[str, list[str]] = {"drivers": [], "rides": [], "users": []}
     for table, conflict_id in results:
         if conflict_id:
             conflicts[table].append(conflict_id)
@@ -308,6 +355,7 @@ def print_report(plan: PreLaunchFlagPlan, *, dry_run: bool) -> None:
     mode = "DRY RUN" if dry_run else "COMMIT"
     print(f"\n=== Pre-launch legacy data flagging ({mode}) ===")
     print(f"  driver candidates (dormant, pre-launch)  : {plan.stats.get('driver_candidates', 0)}")
+    print(f"  rider candidates (dormant, pre-launch)   : {plan.stats.get('rider_candidates', 0)}")
     print(f"  ride candidates (all pre-launch)         : {plan.stats.get('ride_candidates', 0)}")
     print("\n  Additive only -- sets legacy_import_metadata.pre_launch_test = true.")
     print("  No row is deleted, deactivated, or otherwise mutated.\n")

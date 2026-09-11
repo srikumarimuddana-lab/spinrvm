@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
     ActivityIndicator,
     Share,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +17,7 @@ import * as Clipboard from 'expo-clipboard';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface ReferralInfo {
     referral_code: string;
@@ -306,19 +307,19 @@ function createStyles(colors: ThemeColors) {
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingBottom: 14,
-        paddingHorizontal: 16,
+        paddingHorizontal: SPACING.md,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
     },
     loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
-    errorTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 16, textAlign: 'center' },
-    errorSub: { fontSize: 14, color: colors.textDim, marginTop: 8, textAlign: 'center', lineHeight: 20 },
+    errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: SPACING.xl },
+    errorTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: SPACING.md, textAlign: 'center' },
+    errorSub: { fontSize: 14, color: colors.textDim, marginTop: SPACING.sm, textAlign: 'center', lineHeight: 20 },
     retryBtn: {
-        flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 24,
-        backgroundColor: colors.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25,
+        flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: SPACING.lg,
+        backgroundColor: colors.primary, paddingHorizontal: SPACING.lg, paddingVertical: 12, borderRadius: 25,
     },
-    retryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+    retryBtnText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '600' },
     backBtn: {
         width: 40,
         height: 40,
@@ -334,19 +335,19 @@ function createStyles(colors: ThemeColors) {
     },
     content: {
         flex: 1,
-        paddingHorizontal: 16,
+        paddingHorizontal: SPACING.md,
     },
     heroCard: {
         borderRadius: 16,
-        padding: 24,
-        marginTop: 16,
+        padding: SPACING.lg,
+        marginTop: SPACING.md,
         alignItems: 'center',
     },
     heroTitle: {
-        fontSize: 22,
+        fontSize: FONT.h3,
         fontWeight: '700',
         color: '#fff',
-        marginBottom: 8,
+        marginBottom: SPACING.sm,
     },
     heroSubtitle: {
         fontSize: 14,
@@ -357,29 +358,29 @@ function createStyles(colors: ThemeColors) {
     referralCodeBox: {
         backgroundColor: 'rgba(255,255,255,0.2)',
         borderRadius: 12,
-        padding: 16,
+        padding: SPACING.md,
         alignItems: 'center',
         width: '100%',
-        marginBottom: 16,
+        marginBottom: SPACING.md,
     },
     referralCodeLabel: {
         fontSize: 12,
         color: 'rgba(255,255,255,0.8)',
-        marginBottom: 4,
+        marginBottom: SPACING.xs,
     },
     referralCode: {
-        fontSize: 26,
+        fontSize: FONT.h2,
         fontWeight: '700',
         color: '#fff',
         letterSpacing: 2,
-        marginBottom: 8,
+        marginBottom: SPACING.sm,
     },
     copyBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: 'rgba(255,255,255,0.3)',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: SPACING.md,
+        paddingVertical: SPACING.sm,
         borderRadius: 20,
     },
     copyBtnText: {
@@ -392,49 +393,49 @@ function createStyles(colors: ThemeColors) {
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#fff',
-        paddingHorizontal: 24,
+        paddingHorizontal: SPACING.lg,
         paddingVertical: 12,
         borderRadius: 25,
     },
     shareBtnText: {
         color: colors.primary,
-        fontSize: 16,
+        fontSize: FONT.bodyLg,
         fontWeight: '600',
-        marginLeft: 8,
+        marginLeft: SPACING.sm,
     },
     statsRow: {
         flexDirection: 'row',
-        marginTop: 16,
+        marginTop: SPACING.md,
         gap: 12,
     },
     statCard: {
         flex: 1,
         backgroundColor: colors.surface,
         borderRadius: 12,
-        padding: 16,
+        padding: SPACING.md,
         alignItems: 'center',
     },
     statValue: {
-        fontSize: 22,
+        fontSize: FONT.h3,
         fontWeight: '700',
         color: colors.primary,
     },
     statLabel: {
         fontSize: 12,
         color: colors.textDim,
-        marginTop: 4,
+        marginTop: SPACING.xs,
     },
     referredByText: {
-        fontSize: 13,
+        fontSize: FONT.bodySm,
         color: colors.textDim,
         textAlign: 'center',
         marginTop: 12,
     },
     section: {
-        marginTop: 24,
+        marginTop: SPACING.lg,
     },
     sectionTitle: {
-        fontSize: 16,
+        fontSize: FONT.bodyLg,
         fontWeight: '600',
         color: colors.text,
         marginBottom: 12,
@@ -469,7 +470,7 @@ function createStyles(colors: ThemeColors) {
         marginLeft: 12,
     },
     referralName: {
-        fontSize: 15,
+        fontSize: FONT.bodyMd,
         fontWeight: '500',
         color: colors.text,
     },
@@ -499,7 +500,7 @@ function createStyles(colors: ThemeColors) {
     },
     referralBadge: {
         paddingHorizontal: 10,
-        paddingVertical: 4,
+        paddingVertical: SPACING.xs,
         borderRadius: 12,
     },
     badgeActive: {
@@ -521,11 +522,11 @@ function createStyles(colors: ThemeColors) {
     emptyState: {
         backgroundColor: colors.surface,
         borderRadius: 12,
-        padding: 32,
+        padding: SPACING.xl,
         alignItems: 'center',
     },
     emptyText: {
-        fontSize: 16,
+        fontSize: FONT.bodyLg,
         fontWeight: '600',
         color: colors.text,
         marginTop: 12,
@@ -533,12 +534,12 @@ function createStyles(colors: ThemeColors) {
     emptySubtext: {
         fontSize: 14,
         color: colors.textDim,
-        marginTop: 4,
+        marginTop: SPACING.xs,
     },
     termsSection: {
-        marginTop: 24,
-        marginBottom: 32,
-        padding: 16,
+        marginTop: SPACING.lg,
+        marginBottom: SPACING.xl,
+        padding: SPACING.md,
         backgroundColor: colors.surface,
         borderRadius: 12,
     },
@@ -546,10 +547,10 @@ function createStyles(colors: ThemeColors) {
         fontSize: 14,
         fontWeight: '600',
         color: colors.text,
-        marginBottom: 8,
+        marginBottom: SPACING.sm,
     },
     termsText: {
-        fontSize: 13,
+        fontSize: FONT.bodySm,
         color: colors.textDim,
         lineHeight: 18,
     },

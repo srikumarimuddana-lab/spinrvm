@@ -19,6 +19,7 @@ import { showToast } from '../../hooks/useToast';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { getEmergencyContactFormError } from '../../utils/emergencyContactSchema';
 
 const MAX_CONTACTS = 3;
@@ -321,7 +322,7 @@ function createStyles(colors: ThemeColors) {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 12,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
@@ -346,8 +347,8 @@ function createStyles(colors: ThemeColors) {
     flexDirection: 'row',
     backgroundColor: colors.primary + '10',
     borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
+    padding: SPACING.md,
+    marginBottom: SPACING.lg,
     alignItems: 'flex-start',
     gap: 12,
   },
@@ -373,13 +374,13 @@ function createStyles(colors: ThemeColors) {
     backgroundColor: colors.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: SPACING.md,
   },
   emptyTitle: {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.text,
-    marginBottom: 8,
+    marginBottom: SPACING.sm,
   },
   emptySubtitle: {
     fontSize: 14,
@@ -397,7 +398,7 @@ function createStyles(colors: ThemeColors) {
     alignItems: 'center',
     backgroundColor: colors.surfaceLight,
     borderRadius: 16,
-    padding: 16,
+    padding: SPACING.md,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -414,7 +415,7 @@ function createStyles(colors: ThemeColors) {
     flex: 1,
   },
   contactName: {
-    fontSize: 16,
+    fontSize: FONT.bodyLg,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.text,
   },
@@ -428,7 +429,7 @@ function createStyles(colors: ThemeColors) {
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.primary,
-    marginTop: 4,
+    marginTop: SPACING.xs,
     textTransform: 'capitalize',
   },
   deleteButton: {
@@ -445,14 +446,14 @@ function createStyles(colors: ThemeColors) {
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 18,
-    marginTop: 16,
+    marginTop: SPACING.md,
     borderWidth: 2,
     borderColor: colors.primary + '30',
     borderRadius: 16,
     borderStyle: 'dashed',
   },
   addButtonText: {
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.primary,
   },
@@ -471,7 +472,7 @@ function createStyles(colors: ThemeColors) {
     marginBottom: 20,
   },
   formLabel: {
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.textDim,
     marginBottom: 6,
@@ -482,9 +483,9 @@ function createStyles(colors: ThemeColors) {
     borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 14,
-    fontSize: 16,
+    fontSize: FONT.bodyLg,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.text,
   },
@@ -492,11 +493,11 @@ function createStyles(colors: ThemeColors) {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginTop: 4,
+    marginTop: SPACING.xs,
   },
   relationshipChip: {
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: SPACING.sm,
     borderRadius: 20,
     backgroundColor: colors.surface,
     borderWidth: 1.5,
@@ -507,7 +508,7 @@ function createStyles(colors: ThemeColors) {
     borderColor: colors.primary,
   },
   relationshipChipText: {
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.textDim,
   },
@@ -517,7 +518,7 @@ function createStyles(colors: ThemeColors) {
   formButtons: {
     flexDirection: 'row',
     gap: 12,
-    marginTop: 24,
+    marginTop: SPACING.lg,
   },
   cancelButton: {
     flex: 1,
@@ -527,7 +528,7 @@ function createStyles(colors: ThemeColors) {
     alignItems: 'center',
   },
   cancelButtonText: {
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.textDim,
   },
@@ -539,7 +540,7 @@ function createStyles(colors: ThemeColors) {
     alignItems: 'center',
   },
   saveButtonText: {
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.surface,
   },

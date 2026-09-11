@@ -1,7 +1,8 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
-import { Platform, Image } from 'react-native';
-import { Marker } from 'react-native-maps';
+import { Platform } from 'react-native';
+import { Marker, AnimatedRegion } from 'react-native-maps';
+import { Image } from 'expo-image';
 import { CarMarker } from '../../components/CarMarker';
 import { playbackPosition, pushFix } from '@shared/utils/markerPlayback';
 
@@ -23,6 +24,11 @@ jest.mock('react-native-maps', () => {
     timing(_config: any) {
       return { start: (cb?: () => void) => cb?.() };
     }
+    // Real react-native-maps' AnimatedRegion.setValue() sets the underlying
+    // Animated.Values immediately, no animation — CarMarker's ingestFix
+    // calls this on iOS to seed the marker at the first fix after a remount
+    // instead of gliding to it (see that file's comment).
+    setValue(_region: any) {}
   }
   return { __esModule: true, Marker, AnimatedRegion };
 });
@@ -468,6 +474,80 @@ describe('CarMarker — physics-based jump rejection (ingestFix)', () => {
     expect(mockPushFix).toHaveBeenCalledTimes(2);
 
     unmount();
+  });
+});
+
+describe('CarMarker — first fix after a remount snaps instead of gliding (2026-09-11, "moved through the building")', () => {
+  // Simulates index.tsx's mapKey remount on going back online: a fresh
+  // CarMarker instance mounts with a STALE coordinate (wherever the driver
+  // was before going offline), then the first real GPS fix after reacquiring
+  // a signal can be a real few-hundred-metre jump. Before this fix, that
+  // first fix had no "last buffered fix" for shouldResetBuffer to compare
+  // against, so it always animated a glide instead of snapping — this
+  // describe block asserts the instant-seed path instead.
+  const staleMountCoord = { latitude: 50.4452, longitude: -104.6189 };
+  // ~800m away — comfortably past SNAP_DISTANCE_M, representative of "moved
+  // a distance while offline."
+  const realFirstFix = { latitude: staleMountCoord.latitude + 0.0072, longitude: staleMountCoord.longitude };
+  const BASE = 1_700_000_000_000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(BASE);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('Android: seeds androidCoord at the raw fix synchronously, before any ticker animation', () => {
+    const originalPlatformOS = Platform.OS;
+    Platform.OS = 'android';
+    try {
+      const { UNSAFE_getByType, rerender, unmount } = render(
+        <CarMarker coordinate={staleMountCoord} fixTimestampMs={BASE} />,
+      );
+      expect(UNSAFE_getByType(Marker).props.coordinate).toEqual(staleMountCoord);
+
+      jest.setSystemTime(BASE + 25_000); // GPS reacquiring after going online
+      rerender(<CarMarker coordinate={realFirstFix} fixTimestampMs={BASE + 25_000} />);
+
+      // No jest.advanceTimersByTime here — this must be true immediately
+      // after the prop-change effect runs, not after a playback tick.
+      expect(UNSAFE_getByType(Marker).props.coordinate).toEqual(realFirstFix);
+
+      unmount();
+    } finally {
+      Platform.OS = originalPlatformOS;
+    }
+  });
+
+  it('iOS: seeds the AnimatedRegion at the raw fix synchronously via setValue', () => {
+    const originalPlatformOS = Platform.OS;
+    Platform.OS = 'ios';
+    const setValueSpy = jest.spyOn(AnimatedRegion.prototype, 'setValue');
+    try {
+      const { rerender, unmount } = render(
+        <CarMarker coordinate={staleMountCoord} fixTimestampMs={BASE} />,
+      );
+      // The mount-time ingest also seeds setValue once, harmlessly, at the
+      // mount coordinate itself (bufferRef is empty then too) — this test
+      // is about what happens on the NEXT fix, not the absence of the first.
+
+      jest.setSystemTime(BASE + 25_000);
+      rerender(<CarMarker coordinate={realFirstFix} fixTimestampMs={BASE + 25_000} />);
+
+      expect(setValueSpy).toHaveBeenLastCalledWith({
+        latitude: realFirstFix.latitude,
+        longitude: realFirstFix.longitude,
+        latitudeDelta: 0,
+        longitudeDelta: 0,
+      });
+
+      unmount();
+    } finally {
+      setValueSpy.mockRestore();
+      Platform.OS = originalPlatformOS;
+    }
   });
 });
 

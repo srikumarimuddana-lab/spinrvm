@@ -364,3 +364,22 @@ def test_gate_params_distinguish_empty_from_omitted_doc_types():
     assert _gate_params(ExportRequest(**base, doc_types=None))["doc_types"] is None
     assert _gate_params(ExportRequest(**base, doc_types=[]))["doc_types"] == []
     assert _gate_params(ExportRequest(**base, doc_types=None)) != _gate_params(ExportRequest(**base, doc_types=[]))
+
+
+@pytest.mark.asyncio
+async def test_export_rejects_non_super_admin_even_if_mount_is_bypassed():
+    """Admin RBAC audit finding W2 (docs/audit/2026-09-10-admin-portal-
+    security-rbac-audit.md): this router is mounted require_super_admin, but
+    had no independent per-handler check — unlike every sibling super_admin
+    router. Calling the handler directly (skipping FastAPI's dependency
+    injection entirely) proves the new _require_super_admin() guard fires on
+    its own, so a future re-mount under a weaker dependency wouldn't
+    silently reopen this endpoint."""
+    from fastapi import BackgroundTasks, HTTPException
+
+    from backend.routes.admin.data_transfer_export import ExportEntityRef, ExportRequest, export_entities
+
+    body = ExportRequest(entities=[ExportEntityRef(entity_type="driver", entity_id="d1")], reason=_VALID_REASON)
+    with pytest.raises(HTTPException) as exc_info:
+        await export_entities(body, BackgroundTasks(), admin={"id": "admin-2", "role": "admin"})
+    assert exc_info.value.status_code == 403

@@ -3,7 +3,7 @@
  * Loaded by Next.js for Node.js runtime and Edge runtime.
  */
 import * as Sentry from '@sentry/nextjs';
-import { scrubEvent as beforeSend } from './sentry.scrub';
+import { scrubBreadcrumb as beforeBreadcrumb, scrubEvent as beforeSend } from './sentry.scrub';
 
 // PIPEDA A-PE-P2-5: warn at cold-start if the DSN routes to an unreviewed region.
 // Sentry has no Canadian region. Spinr's org (`spinr-backend`) lives in the US
@@ -40,6 +40,7 @@ Sentry.init({
   release: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
   enabled: !!(process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN),
   beforeSend,
+  beforeBreadcrumb,
   // Required tags per CLAUDE.md observability conventions ([21-4]).
   initialScope: {
     tags: {

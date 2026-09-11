@@ -1,10 +1,12 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import { useLanguageStore } from '../../store/languageStore';
 import type { ThemeColors } from '@shared/theme/index';
 import type { Hotspot } from '../../hooks/useDemandHeatmap';
+import { FONT } from '@shared/utils/responsive';
 
 interface HotspotChipsProps {
   hotspots: Hotspot[];
@@ -71,7 +73,7 @@ const createStyles = (colors: ThemeColors) =>
       borderColor: colors.heatmapRamp[3],
     },
     chipText: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '500',
       color: colors.textDim,
     },

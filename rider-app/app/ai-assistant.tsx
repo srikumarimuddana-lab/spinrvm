@@ -20,11 +20,11 @@ import {
   KeyboardAvoidingView,
   Share,
   StyleSheet,
-  Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,7 +37,7 @@ import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/a
 import { buildLocationChoiceMessage } from '@shared/utils/aiLocationMessages';
 import { useAuthStore } from '@shared/store/authStore';
 import BookingProposalCard from '../components/BookingProposalCard';
-import { buildQuoteBookingMessage } from '../components/bookingProposal';
+import { buildQuoteBookingMessage, buildQuoteBookingDisplayMessage } from '../components/bookingProposal';
 import FareQuoteCard from '../components/FareQuoteCard';
 import AiAuroraBackground from '../components/AiAuroraBackground';
 import AiWelcomeOrb from '../components/AiWelcomeOrb';
@@ -46,6 +46,7 @@ import { useRideStore } from '../store/rideStore';
 import { showToast } from '../store/toastStore';
 import { activeRideRouteFor } from '../utils/activeRideRoute';
 import { lastUserMessageIndex } from '../utils/staleAiCard';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // expo-speech-recognition is a native module: it exists only in binaries
 // built after it was added (EAS dev-client / store builds). The guarded
@@ -301,11 +302,17 @@ export default function AiAssistantScreen() {
   }, [messages, toolStatus]);
 
   const handleSend = useCallback(
-    (text?: string) => {
+    (text?: string, displayText?: string) => {
       const value = (text ?? input).trim();
       if (!value) return;
       setInput('');
-      sendMessage(value);
+      // Only forward a second arg when there's a real display twin (AI17/F2)
+      // — every other call site keeps sendMessage's single-arg call shape.
+      if (displayText) {
+        sendMessage(value, displayText);
+      } else {
+        sendMessage(value);
+      }
     },
     [input, sendMessage],
   );
@@ -394,8 +401,12 @@ export default function AiAssistantScreen() {
           onSelect={(option) => {
             // Self-contained message carrying the priced [lat,lng] verbatim —
             // the assistant's next turn sees only message text, and must not
-            // re-geocode the trip the rider just saw priced.
-            handleSend(buildQuoteBookingMessage(quote, option));
+            // re-geocode the trip the rider just saw priced. AI17/F2: the
+            // rider sees the display twin instead (no raw vehicle_type_id).
+            handleSend(
+              buildQuoteBookingMessage(quote, option),
+              buildQuoteBookingDisplayMessage(quote, option),
+            );
           }}
         />
       );
@@ -430,7 +441,9 @@ export default function AiAssistantScreen() {
           </View>
         )}
         <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-          <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>{item.content}</Text>
+          <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>
+            {item.displayContent ?? item.content}
+          </Text>
         </View>
       </View>
     );
@@ -587,18 +600,18 @@ const createStyles = (colors: ThemeColors) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 8,
+      paddingHorizontal: SPACING.sm,
       paddingVertical: 10,
     },
-    headerButton: { padding: 8 },
+    headerButton: { padding: SPACING.sm },
     headerTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     headerTitle: { fontSize: 17, fontWeight: '600', color: colors.text },
-    welcomeWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+    welcomeWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACING.lg },
     welcomeTitle: {
       fontSize: 27,
       fontWeight: '600',
       color: colors.text,
-      marginTop: 8,
+      marginTop: SPACING.sm,
       marginBottom: 10,
       textAlign: 'center',
       letterSpacing: -0.3,
@@ -620,8 +633,8 @@ const createStyles = (colors: ThemeColors) =>
       borderWidth: 1,
       borderColor: colors.border,
     },
-    chipText: { fontSize: 13, fontWeight: '500', color: colors.text },
-    listContent: { padding: 16, gap: 10 },
+    chipText: { fontSize: FONT.bodySm, fontWeight: '500', color: colors.text },
+    listContent: { padding: SPACING.md, gap: 10 },
     bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
     bubbleRowUser: { justifyContent: 'flex-end' },
     aiAvatar: {
@@ -640,7 +653,7 @@ const createStyles = (colors: ThemeColors) =>
       borderColor: colors.border + '99',
     },
     bubbleUser: { backgroundColor: colors.primary, borderBottomRightRadius: 5 },
-    bubbleText: { fontSize: 15, lineHeight: 21, color: colors.text },
+    bubbleText: { fontSize: FONT.bodyMd, lineHeight: 21, color: colors.text },
     bubbleTextUser: { color: '#fff' },
     actionCard: {
       flexDirection: 'row',
@@ -680,7 +693,7 @@ const createStyles = (colors: ThemeColors) =>
       alignItems: 'center',
       gap: 10,
       paddingVertical: 9,
-      paddingHorizontal: 8,
+      paddingHorizontal: SPACING.sm,
       borderRadius: 10,
       backgroundColor: colors.surfaceLight,
     },
@@ -699,7 +712,7 @@ const createStyles = (colors: ThemeColors) =>
     locationRoute: { fontSize: 12, color: colors.primary, fontWeight: '600', marginTop: 3 },
     rideBanner: {
       marginHorizontal: 12,
-      marginTop: 4,
+      marginTop: SPACING.xs,
       padding: 12,
       borderRadius: 12,
       backgroundColor: colors.surfaceLight,
@@ -708,10 +721,10 @@ const createStyles = (colors: ThemeColors) =>
       gap: 8,
     },
     rideBannerTextRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    rideBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.text },
-    rideBannerButtons: { flexDirection: 'row', gap: 14, paddingLeft: 24 },
+    rideBannerText: { flex: 1, fontSize: FONT.bodySm, fontWeight: '600', color: colors.text },
+    rideBannerButtons: { flexDirection: 'row', gap: 14, paddingLeft: SPACING.lg },
     rideBannerButton: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    rideBannerButtonText: { fontSize: 13, fontWeight: '600', color: colors.primary },
+    rideBannerButtonText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.primary },
     toolStatusRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -719,7 +732,7 @@ const createStyles = (colors: ThemeColors) =>
       paddingHorizontal: 20,
       paddingVertical: 6,
     },
-    toolStatusText: { fontSize: 13, color: colors.textDim, fontStyle: 'italic' },
+    toolStatusText: { fontSize: FONT.bodySm, color: colors.textDim, fontStyle: 'italic' },
     // Floating pill input — a single rounded surface holding the text field
     // and the gradient send button, lifted off the gradient with a shadow.
     inputRow: {
@@ -745,11 +758,11 @@ const createStyles = (colors: ThemeColors) =>
     },
     input: {
       flex: 1,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       color: colors.text,
       maxHeight: 100,
-      paddingVertical: 8,
-      paddingRight: 4,
+      paddingVertical: SPACING.sm,
+      paddingRight: SPACING.xs,
     },
     sendButton: {
       width: 38,
@@ -764,7 +777,7 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: 18,
       justifyContent: 'center',
       alignItems: 'center',
-      marginRight: 4,
+      marginRight: SPACING.xs,
     },
     micButtonActive: {
       backgroundColor: colors.error,
@@ -778,10 +791,10 @@ const createStyles = (colors: ThemeColors) =>
       alignItems: 'center',
     },
     disclaimer: {
-      fontSize: 11,
+      fontSize: FONT.label,
       color: colors.textDim,
       textAlign: 'center',
       paddingHorizontal: 20,
-      paddingBottom: 8,
+      paddingBottom: SPACING.sm,
     },
   });

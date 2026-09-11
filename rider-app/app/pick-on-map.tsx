@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
   Platform,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,7 @@ import MapView, { PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import api from '@shared/api/client';
 import { useAiChatStore } from '../store/aiChatStore';
 
@@ -313,8 +314,8 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
-      paddingVertical: 8,
+      paddingHorizontal: SPACING.md,
+      paddingVertical: SPACING.sm,
     },
     backBtn: {
       width: 44,
@@ -330,12 +331,12 @@ function createStyles(colors: ThemeColors) {
       shadowRadius: 4,
     },
     headerTitle: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '600',
       color: colors.text,
       backgroundColor: colors.surface,
-      paddingHorizontal: 16,
-      paddingVertical: 8,
+      paddingHorizontal: SPACING.md,
+      paddingVertical: SPACING.sm,
       borderRadius: 20,
       elevation: 4,
       shadowColor: '#000',
@@ -382,7 +383,7 @@ function createStyles(colors: ThemeColors) {
     addressRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     addressDot: {
       width: 12,
@@ -392,7 +393,7 @@ function createStyles(colors: ThemeColors) {
     },
     addressContent: { flex: 1 },
     addressText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '500',
       color: colors.text,
       lineHeight: 20,
@@ -404,7 +405,7 @@ function createStyles(colors: ThemeColors) {
     confirmBtn: {
       backgroundColor: colors.primary,
       borderRadius: 28,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       alignItems: 'center',
     },
     confirmBtnDisabled: {

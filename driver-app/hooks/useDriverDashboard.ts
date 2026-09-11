@@ -387,7 +387,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const markerFixFeedRef = useRef(createFixFeed());
   // Last coordinate/heading handed to the marker feed and when — read by the
   // stationary heartbeat below, written every time a real fix is emitted.
-  const lastMarkerFixRef = useRef<{ latitude: number; longitude: number; heading?: number | null } | null>(null);
+  const lastMarkerFixRef = useRef<{ latitude: number; longitude: number; heading?: number | null; accuracyM?: number | null } | null>(null);
   const lastMarkerFixEmitMsRef = useRef<number>(0);
   // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
   // ~1 location/minute for driver history without filling the trail with the
@@ -848,12 +848,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           // throttle below stretches inter-fix spacing past the 5 s playback
           // delay and starves the buffer (freeze-then-jump, live-testing
           // 2026-09-02). Zero re-renders: subscribers ingest via refs.
-          lastMarkerFixRef.current = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, heading: loc.coords.heading };
+          lastMarkerFixRef.current = { latitude: loc.coords.latitude, longitude: loc.coords.longitude, heading: loc.coords.heading, accuracyM: loc.coords.accuracy };
           lastMarkerFixEmitMsRef.current = Date.now();
           markerFixFeedRef.current.emit({
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
             heading: loc.coords.heading,
+            accuracyM: loc.coords.accuracy,
             timestampMs: loc.timestamp || Date.now(),
           });
           const now = Date.now();

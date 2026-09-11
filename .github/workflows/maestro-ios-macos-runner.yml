@@ -1,0 +1,191 @@
+name: Maestro Mobile E2E (iOS, local build on GitHub-hosted macOS runner)
+
+# docs/testing/MOBILE_E2E_SETUP.md Part F -- the "no Mac access on the
+# team" answer for iOS coverage. Unlike maestro-e2e.yml (Android's lane),
+# this workflow does NOT use EAS Build or Maestro Cloud at all:
+#
+#   - The app is compiled locally, right on the GitHub-hosted macOS runner,
+#     via `npx expo run:ios --configuration Release` (prebuild + CocoaPods
+#     + xcodebuild + install onto the runner's own iOS Simulator). No EAS
+#     Build cloud minutes are spent, and no EXPO_TOKEN is needed.
+#   - Maestro's flows then run via the free local Maestro CLI (same binary
+#     Part A's local Android instructions use), directly against that
+#     booted Simulator -- no Maestro Cloud account, no
+#     MAESTRO_CLOUD_API_KEY.
+#   - No Apple Developer Program account is needed: this is a Simulator
+#     build (unsigned), not a real-device build. If/when real-device iOS
+#     coverage or TestFlight distribution is wanted later, that's a
+#     separate decision (see the setup guide) -- this workflow doesn't
+#     block on it and isn't replaced by it.
+#
+# Cost model: GitHub's own macOS-hosted runner minutes (not a new vendor
+# subscription) -- reported at roughly $0.062/min for a private repo as of
+# 2026-01-01, draining included free minutes at a 10x multiplier vs Linux.
+# A full fresh build+test run is expected to take on the order of 20-45
+# minutes; run a few times a week that's roughly $15-25/month, versus
+# ~$250/month for a Maestro Cloud or BrowserStack iOS device. Full
+# reasoning, sourcing, and caveats: docs/testing/MOBILE_E2E_SETUP.md Part
+# F (some figures there are cross-checked across secondary sources rather
+# than fetched directly from GitHub's/Apple's own billing pages -- treat
+# them as a planning estimate, not a guarantee, until a real run confirms
+# actual minutes used).
+#
+# KNOWN LIMITATIONS (read before assuming this is full parity with local
+# Part A/B testing or with the Android Maestro Cloud lane):
+#   - No backend is started in this job -- same gap the existing
+#     maestro-e2e.yml (Android) lane already has (see ACTION_ITEMS.md
+#     B25). Flows that only exercise login/UI may pass; flows touching
+#     live dispatch, chat, or payouts need a reachable backend and will
+#     fail here exactly as they would in the Android lane today. Fixing
+#     that is a separate, larger piece of work (standing up a backend +
+#     Supabase test schema in CI), not something folded into this change.
+#   - The iOS Simulator device is left to `expo run:ios`'s own default
+#     selection rather than hardcoded via `--device "<name>"` -- this
+#     environment could not confirm exactly which simulator runtimes/
+#     device names ship on the `macos-15` image at the time this workflow
+#     actually runs, so hardcoding a guessed name risked a hard failure.
+#     If a specific device is wanted, add `--device "<name>"` after
+#     confirming its availability from this job's own
+#     `xcrun simctl list devices available` debug step output.
+#   - This workflow's YAML has been syntax-validated
+#     (`python3 -c "import yaml; yaml.safe_load(...)"`) but NOT exercised
+#     against a real GitHub Actions macOS runner from this environment --
+#     there is no way to run a macOS CI job from here. Treat the first
+#     real `workflow_dispatch` run as the actual proof this works, the
+#     same disclosure this repo's own prior CI additions
+#     (label-run-maestro.yml, the Node 22 fix in maestro-e2e.yml) already
+#     used for the same reason.
+#
+# Trigger gate: deliberately a SEPARATE label ("run-maestro-ios") from the
+# existing Android lane's "run-maestro" label, and deliberately NOT wired
+# into label-run-maestro.yml's auto-labeler. This is a new, unproven lane
+# with its own real (if modest) per-run cost -- it should be applied
+# on purpose while it's being validated, not silently start firing on
+# every PR that already gets "run-maestro" for the Android lane. Revisit
+# folding the two labels together once this has a track record.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: "Which app(s) to test"
+        required: true
+        default: "both"
+        type: choice
+        options:
+          - both
+          - driver-app
+          - rider-app
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: maestro-ios-macos-runner-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Same matrix-resolution shape as maestro-e2e.yml's "plan" job, and for
+  # the same reason (see that file's own C76 comment): the `matrix`
+  # context isn't available in a job-level `if:`, only in
+  # `strategy.matrix`/`steps`, so the app-selection filter has to be
+  # resolved in its own job rather than folded into maestro-ios's `if:`.
+  plan:
+    name: Resolve iOS app matrix
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'run-maestro-ios')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.compute.outputs.matrix }}
+    steps:
+      - id: compute
+        name: Compute app matrix from the "apps" input
+        env:
+          APPS: ${{ github.event.inputs.apps }}
+        run: |
+          if [ "$APPS" = "driver-app" ]; then
+            MATRIX='[{"dir":"driver-app","appId":"com.spinr.driver","flows":".maestro/driver"}]'
+          elif [ "$APPS" = "rider-app" ]; then
+            MATRIX='[{"dir":"rider-app","appId":"com.spinr.user","flows":".maestro/rider"}]'
+          else
+            MATRIX='[{"dir":"driver-app","appId":"com.spinr.driver","flows":".maestro/driver"},{"dir":"rider-app","appId":"com.spinr.user","flows":".maestro/rider"}]'
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  maestro-ios:
+    needs: plan
+    runs-on: macos-15
+    # Generous ceiling for a fully-fresh native prebuild + CocoaPods
+    # install + xcodebuild compile every run (the generated ios/ directory
+    # isn't checked into git -- see rider-app/README or .maestro/README.md
+    # -- so there's no warm native build cache between runs, only the
+    # CocoaPods download cache below). Not an expectation that every run
+    # takes the full hour.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.plan.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+
+      # Speeds up `pod install` (the slowest step in this pipeline per
+      # community reports of this exact expo run:ios-in-CI pattern) on
+      # repeat runs. Keyed on yarn.lock rather than a native Podfile.lock,
+      # since the ios/ directory (and therefore Podfile.lock) doesn't
+      # exist until `expo prebuild` runs inside the build step below --
+      # yarn.lock is the closest available proxy for "did native deps
+      # change" at cache-restore time.
+      - name: Cache CocoaPods downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-pods-${{ matrix.app.dir }}-${{ hashFiles(format('{0}/yarn.lock', matrix.app.dir)) }}
+          restore-keys: |
+            ${{ runner.os }}-pods-${{ matrix.app.dir }}-
+
+      - name: Install ${{ matrix.app.dir }} dependencies
+        working-directory: ${{ matrix.app.dir }}
+        run: yarn install --frozen-lockfile
+
+      - name: Show active Xcode + available Simulator runtimes (debugging aid)
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available
+
+      # Release configuration bundles the JS into the app at build time
+      # instead of depending on a live Metro dev server process staying
+      # up alongside the test run -- closer to how a real build behaves,
+      # and avoids a second long-lived background process to babysit in
+      # CI. No Apple Developer account/signing is needed for a Simulator
+      # destination. `expo run:ios` does the full prebuild -> pod install
+      # -> xcodebuild -> install-on-simulator -> launch pipeline in one
+      # command; no separate CocoaPods or xcodebuild step is needed here.
+      - name: Build, install, and launch on the iOS Simulator (local build — no EAS, no Apple Developer account)
+        working-directory: ${{ matrix.app.dir }}
+        run: npx expo run:ios --configuration Release
+
+      # Same official install method Part A's local instructions and
+      # maestro-e2e.yml's Android job already use -- downloaded first,
+      # then executed, rather than piped straight into bash (Semgrep
+      # gha-curl-pipe-shell convention already established in this repo).
+      - name: Install Maestro CLI
+        env:
+          MAESTRO_VERSION: "1.39.0"
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" -o maestro-install.sh
+          bash maestro-install.sh
+          rm -f maestro-install.sh
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      # Maestro auto-detects the already-booted Simulator from the build
+      # step above -- same behavior as running `maestro test` locally per
+      # .maestro/README.md, no --app-id or device flag needed.
+      - name: Run Maestro flows against the booted Simulator
+        working-directory: ${{ matrix.app.dir }}
+        run: maestro test "../${{ matrix.app.flows }}"

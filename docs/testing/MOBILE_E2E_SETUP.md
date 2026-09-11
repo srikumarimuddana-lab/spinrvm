@@ -23,7 +23,7 @@ so you know what to unblock and who needs to do it.
 | Android — run tests automatically on every relevant PR | 🟡 Built, but switched off | The wiring exists; 2 access keys need to be added by a repo admin (Part D) |
 | iOS — run tests on your own laptop | 🟡 Mac + Xcode only | Maestro cannot test iOS from Windows or Linux **locally**, full stop (Part B) |
 | iOS — run tests **in the cloud** (no Mac needed) | 🟡 One real blocker, not "needs a Mac" | Needs an Apple Developer account connected inside EAS — a business step, not a coding one, and **not** a Mac requirement (Part F, added 2026-09-11) |
-| iOS — run tests automatically in CI, hands-off | 🔴 Not built yet | Same blocker as above, plus one small workflow addition (Part D/F) |
+| iOS — run tests automatically in CI, hands-off | 🟡 Built, first real run unproven | `maestro-ios-macos-runner.yml` (Part F) — no secrets/Apple account needed; trigger it once to confirm it actually works |
 | DAST (security-scanning the live app) | 🔴 Scaffolded, not active | Needs a "staging" environment to scan, which doesn't exist yet (Part E) |
 | SAST (security-scanning the source code) | 🟢 Already running | Runs on every single pull request today — different from DAST, explained below |
 
@@ -459,6 +459,22 @@ subscription entirely: **GitHub Actions' own macOS-hosted CI runners.**
   described above). Maestro's own docs have a guide for exactly this setup
   ("Maestro GitHub Action for iOS"), and it's a well-established community
   pattern, not an exotic one.
+- **This is now built**, as of 2026-09-11:
+  `.github/workflows/maestro-ios-macos-runner.yml`. It builds both apps on
+  a `macos-15` runner via `npx expo run:ios --configuration Release`,
+  boots the Simulator, and runs the same 12 `.maestro/` flows locally
+  against it — no EAS Build, no Maestro Cloud, no `EXPO_TOKEN` or
+  `MAESTRO_CLOUD_API_KEY` needed anywhere in this path. Trigger it via the
+  Actions tab ("Maestro Mobile E2E (iOS, local build...)" → Run workflow)
+  or by applying a **`run-maestro-ios`** label to a PR — a deliberately
+  separate label from the Android lane's `run-maestro`, not yet wired into
+  the auto-labeler, so this new/unproven lane only runs when someone asks
+  for it. **Not yet exercised against a real macOS runner** — the YAML is
+  syntax-validated but this environment has no way to run a real GitHub
+  Actions macOS job, so the first real trigger is the actual proof this
+  works; see the workflow file's own header comment for the full list of
+  known limitations (no backend started in-job, Simulator device left to
+  Expo's own default selection).
 - **Cost — and this is the headline number**: macOS runner minutes are
   billed at roughly **$0.062/minute** on a private repo (GitHub cut this
   price ~23% on 2026-01-01) and count against your included free-minutes
@@ -506,8 +522,12 @@ compliance reason to use AWS specifically).
    entirely and use a GitHub Actions macOS runner instead** (the section
    just above). It reuses the same 12 flow files, needs no Apple Developer
    account, and runs at roughly **$16-24/month** for occasional use versus
-   ~$250/month for a Maestro Cloud or BrowserStack iOS device. This is a
-   new (2026-09-11) workflow to build — it doesn't exist in this repo yet.
+   ~$250/month for a Maestro Cloud or BrowserStack iOS device. **Built
+   2026-09-11** as `.github/workflows/maestro-ios-macos-runner.yml` — apply
+   the `run-maestro-ios` label to a PR, or trigger it manually from the
+   Actions tab, to run it. Its first real run is still unproven (see the
+   file's own header comment) — treat that first trigger as validation,
+   not as an already-confirmed-working pipeline.
 3. **Decide on the Apple Developer Program account ($99/yr) separately, on
    its own timeline** — it's only needed later, for real-device coverage
    or TestFlight distribution, not for the Simulator-based CI path above.
@@ -530,13 +550,16 @@ one is delayed:
    task turns "tests exist but never run" into "tests run automatically on
    every relevant PR." Do this before investing more in new test flows;
    there's no point writing more tests for a pipe that's currently closed.
-3. **For iOS — given the team has no Mac access — build the GitHub Actions
-   macOS-runner path from Part F**, not a Maestro Cloud/BrowserStack iOS
-   subscription. It reuses the same 12 flows, needs no Apple Developer
+3. **For iOS — given the team has no Mac access — use the GitHub Actions
+   macOS-runner workflow from Part F**, not a Maestro Cloud/BrowserStack
+   iOS subscription. It reuses the same 12 flows, needs no Apple Developer
    account, and runs at roughly $16-24/month for occasional use instead of
-   ~$250/month for a device-farm iOS lane. This is the update from the
-   earlier version of this guide: iOS testing was never actually blocked
-   on owning a Mac — it just needed the right CI approach.
+   ~$250/month for a device-farm iOS lane. **This is now built** —
+   `.github/workflows/maestro-ios-macos-runner.yml` — trigger its first
+   real run (Actions tab → Run workflow, or apply the `run-maestro-ios`
+   label to a PR) to prove it actually works end to end; this update is
+   the confirmation that iOS testing was never actually blocked on owning
+   a Mac — it just needed the right CI approach.
 4. **The staging environment (for DAST) is the one genuinely bigger
    project here** — sequence it based on what's next (prioritize it ahead
    of a security review or public launch).
@@ -549,7 +572,7 @@ one is delayed:
 |---|---|---|---|
 | A. Run local Android tests, work through the 🔲 manual items in `docs/MOBILE_SMOKE.md` | You / QA | Nothing | Your laptop only |
 | B. Add `EXPO_TOKEN` + `MAESTRO_CLOUD_API_KEY` repo secrets, hand-fire the workflow once | Repo/org admin | Nothing | GitHub repo settings only |
-| C. Add an iOS Simulator build profile + iOS job to `maestro-e2e.yml` (Part F) | Whoever's driving mobile CI | Track B's secrets, to actually run it | `eas.json` (both apps) + `maestro-e2e.yml` |
+| C. Trigger `maestro-ios-macos-runner.yml`'s first real run to validate it (Actions tab or the `run-maestro-ios` label) | Whoever's driving mobile CI | Nothing — it's already built, needs no secrets | `.github/workflows/maestro-ios-macos-runner.yml` (already written; just needs to be run) |
 | D. Decide on and provision an Apple Developer account inside EAS (real-device iOS, TestFlight) | Whoever owns Apple Developer access | Nothing — independent of Track C | EAS project config only |
 | E. Stand up the staging environment (`ACTION_ITEMS.md` E1), then set `STAGING_URL` | Infra/DevOps | Nothing (independent project) | New Fly.io app + Supabase project |
 

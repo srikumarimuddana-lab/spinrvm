@@ -24396,11 +24396,55 @@ how much they de-risk a public launch._
   Backend fix (loud Firebase Admin SDK init failure, recommendation #2), the client fallback-toast
   fix (recommendation #4, see 2026-09-11 correction below — this session's own 2026-09-11
   status line above wrongly listed #4 as still open two days after it had already shipped
-  2026-09-09; caught by re-reading the actual code rather than trusting the prior note), and the
-  delivery-outcome metric (recommendation #3) have all shipped as follow-up PRs — see below. Ops
-  check (confirm the Firebase credential on Fly/Railway, #1) and the iOS background-mode
-  confirmation (#5) remain open — both need access this session doesn't have. #6 (remove/wire the
-  dead `expo-notifications` handler) is small cleanup, not yet done, not blocked on anything.
+  2026-09-09; caught by re-reading the actual code rather than trusting the prior note), the
+  delivery-outcome metric (recommendation #3), and the `expo-notifications` dead-code fix
+  (recommendation #6, see 2026-09-11 addendum below — turned out bigger than "cleanup") have all
+  shipped as follow-up PRs — see below. Ops check (confirm the Firebase credential on
+  Fly/Railway, #1) and the iOS background-mode confirmation (#5) remain open — both need access
+  this session doesn't have.
+- **Addendum (2026-09-11) — recommendation #6 turned out to be a real routing gap, not just dead
+  code, and was fixed, untested on a real device (user's explicit choice — see below):**
+  Going deeper on #6 found the original "misleading dead code, cleanup" framing understated it.
+  Confirmed by directly comparing `node_modules/@react-native-firebase/messaging/android/.../
+  AndroidManifest.xml` (no explicit `android:priority`, defaults to 0) against
+  `node_modules/expo-notifications/android/.../AndroidManifest.xml` (`android:priority="-1"`) for
+  the same `com.google.firebase.MESSAGING_EVENT` intent-filter — RNFirebase wins, so
+  expo-notifications never sees an FCM-originated message. Two consequences, not one:
+  - `Notifications.setNotificationHandler` (`_layout.tsx:219-243`) is **not** fully dead as
+    originally framed — it's live for the one notification expo-notifications actually posts
+    itself: the "upload your documents" welcome nudge in
+    `DriverIdlePanel.tsx:175` (`Notifications.scheduleNotificationAsync`, `trigger: null`). Its
+    FCM-push-type suppression list (`new_ride_assignment`/`ride_completed`/etc.) is the part
+    that's dead, since no FCM message ever reaches it.
+  - **The real, previously-unflagged gap:** the tap-routing logic in
+    `addNotificationResponseReceivedListener` and `getInitialNotificationResponseAsync` — written
+    to deep-link `chat_message` → chat screen, `lost_and_found`/`lost_and_found_message` → the
+    lost-and-found chat, `license_backfill_prompt` → profile — can only fire for notifications
+    expo-notifications itself posted. Those three push types are **not** data-only (only
+    `new_ride_assignment`/`live_activity` are, per `backend/features.py`'s `is_data_only` gate),
+    so they carry a real FCM `notification` block that RNFirebase receives and the OS
+    auto-displays. A driver tapping one of those from the lock screen/notification tray while the
+    app is backgrounded or killed almost certainly lands on a generic screen instead of the
+    intended chat/case/profile screen — a real, plausible UX gap, not just stale code. (The
+    `new_ride_assignment` branch in the same listeners is separately redundant-but-harmless: ride
+    offers are data-only and handled entirely by Notifee, confirmed working per the audit's
+    finding #11.) No equivalent RNFirebase-side tap-detection (`onNotificationOpenedApp`/
+    `getInitialNotification`) existed anywhere in the codebase before this fix (confirmed via
+    grep — zero hits).
+  - **Fix shipped:** added `onNotificationOpenedApp`/`getInitialNotification` wrappers to
+    `shared/services/firebase.ts` (RNFirebase v22+ modular API), wired both into
+    `driver-app/app/_layout.tsx`'s `usePushNotificationRouter` alongside the existing
+    expo-notifications listeners, and extracted the shared tap-routing switch into
+    `driver-app/utils/pushNotificationRouting.ts` (dependency-free, unit-tested — 9 new tests)
+    instead of quadruplicating a 4-branch if/else across all four listeners. Corrected the
+    misleading module-level comment on `setNotificationHandler` to describe what it actually
+    governs. Full detail: `docs/change-log/2026-09-11-c97-rec6-fcm-tap-routing.md`.
+  - **Explicitly asked the user how to proceed rather than deciding alone**, since this grew from
+    "low-priority cleanup" into new, live, driver-facing notification-tap-handling code with zero
+    ability to test on a real device in this sandbox — the kind of change CLAUDE.md's own
+    escalation gate calls for a pause on. User chose to ship it now, untested on device; see
+    "What was NOT verified" in the change-log entry for the exact boundary of what was and wasn't
+    confirmed before it merged.
 - **Correction (same day, before the client-side fix shipped):** the client-side finding below
   originally read as "every notification type except ride offers is silently dropped, foreground
   and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
@@ -24481,8 +24525,11 @@ how much they de-risk a public launch._
   Notifee-based background handler like `new_ride_assignment` has, it would be silently invisible
   in background/killed state with no guard catching the mismatch — nothing enforces "every
   data-only type has a background display path" today; (5) confirm the iOS background-mode gap
-  against a real build; (6) either wire `expo-notifications`' handler into the real path or
-  remove the now-misleading dead code.
+  against a real build; (6) ~~either wire `expo-notifications`' handler into the real path or
+  remove the now-misleading dead code~~ **DONE 2026-09-11, untested on a real device** — see the
+  2026-09-11 addendum above; wired Firebase's own tap-detection into the router rather than
+  removing the expo-notifications path, since the latter is still genuinely needed for the local
+  welcome-nudge notification.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 

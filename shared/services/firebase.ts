@@ -348,6 +348,42 @@ export function onForegroundMessage(handler: (message: RemoteMessage) => void) {
 
 
 /**
+ * Register a handler for when the app is opened by tapping a push
+ * notification while it was backgrounded (not killed).
+ *
+ * This is the RNFirebase-side counterpart to expo-notifications'
+ * `addNotificationResponseReceivedListener` — needed because RNFirebase's
+ * Android manifest service takes priority over expo-notifications' for the
+ * same FCM intent-filter, so RNFirebase — not expo-notifications — is what
+ * actually receives and (for a `notification`-block message) gets the OS to
+ * auto-display these pushes. A tap on one of those OS-displayed
+ * notifications is only observable through this API, not expo-notifications'.
+ */
+export function onNotificationOpenedApp(handler: (message: RemoteMessage) => void) {
+  if (!messagingApi) return () => {};
+  return messagingApi.onNotificationOpenedApp(messagingApi.getMessaging(), handler);
+}
+
+
+/**
+ * Returns the push notification that launched the app from a fully-killed
+ * state, or null if the app wasn't launched that way. See
+ * `onNotificationOpenedApp` above for why this (not expo-notifications'
+ * `getInitialNotificationResponseAsync`) is the source of truth for a real
+ * FCM push tapped from a killed state.
+ */
+export async function getInitialNotification(): Promise<RemoteMessage | null> {
+  if (!messagingApi) return null;
+  try {
+    return await messagingApi.getInitialNotification(messagingApi.getMessaging());
+  } catch (e) {
+    console.log('[Firebase] getInitialNotification error:', e);
+    return null;
+  }
+}
+
+
+/**
  * Set the background message handler.
  * Must be called at the TOP LEVEL (outside of any component).
  */

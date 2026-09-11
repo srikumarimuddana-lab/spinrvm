@@ -38,7 +38,7 @@ import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
 import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
 import { getLastCarFix } from './useCarLocation';
-import { bumpCarSurfaceGeneration } from './carSurfaceGeneration';
+import { bumpCarSurfaceGeneration, isCarSurfaceMapReady } from './carSurfaceGeneration';
 // Static, not lazy: importing this file is what runs its TaskManager.defineTask.
 // A task must be defined at bundle load or the OS has nothing to deliver to when
 // it relaunches the process for a location event. index.js only requires this
@@ -731,18 +731,27 @@ export default function registerAutoPlay(): void {
       // since it builds the moment a connection appears rather than waiting.
       //
       // So re-push the chrome twice on a short delay. setMapButtons re-resolves
-      // the icons, and bumping the surface generation remounts the map. Both are
-      // no-ops when the first attempt already worked — lastKey is cleared so the
-      // chrome genuinely re-sets, and a remount of an already-good map is
-      // invisible.
+      // the icons (a no-op when the first attempt already worked — lastKey is
+      // cleared so the chrome genuinely re-sets). The map is remounted ONLY if
+      // its native view has not attached by then: a remount of an already-good
+      // map is not invisible on Android — it is a second Google Maps GL view in
+      // the VirtualDisplay on a process that also runs the phone map, and it
+      // resets the camera (see carSurfaceGeneration.ts for the 2026-09-11 OOM
+      // and world-camera evidence). A map that has attached but is genuinely
+      // blank for another reason (the empty-API-key case) is not something a
+      // remount ever fixed either.
       stopChromeRefresh(); // never stack two sessions' worth
       chromeRefreshTimers = [1200, 4000].map((delay) =>
         setTimeout(() => {
           if (!template || !HybridAutoPlay.isConnected?.()) return;
           lastKey = null; // force setMapButtons/setHeaderActions to run again
           apply();
+          if (isCarSurfaceMapReady()) {
+            log('post-connect chrome refresh at', delay, 'ms — map attached, no remount');
+            return;
+          }
           bumpCarSurfaceGeneration();
-          log('post-connect chrome refresh at', delay, 'ms');
+          log('post-connect chrome refresh at', delay, 'ms — map not attached, remounted');
         }, delay),
       );
     }

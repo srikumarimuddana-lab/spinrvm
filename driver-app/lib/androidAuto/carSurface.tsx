@@ -59,6 +59,16 @@ import {
   type CarColorScheme,
 } from './carColorScheme';
 import { carColors } from './carTheme';
+
+// Flag for register.ts's post-connect self-heal: "this map instance attached,
+// do not remount it". Outside the component so onMapReady's identity stays stable.
+const markCarSurfaceMapReady = (): void => {
+  try {
+    useCarSurfaceGeneration.getState().markMapReady();
+  } catch {
+    // A missing store must never take the surface down with it.
+  }
+};
 // RouteLine / RoutePins hard-import react-native-maps, so they are lazy-required
 // AFTER the maps guard below (never at module scope) — otherwise loading this
 // file in a maps-less context (web / Expo Go / tests) would crash before the
@@ -243,6 +253,9 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   // the camera re-applied, and only a dependency change will do that — hence a
   // counter in state rather than a ref.
   const [mapReadyTick, setMapReadyTick] = useState(0);
+  // Bumped by onMapLoaded (tiles drawn). A second, independent "the map
+  // exists" signal for the camera effect — see the guard there.
+  const [mapLoadedTick, setMapLoadedTick] = useState(0);
   const setMapRef = useCallback((m: typeof mapRef.current) => {
     mapRef.current = m;
   }, []);
@@ -292,12 +305,32 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   // The pan offset rides on top: while it is non-zero the driver has dragged the
   // map, so the view stays where they put it instead of being yanked back by the
   // next GPS fix. The Recenter map button clears it.
-  const centerLat = followTarget.latitude + offsetLat;
-  const centerLng = followTarget.longitude + offsetLng;
+  //
+  // Finite or nothing: a NaN/Infinity centre is silently ignored by Google
+  // Maps at every entry point (initialRegion's bounds come back null, a camera
+  // with a NaN target is dropped), which leaves the map at its factory default
+  // — the 0,0 / zoom-2 world view seen on the 2026-09-11 head unit. Whatever
+  // the source, an unusable offset must degrade to "follow the driver", not to
+  // "show the Atlantic".
+  const rawCenterLat = followTarget.latitude + offsetLat;
+  const rawCenterLng = followTarget.longitude + offsetLng;
+  const centerFinite = Number.isFinite(rawCenterLat) && Number.isFinite(rawCenterLng);
+  const centerLat = centerFinite ? rawCenterLat : followTarget.latitude;
+  const centerLng = centerFinite ? rawCenterLng : followTarget.longitude;
+  useEffect(() => {
+    if (!centerFinite) pushDebug('error', 'non-finite camera centre — pan offset dropped');
+  }, [centerFinite]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.animateCamera || mapReadyTick === 0) return;
+    if (!map?.animateCamera) return;
+    // Any sign of a live native instance is enough: animateCamera is null-safe
+    // natively (MapView.animateToCamera returns when `map == null`), so the
+    // only cost of an early call is a no-op. Waiting for onMapReady alone is
+    // what left a remounted map at the world camera when that callback did not
+    // re-fire for the new instance; onMapLoaded (tiles drawn) and a non-zero
+    // layout are independent signals that a map exists to be pointed.
+    if (mapReadyTick === 0 && mapLoadedTick === 0 && viewport.w === 0) return;
     const camera: Record<string, unknown> = {
       center: { latitude: centerLat, longitude: centerLng },
       // 0 is north-up, which is exactly the right fallback before any course
@@ -316,18 +349,22 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
       // dead GPS. Never fatal though — the map still renders where it was.
       pushDebug('error', `animateCamera failed: ${String(e)}`);
     }
-  }, [centerLat, centerLng, cameraHeading, delta, viewport.w, viewport.h, mapReadyTick]);
+  }, [centerLat, centerLng, cameraHeading, delta, viewport.w, viewport.h, mapReadyTick, mapLoadedTick]);
 
   const onMapReady = useCallback(() => {
     console.log('[CarSurface] MapView ready (native view attached)');
     pushDebug('info', 'MapView onMapReady — native view attached');
     setDebugFact('map', 'ready (no tiles yet)');
     setMapReadyTick((n) => n + 1);
+    // Tells register.ts's post-connect self-heal that this instance came up,
+    // so it re-pushes the chrome without remounting the map.
+    markCarSurfaceMapReady();
   }, []);
   const onMapLoaded = useCallback(() => {
     console.log('[CarSurface] MapView finished rendering tiles');
     pushDebug('info', 'MapView onMapLoaded — tiles rendered');
     setDebugFact('map', 'TILES RENDERED');
+    setMapLoadedTick((n) => n + 1);
   }, []);
 
   const carCellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
@@ -496,11 +533,19 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
   return (
     <View style={[styles.fill, styles.mapBackdrop]}>
       <MapView
-        // Re-mount on a leg / idle transition so Android's Google Maps native
-        // layer fully drops a leftover route overlay; within a leg the camera is
-        // driven by the `camera` prop (below), not a remount, so live location,
-        // zoom, and heading updates don't thrash the surface.
-        key={`${route ? route.leg : 'idle'}-${surfaceGeneration}`}
+        // ONE native map per connection. Keyed on the surface generation only,
+        // which register.ts bumps solely when this instance failed to attach
+        // (the cold-launch cure). The leg used to be in this key too, so that
+        // Android's Google Maps layer dropped a leftover route overlay on every
+        // pickup → dropoff → idle transition — but each of those was a full GL
+        // map teardown + re-creation inside the VirtualDisplay Presentation on
+        // the main thread. On the 2026-09-11 test ride the dropoff → idle one
+        // fired at Complete Trip on a process 12 s old and 2 min past an OOM,
+        // and the head unit showed "Spinr Driver isn't responding". The overlay
+        // cleanup the leg key bought is now done at the overlay level: the
+        // route line and pins are keyed on the leg below, so they are recreated
+        // per leg while the map underneath stays put.
+        key={`car-map-${surfaceGeneration}`}
         ref={setMapRef}
         style={styles.fill}
         onLayout={onMapLayout}
@@ -603,10 +648,11 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
             Pins follow the leg: green pickup while heading to the rider; green
             pickup (route start) + red dropoff once the trip is under way. */}
         {route && RouteLine && (livePath ?? route.polyline).length > 1 && (
-          <RouteLine path={livePath ?? route.polyline} />
+          <RouteLine key={`route-line-${route.leg}`} path={livePath ?? route.polyline} />
         )}
         {route && RoutePins && (
           <RoutePins
+            key={`route-pins-${route.leg}`}
             pickup={route.leg === 'pickup' ? route.destination : (route.polyline[0] ?? null)}
             dropoff={route.leg === 'dropoff' ? route.destination : null}
           />

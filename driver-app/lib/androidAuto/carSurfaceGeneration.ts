@@ -21,12 +21,31 @@ import { create } from 'zustand';
 
 interface CarSurfaceGenerationState {
   generation: number;
+  /**
+   * Whether the CURRENT generation's native map has attached (its onMapReady
+   * fired). Cleared by every bump, since a bump is a fresh native map.
+   *
+   * Why it is tracked: the post-connect self-heal in register.ts used to
+   * remount unconditionally at +1.2 s and +4 s. A remount of a map that is
+   * already good is not invisible on Android — each one is a brand-new Google
+   * Maps GL view inside the VirtualDisplay Presentation (tile cache, GL
+   * context, camera reset) on a process that also runs the phone map. The
+   * 2026-09-11 test ride hit a 256 MB heap OOM 59 s after a relaunch
+   * (CRIMSON-SMOKE-7445-SX) with Android Auto connected, and the head unit
+   * showed Google's default world camera after a remount whose onMapReady
+   * never re-fired. Remounting only a map that has not come up keeps the
+   * cold-launch cure and drops the churn.
+   */
+  mapReady: boolean;
   bump: () => void;
+  markMapReady: () => void;
 }
 
 export const useCarSurfaceGeneration = create<CarSurfaceGenerationState>((set) => ({
   generation: 0,
-  bump: () => set((s) => ({ generation: s.generation + 1 })),
+  mapReady: false,
+  bump: () => set((s) => ({ generation: s.generation + 1, mapReady: false })),
+  markMapReady: () => set({ mapReady: true }),
 }));
 
 /** Remount the car surface's map. Safe to call from outside React. */
@@ -35,5 +54,14 @@ export const bumpCarSurfaceGeneration = (): void => {
     useCarSurfaceGeneration.getState().bump();
   } catch {
     // Never let a recovery mechanism be the thing that breaks the surface.
+  }
+};
+
+/** True once the current map instance has attached. Safe outside React. */
+export const isCarSurfaceMapReady = (): boolean => {
+  try {
+    return useCarSurfaceGeneration.getState().mapReady;
+  } catch {
+    return false;
   }
 };

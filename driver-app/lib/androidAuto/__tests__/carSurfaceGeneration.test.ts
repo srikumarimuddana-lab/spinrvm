@@ -10,6 +10,7 @@
 import {
   bumpCarSurfaceGeneration,
   isCarSurfaceMapReady,
+  resetCarSurfaceMapReady,
   useCarSurfaceGeneration,
 } from '../carSurfaceGeneration';
 
@@ -50,5 +51,19 @@ describe('carSurfaceGeneration', () => {
     expect(useCarSurfaceGeneration.getState().generation).toBe(1);
     useCarSurfaceGeneration.getState().markMapReady();
     expect(isCarSurfaceMapReady()).toBe(true);
+  });
+
+  // Reconnect: the next session builds a NEW MapView at the SAME generation.
+  // Without the reset it would inherit this session's `true` and the +4 s
+  // self-heal would never remount a map that failed to attach.
+  it('a disconnect reset forgets the previous instance without changing the generation', () => {
+    useCarSurfaceGeneration.getState().markMapReady();
+    expect(isCarSurfaceMapReady()).toBe(true);
+    resetCarSurfaceMapReady(); // register.ts didDisconnect
+    expect(isCarSurfaceMapReady()).toBe(false);
+    expect(useCarSurfaceGeneration.getState().generation).toBe(0);
+    // New session's map never attaches → the self-heal sees not-ready → remount.
+    bumpCarSurfaceGeneration();
+    expect(useCarSurfaceGeneration.getState().generation).toBe(1);
   });
 });

@@ -136,8 +136,28 @@ describe('shared/api/client — SOS exempt from 401→logout interceptor', () =>
   // refresh attempt. With a refresh token on disk and no callback yet, the
   // session must be left for initialize() to try.
   describe('G2 backstop before auth init', () => {
+    // The fix is native-only: authStore keeps the refresh token in SecureStore;
+    // on web it is an HttpOnly cookie the client cannot read, so web keeps the
+    // old clear-and-logout behaviour. These cases run the Android path.
+    const SecureStoreMock = require('expo-secure-store');
+    const PlatformMock = require('react-native').Platform;
+
+    const storeRefreshToken = (value: string | null) => {
+      SecureStoreMock.getItemAsync.mockImplementation((key: string) =>
+        Promise.resolve(key === 'refresh_token' ? value : null),
+      );
+    };
+
+    beforeEach(() => {
+      PlatformMock.OS = 'android';
+    });
+    afterEach(() => {
+      PlatformMock.OS = 'web';
+      SecureStoreMock.getItemAsync.mockImplementation(() => Promise.resolve(null));
+    });
+
     it('keeps the stored refresh token and does not log out when no refresh callback is registered yet', async () => {
-      _storage.refresh_token = 'stored-refresh-token';
+      storeRefreshToken('stored-refresh-token');
       _mockFetch.mockResolvedValue(make401Response());
 
       await expect(api.get('/rides/active')).rejects.toThrow();
@@ -145,11 +165,22 @@ describe('shared/api/client — SOS exempt from 401→logout interceptor', () =>
       expect(mockLogout).not.toHaveBeenCalled();
       // The dead access token is still dropped so nothing keeps sending it.
       expect(hasAuthToken()).toBe(false);
-      expect(_storage.refresh_token).toBe('stored-refresh-token');
+      expect(SecureStoreMock.getItemAsync).toHaveBeenCalledWith('refresh_token');
+      expect(SecureStoreMock.deleteItemAsync).not.toHaveBeenCalledWith('refresh_token');
     });
 
     it('still clears the session when there is no stored refresh token to recover', async () => {
-      delete _storage.refresh_token;
+      storeRefreshToken(null);
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).toHaveBeenCalled();
+    });
+
+    it('on web (HttpOnly cookie, nothing readable) the backstop behaves as before', async () => {
+      PlatformMock.OS = 'web';
+      _storage.refresh_token = 'would-be-ignored';
       _mockFetch.mockResolvedValue(make401Response());
 
       await expect(api.get('/rides/active')).rejects.toThrow();
@@ -162,7 +193,7 @@ describe('shared/api/client — SOS exempt from 401→logout interceptor', () =>
     // breadcrumb must carry the path only — found by spinr-security-auditor
     // on the first cut of this change.
     it('never puts the query string in the Sentry breadcrumb (raw GPS in /drivers/nearby)', async () => {
-      _storage.refresh_token = 'stored-refresh-token';
+      storeRefreshToken('stored-refresh-token');
       _mockFetch.mockResolvedValue(make401Response());
 
       await expect(api.get('/drivers/nearby?lat=50.4452&lng=-104.6189')).rejects.toThrow();
@@ -176,7 +207,7 @@ describe('shared/api/client — SOS exempt from 401→logout interceptor', () =>
     });
 
     it('redacts the query string on the clearing branch as well', async () => {
-      delete _storage.refresh_token;
+      storeRefreshToken(null);
       _mockFetch.mockResolvedValue(make401Response());
 
       await expect(api.get('/users/search?phone=%2B13065551234')).rejects.toThrow();

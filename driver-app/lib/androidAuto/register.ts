@@ -38,7 +38,7 @@ import { CarMapSurface } from './carSurface';
 import { useCarMapCamera } from './carMapCamera';
 import { isCarDebugAvailable, pushDebug, setDebugFact, useCarDebug } from './carDebug';
 import { getLastCarFix } from './useCarLocation';
-import { bumpCarSurfaceGeneration, isCarSurfaceMapReady } from './carSurfaceGeneration';
+import { bumpCarSurfaceGeneration, isCarSurfaceMapReady, resetCarSurfaceMapReady } from './carSurfaceGeneration';
 // Static, not lazy: importing this file is what runs its TaskManager.defineTask.
 // A task must be defined at bundle load or the OS has nothing to deliver to when
 // it relaunches the process for a location event. index.js only requires this
@@ -740,19 +740,31 @@ export default function registerAutoPlay(): void {
       // and world-camera evidence). A map that has attached but is genuinely
       // blank for another reason (the empty-API-key case) is not something a
       // remount ever fixed either.
+      //
+      // Only the LATER tick may remount. A first GL map inside the VirtualDisplay
+      // on a seconds-old process can legitimately take more than 1.2 s to reach
+      // onMapReady; remounting it then is the teardown/re-create this change
+      // exists to stop. 4 s without onMapReady is the cold-launch failure.
       stopChromeRefresh(); // never stack two sessions' worth
-      chromeRefreshTimers = [1200, 4000].map((delay) =>
+      chromeRefreshTimers = [
+        [1200, false],
+        [4000, true],
+      ].map(([delay, mayRemount]) =>
         setTimeout(() => {
           if (!template || !HybridAutoPlay.isConnected?.()) return;
           lastKey = null; // force setMapButtons/setHeaderActions to run again
           apply();
+          if (!mayRemount) {
+            log('post-connect chrome refresh at', delay, 'ms');
+            return;
+          }
           if (isCarSurfaceMapReady()) {
             log('post-connect chrome refresh at', delay, 'ms — map attached, no remount');
             return;
           }
           bumpCarSurfaceGeneration();
           log('post-connect chrome refresh at', delay, 'ms — map not attached, remounted');
-        }, delay),
+        }, delay as number),
       );
     }
 
@@ -776,6 +788,9 @@ export default function registerAutoPlay(): void {
       primed = false;
       stopColdStartPoll();
       stopChromeRefresh();
+      // The next session's MapView is a new native instance; it must prove it
+      // attached on its own (carSurfaceGeneration.ts, resetCarSurfaceMapReady).
+      resetCarSurfaceMapReady();
       stopCarSession();
       // The screen it was drawing for is gone; so must the notification be.
       stopCarLocationService().catch((e) => logError('car location stop failed:', e));

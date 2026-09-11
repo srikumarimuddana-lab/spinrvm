@@ -174,11 +174,24 @@ export function setRefreshCallback(fn: RefreshFn): void {
 
 /**
  * Whether a refresh token is persisted for this install — i.e. whether a
- * session exists that authStore.initialize() could still restore. Read-only;
- * mirrors the storage split authStore uses (SecureStore natively, session
- * storage on web). Any read failure counts as "none", which keeps the caller
- * on the conservative (clear) path.
+ * session exists that authStore.initialize() could still restore. Native
+ * only: authStore keeps the refresh token in SecureStore under
+ * 'refresh_token'. On web the token lives in an HttpOnly cookie the client
+ * cannot read (authStore's storage helper is a no-op there), so this reports
+ * false and the pre-init branch never applies — web keeps the clear-and-logout
+ * behaviour it always had. Any read failure also counts as "none", which
+ * keeps the caller on the conservative (clear) path.
  */
+async function hasStoredRefreshToken(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  try {
+    const SecureStore = require('expo-secure-store');
+    return !!(await SecureStore.getItemAsync('refresh_token'));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The URL as it may appear in a Sentry breadcrumb: path only. Query strings on
  * this client carry raw coordinates (`/drivers/nearby?lat=…&lng=…`), phone
@@ -194,17 +207,6 @@ function breadcrumbPath(url: string): string {
   }
 }
 
-async function hasStoredRefreshToken(): Promise<boolean> {
-  try {
-    if (Platform.OS === 'web') {
-      return typeof sessionStorage !== 'undefined' && !!sessionStorage.getItem('refresh_token');
-    }
-    const SecureStore = require('expo-secure-store');
-    return !!(await SecureStore.getItemAsync('refresh_token'));
-  } catch {
-    return false;
-  }
-}
 
 // ── Proactive token refresh ──
 // Called before critical actions (AppState resume, WS connect, periodic timer)

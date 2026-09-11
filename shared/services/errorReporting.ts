@@ -61,7 +61,11 @@ export function initErrorReporting(config: ErrorReportingConfig): void {
       //    detection independent of the JVM watchdog — the stall behind
       //    Android Auto's "Spinr Driver isn't responding" left nothing.
       // Both are no-ops on iOS and off-Android. No PII: stack frames and
-      // thread names only.
+      // thread names only. Two caveats to check in Sentry after the first
+      // deploy rather than assume: the NDK heartbeat is independent of the
+      // JVM ANR watchdog, so one hang can surface as two issues; and
+      // historical tombstones arrive without current scope data, so they may
+      // lack the `surface` tag.
       enableTombstone: true,
       enableHistoricalTombstoneReporting: true,
       enableNdkAppHangTracking: true,

@@ -39,6 +39,8 @@ interface CarSurfaceGenerationState {
   mapReady: boolean;
   bump: () => void;
   markMapReady: () => void;
+  /** Forget the previous session's instance — call on car disconnect. */
+  resetMapReady: () => void;
 }
 
 export const useCarSurfaceGeneration = create<CarSurfaceGenerationState>((set) => ({
@@ -46,12 +48,28 @@ export const useCarSurfaceGeneration = create<CarSurfaceGenerationState>((set) =
   mapReady: false,
   bump: () => set((s) => ({ generation: s.generation + 1, mapReady: false })),
   markMapReady: () => set({ mapReady: true }),
+  resetMapReady: () => set({ mapReady: false }),
 }));
 
 /** Remount the car surface's map. Safe to call from outside React. */
 export const bumpCarSurfaceGeneration = (): void => {
   try {
     useCarSurfaceGeneration.getState().bump();
+  } catch {
+    // Never let a recovery mechanism be the thing that breaks the surface.
+  }
+};
+
+/**
+ * Forget the previous session's map. The flag describes ONE native instance;
+ * a reconnect builds a new template and a new MapView at the same generation,
+ * and without this the new instance would inherit the old session's `true`
+ * and the post-connect self-heal would never remount a map that failed to
+ * attach — the exact cold-launch case it exists for. Safe outside React.
+ */
+export const resetCarSurfaceMapReady = (): void => {
+  try {
+    useCarSurfaceGeneration.getState().resetMapReady();
   } catch {
     // Never let a recovery mechanism be the thing that breaks the surface.
   }

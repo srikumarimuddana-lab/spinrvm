@@ -11,6 +11,7 @@ import { RoutePins } from '@shared/components/RoutePins';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { useAuthStore } from '@shared/store/authStore';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
@@ -608,7 +609,7 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
@@ -616,23 +617,23 @@ function createStyles(colors: ThemeColors) {
 
     statusBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 8,
-      paddingHorizontal: 16, paddingVertical: 12, borderRadius: 14, marginBottom: 16,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, borderRadius: 14, marginBottom: SPACING.md,
     },
-    statusText: { fontSize: 15, fontWeight: '700' },
+    statusText: { fontSize: FONT.bodyMd, fontWeight: '700' },
     statusDate: { flex: 1, fontSize: 12, color: colors.textDim, textAlign: 'right' },
 
     importedBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
-      backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: 4,
-      borderRadius: 10, marginBottom: 16,
+      backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: SPACING.xs,
+      borderRadius: 10, marginBottom: SPACING.md,
     },
-    importedBadgeText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+    importedBadgeText: { fontSize: FONT.label, fontWeight: '600', color: colors.textDim },
 
-        mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: 16, backgroundColor: colors.border },
+        mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: SPACING.md, backgroundColor: colors.border },
         map: { flex: 1 },
-        routeQualityText: { color: colors.textDim, fontSize: 12, marginTop: -10, marginBottom: 16 },
+        routeQualityText: { color: colors.textDim, fontSize: 12, marginTop: -10, marginBottom: SPACING.md },
 
-    routeCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
+    routeCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: SPACING.md, marginBottom: SPACING.md },
     routeRow: { flexDirection: 'row' },
     routeDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
     dot: { width: 10, height: 10, borderRadius: 5 },
@@ -642,21 +643,21 @@ function createStyles(colors: ThemeColors) {
 
     fareBreakdownCard: {
       backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
-      marginBottom: 16, borderWidth: 1, borderColor: colors.border,
+      marginBottom: SPACING.md, borderWidth: 1, borderColor: colors.border,
     },
     fareBreakdownTitle: {
       fontSize: 12, fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: colors.textDim, marginBottom: 8,
+      color: colors.textDim, marginBottom: SPACING.sm,
       textTransform: 'uppercase', letterSpacing: 0.5,
     },
     fareBreakdownRow: {
       flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3,
     },
     fareBreakdownLabel: {
-      fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text,
+      fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text,
     },
     fareBreakdownValue: {
-      fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.text,
+      fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_500Medium', color: colors.text,
     },
     fareBreakdownDriverBadge: {
       fontSize: 10, fontFamily: 'PlusJakartaSans_500Medium', color: colors.success, marginTop: 2,
@@ -671,21 +672,21 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary,
     },
     paymentRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
-    paymentText: { fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim },
+    paymentText: { fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim },
 
-    statsRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+    statsRow: { flexDirection: 'row', gap: 10, marginBottom: SPACING.md },
     statCard: { flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, alignItems: 'center' },
     statVal: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 6 },
-    statLabel: { fontSize: 11, color: colors.textDim, marginTop: 2 },
+    statLabel: { fontSize: FONT.label, color: colors.textDim, marginTop: 2 },
 
     helpBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 10,
-      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 16,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: SPACING.md,
     },
     helpText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.primary },
     actionBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 10,
-      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 16, marginBottom: 12,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: SPACING.md, marginBottom: 12,
     },
     actionText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
   });

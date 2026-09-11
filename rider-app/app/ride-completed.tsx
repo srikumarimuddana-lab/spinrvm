@@ -18,6 +18,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { Analytics } from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, HELD_FOR_REVIEW_ALERT, PaymentAlertButton } from '../utils/attemptRidePayment';
@@ -971,7 +972,7 @@ function createStyles(colors: ThemeColors) {
   const onInverse = colors.background;
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surfaceLight },
-    content: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 20, gap: 10 },
+    content: { paddingHorizontal: SPACING.md, paddingTop: 20, paddingBottom: 20, gap: 10 },
 
     // ── Success header ──
     successSection: { alignItems: 'center', paddingVertical: 10 },
@@ -990,18 +991,18 @@ function createStyles(colors: ThemeColors) {
     },
     subtitle: {
       fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular',
-      color: colors.textDim, marginBottom: 8, paddingHorizontal: 20, textAlign: 'center',
+      color: colors.textDim, marginBottom: SPACING.sm, paddingHorizontal: 20, textAlign: 'center',
     },
     rideDateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     rideDateText: {
       fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
     },
     rideCodeBadge: {
-      backgroundColor: colors.surface, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
+      backgroundColor: colors.surface, paddingHorizontal: SPACING.sm, paddingVertical: 3, borderRadius: 6,
       borderWidth: 1, borderColor: colors.border,
     },
     rideCodeText: {
-      fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim, letterSpacing: 0.5,
+      fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim, letterSpacing: 0.5,
     },
 
     // ── Rate card ──
@@ -1030,29 +1031,29 @@ function createStyles(colors: ThemeColors) {
       fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
     },
     driverMeta: {
-      fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2,
+      fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2,
     },
     plateRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
     plateBadge: {
-      backgroundColor: colors.surfaceLight, paddingHorizontal: 8, paddingVertical: 3,
+      backgroundColor: colors.surfaceLight, paddingHorizontal: SPACING.sm, paddingVertical: 3,
       borderRadius: 6, borderWidth: 1, borderColor: colors.border,
     },
     plateText: {
-      fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, letterSpacing: 1,
+      fontSize: FONT.label, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, letterSpacing: 1,
     },
     tripCountText: {
-      fontSize: 11, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
+      fontSize: FONT.label, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
     },
     rateDivider: { height: 1, backgroundColor: colors.border, marginVertical: 18 },
     rateLabel: {
-      fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold',
+      fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text, textAlign: 'center', marginBottom: 14,
     },
-    starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 },
+    starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: SPACING.sm },
     starBtn: { width: 50, height: 50, alignItems: 'center', justifyContent: 'center' },
     ratingText: {
       fontSize: 14, fontFamily: 'PlusJakartaSans_500Medium',
-      color: colors.primary, textAlign: 'center', marginBottom: 16,
+      color: colors.primary, textAlign: 'center', marginBottom: SPACING.md,
     },
     commentInput: {
       backgroundColor: colors.surfaceLight, borderRadius: 12, padding: 14,
@@ -1066,13 +1067,13 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface, borderRadius: 16, padding: 20,
       borderWidth: 1, borderColor: colors.border,
     },
-    tipHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+    tipHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: SPACING.md },
     tipIconWrap: {
       width: 40, height: 40, borderRadius: 20,
       backgroundColor: `${colors.primary}12`, justifyContent: 'center', alignItems: 'center',
     },
     tipTitle: {
-      fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
+      fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
       marginBottom: 0, textAlign: 'left',
     },
     tipSubtitle: {
@@ -1093,7 +1094,7 @@ function createStyles(colors: ThemeColors) {
     tipBtnEmoji: { fontSize: 18, marginBottom: 2 },
     tipBtnEmojiActive: {},
     tipBtnText: {
-      fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
+      fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
     },
     tipBtnTextActive: { color: onInverse },
     tipCustom: {
@@ -1102,11 +1103,11 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 14, minWidth: 80, minHeight: 60,
     },
     tipCustomActive: { borderColor: colors.text, backgroundColor: colors.text },
-    tipDollar: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
+    tipDollar: { fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
     tipDollarActive: { color: onInverse },
     tipCustomInput: {
-      fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
-      paddingVertical: 10, paddingHorizontal: 4, minWidth: 44,
+      fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
+      paddingVertical: 10, paddingHorizontal: SPACING.xs, minWidth: 44,
     },
     // Without this the typed amount keeps colors.text on a colors.text fill —
     // the rider types a tip they cannot read.
@@ -1117,10 +1118,10 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1, borderColor: colors.border,
     },
     fareTopRow: {
-      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16,
+      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md,
     },
     fareLabel: {
-      fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold',
+      fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.textDim, letterSpacing: 1, marginBottom: 4,
     },
     fareAmount: {
@@ -1174,7 +1175,7 @@ function createStyles(colors: ThemeColors) {
     mapAddrText: {
       flex: 1, fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium', color: '#1A1A1A',
     },
-    mapAddrDivider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 6, marginLeft: 16 },
+    mapAddrDivider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 6, marginLeft: SPACING.md },
 
     // ── Actions ──
     actionsCard: {
@@ -1183,7 +1184,7 @@ function createStyles(colors: ThemeColors) {
     },
     actionBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 14,
-      paddingVertical: 15, paddingHorizontal: 16,
+      paddingVertical: 15, paddingHorizontal: SPACING.md,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     actionIcon: {
@@ -1208,7 +1209,7 @@ function createStyles(colors: ThemeColors) {
 
     // ── Bottom bar ──
     bottomBar: {
-      paddingHorizontal: 16, paddingVertical: 12,
+      paddingHorizontal: SPACING.md, paddingVertical: 12,
       backgroundColor: colors.surface,
       borderTopWidth: 1, borderTopColor: colors.border,
     },
@@ -1225,7 +1226,7 @@ function createStyles(colors: ThemeColors) {
       textAlign: 'center', marginBottom: 10,
     },
     submitBtnText: {
-      fontSize: 16, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF',
+      fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF',
     },
 
     // ── Lost item modal ──
@@ -1254,13 +1255,13 @@ function createStyles(colors: ThemeColors) {
     },
     modalDesc: {
       fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular',
-      color: colors.textDim, lineHeight: 20, marginBottom: 16,
+      color: colors.textDim, lineHeight: 20, marginBottom: SPACING.md,
     },
     modalInput: {
       backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
-      fontSize: 15, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text,
+      fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text,
       minHeight: 80, textAlignVertical: 'top',
-      borderWidth: 1, borderColor: colors.border, marginBottom: 16,
+      borderWidth: 1, borderColor: colors.border, marginBottom: SPACING.md,
     },
     modalBtnRow: {
       flexDirection: 'row', gap: 10,
@@ -1271,14 +1272,14 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1, borderColor: colors.border,
     },
     modalCancelText: {
-      fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
+      fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
     },
     modalSubmitBtn: {
       flex: 1, paddingVertical: 14, borderRadius: 12,
       backgroundColor: colors.error, alignItems: 'center',
     },
     modalSubmitText: {
-      fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF',
+      fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF',
     },
   });
 }

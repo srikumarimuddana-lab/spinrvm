@@ -34,6 +34,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface LostFoundCase {
   id: string;
@@ -579,11 +580,11 @@ function createStyles(colors: ThemeColors) {
       borderBottomColor: colors.border,
       gap: 8,
     },
-    back: { padding: 4 },
+    back: { padding: SPACING.xs },
     headerInfo: { flex: 1 },
-    headerTitle: { fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
+    headerTitle: { fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     headerStatus: { fontSize: 12, color: colors.textDim, marginTop: 1, textTransform: 'capitalize' },
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACING.xl },
     emptyText: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
 
     // Report form
@@ -592,13 +593,13 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
-      marginBottom: 4,
+      marginBottom: SPACING.xs,
     },
     formInput: {
       backgroundColor: colors.surface,
       borderRadius: 12,
       padding: 14,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       color: colors.text,
       minHeight: 80,
       borderWidth: 1,
@@ -608,34 +609,34 @@ function createStyles(colors: ThemeColors) {
     catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     catPill: {
       paddingHorizontal: 14,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       borderRadius: 20,
       borderWidth: 1,
       borderColor: colors.border,
       backgroundColor: colors.surface,
     },
     catPillSelected: { borderColor: colors.primary, backgroundColor: `${colors.primary}18` },
-    catText: { fontSize: 13, color: colors.textDim },
+    catText: { fontSize: FONT.bodySm, color: colors.textDim },
     catTextSelected: { color: colors.primary, fontFamily: 'PlusJakartaSans_600SemiBold' },
     submitBtn: {
       backgroundColor: colors.primary,
       borderRadius: 14,
-      padding: 16,
+      padding: SPACING.md,
       alignItems: 'center',
-      marginTop: 8,
+      marginTop: SPACING.sm,
     },
-    submitBtnText: { color: '#fff', fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold' },
+    submitBtnText: { color: '#fff', fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_600SemiBold' },
 
     // Respond banner
     respondBanner: {
-      padding: 16,
+      padding: SPACING.md,
       backgroundColor: 'rgba(245, 158, 11, 0.08)',
       borderBottomWidth: 1,
       borderBottomColor: 'rgba(245, 158, 11, 0.3)',
       gap: 10,
     },
     respondQuestion: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
       textAlign: 'center',
@@ -653,14 +654,14 @@ function createStyles(colors: ThemeColors) {
     respondBtnText: { fontSize: 14, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#fff' },
 
     // Chat
-    msgList: { padding: 16, gap: 8, flexGrow: 1 },
-    systemRow: { alignItems: 'center', marginVertical: 8 },
+    msgList: { padding: SPACING.md, gap: 8, flexGrow: 1 },
+    systemRow: { alignItems: 'center', marginVertical: SPACING.sm },
     systemText: {
       fontSize: 12,
       color: colors.textDim,
       backgroundColor: colors.surfaceLight,
       paddingHorizontal: 12,
-      paddingVertical: 4,
+      paddingVertical: SPACING.xs,
       borderRadius: 12,
       textAlign: 'center',
     },
@@ -682,7 +683,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.border,
     },
-    bubbleText: { fontSize: 15, color: colors.text, lineHeight: 21 },
+    bubbleText: { fontSize: FONT.bodyMd, color: colors.text, lineHeight: 21 },
     bubbleTextMe: { color: '#fff' },
     timeText: { fontSize: 10, color: colors.textDim, alignSelf: 'flex-end' },
     timeTextMe: { color: 'rgba(255,255,255,0.6)' },
@@ -693,7 +694,7 @@ function createStyles(colors: ThemeColors) {
       borderTopColor: colors.border,
       alignItems: 'center',
     },
-    closedText: { fontSize: 13, color: colors.textDim },
+    closedText: { fontSize: FONT.bodySm, color: colors.textDim },
     inputRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
@@ -709,7 +710,7 @@ function createStyles(colors: ThemeColors) {
       borderRadius: 20,
       paddingHorizontal: 14,
       paddingVertical: 10,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       color: colors.text,
       maxHeight: 100,
       borderWidth: 1,

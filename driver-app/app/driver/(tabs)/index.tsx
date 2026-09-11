@@ -42,7 +42,7 @@ import {
   publishLiveRoute,
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
-import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, MIN_DISPLAYED_SPEED_MPS } from '../../../utils/locationDisplayGate';
+import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, displaySpeedKmh } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import { SPACING, FONT } from '@shared/utils/responsive';
@@ -221,6 +221,19 @@ function DriverDashboard() {
     const timer = setInterval(fetchUnread, 60 * 1000);
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
+
+  // Speed-chip staleness tick: `location` only changes when a new GPS fix
+  // arrives, but the chip needs to clamp to 0 once the CURRENT fix ages past
+  // MAX_SPEED_FIX_AGE_MS even while no new fix arrives at all (a genuine
+  // standstill — see displaySpeedKmh's own doc comment). A 1s re-render tick
+  // is what lets that clamp actually fire on a timer instead of waiting on
+  // the next unrelated re-render to happen to notice the fix is now stale.
+  const [, setSpeedTick] = useState(0);
+  useEffect(() => {
+    if (!isOnline) return;
+    const timer = setInterval(() => setSpeedTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [isOnline]);
 
   // Surge multiplier for the driver's service area — fetched on mount and
   // refreshed every 2 minutes (matching the surge engine interval).
@@ -1503,17 +1516,19 @@ function DriverDashboard() {
 
       {/* Current speed — GPS-derived (coords.speed, m/s), shown at all times
           while online so the readout doesn't pop in/out as speed crosses the
-          threshold. Below MIN_DISPLAYED_SPEED_MPS the RAW value is GPS speed
-          noise, not real motion — a stationary vehicle was live-reported
-          showing ~8 km/h from that noise alone (see locationDisplayGate.ts)
-          — so the DISPLAYED value is clamped to a literal 0 rather than
-          showing the noisy figure or hiding the chip entirely. */}
+          threshold. displaySpeedKmh clamps two known failure modes: GPS
+          noise near zero (a stationary vehicle live-reported ~8 km/h from
+          noise alone) and a STALE fix — watchPositionAsync goes quiet at a
+          genuine standstill, so without this the chip held whatever the last
+          real speed was (live-reported: 57 km/h sitting on screen for
+          minutes after the vehicle actually stopped) instead of reading 0.
+          The speedTick state above forces this to re-evaluate every second
+          even with no new fix, so staleness clamps on a timer, not only when
+          the next fix happens to arrive. See locationDisplayGate.ts. */}
       {isOnline && (
         <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
           <Text style={styles.speedChipValue} allowFontScaling={false}>
-            {(location.coords.speed ?? 0) >= MIN_DISPLAYED_SPEED_MPS
-              ? Math.round((location.coords.speed ?? 0) * 3.6)
-              : 0}
+            {displaySpeedKmh(location.coords.speed, location.timestamp, Date.now())}
           </Text>
           <Text style={styles.speedChipUnit} allowFontScaling={false}>km/h</Text>
         </View>

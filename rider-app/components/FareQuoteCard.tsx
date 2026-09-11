@@ -16,6 +16,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiAction, FareQuoteOption } from '@shared/types/ai';
 import { Card } from '@shared/components/Card';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 type FareQuoteAction = Extract<AiAction, { type: 'fare_quote' }>;
 
@@ -184,11 +185,11 @@ const createStyles = (colors: ThemeColors) =>
     vehicleName: { fontSize: 14, fontWeight: '700', color: colors.text },
     optionMeta: { fontSize: 12, color: colors.textDim },
     savingsPill: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-    savingsText: { fontSize: 11, fontWeight: '600', color: colors.success },
-    noPromoText: { fontSize: 11, color: colors.textDim, marginTop: 2 },
+    savingsText: { fontSize: FONT.label, fontWeight: '600', color: colors.success },
+    noPromoText: { fontSize: FONT.label, color: colors.textDim, marginTop: 2 },
     breakdownWrap: {
       gap: 4,
-      paddingTop: 8,
+      paddingTop: SPACING.sm,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
     },
@@ -197,10 +198,10 @@ const createStyles = (colors: ThemeColors) =>
     breakdownLabel: { flex: 1, fontSize: 12, color: colors.textDim },
     breakdownAmount: { fontSize: 12, color: colors.text },
     breakdownSavings: { fontSize: 12, fontWeight: '600', color: colors.success },
-    breakdownTotal: { fontSize: 13, fontWeight: '700', color: colors.text },
+    breakdownTotal: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.text },
     priceCol: { alignItems: 'flex-end', gap: 1 },
     strikePrice: { fontSize: 12, color: colors.textDim, textDecorationLine: 'line-through' },
-    finalPrice: { fontSize: 16, fontWeight: '700', color: colors.text },
-    surgeText: { fontSize: 11, fontWeight: '600', color: colors.warning },
-    fineprint: { fontSize: 11, color: colors.textDim, textAlign: 'center' },
+    finalPrice: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text },
+    surgeText: { fontSize: FONT.label, fontWeight: '600', color: colors.warning },
+    fineprint: { fontSize: FONT.label, color: colors.textDim, textAlign: 'center' },
   });

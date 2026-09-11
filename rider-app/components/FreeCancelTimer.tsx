@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { FONT } from '@shared/utils/responsive';
 interface FreeCancelTimerProps {
   /** ISO timestamp when driver accepted the ride (null if not yet accepted). */
   driverAcceptedAt: string | null | undefined;
@@ -150,14 +151,14 @@ function createStyles(colors: ThemeColors) {
       borderColor: '#FECACA',
     },
     textBlock: { flex: 1 },
-    freeLabel: { fontSize: 13, fontWeight: '600', color: '#059669' },
+    freeLabel: { fontSize: FONT.bodySm, fontWeight: '600', color: '#059669' },
     freeTimer: { fontSize: 18, fontWeight: '800', color: '#059669', letterSpacing: -0.5 },
-    feeLabel: { fontSize: 13, fontWeight: '600', color: colors.error },
+    feeLabel: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.error },
     feeAmount: { fontSize: 18, fontWeight: '800', color: colors.error, letterSpacing: -0.5 },
 
     // Compact variants (for use inside alert dialogs)
-    compactFree: { fontSize: 13, fontWeight: '600', color: '#059669' },
-    compactFee:  { fontSize: 13, fontWeight: '600', color: colors.error },
+    compactFree: { fontSize: FONT.bodySm, fontWeight: '600', color: '#059669' },
+    compactFee:  { fontSize: FONT.bodySm, fontWeight: '600', color: colors.error },
   });
 }
 

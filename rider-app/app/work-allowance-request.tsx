@@ -18,6 +18,7 @@ import { showToast } from '../store/toastStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { isWorkAllowanceRequestValid } from '../utils/workAllowanceRequestSchema';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const QUICK_AMOUNTS = [25, 50, 100, 200];
 
@@ -215,7 +216,7 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surfaceLight },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12,
+      paddingHorizontal: SPACING.md, paddingVertical: 12,
       backgroundColor: colors.surface,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
@@ -224,7 +225,7 @@ function createStyles(colors: ThemeColors) {
 
     balanceSummary: {
       flexDirection: 'row', alignItems: 'center', gap: 8,
-      margin: 16, marginBottom: 0,
+      margin: SPACING.md, marginBottom: 0,
       backgroundColor: colors.infoBg, borderRadius: 10,
       paddingHorizontal: 14, paddingVertical: 10,
     },
@@ -233,15 +234,15 @@ function createStyles(colors: ThemeColors) {
 
     pendingBanner: {
       flexDirection: 'row', alignItems: 'flex-start', gap: 10,
-      margin: 16, marginBottom: 0,
+      margin: SPACING.md, marginBottom: 0,
       backgroundColor: '#FFFBEB', borderRadius: 10,
       padding: 12, borderLeftWidth: 3, borderLeftColor: colors.warning,
     },
-    pendingText: { flex: 1, fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text, lineHeight: 18 },
+    pendingText: { flex: 1, fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text, lineHeight: 18 },
 
-    card: { backgroundColor: colors.surface, margin: 16, marginBottom: 0, borderRadius: 16, padding: 16 },
+    card: { backgroundColor: colors.surface, margin: SPACING.md, marginBottom: 0, borderRadius: 16, padding: SPACING.md },
 
-    label: { fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 12 },
+    label: { fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 12 },
 
     quickRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
     quickChip: {
@@ -254,7 +255,7 @@ function createStyles(colors: ThemeColors) {
 
     amountInput: {
       height: 52, backgroundColor: colors.surfaceLight, borderRadius: 12,
-      paddingHorizontal: 16, fontSize: 24, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
+      paddingHorizontal: SPACING.md, fontSize: 24, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
     },
 
     reasonInput: {
@@ -262,19 +263,19 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 14, paddingTop: 12, fontSize: 15,
       fontFamily: 'PlusJakartaSans_400Regular', color: colors.text,
     },
-    charCount: { fontSize: 11, color: colors.textDim, textAlign: 'right', marginTop: 6 },
+    charCount: { fontSize: FONT.label, color: colors.textDim, textAlign: 'right', marginTop: 6 },
 
     submitBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
       gap: 8, backgroundColor: colors.primary,
-      marginHorizontal: 16, marginTop: 16,
-      borderRadius: 28, paddingVertical: 16,
+      marginHorizontal: SPACING.md, marginTop: SPACING.md,
+      borderRadius: 28, paddingVertical: SPACING.md,
     },
     submitBtnDisabled: { opacity: 0.45 },
-    submitBtnText: { fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#FFF' },
+    submitBtnText: { fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#FFF' },
 
     sectionTitle: {
-      fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
+      fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
       letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 12,
     },
     reqRow: {
@@ -283,7 +284,7 @@ function createStyles(colors: ThemeColors) {
     },
     reqAmount: { fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
     reqReason: { fontSize: 12, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2 },
-    reqBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
-    reqBadgeText: { fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold' },
+    reqBadge: { paddingHorizontal: 10, paddingVertical: SPACING.xs, borderRadius: 10 },
+    reqBadgeText: { fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold' },
   });
 }

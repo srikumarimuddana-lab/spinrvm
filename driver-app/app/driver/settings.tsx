@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
@@ -13,6 +12,7 @@ import {
     TextInput,
     Linking,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -739,12 +739,12 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: 'rgba(0,0,0,0.5)',
             justifyContent: 'center',
             alignItems: 'center' as const,
-            padding: 24,
+            padding: SPACING.lg,
         },
         deleteModal: {
             backgroundColor: colors.surface,
             borderRadius: 20,
-            padding: 24,
+            padding: SPACING.lg,
             width: '100%',
             alignItems: 'center' as const,
         },

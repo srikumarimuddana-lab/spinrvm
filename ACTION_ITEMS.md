@@ -18417,8 +18417,10 @@ mechanical follow-up work, prioritizable independently.
 
 - [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
   minority of screens in both apps** — **Status:** in progress —
-  rider-app partial rollout landed 2026-09-10 (see below); driver-app not
-  started. Do not mark closed until both are done.
+  rider-app partial rollout landed 2026-09-10 (see below); driver-app full
+  rollout (all 42 qualifying files) opened 2026-09-11 (see below), pending
+  review/merge. Do not mark closed until both are done — rider-app still
+  has ~19 files outstanding per its own note below.
   - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
     (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
     there was no `Text.defaultProps` override or themed `Text` wrapper
@@ -18448,30 +18450,63 @@ mechanical follow-up work, prioritizable independently.
     `components/FareQuoteCard.tsx`, `components/BookingProposalCard.tsx`,
     `components/ConfirmSheet.tsx` (this last one alone fans out to ~15
     consuming screens, since it's a shared confirm dialog).
-  - **Remaining follow-up scope (not done):** ~19 more rider-app files
-    still lack `fontFamily` entirely (re-grep `fontWeight` vs `fontFamily`
-    usage before picking the next batch — the app/components lists drift);
-    driver-app hasn't been touched at all (8 of 61 sampled files have
-    `fontFamily`, same wrapper pattern needs to land there too, per its own
-    parallel item/session). Neither app has every screen migrated yet.
-  - **Files:** see "Action taken" above for this round's exact list;
-    `shared/components/Text.tsx` is the new wrapper. Full remaining
-    per-file breakdown: re-grep `fontFamily` vs `fontWeight`-only usage
-    before starting the next batch (not reproduced here to avoid drift from
-    the source).
+  - **Remaining follow-up scope (rider-app, not done):** ~19 more rider-app
+    files still lack `fontFamily` entirely (re-grep `fontWeight` vs
+    `fontFamily` usage before picking the next batch — the app/components
+    lists drift). A separate, isolated-worktree session was working
+    rider-app's remainder in parallel with the driver-app round below.
+  - **Action taken (driver-app, 2026-09-11):** re-grepped driver-app fresh
+    per this item's own "lists drift" warning rather than trusting the
+    "8 of 61" figure above — found 42 files under `driver-app/app` and
+    `driver-app/components` that import `Text` directly from
+    `react-native`, use it with `fontWeight` set somewhere in a style, and
+    have zero `fontFamily` occurrences anywhere in the file (one additional
+    file, `app/driver/(tabs)/_layout.tsx`, matched the `fontWeight` grep but
+    was excluded — its one `fontWeight` hit is on an expo-router
+    `tabBarLabelStyle` prop, not a `Text` component this wrapper can reach).
+    Migrated all 42 to `shared/components/Text.tsx` (unmodified from
+    rider-app's build — no new logic, no new test needed) in 5 commits of
+    7–9 files each, grouped by screen area the same way UX2/UX3's
+    driver-app rounds already batch: dashboard (9), ride/earnings (8),
+    auth/onboarding (9), settings/support (9), legal/misc (7). Full
+    Change Impact Log:
+    `docs/change-log/2026-09-11-ux1-driver-app-text-wrapper-rollout.md`.
+  - **Files (driver-app, all 42 — see the change-log doc above for the
+    full per-file table):** dashboard —
+    `app/driver/(tabs)/activity.tsx`, `app/driver/(tabs)/index.tsx`,
+    `components/dashboard/{ActiveRidePanel,DemandLegend,DriverIdlePanel,
+    DriverTopBar,ForecastStrip,HotspotChips,TripCompletedPanel}.tsx`;
+    ride/earnings — `components/panels/RideOfferPanel.tsx`,
+    `components/activity/ActivityView.tsx`,
+    `components/charts/EarningsBarChart.tsx`, `app/driver/payout.tsx`,
+    `app/driver/payout-history.tsx`, `app/driver/tax-documents.tsx`,
+    `app/driver/subscription.tsx`, `app/subscription/success.tsx`;
+    auth/onboarding — `app/login.tsx`, `app/otp.tsx`,
+    `app/profile-setup.tsx`, `app/vehicle-info.tsx`,
+    `app/reactivate-account.tsx`, `app/legacy-consent-notice.tsx`,
+    `app/documents.tsx`, `app/crc-consent.tsx`,
+    `app/driver/stripe-onboarding.tsx`; settings/support —
+    `app/driver/{settings,notifications,addresses,chat,destination-mode,
+    faq,referral,quests}.tsx`, `app/appeal.tsx`; legal/misc —
+    `app/legal.tsx`, `app/policies.tsx`, `app/report-safety.tsx`,
+    `app/index.tsx`, `components/CancelReasonSheet.tsx`,
+    `components/ScreenHeader.tsx`, `components/toastConfig.tsx`.
   - **Acceptance:** a defined, enforced mechanism exists such that new
     screens can't silently ship off-brand-font by omission — met for any
-    new rider-app screen that imports `Text` from
+    new rider-app or driver-app screen that imports `Text` from
     `@shared/components/Text` instead of `react-native` directly; not yet
-    enforced by lint, and driver-app has no equivalent yet.
+    enforced by lint in either app. driver-app's 42 qualifying files (per
+    this round's fresh grep) are now fully migrated; rider-app has ~19
+    files still outstanding per its own note above — the item stays open
+    until both are done.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
   (driver-app: round 1 merged 2026-09-10, round 2 merged 2026-09-11 across
-  4 PRs, round 3 cleanup PR #5232 open/pending review 2026-09-11 — driver-app's
-  exact-match `StyleSheet`-block scope is now essentially complete; rider-app:
-  5 parallel batches, PRs #5238/#5239/#5241/#5242/#5243, opened 2026-09-11,
-  all open/pending review), identified 2026-09-10.
+  4 PRs (48 files total), round 3 cleanup PR #5232 merged 2026-09-11 —
+  driver-app's exact-match `StyleSheet`-block scope is now complete;
+  rider-app: 5 parallel batches, PRs #5238/#5239/#5241/#5242/#5243, all
+  merged 2026-09-11), identified 2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
     h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
@@ -18506,8 +18541,7 @@ mechanical follow-up work, prioritizable independently.
     - Auth entry + settings: `app/login.tsx`, `app/otp.tsx`,
       `app/driver/settings.tsx`
   - **Files (driver-app, round 2 — 4 parallel batches, PRs #5225/#5228/
-    #5226/#5227, opened 2026-09-11, open/pending review — 39 files total,
-    ~16 commits):**
+    #5226/#5227, merged 2026-09-11 — 39 files total, ~16 commits):**
     - Batch 1 (PR #5225, onboarding/legal, 9 files): `app/appeal.tsx`,
       `app/become-driver.tsx`, `app/crc-consent.tsx`,
       `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
@@ -18566,7 +18600,7 @@ mechanical follow-up work, prioritizable independently.
     time round 2 started, so round 2 layers on top of it cleanly without
     touching any of that other work.
   - **Files (rider-app, 5 parallel batches — PRs #5238/#5239/#5241/#5242/
-    #5243, opened 2026-09-11, all open/pending review — 51 files total, 12
+    #5243, all merged 2026-09-11 — 51 files total, 12
     commits, plus 3 supporting jest-mock fixes):** rider-app had never been
     touched by this item before this round (only 4 screens already imported
     `SPACING`/`FONT`, matching the original issue text). Same methodology as
@@ -18649,11 +18683,14 @@ mechanical follow-up work, prioritizable independently.
     above) with only inline-JSX-prop styling, same category as (a).
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use (met — the `warn`-level lint rule exists) **and** existing
-    screens are actually migrated (driver-app: essentially complete for the
-    `StyleSheet`-block scope across rounds 1–3, PR #5232 still pending
-    review/merge; rider-app: 5 batches open across PRs #5238/#5239/#5241/
-    #5242/#5243, all pending review/merge — not yet complete for either app
-    until those PRs land).
+    screens are actually migrated (met for the `StyleSheet`-block scope in
+    both apps — driver-app complete across rounds 1–3, PR #5232 merged;
+    rider-app complete across its 5 batches, PRs #5238/#5239/#5241/#5242/
+    #5243, all merged 2026-09-11. Item stays open pending a decision on the
+    remaining inline-JSX-prop scope — the ~15 files repo-wide with inline
+    `style={{...}}`-only JSX-prop literals, e.g.
+    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling, are
+    the concrete example of the undecided "(a)" scope above).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started
@@ -24486,11 +24523,14 @@ how much they de-risk a public launch._
 ### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
 
 - [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
-  Backend fix (loud Firebase Admin SDK init failure), a narrowed client-side fix (foreground
-  fallback toast), and the delivery-outcome metric (recommendation #3) shipped as follow-up PRs —
-  see below. Ops check (confirm the Firebase credential on Fly/Railway) and the client
-  fallback-path/iOS recommendations (#4, #5, #6) remain open — all need ops/real-device access
-  this session doesn't have.
+  Backend fix (loud Firebase Admin SDK init failure, recommendation #2), the client fallback-toast
+  fix (recommendation #4, see 2026-09-11 correction below — this session's own 2026-09-11
+  status line above wrongly listed #4 as still open two days after it had already shipped
+  2026-09-09; caught by re-reading the actual code rather than trusting the prior note), and the
+  delivery-outcome metric (recommendation #3) have all shipped as follow-up PRs — see below. Ops
+  check (confirm the Firebase credential on Fly/Railway, #1) and the iOS background-mode
+  confirmation (#5) remain open — both need access this session doesn't have. #6 (remove/wire the
+  dead `expo-notifications` handler) is small cleanup, not yet done, not blocked on anything.
 - **Correction (same day, before the client-side fix shipped):** the client-side finding below
   originally read as "every notification type except ride offers is silently dropped, foreground
   and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
@@ -24549,9 +24589,28 @@ how much they de-risk a public launch._
   `_deliver_push_now`/`_send_expo_push` return point (`success`/`stale_token`/`sdk_unavailable`/
   `failed`). Full detail: `docs/change-log/2026-09-11-push-send-outcome-metric.md`. This is
   observability only — it does not by itself resolve the fork above (still needs a human to say
-  which symptom they're seeing, or ops access to scrape the new metric); (4) add
-  an explicit fallback-notification path for unhandled FCM message types on the client, closing
-  the silent-drop gap for everything except ride offers; (5) confirm the iOS background-mode gap
+  which symptom they're seeing, or ops access to scrape the new metric); (4) ~~add an explicit
+  fallback-notification path for unhandled FCM message types on the client, closing the
+  silent-drop gap for everything except ride offers~~ **DONE 2026-09-09** (PR #5160) — verified
+  directly by re-reading current `driver-app/hooks/useDriverDashboard.ts` (its foreground
+  `onForegroundMessage` handler's final `else if (data?.type)` branch, ~line 2016) rather than
+  trusting the tracker: it now calls `showToast('info', remoteMessage?.notification?.title ||
+  'New notification', remoteMessage?.notification?.body || 'Tap to view details...')` for any
+  type outside the 5 explicitly-handled ones, with a safe fallback string if the notification
+  block is ever absent. **Background/killed state deliberately got no equivalent change** — PR
+  #5160's own commit message reasoning holds up under independent re-check: every type except
+  `new_ride_assignment`/`live_activity` carries a real FCM `notification` block, which Android/iOS
+  auto-display with zero app code running whether the app is foregrounded, backgrounded, or
+  killed; adding a background-handler fallback for those types would risk a **duplicate**
+  notification, not fix a gap. Confirmed `backgroundMessaging.ts` only branches on
+  `new_ride_assignment`/`ride_cancelled`/`location_health` — by design, not oversight, since
+  display for every other type is already the OS's job. **One un-actioned, forward-looking risk
+  worth naming, not fixing now** (no bug exists today, so no code change follows from this,
+  per the simplicity-first / no-speculative-code rule): if a future push type is ever added as
+  data-only (`is_data_only=True` in `backend/features.py`) without also getting its own
+  Notifee-based background handler like `new_ride_assignment` has, it would be silently invisible
+  in background/killed state with no guard catching the mismatch — nothing enforces "every
+  data-only type has a background display path" today; (5) confirm the iOS background-mode gap
   against a real build; (6) either wire `expo-notifications`' handler into the real path or
   remove the now-misleading dead code.
 

@@ -244,7 +244,7 @@ describe('ActivityView', () => {
     });
     mockUseDriverStore.mockReturnValue(mockStore);
 
-    const { getByText, getAllByText } = render(<ActivityView />);
+    const { getByText, getAllByText, queryByText } = render(<ActivityView />);
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
 
     // Total Earned is whatever the backend returns — no client-side add-on.
@@ -253,13 +253,21 @@ describe('ActivityView', () => {
     await waitFor(() => expect(getAllByText('$150.00').length).toBeGreaterThan(0));
     // Avg per Trip = total_earnings / total_rides = 150 / 5.
     expect(getByText('$30.00')).toBeTruthy();
-    // Avg Trips/Day = total_rides / elapsed_days = 5 / 10.
-    expect(getByText('0.5')).toBeTruthy();
-    // Avg KM/Day = total_distance_km / elapsed_days = 25 / 10.
-    expect(getByText('2.5 km')).toBeTruthy();
-    // Total/Avg Online Time = total_duration_minutes (600 = 10h) and per-day (60min = 1h).
-    expect(getByText('10h')).toBeTruthy();
-    expect(getByText('1h')).toBeTruthy();
+    expect(getByText('Avg per Trip')).toBeTruthy();
+    expect(getByText('Total Trips')).toBeTruthy();
+
+    // Product decision 2026-09-11: every other stat card is hidden behind
+    // SHOW_AVERAGE_STAT_CARDS (false) — the values still compute but must not
+    // render. Pinned by label AND by value so a card can't leak back in either
+    // form. Avg Trips/Day would be 0.5, Avg KM/Day 2.5 km, Total KM 25.0,
+    // Total/Avg Online Time 10h / 1h, Avg Distance/Trip 5.0 km.
+    for (const hidden of [
+      'Avg Trips/Day', 'Avg KM/Day', 'Total KM Driven',
+      'Total Online Time', 'Avg Online Time/Day', 'Avg Distance/Trip',
+      '0.5', '2.5 km', '25.0', '10h', '1h', '5.0 km',
+    ]) {
+      expect(queryByText(hidden)).toBeNull();
+    }
   });
 
   // Audit finding 2 (docs/audit/2026-08-19-legacy-migration-data-quality-

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict
 
 try:
@@ -17,6 +18,7 @@ try:
         insert_allowance_request,
         list_active_memberships_for_user,
         list_company_allowance_requests,
+        list_company_ride_payment_sources,
         list_pending_allowance_requests_for_member,
         upsert_member_allowance,
     )
@@ -30,6 +32,8 @@ try:
         auto_match_by_email,
         join_via_domain,
     )
+    from ..utils.audit_logger import log_user_action  # type: ignore
+    from ..utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
         get_corporate_account_by_id,
@@ -39,6 +43,7 @@ except ImportError:
         insert_allowance_request,
         list_active_memberships_for_user,
         list_company_allowance_requests,
+        list_company_ride_payment_sources,
         list_pending_allowance_requests_for_member,
         upsert_member_allowance,
     )
@@ -52,7 +57,11 @@ except ImportError:
         auto_match_by_email,
         join_via_domain,
     )
+    from utils.audit_logger import log_user_action  # type: ignore
+    from utils.corporate_statement_pdf import generate_corporate_statement_pdf  # type: ignore
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rider/work-profile", tags=["Corporate Rider"])
 
@@ -228,6 +237,127 @@ async def my_rides(
 
     rps_by_ride = {r["ride_id"]: r for r in rps_rows}
     return [{**rides_by_id[rid], "payment_source": rps_by_ride[rid]} for rid in ride_ids if rid in rides_by_id]
+
+
+async def _fetch_all_month_rows_for_member(company_id: str, member_id: str, from_iso: str, to_iso: str) -> list[dict]:
+    """Page through every ride_payment_sources row for one rider in a month.
+
+    Mirrors routes/corporate_company.py's `_fetch_all_month_rows`, but
+    scoped to a single member_id. `list_company_ride_payment_sources`
+    already accepts a `member_id` filter (used by the company-admin side's
+    per-member breakdown), so this only adapts the caller — the query
+    layer needs no changes to be rider-scoped instead of company-scoped.
+    """
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = await list_company_ride_payment_sources(
+            company_id=company_id,
+            member_id=member_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
+        )
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return all_rows
+
+
+async def _build_rider_month_statement(company_id: str, member_id: str, month: str) -> dict:
+    """Full-month statement scoped strictly to this rider's own member_id.
+
+    Reuses corporate_company.py's month-bounds / tax-attach / aggregation
+    helpers (same SK-local month math and GST/PST breakdown as the
+    company-wide statement) instead of re-implementing them, following the
+    same cross-module reuse already established by
+    routes/corporate_accounts.py::admin_download_corporate_statement_pdf for
+    build_full_month_statement.
+    """
+    try:
+        from .corporate_company import _aggregate_rows, _attach_ride_tax, _month_bounds
+    except ImportError:
+        from routes.corporate_company import (  # type: ignore[no-redef]
+            _aggregate_rows,
+            _attach_ride_tax,
+            _month_bounds,
+        )
+
+    from_iso, to_iso = _month_bounds(month)
+    rows = await _fetch_all_month_rows_for_member(company_id, member_id, from_iso, to_iso)
+    rows = await _attach_ride_tax(rows)
+    return {
+        "month": month,
+        "from": from_iso,
+        "to": to_iso,
+        "line_items": rows,
+        "summary": _aggregate_rows(rows),
+    }
+
+
+@router.get("/{company_id}/statement/{month}")
+async def my_statement(
+    company_id: str,
+    month: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """This rider's own monthly work-ride statement, for their own expense
+    reporting -- never company-wide. `member_id` comes only from
+    `_ensure_member`'s lookup of the *authenticated* user's own membership;
+    there is no request parameter through which a rider could ask for
+    another rider's statement. `month` is YYYY-MM; `_month_bounds` raises a
+    422 on a malformed string. Read-only: never writes wallet/allowance/
+    billing state.
+    """
+    membership = await _ensure_member(current_user, company_id)
+    return await _build_rider_month_statement(company_id, membership["id"], month)
+
+
+@router.get("/{company_id}/statement/{month}/pdf")
+async def my_statement_pdf(
+    company_id: str,
+    month: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Downloadable PDF of this rider's own monthly statement (for their own
+    expense reporting) -- rider-scoped mirror of
+    corporate_company.py::billing_statement_pdf. Reuses the same
+    `generate_corporate_statement_pdf` renderer; only the query underneath
+    is adapted to filter by this rider's own member_id, never company-wide.
+    Record-only: renders numbers already computed elsewhere, never moves
+    money or touches `corporate_wallet_apply_delta`.
+    """
+    membership = await _ensure_member(current_user, company_id)
+    company = await get_corporate_account_by_id(company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    statement = await _build_rider_month_statement(company_id, membership["id"], month)
+    pdf_bytes = generate_corporate_statement_pdf(company, statement)
+
+    try:
+        await log_user_action(
+            user=current_user,
+            action="corporate_rider_statement_pdf_download",
+            resource="corporate_member",
+            resource_id=str(membership["id"]),
+            details={"company_id": company_id, "month": month},
+        )
+    except Exception:
+        logger.error(
+            "Audit log failed for corporate_rider_statement_pdf_download member=%s",
+            membership["id"],
+            exc_info=True,
+        )
+
+    filename = f"spinr-work-statement-{membership['id'][:8]}-{month}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{company_id}/allowance-requests")

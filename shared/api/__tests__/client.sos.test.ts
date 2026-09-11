@@ -35,6 +35,11 @@ jest.mock('../../config/spinr.config', () => ({
   default: { backendUrl: 'http://localhost:8000' },
 }));
 
+const mockAddBreadcrumb = jest.fn();
+jest.mock('../../services/errorReporting', () => ({
+  addBreadcrumb: (...a: unknown[]) => mockAddBreadcrumb(...a),
+}));
+
 jest.mock('../../services/firebase', () => ({
   auth: { currentUser: null, onAuthStateChanged: null },
   isFirebaseConfigured: false,
@@ -150,6 +155,36 @@ describe('shared/api/client — SOS exempt from 401→logout interceptor', () =>
       await expect(api.get('/rides/active')).rejects.toThrow();
 
       expect(mockLogout).toHaveBeenCalled();
+    });
+
+    // PIPEDA: query strings on this client carry raw coordinates
+    // (`/drivers/nearby?lat=…&lng=…`), phone numbers and addresses. The
+    // breadcrumb must carry the path only — found by spinr-security-auditor
+    // on the first cut of this change.
+    it('never puts the query string in the Sentry breadcrumb (raw GPS in /drivers/nearby)', async () => {
+      _storage.refresh_token = 'stored-refresh-token';
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/drivers/nearby?lat=50.4452&lng=-104.6189')).rejects.toThrow();
+
+      expect(mockAddBreadcrumb).toHaveBeenCalledTimes(1);
+      const crumb = String(mockAddBreadcrumb.mock.calls[0][0]);
+      expect(crumb).toContain('/drivers/nearby');
+      expect(crumb).not.toContain('lat=');
+      expect(crumb).not.toContain('50.4452');
+      expect(crumb).not.toContain('-104.6189');
+    });
+
+    it('redacts the query string on the clearing branch as well', async () => {
+      delete _storage.refresh_token;
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/users/search?phone=%2B13065551234')).rejects.toThrow();
+
+      const crumb = String(mockAddBreadcrumb.mock.calls[0][0]);
+      expect(crumb).toContain('/users/search');
+      expect(crumb).not.toContain('phone=');
+      expect(crumb).not.toContain('3065551234');
     });
 
     it('still clears the session on a retry-after-refresh 401 even with a stored token (fresh credential rejected)', async () => {

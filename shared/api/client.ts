@@ -179,6 +179,21 @@ export function setRefreshCallback(fn: RefreshFn): void {
  * storage on web). Any read failure counts as "none", which keeps the caller
  * on the conservative (clear) path.
  */
+/**
+ * The URL as it may appear in a Sentry breadcrumb: path only. Query strings on
+ * this client carry raw coordinates (`/drivers/nearby?lat=…&lng=…`), phone
+ * numbers and addresses — all on CLAUDE.md's never-in-Sentry list. Path
+ * segments that are ids (UUIDs / ride codes) are fine; anything after `?` or
+ * `#` is not.
+ */
+function breadcrumbPath(url: string): string {
+  try {
+    return String(url).split(/[?#]/)[0];
+  } catch {
+    return '<unparseable-url>';
+  }
+}
+
 async function hasStoredRefreshToken(): Promise<boolean> {
   try {
     if (Platform.OS === 'web') {
@@ -1123,10 +1138,10 @@ const handleApiError = async (
     // logs out on a definitive 401 of its own.
     if (!_refreshCallback && (await hasStoredRefreshToken())) {
       console.log('[API] 401 before auth init — refresh token untouched, deferring to initialize()');
-      addBreadcrumb(`api 401 pre-init on ${method} ${url} — session kept for initialize()`);
+      addBreadcrumb(`api 401 pre-init on ${method} ${breadcrumbPath(url)} — session kept for initialize()`);
     } else {
       console.log('[API] 401 Unauthorized — clearing session');
-      addBreadcrumb(`api 401 ${method} ${url} — clearing session (refreshCallback=${!!_refreshCallback}, retry=${isRetryAttempt})`);
+      addBreadcrumb(`api 401 ${method} ${breadcrumbPath(url)} — clearing session (refreshCallback=${!!_refreshCallback}, retry=${isRetryAttempt})`);
       // Lazily import the auth store to avoid circular deps. The store's
       // logout() clears user/token/isAuthenticated — the layout effects
       // in both apps watch isAuthenticated and redirect to /login.

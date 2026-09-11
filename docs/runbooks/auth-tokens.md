@@ -152,6 +152,43 @@ The cascade never raises — `lookup_refresh_token` always returns
 `None` either way, so the client sees a generic 401 with no oracle
 leakage about which step succeeded.
 
+### One cascade per revoked row (2026-09-11)
+
+The cascade runs **once per replayed row**. Before firing it,
+`lookup_refresh_token` checks whether an `audit_logs` row with
+`action='refresh_token_reuse_detected'` and
+`details.replayed_row_id == <this row>` already exists for the user
+(newest-first, `_reuse_already_handled`). If it does, the replay is:
+
+- still answered with the identical generic 401 (no oracle);
+- logged at **WARNING** (`refresh: replay of an already-cascaded
+  revoked token`), not ERROR;
+- sent to Sentry as a **warning** tagged
+  `spinr_alert=refresh_token_replay_repeat` (message `REFRESH TOKEN
+  REPLAY (already cascaded)`), a different tag from the first
+  detection's `spinr_alert=refresh_token_reuse`.
+
+Why: the cascade answers the *first* replay by revoking everything
+issued before detection. A second replay of the same dead row can only
+come from a holder of that already-dead credential, and re-cascading
+revokes sessions minted *after* the first response — sessions that
+holder never had. On 2026-09-09/10 one stale install replayed a token
+revoked on 08-26 three times and each replay logged the same driver out
+of their live phone mid-shift (Sentry `CRIMSON-SMOKE-7445-B/C`).
+
+Still cascades every time: the first replay of any revoked row
+(rotated outside the 10 min grace, or logout-revoked), and any row for
+which the audit read fails (the check defaults to the cascade). A
+second, independently stolen *live* token for the same user is a new
+row and gets its own full cascade.
+
+**Alerting:** the on-call rule on `spinr_alert=refresh_token_reuse`
+is unchanged and still pages on first detection. Decide explicitly
+whether `refresh_token_replay_repeat` should page (a persistent
+replay of one dead row is a probe worth knowing about) or only be
+dashboarded — as of this note the second tag has **no** alert rule
+attached; that is a follow-up, not an assumption.
+
 ### What the user sees
 
 A single 401 from `/auth/refresh`. The mobile client's Axios
@@ -281,6 +318,9 @@ why — manual session kills must be traceable.
 - **Do not edit `_handle_refresh_token_reuse` to swallow the
   `logger.error` line.** That line is the only signal Sentry/PagerDuty
   has for the reuse event; the audit_logs row alone is not real-time.
+  (The once-per-row dedupe above does not touch it: a first detection
+  still logs at ERROR; only a *repeat* of the same row is a WARNING
+  under its own tag.)
 - **Do not store the raw refresh token anywhere** — server-side, only
   the sha256 hash lives in `refresh_tokens.token_hash`. A DB dump must
   not yield usable tokens. The raw bytes leave the backend exactly

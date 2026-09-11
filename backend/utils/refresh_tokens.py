@@ -300,9 +300,15 @@ async def _reuse_already_handled(row: dict) -> bool:
     if not user_id or not row_id:
         return False
     try:
+        # Newest first: a user's reuse records accrue for 7 years, and the
+        # row being checked is the one most recently written. Without an
+        # explicit order a >100-row history could push it past the limit and
+        # re-run the cascade this check exists to suppress.
         rows = await db.get_rows(
             "audit_logs",
             {"action": REUSE_AUDIT_ACTION, "entity_id": user_id},
+            order="created_at",
+            desc=True,
             limit=100,
         )
     except Exception as e:

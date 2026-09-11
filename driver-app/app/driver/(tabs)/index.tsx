@@ -273,6 +273,15 @@ function DriverDashboard() {
   // above doesn't cover this transition since rideState stays 'idle' the
   // whole time a driver goes offline and back online.
   const [mapKey, setMapKey] = useState(0);
+  // Which MapView instance (by mapKey) has fired onMapReady. `mapPadding` is
+  // withheld until then — see the prop's comment for the crash this prevents.
+  // Keyed on mapKey rather than a plain boolean reset in an effect, so that a
+  // remount reads as not-ready in the SAME render the new key appears in: an
+  // effect-based reset would let the fresh MapView mount with the stale
+  // `true`, then flip the prop to undefined one frame later — and that flip is
+  // itself a padding update landing inside the exact window this guards.
+  const [mapReadyKey, setMapReadyKey] = useState(-1);
+  const mapReady = mapReadyKey === mapKey;
   const prevRideStateRef = useRef(rideState);
   const prevIsOnlineRef = useRef(isOnline);
   useEffect(() => {
@@ -1003,8 +1012,29 @@ function DriverDashboard() {
         // ActiveRidePanel's bigger sheet during navigating_to_pickup/
         // trip_in_progress, tracked via activeSheetExpanded). Every other
         // ride state keeps its existing route-overview framing unpadded.
+        //
+        // WITHHELD UNTIL onMapReady — this is a crash guard, not a nicety.
+        // react-native-maps' MapView.applyBaseMapPadding (Android) guards only
+        // against a zero layout size, NOT against a null GoogleMap — eight other
+        // setters in the same file check `map == null`; this one does not. So a
+        // padding UPDATE that lands after the view is laid out but before
+        // onMapReady (~100-500 ms on every mount and every mapKey remount)
+        // calls GoogleMap.setPadding on null: an unhandled NPE on the main
+        // thread inside a Fabric mount, which blanks the whole React surface —
+        // the "white screen when I reopen the app" report. It is reachable
+        // precisely because this prop is derived from rideState: opening the
+        // app on a pending offer flips rideState to 'ride_offered' via
+        // consumePendingOffer during the very window the map is initialising.
+        // Sentry CRIMSON-SMOKE-7445-SF (driver 2.0.0+25, handled: no).
+        // Passing undefined here means no update is sent until the map exists;
+        // the initial-creation path is separately safe because the view is not
+        // yet laid out then and the native side defers. Visually invisible: the
+        // map has not drawn a tile yet at the point this withholds.
+        onMapReady={() => setMapReadyKey(mapKey)}
         mapPadding={
-          rideState === 'idle'
+          !mapReady
+            ? undefined
+            : rideState === 'idle'
             ? {
                 top: 0, right: 0, left: 0,
                 bottom:

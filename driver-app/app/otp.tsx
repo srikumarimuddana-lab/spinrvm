@@ -23,6 +23,7 @@ import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { HAS_AUTHENTICATED_BEFORE_KEY } from './login';
+import { shakeHorizontal } from '@shared/utils/motion';
 
 export default function OtpScreen() {
   const router = useRouter();
@@ -149,13 +150,7 @@ export default function OtpScreen() {
   }, [user, hasAttemptedVerification, router]);
 
   const triggerShake = () => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
-    ]).start();
+    shakeHorizontal(shakeAnim);
   };
 
   const handleCodeChange = (text: string) => {

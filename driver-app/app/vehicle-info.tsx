@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     TextInput,
@@ -15,6 +14,7 @@ import {
     UIManager,
     Alert,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { showToast } from '../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -25,6 +25,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { isVehicleInfoFormValid, getVehicleYearValue } from '../utils/vehicleInfoFormSchema';
 
@@ -534,7 +535,7 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
             padding: 18,
             borderRadius: 18,
-            marginBottom: 16,
+            marginBottom: SPACING.md,
             alignItems: 'center',
             shadowColor: '#000',
             shadowOffset: { width: 0, height: 2 },
@@ -552,13 +553,13 @@ function createStyles(colors: ThemeColors) {
             marginRight: 14,
         },
         heroTitle: { fontSize: 12, fontWeight: '700', color: colors.textDim, letterSpacing: 0.8, textTransform: 'uppercase' },
-        heroSub: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
+        heroSub: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 2 },
         platePill: {
             alignSelf: 'flex-start',
             marginTop: 6,
             backgroundColor: colors.text,
             paddingHorizontal: 10,
-            paddingVertical: 4,
+            paddingVertical: SPACING.xs,
             borderRadius: 6,
         },
         plateText: { color: colors.gold, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
@@ -582,9 +583,9 @@ function createStyles(colors: ThemeColors) {
             color: colors.textDim,
             letterSpacing: 0.8,
             textTransform: 'uppercase',
-            marginBottom: 8,
-            marginTop: 4,
-            paddingHorizontal: 4,
+            marginBottom: SPACING.sm,
+            marginTop: SPACING.xs,
+            paddingHorizontal: SPACING.xs,
         },
         card: {
             backgroundColor: colors.surface,
@@ -597,19 +598,19 @@ function createStyles(colors: ThemeColors) {
             elevation: 1,
             overflow: 'hidden',
         },
-        divider: { height: 1, backgroundColor: colors.border, marginHorizontal: 16 },
+        divider: { height: 1, backgroundColor: colors.border, marginHorizontal: SPACING.md },
         vDivider: { width: 1, backgroundColor: colors.border },
         rowSplit: { flexDirection: 'row' },
 
-        field: { paddingHorizontal: 16, paddingVertical: 12 },
-        fieldLabel: { fontSize: 11, fontWeight: '700', color: colors.textDim, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 },
-        fieldInput: { fontSize: 16, color: colors.text, padding: 0, fontWeight: '500' },
-        fieldHelper: { fontSize: 11, color: colors.textDim, marginTop: 4 },
+        field: { paddingHorizontal: SPACING.md, paddingVertical: 12 },
+        fieldLabel: { fontSize: FONT.label, fontWeight: '700', color: colors.textDim, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: SPACING.xs },
+        fieldInput: { fontSize: FONT.bodyLg, color: colors.text, padding: 0, fontWeight: '500' },
+        fieldHelper: { fontSize: FONT.label, color: colors.textDim, marginTop: SPACING.xs },
 
         vehicleTypeBox: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
             paddingVertical: 14,
             gap: 12,
         },
@@ -621,8 +622,8 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             alignItems: 'center',
         },
-        vehicleTypeLabel: { fontSize: 11, fontWeight: '700', color: colors.textDim, letterSpacing: 0.6, textTransform: 'uppercase' },
-        vehicleTypeValue: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
+        vehicleTypeLabel: { fontSize: FONT.label, fontWeight: '700', color: colors.textDim, letterSpacing: 0.6, textTransform: 'uppercase' },
+        vehicleTypeValue: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 2 },
 
         // Sticky footer
         footer: {
@@ -638,7 +639,7 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             backgroundColor: colors.primary,
             borderRadius: 14,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             gap: 8,
             shadowColor: colors.primary,
             shadowOffset: { width: 0, height: 4 },
@@ -651,7 +652,7 @@ function createStyles(colors: ThemeColors) {
             shadowOpacity: 0,
             elevation: 0,
         },
-        saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+        saveButtonText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '700' },
 
         // Modal
         modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
@@ -704,9 +705,9 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
         },
         vehicleTypeInfo: { flex: 1 },
-        vehicleTypeOptionName: { fontSize: 16, fontWeight: '700', color: colors.text },
-        vehicleTypeOptionDesc: { fontSize: 13, color: colors.textDim, marginTop: 2 },
-        vehicleTypeEmpty: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center', gap: 12 },
+        vehicleTypeOptionName: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text },
+        vehicleTypeOptionDesc: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: 2 },
+        vehicleTypeEmpty: { paddingVertical: 36, paddingHorizontal: SPACING.lg, alignItems: 'center', gap: 12 },
         vehicleTypeEmptyText: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
         vehicleTypeRetryBtn: { backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 28 },
         vehicleTypeRetryText: { color: '#fff', fontSize: 14, fontWeight: '600' },

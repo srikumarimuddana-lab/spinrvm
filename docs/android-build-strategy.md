@@ -31,8 +31,10 @@ rider-app/                                       (driver-app mirrors this except
 │   ├── withForceCompileSdk.js            ← active: stamps compileSdk=36, targetSdk=36
 │   └── withKspVersion.js                 ← active: stamps kspVersion=2.2.21-2.0.5
 ├── patches/
-│   └── @react-native+gradle-plugin+0.86.2.patch    ← kotlin = "2.2.21" (was "2.1.20" upstream)
-│       (companion react-native+0.86.2.patch is New-Arch codegen JS fallbacks, not Kotlin/Gradle)
+│   └── @react-native+gradle-plugin+0.86.3.patch    ← kotlin = "2.2.21" (was "2.1.20" upstream)
+│       (companion react-native+0.86.3.patch is New-Arch codegen JS fallbacks, not Kotlin/Gradle;
+│        both renamed from +0.86.2 to +0.86.3 — stale-filename cleanup, content unchanged, see
+│        ACTION_ITEMS.md C98)
 ├── app.config.ts                         ← expo-build-properties.android.kotlinVersion: '2.2.21'
 └── build-options/                        ← cold storage (alternative strategies)
 ```
@@ -168,7 +170,7 @@ Track these:
 |---|---|
 | `withForceCompileSdk` | Expo SDK ≥56 ships compileSdk 36 as default AND `useExpoVersionCatalog()` bridges gradle.properties on EAS (verify with build that has plugin disabled). **Now on SDK 57 the criterion is testable — needs one EAS Android build with the plugin disabled; not run in the 2026-08-11 alignment pass (no EAS builds).** |
 | `withKspVersion` | `expo-updates/android/build.gradle` is fixed upstream to use a deferred lookup OR Expo SDK ≥56 ships with our kotlinVersion in its hardcoded mapping. **Same status: testable on 57, needs an EAS build to verify.** |
-| `@react-native+gradle-plugin+0.86.2.patch` (kotlin 2.2.21) | `@react-native/gradle-plugin/gradle/libs.versions.toml` upstream sets `kotlin = "2.2.x"` (i.e., RN itself moves to 2.2). Still 2.1.20 in RN 0.86.2 — patch still required. |
+| `@react-native+gradle-plugin+0.86.3.patch` (kotlin 2.2.21) | `@react-native/gradle-plugin/gradle/libs.versions.toml` upstream sets `kotlin = "2.2.x"` (i.e., RN itself moves to 2.2). Still 2.1.20 in RN 0.86.3 — patch still required. |
 | ~~`expo-modules-core+55.0.25.patch` (Promise.kt)~~ | **RETIRED** — fixed upstream; no equivalent patch exists for expo-modules-core 57.x. |
 
 ---

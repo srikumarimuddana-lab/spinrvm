@@ -33,7 +33,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { Text, TouchableOpacity, Linking } from 'react-native';
+import { Text, TouchableOpacity, Linking, Platform } from 'react-native';
 
 const appStateListeners: Array<(state: string) => void> = [];
 jest.mock('react-native/Libraries/AppState/AppState', () => ({
@@ -44,6 +44,19 @@ jest.mock('react-native/Libraries/AppState/AppState', () => ({
       return { remove: jest.fn() };
     },
     currentState: 'active',
+  },
+}));
+
+// expo-router's real module pulls in an ESM dependency Jest cannot parse.
+// index.tsx uses only useFocusEffect (remount the car marker on tab refocus);
+// run the effect once on mount, like a screen that is focused from the start,
+// and expose the callback so a test can simulate a blur/refocus cycle.
+let mockFocusEffectCb: (() => void | (() => void)) | null = null;
+jest.mock('expo-router', () => ({
+  useFocusEffect: (cb: () => void | (() => void)) => {
+    mockFocusEffectCb = cb;
+    const ReactActual = require('react');
+    ReactActual.useEffect(() => cb(), [cb]);
   },
 }));
 
@@ -86,8 +99,15 @@ jest.mock('react-native-maps', () => {
 jest.mock('react-native-maps-directions', () => () => null);
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
 jest.mock('@shared/components/RoutePins', () => ({ RoutePins: () => null }));
+const mockCarMarkerMounts = jest.fn();
 jest.mock('../../components/CarMarker', () => ({
-  CarMarker: () => null,
+  // Records each MOUNT (not render) so a test can assert the marker was
+  // remounted — the tab-refocus fix works by changing its key.
+  CarMarker: () => {
+    const ReactActual = require('react');
+    ReactActual.useEffect(() => { mockCarMarkerMounts(); }, []);
+    return null;
+  },
   resolveMarkerVariant: () => 'sedan',
 }));
 jest.mock('../../hooks/liveRouteShared', () => ({
@@ -266,6 +286,9 @@ jest.mock('../../components/dashboard', () => {
     DemandLegend: (props: any) => <RNText accessibilityLabel="demand-legend">{`layer:${props.layer}`}</RNText>,
     ForecastStrip: (props: any) => <RNText accessibilityLabel="forecast-strip">{`forecast:${props.forecast.length}`}</RNText>,
     HeatmapCells: (props: any) => <RNText accessibilityLabel="heatmap-cells">{`cells:${props.cells.length}`}</RNText>,
+    HeatmapGradientOverlay: (props: any) => (
+      <RNText accessibilityLabel="heatmap-gradient-overlay">{`cells:${props.cells.length}`}</RNText>
+    ),
     HotspotChips: (props: any) => (
       <RNTouchableOpacity accessibilityLabel="hotspot-chip" onPress={() => props.onPress(52.15, -106.65)}>
         <RNText>{`hotspots:${props.hotspots.length}`}</RNText>
@@ -560,25 +583,57 @@ describe('DriverDashboardScreen', () => {
 });
 
 describe('demand heatmap overlay (idle only)', () => {
-  it('renders HeatmapCells when cells are present', async () => {
+  // HeatmapGradientOverlay (the Skia gradient overlay, HM-32) is kill-switched
+  // as of 2026-09-10 pending investigation of a driver-app 2.0.03 100% iOS
+  // crash (TurboModuleRegistry.getEnforcing 'RNSkiaModule') — see the
+  // driver dashboard screen's render-site comment and
+  // docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md. HeatmapCells
+  // (react-native-maps' native <Heatmap> on Android, a Skia-free Circle
+  // fallback on iOS — pre-dates HM-32) is back to rendering on both
+  // platforms, exactly as it did before HM-32 ever touched this screen.
+  const originalPlatformOS = Platform.OS;
+  afterEach(() => {
+    Platform.OS = originalPlatformOS;
+  });
+
+  it('renders HeatmapCells on Android when cells are present', async () => {
+    Platform.OS = 'android';
     mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
     expect(r.root.findByProps({ accessibilityLabel: 'heatmap-cells' })).toBeTruthy();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
   });
 
-  it('omits HeatmapCells with zero cells', async () => {
+  it('omits HeatmapCells with zero cells (Android)', async () => {
+    Platform.OS = 'android';
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
   });
 
-  it('renders the DemandLegend only when visible', async () => {
-    mockHeatmapState.visible = true;
+  it('renders HeatmapCells on iOS too when cells are present, never HeatmapGradientOverlay (Skia kill-switched)', async () => {
+    Platform.OS = 'ios';
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
     const r = await renderScreen();
-    expect(r.root.findByProps({ accessibilityLabel: 'demand-legend' })).toBeTruthy();
+    expect(r.root.findByProps({ accessibilityLabel: 'heatmap-cells' })).toBeTruthy();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
   });
 
-  it('omits the DemandLegend when not visible', async () => {
-    mockHeatmapState.visible = false;
+  it('omits HeatmapCells with zero cells (iOS)', async () => {
+    Platform.OS = 'ios';
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
+  });
+
+  it('never renders HeatmapGradientOverlay at all, on any platform (Skia kill-switch, 2026-09-10)', async () => {
+    Platform.OS = 'ios';
+    mockHeatmapState.cells = [{ lat: 52.1, lng: -106.6, weight: 0.5 }];
+    const r = await renderScreen();
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
+  });
+
+  it('never renders the DemandLegend pill — removed entirely (was overlapping the SOS button)', async () => {
+    mockHeatmapState.visible = true;
     const r = await renderScreen();
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
   });
@@ -616,6 +671,15 @@ describe('demand heatmap overlay (idle only)', () => {
     mockHeatmapState.isV2 = true;
     mockHeatmapState.hotspots = [{ lat: 52.1, lng: -106.6, label: 'Downtown' }];
     const r = await renderScreen();
+    // HeatmapCells/HeatmapGradientOverlay are asserted here too, not just
+    // their sibling widgets: the render site itself must gate on
+    // rideState === 'idle' rather than relying only on useDemandHeatmap
+    // clearing `cells` internally — see the driver dashboard screen's
+    // comment at this render site for why (this exact test previously
+    // mocked non-empty cells during an active ride without ever checking
+    // heatmap-cells stayed absent).
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-cells' })).toHaveLength(0);
+    expect(r.root.findAllByProps({ accessibilityLabel: 'heatmap-gradient-overlay' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'demand-legend' })).toHaveLength(0);
     expect(r.root.findAllByProps({ accessibilityLabel: 'hotspot-chip' })).toHaveLength(0);
   });
@@ -916,6 +980,29 @@ describe('map recenter control', () => {
     expect(mockRefreshLocation).toHaveBeenCalledWith(false);
   });
 
+  // Drive → Profile → Drive lost the car marker: Expo Tabs detach the native
+  // MapView on blur, and on re-attach react-native-maps re-adds the marker from
+  // its frozen custom-view snapshot, which comes back blank. Three attempts to
+  // make the snapshot survive failed in live testing; what was OBSERVED to bring
+  // the car back is a remount (offline → online bumps mapKey). So the fix
+  // remounts the marker on every refocus after the first. This pins that a
+  // blur/refocus cycle mounts a fresh CarMarker, and that startup does not.
+  it('remounts CarMarker when the Drive tab regains focus, not on first focus', async () => {
+    mockCarMarkerMounts.mockClear();
+    await renderScreen();
+    expect(mockCarMarkerMounts).toHaveBeenCalledTimes(1);
+    expect(mockFocusEffectCb).toBeTruthy();
+
+    // The mock already ran the focus callback once on mount (first focus, no
+    // remount). Invoking it again is the refocus after a tab switch.
+    act(() => { mockFocusEffectCb!(); });
+    expect(mockCarMarkerMounts).toHaveBeenCalledTimes(2);
+
+    // And each further return to the tab remounts again.
+    act(() => { mockFocusEffectCb!(); });
+    expect(mockCarMarkerMounts).toHaveBeenCalledTimes(3);
+  });
+
   it('updates currentRegionRef on MapView onRegionChange', async () => {
     const r = await renderScreen();
     const mapView = r.root.findByType('MapView' as any);
@@ -923,6 +1010,33 @@ describe('map recenter control', () => {
       mapView.props.onRegionChange({ latitudeDelta: 0.02, longitudeDelta: 0.03 });
     });
     expect(mockDashboardState.currentRegionRef.current).toEqual({ latitudeDelta: 0.02, longitudeDelta: 0.03 });
+  });
+
+  // Crash guard (Sentry CRIMSON-SMOKE-7445-SF): react-native-maps'
+  // applyBaseMapPadding calls GoogleMap.setPadding with no null check, so a
+  // mapPadding UPDATE between layout and onMapReady is an unhandled NPE that
+  // blanks the whole React surface — the "white screen when I reopen the app
+  // on a pending offer" report. mapPadding is derived from rideState, and
+  // consumePendingOffer flips rideState exactly inside that window. So the prop
+  // must be withheld until the map says it is ready.
+  it('withholds mapPadding until onMapReady, then supplies it', async () => {
+    const r = await renderScreen();
+    const before = r.root.findByType('MapView' as any);
+    expect(before.props.mapPadding).toBeUndefined();
+
+    act(() => {
+      before.props.onMapReady();
+    });
+
+    const after = r.root.findByType('MapView' as any);
+    expect(after.props.mapPadding).toEqual(
+      expect.objectContaining({ top: 0, left: 0, right: 0 }),
+    );
+    // idle state reserves the bottom strip for the HUD — its presence proves
+    // the rideState-derived value came through, not a placeholder. (Its numeric
+    // value is not asserted: the safe-area mock here returns no insets.bottom,
+    // so the pre-existing `+ insets.bottom` formula yields NaN in Jest only.)
+    expect(after.props.mapPadding).toHaveProperty('bottom');
   });
 });
 

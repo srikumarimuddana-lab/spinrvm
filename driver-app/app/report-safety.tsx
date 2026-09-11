@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TextInput,
     TouchableOpacity,
@@ -10,6 +9,7 @@ import {
     Platform,
     Alert,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 // getAuthHeader / SpinrConfig were only needed by the hand-rolled fetch()
 // this screen used for photo uploads; api.post now handles the URL, auth,
 // and App Check headers itself.
@@ -266,13 +267,13 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 20,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
             backgroundColor: colors.surface,
         },
         backButton: {
-            padding: 8,
+            padding: SPACING.sm,
             marginLeft: -8,
         },
         headerTitle: {
@@ -288,15 +289,15 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
         },
         content: {
-            padding: 24,
+            padding: SPACING.lg,
             paddingBottom: 140,
         },
         warningBox: {
             flexDirection: 'row',
             backgroundColor: 'rgba(245,158,11,0.1)',
-            padding: 16,
+            padding: SPACING.md,
             borderRadius: 12,
-            marginBottom: 24,
+            marginBottom: SPACING.lg,
             alignItems: 'flex-start',
             gap: 12,
         },
@@ -307,7 +308,7 @@ function createStyles(colors: ThemeColors) {
             lineHeight: 20,
         },
         label: {
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '600',
             color: colors.text,
             marginBottom: 12,
@@ -321,7 +322,7 @@ function createStyles(colors: ThemeColors) {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 8,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
             paddingVertical: 10,
             borderRadius: 24,
             backgroundColor: colors.surfaceLight,
@@ -345,17 +346,17 @@ function createStyles(colors: ThemeColors) {
             borderWidth: 1,
             borderColor: colors.border,
             borderRadius: 12,
-            padding: 16,
-            fontSize: 15,
+            padding: SPACING.md,
+            fontSize: FONT.bodyMd,
             color: colors.text,
             minHeight: 160,
-            marginBottom: 24,
+            marginBottom: SPACING.lg,
         },
         photoGrid: {
             flexDirection: 'row',
             flexWrap: 'wrap',
             gap: 10,
-            marginBottom: 24,
+            marginBottom: SPACING.lg,
         },
         photoThumb: {
             width: 80,
@@ -384,14 +385,14 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surfaceLight,
         },
         photoAddText: {
-            fontSize: 11,
+            fontSize: FONT.label,
             color: colors.textDim,
             marginTop: 2,
         },
         submitButton: {
             backgroundColor: colors.primary,
             borderRadius: 12,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             alignItems: 'center',
         },
         submitButtonDisabled: {
@@ -399,7 +400,7 @@ function createStyles(colors: ThemeColors) {
         },
         submitButtonText: {
             color: '#fff',
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '600',
         },
     });

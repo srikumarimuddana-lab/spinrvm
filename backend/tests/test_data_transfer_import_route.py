@@ -18,7 +18,9 @@ _ZIP_FILE = {"bundle_zip": ("bundle.zip", b"not a real zip", "application/zip")}
 
 
 def _plan(can_commit: bool) -> entity_import_service.ImportPlan:
-    errors = [] if can_commit else [entity_import_service.ImportReportItem(entity_id="d1", field="name", message="conflict")]
+    errors = (
+        [] if can_commit else [entity_import_service.ImportReportItem(entity_id="d1", field="name", message="conflict")]
+    )
     return entity_import_service.ImportPlan(entities=[], resolutions={}, warnings=[], errors=errors)
 
 
@@ -143,3 +145,18 @@ class TestCommit:
         assert resp.status_code == 200
         commit.assert_awaited_once()
         assert commit.call_args.kwargs.get("update_existing") is True
+
+
+@pytest.mark.asyncio
+async def test_validate_rejects_non_super_admin_even_if_mount_is_bypassed():
+    """Admin RBAC audit finding W2: this router is mounted require_super_admin
+    but had no independent per-handler check. Direct call (skipping FastAPI's
+    dependency injection) proves the new _require_super_admin() guard fires
+    on its own."""
+    from fastapi import HTTPException
+
+    from backend.routes.admin.data_transfer_import import validate_bundle_import
+
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_bundle_import(request=None, bundle_zip=None, admin={"id": "admin-2", "role": "admin"})
+    assert exc_info.value.status_code == 403

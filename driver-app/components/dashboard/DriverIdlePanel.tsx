@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -9,6 +10,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 // Guarded native-module require — must stay runtime require(), not a
@@ -337,7 +339,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       borderRadius: 20,
       paddingHorizontal: 14,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       marginBottom: 10,
       gap: 6,
       shadowColor: '#000',
@@ -362,7 +364,7 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 2,
     },
     plateBadgeText: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '700',
       color: colors.primary,
       letterSpacing: 0.5,
@@ -395,8 +397,8 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.successBg,
-      paddingHorizontal: 16,
-      paddingVertical: 8,
+      paddingHorizontal: SPACING.md,
+      paddingVertical: SPACING.sm,
       borderRadius: 20,
       borderWidth: 1,
       borderColor: colors.success,
@@ -406,8 +408,8 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.surfaceLight,
-      paddingHorizontal: 16,
-      paddingVertical: 8,
+      paddingHorizontal: SPACING.md,
+      paddingVertical: SPACING.sm,
       borderRadius: 20,
       borderWidth: 1,
       borderColor: colors.border,
@@ -426,12 +428,12 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.textDim,
     },
     statusPillTextOnline: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '700',
       color: colors.success,
     },
     statusPillTextOffline: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '600',
       color: colors.textSecondary,
     },

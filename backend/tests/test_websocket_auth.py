@@ -219,6 +219,7 @@ def test_ws_valid_auth_accepted(app_with_ws):
         "uid": _RIDER_USER["id"],
         "phone_number": _RIDER_USER["phone"],
         "aud": _TEST_FIREBASE_APP_ID,
+        "firebase": {"sign_in_provider": "phone"},
     }
 
     patches = _start_patches(
@@ -378,6 +379,7 @@ def test_ws_firebase_user_missing_is_not_auto_created(app_with_ws):
         "uid": "ghost-uid-c4",
         "phone_number": "+15550009999",
         "aud": _TEST_FIREBASE_APP_ID,
+        "firebase": {"sign_in_provider": "phone"},
     }
     create_user = AsyncMock()
 
@@ -420,6 +422,7 @@ def test_ws_db_outage_closes_1013_not_invalid_token(app_with_ws):
         "uid": _RIDER_USER["id"],
         "phone_number": _RIDER_USER["phone"],
         "aud": _TEST_FIREBASE_APP_ID,
+        "firebase": {"sign_in_provider": "phone"},
     }
 
     patches = _start_patches(
@@ -488,6 +491,7 @@ def _c5_patches(ride: dict, send_personal: AsyncMock, broadcast_admins: AsyncMoc
         "uid": _C5_RIDER["id"],
         "phone_number": _C5_RIDER["phone"],
         "aud": _TEST_FIREBASE_APP_ID,
+        "firebase": {"sign_in_provider": "phone"},
     }
     return _start_patches(
         patch("backend.routes.websocket.settings", _rider_settings_mock()),
@@ -641,6 +645,7 @@ async def test_ws_rate_limit_response_keeps_socket_open(app_with_ws):
         "uid": _RIDER_USER["id"],
         "phone_number": _RIDER_USER["phone"],
         "aud": _TEST_FIREBASE_APP_ID,
+        "firebase": {"sign_in_provider": "phone"},
     }
 
     patches = _start_patches(

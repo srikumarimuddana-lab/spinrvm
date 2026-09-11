@@ -75,6 +75,13 @@ export interface FareQuoteOption {
   drivers_nearby?: number | null;
   /** Distance of the nearest driver from the pickup. */
   closest_driver_km?: number | null;
+  /** AI17/F4: false when no driver is currently online for this vehicle
+   * type — the option is still priced (matches ride-options.tsx showing a
+   * dimmed, unbookable card) but must never be presented as bookable.
+   * Absent/undefined means available (pre-F4 quotes never carried this
+   * field, and it's only added by the backend when the F4 settings flag is
+   * on — see backend/ai/tools_booking.py's get_fare_quote). */
+  available?: boolean | null;
   surge_multiplier?: number | null;
   /** Labelled fare line items from the estimate engine (display-only;
    * `amount: null` lines are modifiers like surge). */
@@ -159,6 +166,12 @@ export interface AiChatMessage {
     | 'ride_status'
     | 'map_picker';
   content: string;
+  /** AI17/F2: what to render instead of `content`, when present — for a
+   * local echo whose real `content` carries machine-only text (e.g. a
+   * quote-card tap's "(vehicle id <uuid>)") the model needs but a rider
+   * never should see. Never sent to the backend; `content` is. Absent on
+   * messages reloaded from history (the server only stores `content`). */
+  displayContent?: string;
   action?: AiAction;
   createdAt: number;
 }

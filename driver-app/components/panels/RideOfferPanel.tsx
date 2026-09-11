@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import {
-    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
+    View, TouchableOpacity, StyleSheet, ActivityIndicator,
     BackHandler, Animated, Easing, Dimensions, Platform, Vibration
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
 import { showAlert } from '../AlertDialog';
 
@@ -407,17 +410,36 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
                     {/* Action buttons — Decline left, Accept right (reversed from typical so Accept is away from next screen's Cancel) */}
                     <View style={styles.actionBar}>
-                        <TouchableOpacity
+                        {/* UX3 (ACTION_ITEMS.md): migrated onto the shared Button
+                            primitive — this is the exact call site size="lg" /
+                            variant="secondary" were extracted from, so the swap is
+                            visually a no-op (declineBtn below now supplies only the
+                            flex:1 layout constraint; fill/border/radius/text all come
+                            from Button). onLongPress/accessibilityLabel/disabled pass
+                            through unchanged via Button's TouchableOpacityProps rest. */}
+                        <Button
+                            variant="secondary"
+                            size="lg"
+                            fullWidth={false}
                             style={styles.declineBtn}
                             onPress={() => handleDecline()}
                             onLongPress={handleDeclineLongPress}
-                            activeOpacity={0.7}
                             accessibilityLabel="Decline ride"
                             disabled={isLoading}
                         >
-                            <Text style={styles.declineBtnText}>Decline</Text>
-                        </TouchableOpacity>
+                            Decline
+                        </Button>
 
+                        {/* Accept intentionally stays bespoke: the two-tone
+                            "Accept / $12.34" label and the ACCENT→ACCENT_DARK
+                            LinearGradient fill aren't expressible through Button's
+                            single-Text-label + flat-variant-fill API, and Button.tsx's
+                            own doc comment already says only the *shape* (54px/14px
+                            radius/spinner-swap/disabled-dim) was extracted from this
+                            button, not its fill treatment. Forcing it through Button
+                            would drop the gradient this design audit called
+                            "already exemplary" for a component this task doesn't
+                            need to touch. */}
                         <TouchableOpacity
                             style={styles.acceptBtn}
                             onPress={handleAccept}
@@ -494,8 +516,8 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 20,
-            paddingTop: 16,
-            paddingBottom: 8,
+            paddingTop: SPACING.md,
+            paddingBottom: SPACING.sm,
         },
         headerLeft: {
             flex: 1,
@@ -512,7 +534,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             borderRadius: 3,
         },
         liveText: {
-            fontSize: 11,
+            fontSize: FONT.label,
             fontWeight: '800',
             color: ACCENT,
             letterSpacing: 1,
@@ -579,7 +601,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             fontWeight: '800',
             color: colors.textDim,
             letterSpacing: 1.2,
-            marginBottom: 4,
+            marginBottom: SPACING.xs,
         },
         earningsHero: {
             flexDirection: 'row',
@@ -598,7 +620,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             fontSize: 24,
             fontWeight: '700',
             color: colors.text,
-            marginTop: 8,
+            marginTop: SPACING.sm,
             marginRight: 1,
         },
         earningsAmount: {
@@ -646,12 +668,12 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             gap: 4,
             backgroundColor: ACCENT + '15',
             paddingHorizontal: 10,
-            paddingVertical: 4,
+            paddingVertical: SPACING.xs,
             borderRadius: 8,
-            marginTop: 8,
+            marginTop: SPACING.sm,
         },
         keepText: {
-            fontSize: 11,
+            fontSize: FONT.label,
             fontWeight: '700',
             color: ACCENT_DARK,
         },
@@ -662,7 +684,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             flexWrap: 'wrap',
             gap: 6,
             paddingHorizontal: 20,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
             justifyContent: 'center',
         },
         badge: {
@@ -681,7 +703,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
         // Incentives
         incentivesRow: {
             paddingHorizontal: 20,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
             gap: 4,
         },
         incentiveChip: {
@@ -700,7 +722,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             color: colors.text,
         },
         incentiveAmount: {
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '800',
             color: GOLD,
         },
@@ -710,7 +732,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             flexDirection: 'row',
             alignItems: 'center',
             marginHorizontal: 20,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
             backgroundColor: QUEST_PURPLE + '12',
             borderRadius: 8,
             paddingHorizontal: 10,
@@ -724,7 +746,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             color: colors.text,
         },
         questReward: {
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '800',
             color: QUEST_PURPLE,
         },
@@ -745,13 +767,13 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
         routeDot: {
             width: 10, height: 10,
             borderRadius: 5,
-            marginTop: 4,
+            marginTop: SPACING.xs,
         },
         routeLine: {
             width: 2,
             height: 8,
             backgroundColor: borderClr,
-            marginLeft: 4,
+            marginLeft: SPACING.xs,
             marginVertical: 2,
         },
         routeContent: {
@@ -785,23 +807,14 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             flexDirection: 'row',
             gap: 10,
             paddingHorizontal: 20,
-            paddingTop: 4,
+            paddingTop: SPACING.xs,
             paddingBottom: 20,
         },
+        // Fill/border/radius/height/text now all come from the shared Button
+        // (variant="secondary" size="lg") — this only supplies the flex:1 half
+        // of the actionBar row, matching acceptBtn's own flex:1 below.
         declineBtn: {
             flex: 1,
-            height: 54,
-            borderRadius: 14,
-            backgroundColor: surfaceBg,
-            justifyContent: 'center',
-            alignItems: 'center',
-            borderWidth: 1,
-            borderColor: borderClr,
-        },
-        declineBtnText: {
-            fontSize: 16,
-            fontWeight: '700',
-            color: colors.textDim,
         },
         acceptBtn: {
             flex: 1,
@@ -823,7 +836,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
         },
         acceptBtnFare: {
             color: 'rgba(255,255,255,0.9)',
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '700',
         },
     });

@@ -78,7 +78,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+      - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
@@ -114,15 +114,28 @@ jobs:
           # keeps the operator's explicit choice uniform across platforms,
           # since that's a deliberate manual override, not the push default
           # this bug is about.
+          # Update 2026-09-09: android now publishes to BOTH channels on push.
+          # The paragraph above is still accurate about history, but its
+          # premise ("Android store builds are always channel preview") stopped
+          # holding the moment the first Play production AAB was cut from the
+          # `production` build profile, whose eas.json channel is `production`.
+          # Two live Android populations now exist and they read different
+          # branches:
+          #   • preview    — every internal-distribution APK handed to live
+          #                  testers (all Android store builds before this).
+          #   • production — Play production installs.
+          # Publishing android only to `preview` would leave every
+          # Play-installed user with no reachable OTA update at all: branch
+          # `production` receives only --platform ios publishes, so an Android
+          # device on that channel finds nothing applicable and the OTA hotfix
+          # path silently does not exist for it. Additive on purpose — preview
+          # keeps receiving exactly what it received before.
           if [ -n "$INPUT_PROFILE" ]; then
-            CHANNEL_IOS="$INPUT_PROFILE"
-            CHANNEL_ANDROID="$INPUT_PROFILE"
+            PAIRS="ios:$INPUT_PROFILE android:$INPUT_PROFILE"
           elif [ "$EVENT_NAME" = "push" ]; then
-            CHANNEL_IOS="production"
-            CHANNEL_ANDROID="preview"
+            PAIRS="ios:production android:preview android:production"
           else
-            CHANNEL_IOS="preview"
-            CHANNEL_ANDROID="preview"
+            PAIRS="ios:preview android:preview"
           fi
           MESSAGE="${MSG:-manual update}"
           # eas update truncates at 1024 chars; keep just the first line.
@@ -145,10 +158,11 @@ jobs:
           # environment (they are development/preview/production), so it maps to
           # preview alongside the preview channel.
           #
-          # Two separate --platform-scoped publishes (not one unscoped call)
-          # because CHANNEL_IOS and CHANNEL_ANDROID can now legitimately
-          # differ (see above).
-          for pair in "ios:$CHANNEL_IOS" "android:$CHANNEL_ANDROID"; do
+          # One --platform-scoped publish per entry in $PAIRS (not a single
+          # unscoped call): the platforms legitimately target different
+          # channels, and android deliberately appears twice on push so both
+          # the preview and production channels are served (see above).
+          for pair in $PAIRS; do
             platform="${pair%%:*}"
             channel="${pair#*:}"
             case "$channel" in
@@ -174,7 +188,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+      - uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
@@ -191,22 +205,35 @@ jobs:
           # Android Play Store submissions — driver-app's own `android-auto`
           # profile included — have so far always used channel `preview`,
           # never `production`).
+          # Update 2026-09-09: android now publishes to BOTH channels on push.
+          # The paragraph above is still accurate about history, but its
+          # premise ("Android store builds are always channel preview") stopped
+          # holding the moment the first Play production AAB was cut from the
+          # `production` build profile, whose eas.json channel is `production`.
+          # Two live Android populations now exist and they read different
+          # branches:
+          #   • preview    — every internal-distribution APK handed to live
+          #                  testers (all Android store builds before this).
+          #   • production — Play production installs.
+          # Publishing android only to `preview` would leave every
+          # Play-installed user with no reachable OTA update at all: branch
+          # `production` receives only --platform ios publishes, so an Android
+          # device on that channel finds nothing applicable and the OTA hotfix
+          # path silently does not exist for it. Additive on purpose — preview
+          # keeps receiving exactly what it received before.
           if [ -n "$INPUT_PROFILE" ]; then
-            CHANNEL_IOS="$INPUT_PROFILE"
-            CHANNEL_ANDROID="$INPUT_PROFILE"
+            PAIRS="ios:$INPUT_PROFILE android:$INPUT_PROFILE"
           elif [ "$EVENT_NAME" = "push" ]; then
-            CHANNEL_IOS="production"
-            CHANNEL_ANDROID="preview"
+            PAIRS="ios:production android:preview android:production"
           else
-            CHANNEL_IOS="preview"
-            CHANNEL_ANDROID="preview"
+            PAIRS="ios:preview android:preview"
           fi
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
           # See rider job above — publish by branch, always with an explicit
           # --environment, and one --platform-scoped call per platform since
           # the two channels can now differ.
-          for pair in "ios:$CHANNEL_IOS" "android:$CHANNEL_ANDROID"; do
+          for pair in $PAIRS; do
             platform="${pair%%:*}"
             channel="${pair#*:}"
             case "$channel" in

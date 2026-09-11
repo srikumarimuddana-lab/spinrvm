@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert,
+  View, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,6 +12,7 @@ import { useQuestStore, MyQuestProgress } from '../../store/questStore';
 import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors, ThemeColorKey } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 /**
  * Quests & Bonuses.
@@ -339,8 +341,8 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surfaceLight },
 
-    hero: { paddingHorizontal: 16, paddingBottom: 22, borderBottomLeftRadius: 26, borderBottomRightRadius: 26 },
-    heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+    hero: { paddingHorizontal: SPACING.md, paddingBottom: 22, borderBottomLeftRadius: 26, borderBottomRightRadius: 26 },
+    heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.md },
     back: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
     heroTitle: { fontSize: 18, fontWeight: '800', color: '#FFF' },
     statsRow: { flexDirection: 'row', alignItems: 'center' },
@@ -350,30 +352,30 @@ function createStyles(colors: ThemeColors) {
     statValueHi: { color: '#FFE08A' },
     statLabel: { fontSize: 12, color: 'rgba(255,255,255,0.85)', marginTop: 2, fontWeight: '600' },
 
-    segment: { flexDirection: 'row', marginTop: 16, marginHorizontal: 16, backgroundColor: colors.surface, borderRadius: 14, padding: 4, borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6, elevation: 2 },
+    segment: { flexDirection: 'row', marginTop: SPACING.md, marginHorizontal: SPACING.md, backgroundColor: colors.surface, borderRadius: 14, padding: SPACING.xs, borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 6, elevation: 2 },
     seg: { flex: 1, paddingVertical: 10, borderRadius: 11, alignItems: 'center' },
     segActive: { backgroundColor: colors.primary },
     segText: { fontSize: 14, fontWeight: '700', color: colors.textDim },
     segTextActive: { color: '#FFF' },
 
     scroll: { flex: 1 },
-    scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 44 },
+    scrollContent: { paddingHorizontal: SPACING.md, paddingTop: SPACING.md, paddingBottom: 44 },
 
-    empty: { alignItems: 'center', marginTop: 48, paddingHorizontal: 24 },
-    emptyCircle: { width: 82, height: 82, borderRadius: 41, backgroundColor: colors.primary + '15', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+    empty: { alignItems: 'center', marginTop: SPACING.xxl, paddingHorizontal: SPACING.lg },
+    emptyCircle: { width: 82, height: 82, borderRadius: 41, backgroundColor: colors.primary + '15', alignItems: 'center', justifyContent: 'center', marginBottom: SPACING.md },
     emptyTitle: { fontSize: 18, fontWeight: '800', color: colors.text, textAlign: 'center' },
     emptySub: { fontSize: 14, color: colors.textDim, textAlign: 'center', marginTop: 6, lineHeight: 21 },
-    emptyBtn: { marginTop: 18, backgroundColor: colors.primary, borderRadius: 13, paddingVertical: 12, paddingHorizontal: 24 },
-    emptyBtnText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+    emptyBtn: { marginTop: 18, backgroundColor: colors.primary, borderRadius: 13, paddingVertical: 12, paddingHorizontal: SPACING.lg },
+    emptyBtnText: { color: '#FFF', fontSize: FONT.bodyMd, fontWeight: '800' },
 
-    card: { backgroundColor: colors.surface, borderRadius: 18, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8, elevation: 2 },
+    card: { backgroundColor: colors.surface, borderRadius: 18, padding: SPACING.md, marginBottom: 14, borderWidth: 1, borderColor: colors.border, shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8, elevation: 2 },
     cardTop: { flexDirection: 'row', alignItems: 'center' },
     iconChip: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
     titleWrap: { flex: 1 },
-    cardTitle: { fontSize: 16, fontWeight: '800', color: colors.text },
-    cardSub: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
-    coin: { alignItems: 'center', backgroundColor: colors.orange + '18', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, marginLeft: 8 },
-    coinAmt: { fontSize: 16, fontWeight: '900', color: colors.orange },
+    cardTitle: { fontSize: FONT.bodyLg, fontWeight: '800', color: colors.text },
+    cardSub: { fontSize: FONT.bodySm, color: colors.textSecondary, marginTop: 2 },
+    coin: { alignItems: 'center', backgroundColor: colors.orange + '18', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, marginLeft: SPACING.sm },
+    coinAmt: { fontSize: FONT.bodyLg, fontWeight: '900', color: colors.orange },
     coinLbl: { fontSize: 10, fontWeight: '700', color: colors.orange, marginTop: 1, textTransform: 'uppercase', letterSpacing: 0.4 },
 
     desc: { fontSize: 14, color: colors.textDim, lineHeight: 20, marginTop: 12 },
@@ -382,22 +384,22 @@ function createStyles(colors: ThemeColors) {
     track: { height: 9, backgroundColor: colors.surfaceLight, borderRadius: 5, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
     fill: { height: '100%', borderRadius: 5 },
     progRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-    progVal: { fontSize: 13, fontWeight: '700', color: colors.text },
-    progPct: { fontSize: 13, fontWeight: '800' },
+    progVal: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.text },
+    progPct: { fontSize: FONT.bodySm, fontWeight: '800' },
 
     meta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, flexWrap: 'wrap' },
     metaItem: { flexDirection: 'row', alignItems: 'center', marginRight: 12 },
-    metaText: { fontSize: 13, color: colors.textSecondary, fontWeight: '500', marginLeft: 5 },
+    metaText: { fontSize: FONT.bodySm, color: colors.textSecondary, fontWeight: '500', marginLeft: 5 },
 
-    btn: { backgroundColor: colors.primary, borderRadius: 13, paddingVertical: 13, alignItems: 'center', justifyContent: 'center', marginTop: 16 },
+    btn: { backgroundColor: colors.primary, borderRadius: 13, paddingVertical: 13, alignItems: 'center', justifyContent: 'center', marginTop: SPACING.md },
     btnOff: { backgroundColor: colors.textSecondary, opacity: 0.6 },
-    btnText: { color: '#FFF', fontSize: 15, fontWeight: '800' },
+    btnText: { color: '#FFF', fontSize: FONT.bodyMd, fontWeight: '800' },
     btnRow: { flexDirection: 'row', alignItems: 'center' },
 
-    pill: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 16, paddingVertical: 11, borderRadius: 12 },
-    pillText: { fontSize: 13, fontWeight: '700', marginLeft: 6 },
+    pill: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: SPACING.md, paddingVertical: 11, borderRadius: 12 },
+    pillText: { fontSize: FONT.bodySm, fontWeight: '700', marginLeft: 6 },
 
-    statusBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, marginLeft: 8 },
-    statusText: { fontSize: 11, fontWeight: '800' },
+    statusBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, marginLeft: SPACING.sm },
+    statusText: { fontSize: FONT.label, fontWeight: '800' },
   });
 }

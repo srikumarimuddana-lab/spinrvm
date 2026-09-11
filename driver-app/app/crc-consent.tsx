@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +8,7 @@ import { SpinrConfig } from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api, { getApiErrorMessage } from '@shared/api/client';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { showToast } from '../hooks/useToast';
 
 // Purpose-built consent screen for the Criminal Record Check / Vulnerable
@@ -156,17 +158,17 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 20,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
             backgroundColor: colors.surface,
         },
-        backButton: { padding: 8, marginLeft: -8 },
+        backButton: { padding: SPACING.sm, marginLeft: -8 },
         headerTitle: { fontSize: 18, fontWeight: '600', color: colors.text },
         headerRight: { width: 40 },
         loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
         container: { flex: 1, backgroundColor: colors.surface },
-        contentContainer: { padding: 24, paddingBottom: 24 },
+        contentContainer: { padding: SPACING.lg, paddingBottom: SPACING.lg },
         currentBanner: {
             flexDirection: 'row',
             alignItems: 'center',
@@ -176,8 +178,8 @@ function createStyles(colors: ThemeColors) {
             padding: 12,
             marginBottom: 20,
         },
-        currentBannerText: { flex: 1, fontSize: 13, color: colors.textSecondary },
-        textContent: { fontSize: 15, lineHeight: 24, color: colors.text },
+        currentBannerText: { flex: 1, fontSize: FONT.bodySm, color: colors.textSecondary },
+        textContent: { fontSize: FONT.bodyMd, lineHeight: 24, color: colors.text },
         footer: {
             paddingHorizontal: 20,
             paddingTop: 12,
@@ -187,7 +189,7 @@ function createStyles(colors: ThemeColors) {
             gap: 14,
         },
         checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-        checkboxLabel: { flex: 1, fontSize: 13, lineHeight: 19, color: colors.text },
+        checkboxLabel: { flex: 1, fontSize: FONT.bodySm, lineHeight: 19, color: colors.text },
         submitButton: {
             borderRadius: 12,
             paddingVertical: 14,
@@ -195,6 +197,6 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
         },
         submitButtonDisabled: { opacity: 0.5 },
-        submitButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+        submitButtonText: { color: '#fff', fontSize: FONT.bodyMd, fontWeight: '600' },
     });
 }

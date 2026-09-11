@@ -9,7 +9,8 @@
  * handling). Anything needing more input deep-links to the standard flow.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -17,6 +18,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { BookingProposal } from '@shared/types/ai';
 import { Card } from '@shared/components/Card';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { useRideStore } from '../store/rideStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import {
@@ -396,14 +398,14 @@ const createStyles = (colors: ThemeColors) =>
     headerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     headerText: { fontSize: 15, fontWeight: '700', color: colors.text },
     routeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    routeText: { flex: 1, fontSize: 13, color: colors.textDim },
-    quoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
-    quoteHint: { fontSize: 13, color: colors.textDim },
+    routeText: { flex: 1, fontSize: FONT.bodySm, color: colors.textDim },
+    quoteRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: SPACING.xs },
+    quoteHint: { fontSize: FONT.bodySm, color: colors.textDim },
     fareRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
-      paddingTop: 4,
+      paddingTop: SPACING.xs,
     },
     vehicleName: { fontSize: 14, fontWeight: '600', color: colors.text },
     fareAmounts: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -419,12 +421,12 @@ const createStyles = (colors: ThemeColors) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: 4,
-      paddingHorizontal: 8,
+      paddingHorizontal: SPACING.sm,
       paddingVertical: 5,
       borderRadius: 999,
       backgroundColor: colors.surfaceLight,
     },
-    preferenceText: { fontSize: 11, color: colors.textDim, fontWeight: '600' },
+    preferenceText: { fontSize: FONT.label, color: colors.textDim, fontWeight: '600' },
     surgeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     surgeText: { fontSize: 12, color: colors.warning, fontWeight: '600' },
     priceNoticeRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -434,21 +436,21 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: 10,
       paddingVertical: 12,
       alignItems: 'center',
-      marginTop: 4,
+      marginTop: SPACING.xs,
     },
     confirmDisabled: { opacity: 0.6 },
     confirmText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-    fineprint: { fontSize: 11, color: colors.textDim, textAlign: 'center' },
+    fineprint: { fontSize: FONT.label, color: colors.textDim, textAlign: 'center' },
     aiDisclaimer: {
-      fontSize: 11,
+      fontSize: FONT.label,
       color: colors.textDim,
       textAlign: 'center',
       fontStyle: 'italic',
       marginTop: 2,
     },
-    bookedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+    bookedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: SPACING.xs },
     bookedText: { fontSize: 14, fontWeight: '600', color: colors.success },
-    errorText: { fontSize: 13, color: colors.error },
-    linkButton: { paddingVertical: 8 },
+    errorText: { fontSize: FONT.bodySm, color: colors.error },
+    linkButton: { paddingVertical: SPACING.sm },
     linkButtonText: { fontSize: 14, fontWeight: '600', color: colors.primary },
   });

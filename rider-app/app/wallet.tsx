@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList,
+  View, StyleSheet, TouchableOpacity, FlatList,
   TextInput, ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +15,7 @@ import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { isWalletTopUpAmountValid } from '../utils/walletTopUpSchema';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const TOP_UP_AMOUNTS = [10, 25, 50, 100];
 
@@ -327,17 +329,17 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12, backgroundColor: colors.surface,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, backgroundColor: colors.surface,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceLight, alignItems: 'center', justifyContent: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
 
     balanceCard: {
-      margin: 16, backgroundColor: colors.primary, borderRadius: 20,
-      padding: 24, alignItems: 'center',
+      margin: SPACING.md, backgroundColor: colors.primary, borderRadius: 20,
+      padding: SPACING.lg, alignItems: 'center',
     },
-    balanceLabel: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginBottom: 4 },
+    balanceLabel: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginBottom: SPACING.xs },
     balanceAmount: { fontSize: 42, fontWeight: '800', color: '#FFF' },
     balanceCurrency: { fontSize: 14, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
     balanceActions: { flexDirection: 'row', marginTop: 20, gap: 12 },
@@ -350,11 +352,11 @@ function createStyles(colors: ThemeColors) {
     actionText: { fontSize: 15, fontWeight: '600', color: '#FFF' },
 
     topUpSection: {
-      margin: 16, backgroundColor: colors.surface, borderRadius: 16, padding: 20,
+      margin: SPACING.md, backgroundColor: colors.surface, borderRadius: 16, padding: 20,
       shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8,
       elevation: 3,
     },
-    topUpTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 16 },
+    topUpTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: SPACING.md },
     topUpGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
     topUpChip: {
       flex: 1, minWidth: 70, alignItems: 'center', paddingVertical: 14,
@@ -363,27 +365,27 @@ function createStyles(colors: ThemeColors) {
     topUpChipSelected: {
       backgroundColor: colors.primary + '15', borderColor: colors.primary,
     },
-    topUpChipText: { fontSize: 16, fontWeight: '700', color: colors.text },
+    topUpChipText: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text },
     topUpChipTextSelected: { color: colors.primary },
     customRow: { flexDirection: 'row', marginTop: 12, gap: 10 },
     customInput: {
-      flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 12, paddingHorizontal: 16,
-      paddingVertical: 12, fontSize: 16, borderWidth: 1.5, borderColor: colors.border,
+      flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 12, paddingHorizontal: SPACING.md,
+      paddingVertical: 12, fontSize: FONT.bodyLg, borderWidth: 1.5, borderColor: colors.border,
       color: colors.text,
     },
     customInputActive: { borderColor: colors.primary },
     addFundsButton: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
       backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 16,
-      marginTop: 16,
+      marginTop: SPACING.md,
     },
     addFundsButtonDisabled: { opacity: 0.45 },
-    addFundsButtonText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+    addFundsButtonText: { fontSize: FONT.bodyLg, fontWeight: '700', color: '#FFF' },
     cancelText: { textAlign: 'center', color: colors.textDim, marginTop: 12, fontSize: 14 },
 
-    txnHeader: { paddingHorizontal: 16, paddingVertical: 8 },
+    txnHeader: { paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm },
     txnTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
-    txnList: { paddingHorizontal: 16, paddingBottom: 40 },
+    txnList: { paddingHorizontal: SPACING.md, paddingBottom: 40 },
 
     txnRow: {
       flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
@@ -405,21 +407,21 @@ function createStyles(colors: ThemeColors) {
       fontSize: 12, color: colors.textDim, flex: 1,
     },
     txnBookingRow: {
-      flexDirection: 'row', marginTop: 4,
+      flexDirection: 'row', marginTop: SPACING.xs,
     },
     txnBookingId: {
-      fontSize: 11, fontWeight: '600', color: colors.textDim,
-      backgroundColor: colors.surfaceLight, paddingHorizontal: 8, paddingVertical: 2,
+      fontSize: FONT.label, fontWeight: '600', color: colors.textDim,
+      backgroundColor: colors.surfaceLight, paddingHorizontal: SPACING.sm, paddingVertical: 2,
       borderRadius: 4, overflow: 'hidden', letterSpacing: 0.5,
     },
-    txnDate: { fontSize: 13, color: colors.textDim, marginTop: 4 },
+    txnDate: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.xs },
     txnAmountCol: { alignItems: 'flex-end' },
-    txnAmount: { fontSize: 16, fontWeight: '700' },
+    txnAmount: { fontSize: FONT.bodyLg, fontWeight: '700' },
 
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
-    emptyText: { fontSize: 16, fontWeight: '600', color: colors.textDim, marginTop: 12 },
-    emptySubtext: { fontSize: 14, color: '#BBB', marginTop: 4 },
+    emptyText: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.textDim, marginTop: 12 },
+    emptySubtext: { fontSize: 14, color: '#BBB', marginTop: SPACING.xs },
 
   });
 }

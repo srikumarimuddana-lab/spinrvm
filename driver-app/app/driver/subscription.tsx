@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  View, StyleSheet, TouchableOpacity, ScrollView,
   ActivityIndicator, Alert,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { showToast } from '../../hooks/useToast';
 import { ScreenHeader } from '../../components/ScreenHeader';
 
@@ -521,21 +523,21 @@ export default function SubscriptionScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
-    content: { paddingTop: 8 },
+    content: { paddingTop: SPACING.sm },
 
     // Current subscription
     currentCard: {
-      backgroundColor: colors.primary, margin: 16, borderRadius: 20, padding: 20, alignItems: 'center',
+      backgroundColor: colors.primary, margin: SPACING.md, borderRadius: 20, padding: 20, alignItems: 'center',
     },
     currentBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 4,
-      backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, marginBottom: 10,
+      backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: SPACING.xs, borderRadius: 12, marginBottom: 10,
     },
-    currentBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
-    currentPlan: { fontSize: 24, fontWeight: '800', color: '#FFF', marginBottom: 4 },
-    currentPrice: { fontSize: 16, color: 'rgba(255,255,255,0.8)' },
+    currentBadgeText: { fontSize: FONT.label, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
+    currentPlan: { fontSize: 24, fontWeight: '800', color: '#FFF', marginBottom: SPACING.xs },
+    currentPrice: { fontSize: FONT.bodyLg, color: 'rgba(255,255,255,0.8)' },
     currentStats: {
-      flexDirection: 'row', marginTop: 16, paddingTop: 16,
+      flexDirection: 'row', marginTop: SPACING.md, paddingTop: SPACING.md,
       borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)', width: '100%',
     },
     currentStat: { flex: 1, alignItems: 'center' },
@@ -552,60 +554,60 @@ function createStyles(colors: ThemeColors) {
     },
     countdownText: { fontSize: 12, fontWeight: '600', color: '#FFF' },
     cancelLink: { marginTop: 14 },
-    cancelLinkText: { fontSize: 13, color: 'rgba(255,255,255,0.6)' },
+    cancelLinkText: { fontSize: FONT.bodySm, color: 'rgba(255,255,255,0.6)' },
 
     // Section
     sectionTitle: { fontSize: 20, fontWeight: '800', color: colors.text, paddingHorizontal: 20, marginTop: 20 },
-    sectionSubtitle: { fontSize: 14, color: colors.textDim, paddingHorizontal: 20, marginTop: 4, marginBottom: 16 },
+    sectionSubtitle: { fontSize: 14, color: colors.textDim, paddingHorizontal: 20, marginTop: SPACING.xs, marginBottom: SPACING.md },
 
     // Plan card
     planCard: {
-      backgroundColor: colors.surfaceLight, marginHorizontal: 16, marginBottom: 12,
+      backgroundColor: colors.surfaceLight, marginHorizontal: SPACING.md, marginBottom: 12,
       borderRadius: 18, padding: 20, borderWidth: 1.5, borderColor: 'transparent',
     },
     planCardActive: { borderColor: colors.primary, backgroundColor: colors.surfaceLight },
-    currentTagRow: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 8 },
+    currentTagRow: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: SPACING.sm },
     currentTag: {
-      backgroundColor: colors.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
+      backgroundColor: colors.primary, paddingHorizontal: SPACING.sm, paddingVertical: 3, borderRadius: 6,
     },
     currentTagText: { fontSize: 9, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
     planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
     planName: { fontSize: 18, fontWeight: '700', color: colors.text },
-    planDesc: { fontSize: 13, color: colors.textDim, marginTop: 2, maxWidth: 180 },
+    planDesc: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: 2, maxWidth: 180 },
     priceWrap: { alignItems: 'flex-end' },
     planPrice: { fontSize: 24, fontWeight: '800', color: colors.primary },
     planDuration: { fontSize: 12, color: colors.textSecondary },
-    planDetails: { gap: 8, marginBottom: 16 },
+    planDetails: { gap: 8, marginBottom: SPACING.md },
     planDetail: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     planDetailText: { fontSize: 14, color: colors.textDim },
     subscribeBtn: {
       backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center',
     },
-    subscribeBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    subscribeBtnText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#FFF' },
 
     empty: { alignItems: 'center', paddingVertical: 40 },
-    emptyText: { fontSize: 15, color: colors.textSecondary, marginTop: 12 },
+    emptyText: { fontSize: FONT.bodyMd, color: colors.textSecondary, marginTop: 12 },
 
     // Free mode celebration card — reuses the brand success token
     // (colors.success / colors.successBg), same convention CustomAlert.tsx
     // established, instead of an ad hoc Tailwind-emerald palette.
     freeCard: {
-      backgroundColor: colors.successBg, marginHorizontal: 16, marginTop: 8,
+      backgroundColor: colors.successBg, marginHorizontal: SPACING.md, marginTop: SPACING.sm,
       borderRadius: 20, padding: 28, alignItems: 'center',
       borderWidth: 1.5, borderColor: `${colors.success}55`,
     },
     freeEmoji: { fontSize: 48, marginBottom: 12 },
-    freeTitle: { fontSize: 22, fontWeight: '800', color: colors.success, marginBottom: 8 },
-    freeMessage: { fontSize: 15, color: colors.success, textAlign: 'center', lineHeight: 22, marginBottom: 16 },
+    freeTitle: { fontSize: FONT.h3, fontWeight: '800', color: colors.success, marginBottom: SPACING.sm },
+    freeMessage: { fontSize: FONT.bodyMd, color: colors.success, textAlign: 'center', lineHeight: 22, marginBottom: SPACING.md },
     freeBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
-      backgroundColor: colors.successBg, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
+      backgroundColor: colors.successBg, paddingHorizontal: 14, paddingVertical: SPACING.sm, borderRadius: 12,
     },
-    freeBadgeText: { fontSize: 13, fontWeight: '700', color: colors.success },
+    freeBadgeText: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.success },
 
     // Payment history
     paymentRow: {
-      flexDirection: 'row', alignItems: 'flex-start', marginHorizontal: 16, marginBottom: 8,
+      flexDirection: 'row', alignItems: 'flex-start', marginHorizontal: SPACING.md, marginBottom: SPACING.sm,
       backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, gap: 12,
     },
     paymentIcon: {
@@ -615,13 +617,13 @@ function createStyles(colors: ThemeColors) {
     paymentInfo: { flex: 1 },
     paymentPlan: { fontSize: 14, fontWeight: '600', color: colors.text },
     paymentMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
-    paymentTax: { fontSize: 11, color: colors.textDim, marginTop: 3, opacity: 0.8 },
+    paymentTax: { fontSize: FONT.label, color: colors.textDim, marginTop: 3, opacity: 0.8 },
     resendBtn: { marginTop: 6, alignSelf: 'flex-start' },
     resendText: { fontSize: 12, fontWeight: '600' },
     paymentAmountCol: { alignItems: 'flex-end', flexShrink: 0 },
-    paymentAmount: { fontSize: 15, fontWeight: '700', color: colors.text },
+    paymentAmount: { fontSize: FONT.bodyMd, fontWeight: '700', color: colors.text },
     paymentCurrency: { fontSize: 10, color: colors.textDim, marginTop: 1 },
-    loadMoreRow: { alignItems: 'center', paddingVertical: 16 },
+    loadMoreRow: { alignItems: 'center', paddingVertical: SPACING.md },
     loadMoreText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   });
 }

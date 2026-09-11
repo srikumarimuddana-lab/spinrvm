@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
@@ -13,6 +12,7 @@ import {
   Alert,
   BackHandler,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,6 +23,7 @@ import { showToast } from '../hooks/useToast';
 import { notifyError } from '../lib/notifyError';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import {
   isFirstNameValid,
   isLastNameValid,
@@ -602,7 +603,7 @@ function createStyles(colors: ThemeColors) {
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 24,
+    paddingHorizontal: SPACING.lg,
   },
   // Signed In Pill
   signedInRow: {
@@ -611,7 +612,7 @@ function createStyles(colors: ThemeColors) {
     backgroundColor: colors.surfaceLight,
     padding: 12,
     borderRadius: 16,
-    marginBottom: 32,
+    marginBottom: SPACING.xl,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -628,7 +629,7 @@ function createStyles(colors: ThemeColors) {
     flex: 1,
   },
   signedInLabel: {
-    fontSize: 11,
+    fontSize: FONT.label,
     color: colors.textDim,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -642,8 +643,8 @@ function createStyles(colors: ThemeColors) {
   },
   changeBtn: {
     backgroundColor: colors.surface,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
     borderRadius: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -652,7 +653,7 @@ function createStyles(colors: ThemeColors) {
     elevation: 2,
   },
   changeBtnText: {
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     color: colors.text,
     fontWeight: '600',
   },
@@ -661,20 +662,20 @@ function createStyles(colors: ThemeColors) {
     marginBottom: 36,
   },
   title: {
-    fontSize: 32,
+    fontSize: FONT.h1,
     fontWeight: '800',
     color: colors.text,
     letterSpacing: -0.5,
     marginBottom: 10,
   },
   subtitle: {
-    fontSize: 15,
+    fontSize: FONT.bodyMd,
     color: colors.textDim,
     lineHeight: 22,
   },
   // Form elements
   form: {
-    marginBottom: 32,
+    marginBottom: SPACING.xl,
   },
   row: {
     flexDirection: 'row',
@@ -684,11 +685,11 @@ function createStyles(colors: ThemeColors) {
     marginBottom: 20,
   },
   label: {
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     fontWeight: '700',
     color: colors.text,
-    marginBottom: 8,
-    paddingLeft: 4,
+    marginBottom: SPACING.sm,
+    paddingLeft: SPACING.xs,
   },
   inputContainer: {
     flexDirection: 'row',
@@ -720,7 +721,7 @@ function createStyles(colors: ThemeColors) {
   input: {
     flex: 1,
     height: '100%',
-    fontSize: 16,
+    fontSize: FONT.bodyLg,
     fontWeight: '600',
     color: colors.text,
   },
@@ -770,7 +771,7 @@ function createStyles(colors: ThemeColors) {
     shadowOpacity: 0.25,
     shadowRadius: 12,
     elevation: 6,
-    marginBottom: 24,
+    marginBottom: SPACING.lg,
   },
   submitButtonDisabled: {
     backgroundColor: colors.border,
@@ -786,7 +787,7 @@ function createStyles(colors: ThemeColors) {
     gap: 8,
   },
   submitButtonText: {
-    fontSize: 16,
+    fontSize: FONT.bodyLg,
     fontWeight: '700',
     color: colors.surface,
   },
@@ -800,7 +801,7 @@ function createStyles(colors: ThemeColors) {
     gap: 6,
   },
   footerText: {
-    fontSize: 13,
+    fontSize: FONT.bodySm,
     color: '#A0A0A0',
     fontWeight: '500',
   },
@@ -814,7 +815,7 @@ function createStyles(colors: ThemeColors) {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 12,
     borderRadius: 16,
     backgroundColor: colors.surfaceLight,
@@ -834,10 +835,10 @@ function createStyles(colors: ThemeColors) {
     color: colors.surface,
   },
   serviceAreaHint: {
-    fontSize: 11,
+    fontSize: FONT.label,
     color: '#A0A0A0',
-    marginTop: 8,
-    paddingLeft: 4,
+    marginTop: SPACING.sm,
+    paddingLeft: SPACING.xs,
     fontStyle: 'italic',
   },
   });

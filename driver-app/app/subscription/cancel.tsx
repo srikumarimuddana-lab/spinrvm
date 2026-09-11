@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING } from '@shared/utils/responsive';
 
 /**
  * Stripe Checkout cancel landing screen.
@@ -40,8 +41,8 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',
-      padding: 32,
+      padding: SPACING.xl,
     },
-    subtitle: { fontSize: 14, color: colors.textDim, marginTop: 16, textAlign: 'center' },
+    subtitle: { fontSize: 14, color: colors.textDim, marginTop: SPACING.md, textAlign: 'center' },
   });
 }

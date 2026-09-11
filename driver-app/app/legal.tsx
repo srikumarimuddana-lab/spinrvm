@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     ScrollView,
     TouchableOpacity,
     ActivityIndicator,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,7 @@ import { SpinrConfig } from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { isValidLegalDocType, legalDocFallbackText, legalDocTitle } from '@shared/config/legalDocs';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Previously this fallback held hardcoded ToS/Privacy Policy text that was
 // factually wrong for Spinr's actual business (Ontario governing law, a
@@ -189,13 +190,13 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 20,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
             backgroundColor: colors.surface,
         },
         backButton: {
-            padding: 8,
+            padding: SPACING.sm,
             marginLeft: -8,
         },
         headerTitle: {
@@ -216,14 +217,14 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
         },
         contentContainer: {
-            padding: 24,
+            padding: SPACING.lg,
             paddingBottom: 60,
         },
         sectionHeader: {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 10,
-            marginBottom: 16,
+            marginBottom: SPACING.md,
         },
         sectionTitle: {
             fontSize: 20,
@@ -231,14 +232,14 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
         },
         textContent: {
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             lineHeight: 24,
             color: colors.text,
         },
         divider: {
             height: 1,
             backgroundColor: colors.border,
-            marginVertical: 32,
+            marginVertical: SPACING.xl,
         },
     });
 }

@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
@@ -13,6 +12,7 @@ import {
     TextInput,
     Linking,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -32,6 +32,7 @@ import {
 import { showToast } from '../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { otaVersionLabel } from '@shared/utils/otaVersion';
 import { isDeleteConfirmationValid } from '../../utils/accountDeletionSchema';
 
@@ -574,17 +575,17 @@ export default function SettingsScreen() {
 function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
-        section: { paddingHorizontal: 16, marginTop: 20 },
+        section: { paddingHorizontal: SPACING.md, marginTop: 20 },
         sectionTitle: {
             color: colors.text,
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '700',
             marginBottom: 10,
         },
         card: {
             backgroundColor: colors.surface,
             borderRadius: 18,
-            padding: 4,
+            padding: SPACING.xs,
             borderWidth: 1,
             borderColor: colors.border,
         },
@@ -607,7 +608,7 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
         },
         settingLabel: { color: colors.text, fontSize: 14, fontWeight: '500' },
-        settingDesc: { color: colors.textDim, fontSize: 11, marginTop: 1 },
+        settingDesc: { color: colors.textDim, fontSize: FONT.label, marginTop: 1 },
         toggle: {
             width: 48,
             height: 28,
@@ -622,7 +623,7 @@ function createStyles(colors: ThemeColors) {
         },
         settingValue: {
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             marginLeft: 'auto',
             marginRight: 6,
         },
@@ -660,7 +661,7 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'center',
             gap: 8,
-            padding: 16,
+            padding: SPACING.md,
             backgroundColor: 'rgba(255,71,87,0.08)',
             borderRadius: 16,
             borderWidth: 1,
@@ -669,10 +670,10 @@ function createStyles(colors: ThemeColors) {
         deleteText: { color: colors.error, fontSize: 14, fontWeight: '600' },
         wavHint: {
             color: colors.textDim,
-            fontSize: 11,
-            marginTop: 8,
+            fontSize: FONT.label,
+            marginTop: SPACING.sm,
             lineHeight: 16,
-            paddingHorizontal: 4,
+            paddingHorizontal: SPACING.xs,
         },
         version: {
             color: colors.textDim,
@@ -711,17 +712,17 @@ function createStyles(colors: ThemeColors) {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            paddingVertical: 16,
-            paddingHorizontal: 16,
+            paddingVertical: SPACING.md,
+            paddingHorizontal: SPACING.md,
             borderRadius: 12,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
             backgroundColor: colors.surface,
         },
         languageOptionSelected: {
             backgroundColor: `${colors.primary}1A`,
         },
         languageName: {
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '500',
             color: colors.text,
         },
@@ -729,7 +730,7 @@ function createStyles(colors: ThemeColors) {
             color: colors.primary,
         },
         languageEnglish: {
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             color: colors.textDim,
             marginTop: 2,
         },
@@ -738,12 +739,12 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: 'rgba(0,0,0,0.5)',
             justifyContent: 'center',
             alignItems: 'center' as const,
-            padding: 24,
+            padding: SPACING.lg,
         },
         deleteModal: {
             backgroundColor: colors.surface,
             borderRadius: 20,
-            padding: 24,
+            padding: SPACING.lg,
             width: '100%',
             alignItems: 'center' as const,
         },
@@ -751,20 +752,20 @@ function createStyles(colors: ThemeColors) {
             fontSize: 18,
             fontWeight: '700' as const,
             color: colors.text,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
         },
         deleteModalMsg: {
             fontSize: 14,
             color: colors.textDim,
             textAlign: 'center' as const,
-            marginBottom: 16,
+            marginBottom: SPACING.md,
         },
         deleteInput: {
             width: '100%',
             backgroundColor: colors.background,
             borderRadius: 12,
             padding: 14,
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             color: colors.text,
             borderWidth: 1,
             borderColor: colors.border,
@@ -777,7 +778,7 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center' as const,
         },
         deleteModalBtnText: {
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '600' as const,
         },
     });

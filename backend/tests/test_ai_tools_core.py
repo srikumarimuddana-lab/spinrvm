@@ -247,3 +247,70 @@ class TestExecuteTool:
         assert result["note"] == "Warning: do NOT quote on it."
         assert result["needs_correction"] == "dropoff_label_mismatch"
         assert result["imprecise_address"] is True
+
+    @pytest.mark.anyio
+    async def test_no_cache_flag_survives_truncation(self):
+        """F05 (AI security assessment (PR #5138)).
+
+        `_no_cache` marks a turn as non-replayable across users — an
+        area-scoped FAQ answer must never be served from the shared
+        (audience, question) response cache to a rider in another service
+        area. Truncation used to rebuild the result as
+        {_truncated, preview, **_GUARDRAIL_KEYS} and drop the flag with
+        everything else, so the orchestrator saw an ordinary cacheable
+        FAQ turn. The bug only appeared ABOVE the cap, which is exactly the
+        shape a long area-scoped FAQ result has — hence the oversized
+        fixture here rather than a small one.
+        """
+
+        async def huge_scoped_faq(user, **args):
+            return {"results": [{"question": "q", "answer": "x" * 100}] * 200, "_no_cache": True}
+
+        register(_spec(handler=huge_scoped_faq))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["_truncated"] is True
+        assert result["_no_cache"] is True
+
+    @pytest.mark.anyio
+    async def test_no_cache_flag_survives_a_short_result_too(self):
+        """The below-cap path was already correct; pin it so a future change
+        to the meta handling can't regress the easy case while fixing the
+        hard one."""
+
+        async def small_scoped_faq(user, **args):
+            return {"results": [{"question": "q", "answer": "a"}], "_no_cache": True}
+
+        register(_spec(handler=small_scoped_faq))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert "_truncated" not in result
+        assert result["_no_cache"] is True
+
+    @pytest.mark.anyio
+    async def test_unscoped_result_is_not_marked_no_cache(self):
+        """The negative half: the fix must not make every turn uncacheable,
+        which would silently disable the FAQ response cache instead of
+        correcting its isolation."""
+
+        async def global_faq(user, **args):
+            return {"results": [{"question": "q", "answer": "a"}]}
+
+        register(_spec(handler=global_faq))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert "_no_cache" not in result
+
+    @pytest.mark.anyio
+    async def test_non_dict_result_survives_meta_handling(self):
+        """A tool may return a list. The meta re-attach must not assume a
+        dict — `result.update(...)` on a list raises AttributeError, which
+        would turn a working tool into a 'tool failed' result."""
+
+        async def listy(user, **args):
+            return ["a", "b"]
+
+        register(_spec(handler=listy))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result == ["a", "b"]

@@ -10,7 +10,8 @@
  * estimate, FCM offer payload) is unchanged — only presentational.
  */
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,6 +20,7 @@ import CustomToggle from '../components/CustomToggle';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useRideStore } from '../store/rideStore';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function AccessibilityScreen() {
   const router = useRouter();
@@ -72,7 +74,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
@@ -81,12 +83,12 @@ function createStyles(colors: ThemeColors) {
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
     content: { padding: 20, paddingBottom: 40 },
     sectionTitle: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '700',
       color: colors.textDim,
       letterSpacing: 0.5,
-      marginBottom: 8,
-      marginTop: 16,
+      marginBottom: SPACING.sm,
+      marginTop: SPACING.md,
     },
     card: { backgroundColor: colors.surfaceLight, borderRadius: 16, paddingHorizontal: 14 },
     row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14 },
@@ -98,13 +100,13 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       marginRight: 14,
     },
-    rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+    rowTitle: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.text },
     rowSubtitle: { fontSize: 12, color: colors.textDim, marginTop: 2, marginRight: 12 },
     footerText: {
       fontSize: 12,
       color: colors.textDim,
       textAlign: 'center',
-      marginTop: 24,
+      marginTop: SPACING.lg,
       lineHeight: 18,
     },
   });

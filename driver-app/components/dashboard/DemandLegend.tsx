@@ -1,17 +1,18 @@
 import React, { useMemo, useState } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   Modal,
   Pressable,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { HeatmapLayer, HeatmapStatus } from '../../hooks/useDemandHeatmap';
 import { useLanguageStore } from '../../store/languageStore';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Status type is imported from the hook rather than redeclared. The local
 // copy had drifted (no 'disabled'/'idle'), which forced the call site to
@@ -260,7 +261,7 @@ const createStyles = (colors: ThemeColors) =>
       borderColor: colors.textDim,
     },
     label: {
-      fontSize: 11,
+      fontSize: FONT.label,
       color: colors.textDim,
       fontWeight: '500',
     },
@@ -283,14 +284,14 @@ const createStyles = (colors: ThemeColors) =>
     },
     segment: {
       paddingHorizontal: 10,
-      paddingVertical: 4,
+      paddingVertical: SPACING.xs,
       borderRadius: 12,
     },
     segmentActive: {
       backgroundColor: colors.primary,
     },
     segmentText: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '500',
       color: colors.textDim,
     },
@@ -307,8 +308,8 @@ const createStyles = (colors: ThemeColors) =>
     sheet: {
       backgroundColor: colors.surface,
       borderRadius: 16,
-      padding: 24,
-      margin: 32,
+      padding: SPACING.lg,
+      margin: SPACING.xl,
       maxWidth: 340,
     },
     sheetTitle: {
@@ -318,21 +319,21 @@ const createStyles = (colors: ThemeColors) =>
       marginBottom: 12,
     },
     sheetBody: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       color: colors.textSecondary,
       lineHeight: 22,
       marginBottom: 20,
     },
     sheetClose: {
       alignSelf: 'flex-end',
-      paddingHorizontal: 16,
-      paddingVertical: 8,
+      paddingHorizontal: SPACING.md,
+      paddingVertical: SPACING.sm,
       backgroundColor: colors.primary,
       borderRadius: 8,
     },
     sheetCloseText: {
       color: colors.surface,
       fontWeight: '600',
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
     },
   });

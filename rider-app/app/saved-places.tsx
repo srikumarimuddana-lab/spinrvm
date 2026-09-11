@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
+  View, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +16,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
 import type { PlacePrediction as Prediction } from '@shared/api/places';
 import { SAVED_PLACE_TYPES, savedPlaceConfig } from '../utils/savedPlaceIcon';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function SavedPlacesScreen() {
   const router = useRouter();
@@ -278,7 +280,7 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
@@ -293,38 +295,38 @@ function createStyles(colors: ThemeColors) {
     placeIcon: {
       width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14,
     },
-    placeName: { fontSize: 15, fontWeight: '600', color: colors.text },
+    placeName: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.text },
     placeAddr: { fontSize: 12, color: colors.textDim, marginTop: 2 },
 
     // Empty
     empty: { alignItems: 'center', paddingVertical: 40 },
     emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 12 },
-    emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center', paddingHorizontal: 20 },
+    emptySub: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.xs, textAlign: 'center', paddingHorizontal: 20 },
 
     // Add button
     addBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       paddingVertical: 16, borderRadius: 14, borderWidth: 2, borderColor: colors.primary,
-      borderStyle: 'dashed', marginTop: 16,
+      borderStyle: 'dashed', marginTop: SPACING.md,
     },
-    addBtnText: { fontSize: 15, fontWeight: '700', color: colors.primary },
+    addBtnText: { fontSize: FONT.bodyMd, fontWeight: '700', color: colors.primary },
 
     // Add form
-    addForm: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 20, marginTop: 16 },
+    addForm: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 20, marginTop: SPACING.md },
     formLabel: { fontSize: 12, fontWeight: '600', color: '#888', marginBottom: 6, marginTop: 14 },
     input: {
-      backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
-      fontSize: 15, color: colors.text, borderWidth: 1, borderColor: colors.border,
+      backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: SPACING.md, paddingVertical: 14,
+      fontSize: FONT.bodyMd, color: colors.text, borderWidth: 1, borderColor: colors.border,
     },
     typeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     typeChip: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
-      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+      paddingHorizontal: 14, paddingVertical: SPACING.sm, borderRadius: 20,
       borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface,
     },
-    typeChipText: { fontSize: 13, fontWeight: '600', color: colors.textDim },
+    typeChipText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.textDim },
 
-    predList: { backgroundColor: colors.surface, borderRadius: 12, marginTop: 8, borderWidth: 1, borderColor: colors.border },
+    predList: { backgroundColor: colors.surface, borderRadius: 12, marginTop: SPACING.sm, borderWidth: 1, borderColor: colors.border },
     predItem: {
       flexDirection: 'row', alignItems: 'center', gap: 8,
       paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.surfaceLight,
@@ -335,12 +337,12 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row', alignItems: 'center', gap: 8,
       marginTop: 10, padding: 12, backgroundColor: '#F0FFF4', borderRadius: 10,
     },
-    selectedAddrText: { flex: 1, fontSize: 13, color: '#059669' },
+    selectedAddrText: { flex: 1, fontSize: FONT.bodySm, color: '#059669' },
 
     formActions: { flexDirection: 'row', gap: 12, marginTop: 20 },
     cancelBtn: { flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12, backgroundColor: colors.border },
-    cancelText: { fontSize: 15, fontWeight: '600', color: colors.textDim },
+    cancelText: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.textDim },
     saveBtn: { flex: 2, alignItems: 'center', paddingVertical: 14, borderRadius: 12, backgroundColor: colors.primary },
-    saveText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    saveText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#FFF' },
   });
 }

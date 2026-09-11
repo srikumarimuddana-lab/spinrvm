@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api, { getApiErrorMessage } from '@shared/api/client';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { showToast } from '../hooks/useToast';
 
 // Driver-facing side of docs/legal/driver-deactivation-appeals-policy.md.
@@ -179,13 +181,13 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingHorizontal: 20,
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
             backgroundColor: colors.surface,
         },
-        backButton: { padding: 8, marginLeft: -8 },
-        headerTitle: { fontSize: 16, fontWeight: '600', color: colors.text, flex: 1, textAlign: 'center' },
+        backButton: { padding: SPACING.sm, marginLeft: -8 },
+        headerTitle: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, flex: 1, textAlign: 'center' },
         headerRight: { width: 40 },
         loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
         container: { flex: 1, backgroundColor: colors.surface },
@@ -198,9 +200,9 @@ function createStyles(colors: ThemeColors) {
             borderRadius: 12,
             padding: 14,
         },
-        pendingBannerText: { flex: 1, fontSize: 13, lineHeight: 19, color: colors.text },
-        sectionTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 8 },
-        helperText: { fontSize: 13, lineHeight: 19, color: colors.textSecondary, marginBottom: 12 },
+        pendingBannerText: { flex: 1, fontSize: FONT.bodySm, lineHeight: 19, color: colors.text },
+        sectionTitle: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text, marginBottom: SPACING.sm },
+        helperText: { fontSize: FONT.bodySm, lineHeight: 19, color: colors.textSecondary, marginBottom: 12 },
         textInput: {
             borderWidth: 1,
             borderColor: colors.border,
@@ -209,18 +211,18 @@ function createStyles(colors: ThemeColors) {
             fontSize: 14,
             color: colors.text,
             minHeight: 130,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
         },
-        errorText: { fontSize: 13, color: colors.error, marginBottom: 8 },
+        errorText: { fontSize: FONT.bodySm, color: colors.error, marginBottom: SPACING.sm },
         submitButton: {
             borderRadius: 12,
             paddingVertical: 14,
             alignItems: 'center',
             justifyContent: 'center',
-            marginTop: 8,
+            marginTop: SPACING.sm,
         },
         submitButtonDisabled: { opacity: 0.5 },
-        submitButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+        submitButtonText: { color: '#fff', fontSize: FONT.bodyMd, fontWeight: '600' },
         historyCard: {
             backgroundColor: colors.surfaceLight,
             borderRadius: 12,
@@ -228,9 +230,9 @@ function createStyles(colors: ThemeColors) {
             marginBottom: 10,
         },
         historyHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-        historyStatus: { fontSize: 13, fontWeight: '600', color: colors.text },
+        historyStatus: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.text },
         historyDate: { fontSize: 12, color: colors.textDim },
-        historyMessage: { fontSize: 13, lineHeight: 19, color: colors.textSecondary },
+        historyMessage: { fontSize: FONT.bodySm, lineHeight: 19, color: colors.textSecondary },
         historyNote: { fontSize: 12, lineHeight: 18, color: colors.textDim, marginTop: 6, fontStyle: 'italic' },
     });
 }

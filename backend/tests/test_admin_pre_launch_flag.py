@@ -129,7 +129,7 @@ class _FakeSupabase:
 
 
 def _fresh_store(**tables):
-    base = {"drivers": [], "rides": [], "driver_insurance_periods": []}
+    base = {"drivers": [], "rides": [], "driver_insurance_periods": [], "users": []}
     base.update(tables)
     return base
 
@@ -139,6 +139,14 @@ def _driver_row(driver_id):
         "id": driver_id,
         "created_at": "2026-02-01",
         "legacy_import_metadata": {"source": "legacy_mongo_driver_import"},
+    }
+
+
+def _rider_row(rider_id):
+    return {
+        "id": rider_id,
+        "created_at": "2026-02-01",
+        "legacy_import_metadata": {"rider_csv_import": {"old_customer_id": "cust-1"}},
     }
 
 
@@ -193,6 +201,32 @@ def test_commit_is_idempotent_on_rerun(test_client, super_admin_override):
         second = test_client.post("/api/admin/legacy/pre-launch-flag/commit", data={"batch": "b2"})
     assert second.status_code == 200, second.text
     assert second.json()["committed"] is False  # nothing left to flag
+
+
+def test_commit_flags_dormant_riders(test_client, super_admin_override):
+    store = _fresh_store(users=[_rider_row("rider-1")])
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post("/api/admin/legacy/pre-launch-flag/commit", data={"batch": "b1"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["committed"] is True
+    assert body["riders_flagged"] == 1
+    assert body["rider_conflicts"] == 0
+    assert store["users"][0]["legacy_import_metadata"]["pre_launch_test"] is True
+
+
+def test_commit_never_flags_a_rider_with_a_ride(test_client, super_admin_override):
+    store = _fresh_store(
+        users=[_rider_row("rider-1")],
+        rides=[{"id": "ride-1", "rider_id": "rider-1", "created_at": "2026-06-01", "legacy_import_metadata": {}}],
+    )
+    p_sb, p_audit = _patches(store)
+    with p_sb, p_audit:
+        resp = test_client.post("/api/admin/legacy/pre-launch-flag/commit", data={"batch": "b1"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["committed"] is False
+    assert "pre_launch_test" not in store["users"][0]["legacy_import_metadata"]
 
 
 def test_commit_never_flags_a_driver_with_a_ride(test_client, super_admin_override):

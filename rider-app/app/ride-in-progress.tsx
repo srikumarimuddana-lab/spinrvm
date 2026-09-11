@@ -2,7 +2,6 @@ import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
-  Text,
   Image,
   StyleSheet,
   TouchableOpacity,
@@ -13,6 +12,7 @@ import {
   ActivityIndicator,
   BackHandler,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -33,6 +33,7 @@ import { RiderSOS } from '../components/RiderSOS';
 import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { TrackBaseUrlContext } from './_layout';
 import { getRideMapCoords } from '../utils/rideMapCoords';
 import { useTranslation } from '../i18n';
@@ -866,7 +867,7 @@ function createStyles(colors: ThemeColors) {
       shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
     },
     greenDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.success, marginRight: 10 },
-    statusText: { fontSize: 15, fontWeight: '600', color: colors.text },
+    statusText: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.text },
     sosOverlay: {
       position: 'absolute', top: 0, right: 16, zIndex: 20,
       alignItems: 'flex-end', paddingTop: 8,
@@ -874,9 +875,9 @@ function createStyles(colors: ThemeColors) {
     mapContainer: { flex: 1, position: 'relative' },
     map: { ...StyleSheet.absoluteFill },
     mapPlaceholder: { flex: 1, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' },
-    mapPlaceholderText: { marginTop: 12, fontSize: 15, fontWeight: '500', color: '#555' },
-    retryBtn: { marginTop: 16, paddingHorizontal: 28, paddingVertical: 12, backgroundColor: '#EE2B2B', borderRadius: 24 },
-    retryBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+    mapPlaceholderText: { marginTop: 12, fontSize: FONT.bodyMd, fontWeight: '500', color: '#555' },
+    retryBtn: { marginTop: SPACING.md, paddingHorizontal: 28, paddingVertical: 12, backgroundColor: '#EE2B2B', borderRadius: 24 },
+    retryBtnText: { color: '#FFF', fontSize: FONT.bodyMd, fontWeight: '700' },
     locationButton: {
       position: 'absolute', right: 16, bottom: 16,
       width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface,
@@ -891,7 +892,7 @@ function createStyles(colors: ThemeColors) {
     etaHero: {
       flexDirection: 'row', alignItems: 'center', marginBottom: 12,
     },
-    etaLabel: { fontSize: 11, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
+    etaLabel: { fontSize: FONT.label, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
     etaTime: { fontSize: 28, fontWeight: '800', color: colors.text },
     etaBadge: {
       width: 56, height: 56, borderRadius: 28,
@@ -902,18 +903,18 @@ function createStyles(colors: ThemeColors) {
     etaBadgeUnit: { fontSize: 10, fontWeight: '600', color: 'rgba(255,255,255,0.8)', marginTop: -2 },
 
     // Progress
-    progressContainer: { height: 4, backgroundColor: colors.border, borderRadius: 2, marginBottom: 16 },
+    progressContainer: { height: 4, backgroundColor: colors.border, borderRadius: 2, marginBottom: SPACING.md },
     progressBar: { height: 4, backgroundColor: colors.primary, borderRadius: 2 },
 
     // Driver Card
-    driverCard: { backgroundColor: colors.surfaceLight, borderRadius: 16, padding: 16, marginBottom: 14 },
+    driverCard: { backgroundColor: colors.surfaceLight, borderRadius: 16, padding: SPACING.md, marginBottom: 14 },
     driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
     driverAvatar: {
       width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
       justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden',
     },
     driverAvatarImg: { width: 48, height: 48, borderRadius: 24 },
-    driverName: { fontSize: 16, fontWeight: '700', color: colors.text },
+    driverName: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
     driverMeta: { fontSize: 12, color: colors.textDim, marginLeft: 2 },
     msgIconBtn: {
@@ -930,16 +931,16 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center', alignItems: 'center',
     },
     vehicleLabel: { fontSize: 9, fontWeight: '700', color: colors.textDim, letterSpacing: 0.8, marginBottom: 2 },
-    vehicleDetail: { fontSize: 13, fontWeight: '600', color: colors.text },
+    vehicleDetail: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.text },
     plateWrap: { alignItems: 'center' },
     plateLabel: { fontSize: 9, fontWeight: '700', color: colors.textDim, letterSpacing: 0.8, marginBottom: 3 },
     plateBadge: {
-      backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4,
+      backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: SPACING.xs,
     },
-    plateNum: { fontSize: 13, fontWeight: '800', color: colors.surface, letterSpacing: 1.5 },
+    plateNum: { fontSize: FONT.bodySm, fontWeight: '800', color: colors.surface, letterSpacing: 1.5 },
 
     // Trip Card
-    tripCard: { backgroundColor: colors.surfaceLight, borderRadius: 16, padding: 16, marginBottom: 14 },
+    tripCard: { backgroundColor: colors.surfaceLight, borderRadius: 16, padding: SPACING.md, marginBottom: 14 },
     tripRow: { flexDirection: 'row' },
     tripDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
     tripDot: { width: 10, height: 10, borderRadius: 5 },
@@ -951,7 +952,7 @@ function createStyles(colors: ThemeColors) {
       borderTopWidth: 1, borderTopColor: '#ECECEC',
     },
     fareItem: { flex: 1, alignItems: 'center' },
-    fareValue: { fontSize: 15, fontWeight: '700', color: colors.text, marginTop: 4 },
+    fareValue: { fontSize: FONT.bodyMd, fontWeight: '700', color: colors.text, marginTop: 4 },
     fareLabel: { fontSize: 10, color: colors.textDim, marginTop: 2 },
     fareDivider: { width: 1, backgroundColor: '#ECECEC' },
 
@@ -963,14 +964,14 @@ function createStyles(colors: ThemeColors) {
     },
     liveIndicator: {
       flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.error, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 10,
+      backgroundColor: colors.error, paddingHorizontal: SPACING.sm, paddingVertical: SPACING.xs, borderRadius: 6, marginRight: 10,
     },
     liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF', marginRight: 4 },
     liveText: { fontSize: 10, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
     sharingText: { flex: 1, fontSize: 14, fontWeight: '500', color: '#059669' },
 
     // Action Row
-    actionRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
+    actionRow: { flexDirection: 'row', gap: 10, marginBottom: SPACING.sm },
     actionBtn: {
       flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4,
       backgroundColor: colors.surfaceLight, paddingVertical: 14, borderRadius: 14,
@@ -981,10 +982,10 @@ function createStyles(colors: ThemeColors) {
     // Dev
     devBar: {
       flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
-      marginTop: 16, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
+      marginTop: SPACING.md, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
       borderWidth: 1, borderColor: colors.warning,
     },
-    devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
+    devLabel: { fontSize: FONT.label, fontWeight: '700', color: '#92400E', marginRight: 4 },
     devBtn: { backgroundColor: colors.warning, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
     devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   });

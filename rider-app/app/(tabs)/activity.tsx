@@ -18,6 +18,7 @@ import SkeletonBox from '../../components/SkeletonBox';
 import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import api from '@shared/api/client';
 import { useTranslation } from '../../i18n';
 import type { FareBreakdownLine } from '../../store/walletStore';
@@ -592,24 +593,24 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   container: { flex: 1, backgroundColor: colors.surface },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 24, paddingVertical: 16,
+    paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md,
   },
   title: { fontSize: 28, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
   tabRow: {
     flexDirection: 'row',
     paddingHorizontal: 20,
-    marginBottom: 4,
+    marginBottom: SPACING.xs,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   tab: {
-    paddingHorizontal: 16, paddingVertical: 12,
-    marginRight: 8,
+    paddingHorizontal: SPACING.md, paddingVertical: 12,
+    marginRight: SPACING.sm,
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
   },
   tabActive: { borderBottomColor: colors.primary },
-  tabText: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
+  tabText: { fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
   tabTextActive: { color: colors.primary },
   periodPillRow: {
     flexDirection: 'row', paddingHorizontal: 20, paddingTop: 12, gap: 8, flexWrap: 'wrap',
@@ -627,18 +628,18 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   },
   periodPillTextActive: { color: '#fff' },
   statsCard: {
-    marginHorizontal: 20, marginTop: 12, marginBottom: 4,
+    marginHorizontal: 20, marginTop: 12, marginBottom: SPACING.xs,
     backgroundColor: colors.surfaceLight ?? colors.surface,
-    borderRadius: 16, padding: 16,
+    borderRadius: 16, padding: SPACING.md,
     borderWidth: 1, borderColor: colors.border,
   },
   statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
   statItem: { flex: 1, alignItems: 'center' },
   statValue: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 2 },
-  statLabel: { fontSize: 11, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim },
+  statLabel: { fontSize: FONT.label, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim },
   statDivider: { width: 1, height: 32, backgroundColor: colors.border },
   filterTabs: {
-    flexDirection: 'row', paddingHorizontal: 20, marginBottom: 8, gap: 8, flexWrap: 'wrap',
+    flexDirection: 'row', paddingHorizontal: 20, marginBottom: SPACING.sm, gap: 8, flexWrap: 'wrap',
   },
   filterTab: {
     paddingHorizontal: isCompactFilterLayout ? 14 : 20, paddingVertical: 10,
@@ -657,34 +658,34 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   contentContainer: { padding: 20, paddingTop: 12 },
   listFooter: {
     alignItems: 'center', justifyContent: 'center',
-    paddingTop: 16, paddingBottom: 28, gap: 6,
+    paddingTop: SPACING.md, paddingBottom: 28, gap: 6,
   },
   listFooterText: {
-    fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
+    fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
   },
   listFooterAction: {
-    fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary,
+    fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary,
   },
   monthHeader: {
     fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
-    letterSpacing: 0.5, marginTop: 16, marginBottom: 12,
+    letterSpacing: 0.5, marginTop: SPACING.md, marginBottom: 12,
   },
   rideCard: {
     flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border,
+    paddingVertical: SPACING.md, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   rideIcon: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
   rideDetails: { flex: 1 },
   rideDestination: {
-    fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text, marginBottom: 4,
+    fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text, marginBottom: SPACING.xs,
   },
-  rideInfo: { fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim },
+  rideInfo: { fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim },
   rideBookingId: {
-    fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
-    letterSpacing: 0.5, marginTop: 4,
+    fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
+    letterSpacing: 0.5, marginTop: SPACING.xs,
   },
   rideFareContainer: { alignItems: 'flex-end' },
-  rideFare: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 4 },
+  rideFare: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: SPACING.xs },
   rideFareCancelled: { color: colors.textDim },
   rideFareBreakdown: { fontSize: 10, color: colors.success, marginBottom: 3 },
   rideStatusContainer: { flexDirection: 'row', alignItems: 'center' },
@@ -693,10 +694,10 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 100 },
   emptyIconContainer: {
     width: 100, height: 100, borderRadius: 50, backgroundColor: colors.surfaceLight,
-    justifyContent: 'center', alignItems: 'center', marginBottom: 24,
+    justifyContent: 'center', alignItems: 'center', marginBottom: SPACING.lg,
   },
   emptyTitle: {
-    fontSize: 20, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text, marginBottom: 8,
+    fontSize: 20, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text, marginBottom: SPACING.sm,
   },
   emptyText: {
     fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim,

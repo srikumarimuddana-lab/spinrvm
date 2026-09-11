@@ -303,10 +303,8 @@ def _route_snapshot_presentation(ride: Dict[str, Any]) -> tuple[str, str, bool]:
     if url and revision > 0 and snapshot_revision == revision:
         return url, f"Actual route (revision {revision}) — {coverage_text}", True
     if quality.get("missing_tail") or quality.get("incomplete_reason"):
-        # nosemgrep: spinr-no-float-in-money -- coverage_ratio is a GPS route-quality ratio, not money.
-        coverage_note = f"{round(float(coverage) * 100)}% coverage" if coverage is not None else "coverage unavailable"
-        return "", f"Route snapshot unavailable — GPS capture was incomplete ({coverage_note}).", False
-    return "", "Route snapshot unavailable — actual route processing is still pending.", False
+        return "", "", False
+    return "", "", False
 
 
 async def _await_route_receipt_projection(ride: Dict[str, Any]) -> Dict[str, Any]:

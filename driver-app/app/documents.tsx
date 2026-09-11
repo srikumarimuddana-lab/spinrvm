@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image, Modal, StatusBar, Alert } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image, Modal, StatusBar, Alert } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { showToast } from '../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from "expo-router/react-navigation";
@@ -17,7 +18,9 @@ import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { ScreenHeader } from '../components/ScreenHeader';
 
 
@@ -421,13 +424,20 @@ export default function DocumentsScreen() {
                                             <Text style={styles.rejectReason}>{frontDoc.rejection_reason}</Text>
                                         </View>
                                     )}
-                                    <TouchableOpacity
+                                    {/* UX3 (ACTION_ITEMS.md): migrated onto the shared Button
+                                        (variant="primary" size="sm" icon="cloud-upload-outline") —
+                                        borderRadius:10/fontSize:13/fontWeight:600 already matched
+                                        this button's own reuploadBtn/reuploadBtnText styles, so
+                                        the swap is visually a no-op. */}
+                                    <Button
+                                        variant="primary"
+                                        size="sm"
+                                        icon="cloud-upload-outline"
                                         style={styles.reuploadBtn}
                                         onPress={() => handleUpload(req.id, 'front')}
                                     >
-                                        <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
-                                        <Text style={styles.reuploadBtnText}>Re-upload Document</Text>
-                                    </TouchableOpacity>
+                                        Re-upload Document
+                                    </Button>
                                 </View>
                             )}
 
@@ -461,6 +471,11 @@ export default function DocumentsScreen() {
                                         );
                                     })()}
                                 </View>
+                                {/* Not migrated (UX3, ACTION_ITEMS.md): a compact 44px square
+                                    icon-over-label tile, not a horizontal text CTA — Button's
+                                    children model assumes a single-line label (plus an optional
+                                    leading icon), not a 2-line icon-over-text stack. Genuinely
+                                    bespoke; left as its own TouchableOpacity. */}
                                 <TouchableOpacity
                                     style={styles.uploadBtn}
                                     onPress={() => handleUpload(req.id, 'front')}
@@ -574,7 +589,7 @@ function createStyles(colors: ThemeColors) {
             borderWidth: 1,
             borderColor: '#FFE4E6',
         },
-        infoText: { color: colors.primaryDark, fontSize: 13, lineHeight: 20, flex: 1 },
+        infoText: { color: colors.primaryDark, fontSize: FONT.bodySm, lineHeight: 20, flex: 1 },
         legacyInfoBox: {
             flexDirection: 'row',
             alignItems: 'flex-start',
@@ -585,12 +600,12 @@ function createStyles(colors: ThemeColors) {
             borderWidth: 1,
             borderColor: colors.border,
         },
-        legacyInfoText: { color: colors.textDim, fontSize: 13, lineHeight: 20, flex: 1 },
+        legacyInfoText: { color: colors.textDim, fontSize: FONT.bodySm, lineHeight: 20, flex: 1 },
         card: {
             backgroundColor: colors.surface,
             borderRadius: 12,
-            padding: 16,
-            marginBottom: 16,
+            padding: SPACING.md,
+            marginBottom: SPACING.md,
             borderWidth: 1,
             borderColor: colors.border,
             shadowColor: '#000',
@@ -600,14 +615,14 @@ function createStyles(colors: ThemeColors) {
             elevation: 2,
         },
         cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-        cardTitle: { fontSize: 16, fontWeight: '600', color: colors.text },
+        cardTitle: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text },
         mandatory: { color: colors.error, fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-        cardDesc: { color: colors.textSecondary, fontSize: 13, marginBottom: 15 },
+        cardDesc: { color: colors.textSecondary, fontSize: FONT.bodySm, marginBottom: 15 },
         uploadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-        sideLabel: { color: colors.textSecondary, fontSize: 13, marginBottom: 4, fontWeight: '500' },
-        badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start' },
+        sideLabel: { color: colors.textSecondary, fontSize: FONT.bodySm, marginBottom: SPACING.xs, fontWeight: '500' },
+        badge: { paddingHorizontal: SPACING.sm, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start' },
         badgeText: { color: '#fff', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-        rejectReason: { color: colors.error, fontSize: 11, marginTop: 2, flex: 1 },
+        rejectReason: { color: colors.error, fontSize: FONT.label, marginTop: 2, flex: 1 },
         statusRow: {
             flexDirection: 'row',
             flexWrap: 'wrap',
@@ -623,7 +638,7 @@ function createStyles(colors: ThemeColors) {
             borderRadius: 8,
         },
         statusBadgeText: {
-            fontSize: 11,
+            fontSize: FONT.label,
             fontWeight: '600',
         },
         rejectionBlock: {
@@ -638,23 +653,14 @@ function createStyles(colors: ThemeColors) {
             paddingVertical: 6,
             borderRadius: 8,
         },
+        // Fill/radius/padding/text now come from the shared Button
+        // (variant="primary" size="sm" icon="cloud-upload-outline") — this
+        // only supplies the spacing above it.
         reuploadBtn: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            backgroundColor: colors.primary,
-            paddingVertical: 10,
-            borderRadius: 10,
-            marginTop: 8,
-        },
-        reuploadBtnText: {
-            color: '#fff',
-            fontSize: 13,
-            fontWeight: '600',
+            marginTop: SPACING.sm,
         },
         uploadBtn: {
-            padding: 8,
+            padding: SPACING.sm,
             borderRadius: 8,
             backgroundColor: '#FFF5F5',
             borderWidth: 1,
@@ -667,7 +673,7 @@ function createStyles(colors: ThemeColors) {
             gap: 2,
         },
         previewContainer: {
-            marginTop: 8,
+            marginTop: SPACING.sm,
             borderRadius: 8,
             overflow: 'hidden',
             width: 100,

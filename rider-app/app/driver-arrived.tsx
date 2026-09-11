@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
-  View, Text, Image, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
+  View, Image, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -24,6 +25,7 @@ import { RiderSOS } from '../components/RiderSOS';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { useTranslation } from '../i18n';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -469,18 +471,18 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
     },
-    mapErrorText: { marginTop: 12, fontSize: 16, fontWeight: '500', color: '#555' },
+    mapErrorText: { marginTop: 12, fontSize: FONT.bodyLg, fontWeight: '500', color: '#555' },
     mapRetryButton: {
-      marginTop: 16, paddingHorizontal: 28, paddingVertical: 12,
+      marginTop: SPACING.md, paddingHorizontal: 28, paddingVertical: 12,
       backgroundColor: '#EE2B2B', borderRadius: 24,
     },
-    mapRetryText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+    mapRetryText: { color: '#FFF', fontSize: FONT.bodyMd, fontWeight: '700' },
 
     // Header
     headerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 10,
+      paddingHorizontal: SPACING.md, paddingVertical: 10,
     },
     hBtn: {
       width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface,
@@ -489,10 +491,10 @@ function createStyles(colors: ThemeColors) {
     },
     arrivedChip: {
       flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24,
+      backgroundColor: colors.surface, paddingHorizontal: SPACING.md, paddingVertical: 10, borderRadius: 24,
       elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
     },
-    pulseGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success, marginRight: 8 },
+    pulseGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success, marginRight: SPACING.sm },
     arrivedChipText: { fontSize: 14, fontWeight: '700', color: colors.text },
 
     // Sheet
@@ -503,7 +505,7 @@ function createStyles(colors: ThemeColors) {
     // OTP Card
     otpCard: {
       backgroundColor: colors.primary, borderRadius: 20, padding: 20,
-      alignItems: 'center', marginBottom: 16,
+      alignItems: 'center', marginBottom: SPACING.md,
     },
     otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
     otpTitle: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
@@ -517,7 +519,7 @@ function createStyles(colors: ThemeColors) {
     otpSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center' },
 
     // Driver Card
-    driverCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 14 },
+    driverCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: SPACING.md, marginBottom: 14 },
     driverTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
     avatar: {
       width: 50, height: 50, borderRadius: 25, backgroundColor: '#E8E8E8',
@@ -541,16 +543,16 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center', alignItems: 'center',
     },
     vehicleLabel: { fontSize: 9, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.8, marginBottom: 2 },
-    vehicleName: { fontSize: 13, fontWeight: '600', color: colors.text },
+    vehicleName: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.text },
     plateWrap: { alignItems: 'center' },
     plateLabel: { fontSize: 9, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.8, marginBottom: 3 },
     plateBadge: {
       backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
     },
-    plateNum: { fontSize: 13, fontWeight: '800', color: '#FFF', letterSpacing: 1.5 },
+    plateNum: { fontSize: FONT.bodySm, fontWeight: '800', color: '#FFF', letterSpacing: 1.5 },
 
     // Trip Card
-    tripCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 14 },
+    tripCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: SPACING.md, marginBottom: 14 },
     tripRow: { flexDirection: 'row' },
     tripDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
     tripDot: { width: 10, height: 10, borderRadius: 5 },
@@ -563,7 +565,7 @@ function createStyles(colors: ThemeColors) {
       borderTopWidth: 1, borderTopColor: '#ECECEC',
     },
     fareItem: { flex: 1, alignItems: 'center' },
-    fareVal: { fontSize: 15, fontWeight: '700', color: colors.text },
+    fareVal: { fontSize: FONT.bodyMd, fontWeight: '700', color: colors.text },
     fareLbl: { fontSize: 10, color: colors.textDim, marginTop: 2 },
     fareDivider: { width: 1, backgroundColor: '#ECECEC' },
 
@@ -573,22 +575,22 @@ function createStyles(colors: ThemeColors) {
       flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       backgroundColor: colors.primary, paddingVertical: 15, borderRadius: 16,
     },
-    actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    actionPrimaryText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#FFF' },
     actionIcon: {
       width: 50, height: 50, borderRadius: 14,
       backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center',
     },
 
     cancelLink: { alignItems: 'center', paddingVertical: 10, marginBottom: 4 },
-    cancelLinkText: { fontSize: 13, fontWeight: '500', color: colors.textDim },
+    cancelLinkText: { fontSize: FONT.bodySm, fontWeight: '500', color: colors.textDim },
 
     // Dev
     devBar: {
       flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
-      marginTop: 8, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
+      marginTop: SPACING.sm, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
       borderWidth: 1, borderColor: colors.warning,
     },
-    devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
+    devLabel: { fontSize: FONT.label, fontWeight: '700', color: '#92400E', marginRight: 4 },
     devBtn: { backgroundColor: colors.warning, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
     devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   });

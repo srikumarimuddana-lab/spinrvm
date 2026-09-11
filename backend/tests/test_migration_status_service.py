@@ -423,7 +423,16 @@ def test_pre_launch_flag_counts_drivers_and_rides(monkeypatch):
     report = svc.get_migration_status()
     t16 = next(t for t in report.tools if t.id == "pre_launch_flag")
     assert t16.state == "done"
-    assert "1 driver(s), 1 ride(s)" in t16.detail
+    assert "1 driver(s), 0 rider(s), 1 ride(s)" in t16.detail
+
+
+def test_pre_launch_flag_counts_riders_too(monkeypatch):
+    store = _fresh_store(users=[{"id": "u1", "legacy_import_metadata": {"pre_launch_test": "true"}}])
+    _use(monkeypatch, store)
+    report = svc.get_migration_status()
+    t16 = next(t for t in report.tools if t.id == "pre_launch_flag")
+    assert t16.state == "done"
+    assert "0 driver(s), 1 rider(s), 0 ride(s)" in t16.detail
 
 
 # --------------------------------------------------------------------------

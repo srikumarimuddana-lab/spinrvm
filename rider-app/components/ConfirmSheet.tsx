@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Text, TouchableOpacity, View, StyleSheet, useWindowDimensions } from 'react-native';
+import { TouchableOpacity, View, StyleSheet, useWindowDimensions } from 'react-native';
+import { Text } from '@shared/components/Text';
 import BottomSheet, { BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
 import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export type ConfirmVariant = 'info' | 'warning' | 'danger' | 'success';
 
@@ -170,7 +172,7 @@ function createStyles(colors: ThemeColors) {
     },
     content: {
       paddingHorizontal: 28,
-      paddingTop: 8,
+      paddingTop: SPACING.sm,
       paddingBottom: 40,
       alignItems: 'center',
     },
@@ -180,14 +182,14 @@ function createStyles(colors: ThemeColors) {
       borderRadius: 32,
       justifyContent: 'center',
       alignItems: 'center',
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     title: {
       fontSize: 20,
       fontWeight: '700',
       color: colors.text,
       textAlign: 'center',
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     message: {
       fontSize: 14,
@@ -199,7 +201,7 @@ function createStyles(colors: ThemeColors) {
     buttonContainer: {
       width: '100%',
       gap: 10,
-      marginTop: 8,
+      marginTop: SPACING.sm,
     },
     button: {
       width: '100%',
@@ -209,7 +211,7 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
     },
     buttonText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '600',
       color: '#fff',
     },

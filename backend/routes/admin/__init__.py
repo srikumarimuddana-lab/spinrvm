@@ -87,6 +87,7 @@ from .dispute_pack_download import router as dispute_pack_download_router
 from .documents import router as documents_router
 from .driver_appeals import router as driver_appeals_router
 from .driver_distance import router as driver_distance_router
+from .driver_dormancy import router as driver_dormancy_router
 from .driver_import import router as driver_import_router
 from .driver_statements import router as driver_statements_router
 from .drivers import router as drivers_router
@@ -172,10 +173,12 @@ admin_router.include_router(driver_import_router, dependencies=[Depends(require_
 admin_router.include_router(legacy_driver_import_router, dependencies=[Depends(require_module("drivers"))])
 # Legacy SIN/DOB backfill (Phase 2 of the 2026-08-27 migration plan) — writes
 # a vault-encrypted SIN + date_of_birth onto already-legacy-imported drivers
-# from the previous app's banks.csv/drivers.csv export. Same "drivers"
-# module gate as the bulk driver import above; the underlying write is
-# guarded further at commit time (never clobbers a value already on file).
-admin_router.include_router(legacy_sin_dob_backfill_router, dependencies=[Depends(require_module("drivers"))])
+# from the previous app's banks.csv/drivers.csv export. Writes a government
+# ID, so this takes the same strictly-super_admin posture as reveal-sin/
+# update-sin/tax_id_import (not the plain "drivers" module gate the other
+# legacy-import routers above use) — the underlying write is guarded further
+# at commit time (never clobbers a value already on file).
+admin_router.include_router(legacy_sin_dob_backfill_router, dependencies=[Depends(require_super_admin)])
 # Legacy vehicle-history backfill (2026-08-27 migration plan Phase 2) —
 # admin-dashboard wrapper over services/driver_import_service.py's
 # plan/apply_legacy_vehicle_history_backfill (also used by
@@ -187,8 +190,12 @@ admin_router.include_router(legacy_vehicle_history_backfill_router, dependencies
 # to driver). Read-only + driver-addressed email; drivers module grant.
 admin_router.include_router(driver_statements_router, dependencies=[Depends(require_module("drivers"))])
 # Legacy Stripe mapping import (drivers + riders kinds) — migration ops
-# tooling, gated like the bulk driver import it mirrors.
-admin_router.include_router(stripe_import_router, dependencies=[Depends(require_module("drivers"))])
+# tooling. Every handler in stripe_import.py independently requires
+# super_admin already (its own docstring: "module grants are not enough");
+# the mount matches that actual enforcement so it isn't weaker than what the
+# code relies on — a future edit trimming the per-handler checks would
+# otherwise silently reopen this to any "drivers"-grant admin.
+admin_router.include_router(stripe_import_router, dependencies=[Depends(require_super_admin)])
 # Stripe payout-history sync (legacy migration: rebuild payouts from Stripe
 # Transfer truth). Writes to payouts, so it takes the booking-import posture:
 # require_super_admin at the mount AND re-checked inside each handler.
@@ -264,6 +271,12 @@ admin_router.include_router(migration_driver_repair_router, dependencies=[Depend
 # brand-new, previously-empty table. Same require_super_admin boundary as
 # the importers above.
 admin_router.include_router(legacy_id_crosswalk_router, dependencies=[Depends(require_super_admin)])
+# Driver dormancy flagging (2026-09-11) -- additive-only, flags drivers idle
+# past a threshold (never activated, or gone dark since their last
+# went_online_at/went_offline_at toggle) in legacy_import_metadata. Bulk
+# write across the core drivers table, same require_super_admin boundary
+# as the importers above. Never touches go-online eligibility.
+admin_router.include_router(driver_dormancy_router, dependencies=[Depends(require_super_admin)])
 # Migration checklist status panel (2026-08-31) -- read-only, no writes.
 # Same require_super_admin boundary as every other Bulk Operations tool it
 # summarizes, even though it can't itself change any of the tables it reads.

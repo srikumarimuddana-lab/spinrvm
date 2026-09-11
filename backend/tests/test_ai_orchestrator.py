@@ -105,7 +105,14 @@ class TestHappyPaths:
         adapter = FakeAdapter([[_text("Your driver "), _text("is close."), _end()]])
         frames, mocks = await _run(adapter)
         names = [n for n, _ in frames]
-        assert names == ["meta", "token", "token", "done"]
+        # F08: the streaming output filter withholds a tail until it can no
+        # longer change, so short replies coalesce into a single token frame
+        # instead of one per provider event. The CONTENT is what matters and
+        # is asserted below; frame granularity is an implementation detail of
+        # the filter, so this no longer pins an exact count.
+        assert names[0] == "meta" and names[-1] == "done"
+        assert [n for n in names if n == "token"]
+        assert "".join(p["text"] for n, p in frames if n == "token") == "Your driver is close."
         assert frames[0][1]["conversation_id"] == "conv-1"
         done = frames[-1][1]
         assert done["usage"] == {"input_tokens": 100, "output_tokens": 10}
@@ -197,17 +204,29 @@ class TestHappyPaths:
         assert assistant_call.kwargs["provider"] == "fake"
 
     @pytest.mark.anyio
-    async def test_assistant_text_is_pii_scrubbed_before_persistence(self):
+    async def test_assistant_text_is_pii_scrubbed_before_delivery_and_persistence(self):
         # AI2 regression: the model can echo tool-result data verbatim (e.g.
         # a driver's phone number pulled from a dispatch tool result) — the
         # persisted assistant row must be scrubbed the same as the user row,
         # not treated as trusted first-party text.
-        adapter = FakeAdapter([[_text("Your driver's number is "), _text("306-555-1234, call anytime."), _end()]])
+        #
+        # F08 (PR #5138) INVERTED the streaming half of this test. It used to
+        # assert `"306-555-1234" in tokens` with the comment "the client still
+        # sees the raw text streamed this turn" — i.e. it pinned the defect as
+        # intended behaviour. A clean ai_messages row does not prove the rider
+        # saw a clean answer, so the emitted stream is filtered too.
+        #
+        # This reply is shorter than StreamingOutputFilter's holdback, so it is
+        # released in one piece at flush(). That is deliberate here: this test
+        # covers the ORCHESTRATOR wiring (does filtered text reach the frames
+        # at all). The incremental release path — where every shipped defect
+        # actually lived — is covered in test_ai_stream_filter.py, whose
+        # fixtures all exceed the holdback on purpose.
+        adapter = FakeAdapter([[_text("Your driver's number is 306-"), _text("555-1234, call anytime."), _end()]])
         frames, mocks = await _run(adapter)
-        # the client still sees the raw text streamed this turn — only the
-        # persisted copy changes.
         tokens = "".join(p["text"] for n, p in frames if n == "token")
-        assert "306-555-1234" in tokens
+        assert "306-555-1234" not in tokens
+        assert "[PHONE]" in tokens
         assistant_call = mocks["append"].await_args_list[1]
         assert assistant_call.args[1] == "assistant"
         assert "[PHONE]" in assistant_call.args[2]
@@ -220,14 +239,64 @@ class TestHappyPaths:
         # filtered, same convention as the AI2 PII scrub above.
         adapter = FakeAdapter([[_text("Let me run "), _text("find_place to check that address for you."), _end()]])
         frames, mocks = await _run(adapter)
-        # the client still sees the raw text streamed this turn — only the
-        # persisted copy changes.
+        # F08: same inversion as the PII test above — this used to assert
+        # "find_place" REACHED the client. Output rules now apply to the stream
+        # as well as the stored copy. Also below the holdback; see the note on
+        # that test for why that is fine here.
         tokens = "".join(p["text"] for n, p in frames if n == "token")
-        assert "find_place" in tokens
+        assert "find_place" not in tokens
+        assert "[internal]" in tokens
         assistant_call = mocks["append"].await_args_list[1]
         assert assistant_call.args[1] == "assistant"
         assert "[internal]" in assistant_call.args[2]
         assert "find_place" not in assistant_call.args[2]
+
+    @pytest.mark.anyio
+    async def test_incremental_streaming_kill_switch_still_filters_everything(self):
+        # AI17/F1 follow-up: ai_stream_incremental_enabled=False is an
+        # operational lever for the RELEASE mechanism, not a privacy
+        # toggle — filtering must still remove 100% of the leak, it should
+        # just arrive as a single frame instead of several. Multiple chunks
+        # well past StreamingOutputFilter's holdback/min_release so the
+        # default (enabled) path would release more than once.
+        adapter = FakeAdapter(
+            [
+                [
+                    _text("x" * 80 + " Let me run "),
+                    _text("find_place to check that address, call 306-"),
+                    _text("555-1234 if it fails." + "z" * 40),
+                    _end(),
+                ]
+            ]
+        )
+        settings = dict(SETTINGS, ai_stream_incremental_enabled=False)
+        frames, mocks = await _run(adapter, settings=settings)
+        token_frames = [p["text"] for n, p in frames if n == "token"]
+        # The property under test: the switch actually suppresses
+        # incremental release (a single flush), not just an implementation
+        # detail — unlike the frame-count-agnostic tests above.
+        assert len(token_frames) == 1
+        tokens = token_frames[0]
+        assert "find_place" not in tokens and "[internal]" in tokens
+        assert "306-555-1234" not in tokens and "[PHONE]" in tokens
+        assistant_call = mocks["append"].await_args_list[1]
+        assert "find_place" not in assistant_call.args[2]
+        assert "306-555-1234" not in assistant_call.args[2]
+
+    @pytest.mark.anyio
+    async def test_incremental_streaming_defaults_on_when_setting_absent(self):
+        # A settings dict missing the key entirely (stale cache row, an old
+        # test fixture) must behave as enabled — the explicit `True` default
+        # in orchestrator.py, not settings.get's implicit None/falsy.
+        settings = dict(SETTINGS)
+        settings.pop("ai_stream_incremental_enabled", None)
+        long_chunks = [_text("x" * 60) for _ in range(4)] + [_end()]
+        adapter = FakeAdapter([long_chunks])
+        frames, _ = await _run(adapter, settings=settings)
+        token_frames = [p["text"] for n, p in frames if n == "token"]
+        # Enough text to cross the holdback more than once; a single frame
+        # here would mean the flag was misread as disabled by default.
+        assert len(token_frames) > 1
 
 
 # Rule 6c in the system prompt mentions the block by name, so the test
@@ -381,7 +450,9 @@ class TestGuards:
                 user=USER, conversation_id="conv-1", user_message="hi", admin_actor_id="admin-1"
             ):
                 frames.append(frame)
-        assert [n for n, _ in frames] == ["meta", "token", "done"]
+        names = [n for n, _ in frames]
+        assert names[0] == "meta" and names[-1] == "done"
+        assert all(n in ("meta", "token", "done") for n in names)  # no tool/error frames
         mocks["incr"].assert_not_awaited()
 
     @pytest.mark.anyio
@@ -725,6 +796,146 @@ class TestConversationLock:
                 frames.append(frame)
         set_nx.assert_not_awaited()
         assert [n for n, _ in frames][-1] == "done"
+
+    @pytest.mark.anyio
+    async def test_lock_release_is_ownership_checked(self):
+        """F09 (AI security assessment (PR #5138)): the lock was released with
+        an unconditional DELETE. When a turn outlives the 90s TTL, turn A's
+        release deletes turn B's freshly-acquired lock and turn C can start
+        alongside B — so the release made the concurrency it exists to prevent
+        MORE likely. Release now goes through a compare-and-delete keyed on a
+        per-turn token."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter)
+        stored = {}
+
+        async def fake_set_nx(key, value, ttl):
+            if key in stored:
+                return False
+            stored[key] = value
+            return True
+
+        released = []
+
+        async def fake_eval(script, numkeys, *args):
+            key, token = args[0], args[1]
+            # Mirror the Lua: delete only on a token match.
+            if stored.get(key) == token:
+                del stored[key]
+                released.append(token)
+                return 1
+            return 0
+
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock(side_effect=fake_set_nx)),
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=fake_eval)),
+            patch.object(orch, "_redis_configured", lambda: True),
+        ):
+            async for _ in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message="hi"):
+                pass
+
+        # The lock was taken with a unique token, not a constant, and released
+        # with that same token.
+        assert len(released) == 1
+        assert released[0] != "1"
+        assert "ai:conv_lock:conv-1" not in stored
+
+    @pytest.mark.anyio
+    async def test_release_does_not_delete_another_turns_lock(self):
+        """The scenario the token exists for: our own lock has expired and a
+        DIFFERENT turn now holds the key. Our release must be a no-op."""
+        stored = {"ai:conv_lock:conv-1": "someone-elses-token"}
+
+        async def fake_eval(script, numkeys, *args):
+            key, token = args[0], args[1]
+            if stored.get(key) == token:
+                del stored[key]
+                return 1
+            return 0
+
+        with (
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=fake_eval)),
+            patch.object(orch, "_redis_configured", lambda: True),
+        ):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "our-expired-token")
+
+        assert stored["ai:conv_lock:conv-1"] == "someone-elses-token"
+
+    @pytest.mark.anyio
+    async def test_fail_open_path_does_not_release_a_lock_it_never_held(self):
+        """On a Redis error the turn proceeds WITHOUT the lock. Releasing then
+        would delete a lock a concurrent turn legitimately holds — the same
+        clobber as above, reached by a different route."""
+        adapter = FakeAdapter([[_text("hi"), _end()]])
+        patches, mocks = _patches(adapter)
+        with (
+            patches[0],
+            patches[1],
+            patches[2],
+            patches[3],
+            patches[4],
+            patches[5],
+            patches[6],
+            patches[7],
+            patches[8],
+            patch.object(orch, "redis_set_nx", AsyncMock(side_effect=ConnectionError("redis down"))),
+            patch.object(orch, "redis_eval", AsyncMock()) as eval_mock,
+            patch.object(orch, "redis_delete", AsyncMock()) as del_mock,
+        ):
+            async for _ in orch.run_chat_turn(user=USER, conversation_id="conv-1", user_message="hi"):
+                pass
+
+        eval_mock.assert_not_awaited()
+        del_mock.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_release_falls_back_when_redis_has_no_lua(self):
+        """redis_eval raises RuntimeError when REDIS_URL is unset (dev/test).
+        A single in-process dict has no other holder to clobber, so the
+        non-atomic compare-and-delete is exact there."""
+        with (
+            patch.object(orch, "_redis_configured", lambda: False),
+            patch.object(orch, "redis_get", AsyncMock(return_value="tok")),
+            patch.object(orch, "redis_delete", AsyncMock()) as del_mock,
+        ):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "tok")
+        del_mock.assert_awaited_once_with("ai:conv_lock:conv-1")
+
+    @pytest.mark.anyio
+    async def test_release_never_raises(self):
+        """A failed release must not fail the turn — the rider has already seen
+        the reply stream, and the lock carries a TTL."""
+        with (
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=ConnectionError("down"))),
+            patch.object(orch, "_redis_configured", lambda: True),
+        ):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "tok")
+
+    @pytest.mark.anyio
+    async def test_live_redis_runtimeerror_never_falls_back_to_the_racy_path(self):
+        """redis_eval re-raises RuntimeErrors from a LIVE connection as well as
+        its own "unconfigured" one, so treating RuntimeError as "no Lua" would
+        drop a real Redis error onto a non-atomic GET-then-DELETE against a
+        cluster-shared key — reintroducing the exact clobber the token
+        prevents. Configured Redis gets the atomic path or nothing."""
+        with (
+            patch.object(orch, "_redis_configured", lambda: True),
+            patch.object(orch, "redis_eval", AsyncMock(side_effect=RuntimeError("Event loop is closed"))),
+            patch.object(orch, "redis_get", AsyncMock()) as get_mock,
+            patch.object(orch, "redis_delete", AsyncMock()) as del_mock,
+        ):
+            await orch._release_conversation_lock("ai:conv_lock:conv-1", "tok")
+        get_mock.assert_not_awaited()
+        del_mock.assert_not_awaited()
 
 
 class TestDailyCapFallback:

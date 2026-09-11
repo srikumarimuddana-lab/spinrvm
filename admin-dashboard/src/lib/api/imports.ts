@@ -411,12 +411,13 @@ export const adminCommitWalletImport = (files: WalletImportFiles, opts?: WalletI
 /* ── Pre-Launch Legacy Data Flagging (no files) ───── */
 // Super-admin-only (backend/routes/admin/pre_launch_flag.py). Unlike every
 // other tool on this page, this one has no CSV to upload — it operates
-// entirely on already-migrated production data (drivers/rides), flagging
-// dormant pre-launch driver profiles and pre-launch rides so admin views/
-// KPIs can filter them out. Additive only: sets
+// entirely on already-migrated production data (drivers/rides/users),
+// flagging dormant pre-launch driver/rider profiles and pre-launch rides so
+// admin views/KPIs can filter them out. Additive only: sets
 // legacy_import_metadata.pre_launch_test = true. Never deletes anything.
 export interface PreLaunchFlagCounts {
     driver_candidates: number;
+    rider_candidates: number;
     ride_candidates: number;
 }
 export interface PreLaunchFlagReport {
@@ -427,8 +428,10 @@ export interface PreLaunchFlagReport {
 export interface PreLaunchFlagCommitResult extends PreLaunchFlagReport {
     committed: boolean;
     drivers_flagged?: number;
+    riders_flagged?: number;
     rides_flagged?: number;
     driver_conflicts?: number;
+    rider_conflicts?: number;
     ride_conflicts?: number;
 }
 export interface PreLaunchFlagOptions {
@@ -457,6 +460,58 @@ export const adminCommitPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
     request<PreLaunchFlagCommitResult>("/api/admin/legacy/pre-launch-flag/commit", {
         method: "POST",
         body: preLaunchFlagFormData(opts),
+    });
+
+/* ── Driver Dormancy Flagging (no files) ───── */
+// Super-admin-only (backend/routes/admin/driver_dormancy.py). Same shape
+// as Pre-Launch Legacy Data Flagging above — no CSV, operates entirely on
+// already-migrated production data (drivers). Flags a driver as dormant
+// (90+ days idle) or long_dormant (365+ days idle, past Spinr's own
+// annual document-renewal cycle) via
+// legacy_import_metadata.dormant/dormancy_tier/dormancy_flag. Additive
+// only. Never touches go-online eligibility, never suspends/deactivates.
+export interface DriverDormancyCounts {
+    dormant_candidates: number;
+    long_dormant_candidates: number;
+    never_activated: number;
+    went_dark: number;
+}
+export interface DriverDormancyReport {
+    batch: string;
+    counts: DriverDormancyCounts;
+    can_commit: boolean;
+}
+export interface DriverDormancyCommitResult extends DriverDormancyReport {
+    committed: boolean;
+    drivers_flagged?: number;
+    conflicts?: number;
+}
+export interface DriverDormancyOptions {
+    batch?: string;
+}
+
+function driverDormancyFormData(opts?: DriverDormancyOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the plan and return counts. No writes. */
+export const adminPreviewDriverDormancy = (opts?: DriverDormancyOptions) =>
+    request<DriverDormancyReport>("/api/admin/drivers/dormancy/preview", {
+        method: "POST",
+        body: driverDormancyFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if there's anything to flag, applies it.
+ * Safe to re-send: an already-flagged row is skipped, never re-flagged or
+ * double-written.
+ */
+export const adminCommitDriverDormancy = (opts?: DriverDormancyOptions) =>
+    request<DriverDormancyCommitResult>("/api/admin/drivers/dormancy/commit", {
+        method: "POST",
+        body: driverDormancyFormData(opts),
     });
 
 /* ── Migration Data Quality Scan (Step 17) ───── */
@@ -903,6 +958,60 @@ export const adminCommitTaxIdBackfill = (file: File, batch?: string) =>
         body: taxIdBackfillFormData(file, batch),
     });
 
+// The raw-export path (backend/routes/admin/tax_id_import.py's
+// prepare-validate/prepare-commit): an operator uploads the untouched
+// MongoDB-export banks.csv + drivers.csv directly, and the backend joins
+// them server-side (the same join scripts/build_legacy_tax_id_csv.py uses)
+// instead of the operator building a phone,sin,gst_bn CSV out-of-band first
+// -- so real SIN/GST values never have to pass through a chat session or a
+// hand-built intermediate file. Two-file upload/validate/commit shape and
+// the validation_token gate mirror adminValidateSinDobBackfill below.
+export interface TaxIdBackfillJoinStats {
+    banks_rows: number;
+    unmatched_no_phone: number;
+    skipped_no_sin_or_gst: number;
+    duplicate_phone_groups: number;
+}
+export interface TaxIdBackfillFromLegacyExportReport extends TaxIdBackfillReport {
+    join_stats: TaxIdBackfillJoinStats;
+    // Proves a /prepare-validate call happened for this exact (batch,
+    // combined CSV bytes, admin) -- /prepare-commit requires it back.
+    validation_token: string;
+}
+export interface LegacyExportFiles {
+    banks: File;
+    drivers: File;
+}
+export interface LegacyExportOptions {
+    batch?: string;
+    // Required for /prepare-commit -- pass report.validation_token from the
+    // preceding /prepare-validate call. Omitted for /prepare-validate itself.
+    validationToken?: string;
+}
+
+function legacyExportFormData(files: LegacyExportFiles, opts?: LegacyExportOptions): FormData {
+    const fd = new FormData();
+    fd.append("banks_csv", files.banks);
+    fd.append("drivers_csv", files.drivers);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    if (opts?.validationToken) fd.append("validation_token", opts.validationToken);
+    return fd;
+}
+
+/** Dry-run: join banks.csv + drivers.csv server-side, then validate exactly like adminValidateTaxIdBackfill. No writes. */
+export const adminPrepareValidateTaxIdFromLegacyExport = (files: LegacyExportFiles, opts?: LegacyExportOptions) =>
+    request<TaxIdBackfillFromLegacyExportReport>("/api/admin/tax-ids/import/prepare-validate", {
+        method: "POST",
+        body: legacyExportFormData(files, opts),
+    });
+
+/** Commit the tax-ID backfill built from the raw export pair. Returns committed=false + errors if the files no longer validate. */
+export const adminPrepareCommitTaxIdFromLegacyExport = (files: LegacyExportFiles, opts: LegacyExportOptions) =>
+    request<TaxIdBackfillCommitResult>("/api/admin/tax-ids/import/prepare-commit", {
+        method: "POST",
+        body: legacyExportFormData(files, opts),
+    });
+
 /* ── Legacy SIN/DOB Backfill (2 CSVs) ─────── */
 // Admin-dashboard wrapper for the CLI-only
 // backend/scripts/backfill_legacy_driver_sin_dob.py (Phase 2 of the
@@ -998,11 +1107,20 @@ export interface SnapshotRegenerateResult {
 
 /** preview=true (added 2026-08-31) runs the same eligibility query and
  * returns the count that would be affected -- no renders, uploads, or
- * writes. Matches every other tool's dry-run-first pattern on this page. */
-export const adminRegenerateImportedSnapshots = (force: boolean, limit: number = 50, preview: boolean = false) =>
+ * writes. Matches every other tool's dry-run-first pattern on this page.
+ * `offset` (added 2026-09-09) pages past the backend's 500-row-per-call
+ * ceiling when force=true -- see RegenerateSnapshotsRequest.offset in
+ * backend/routes/admin/rides.py for why force=true needs it and force=false
+ * doesn't. */
+export const adminRegenerateImportedSnapshots = (
+    force: boolean,
+    limit: number = 50,
+    preview: boolean = false,
+    offset: number = 0,
+) =>
     request<SnapshotRegenerateResult>("/api/admin/rides/regenerate-imported-snapshots", {
         method: "POST",
-        body: JSON.stringify({ force, limit, preview }),
+        body: JSON.stringify({ force, limit, preview, offset }),
         headers: { "Content-Type": "application/json" },
     });
 
@@ -1023,11 +1141,18 @@ export interface RouteRegenerateResult {
 
 /** preview=true (added 2026-08-31) returns the count of rides that need a
  * route backfill (same _needs_route filter) with no OSRM/Google calls and
- * no writes. Matches every other tool's dry-run-first pattern on this page. */
-export const adminRegenerateImportedRoutes = (force: boolean, limit: number = 200, preview: boolean = false) =>
+ * no writes. Matches every other tool's dry-run-first pattern on this page.
+ * `offset` (added 2026-09-09) -- see adminRegenerateImportedSnapshots's own
+ * offset comment above; same reason, same force=true-only use. */
+export const adminRegenerateImportedRoutes = (
+    force: boolean,
+    limit: number = 200,
+    preview: boolean = false,
+    offset: number = 0,
+) =>
     request<RouteRegenerateResult>("/api/admin/rides/regenerate-imported-routes", {
         method: "POST",
-        body: JSON.stringify({ force, limit, preview }),
+        body: JSON.stringify({ force, limit, preview, offset }),
         headers: { "Content-Type": "application/json" },
     });
 

@@ -1043,6 +1043,88 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     this is a data question needing a live query, not a code gap); two
     incompatible legacy-ID namespaces still need a crosswalk table (now
     half-closed, see above).
+  - **2026-09-10 — re-ran the two ambiguous Stripe buckets against live
+    production; evidence shifted, not yet a decision.** This session's
+    Supabase MCP connector reached `spinrmobileapp` (confirmed prod)
+    directly — the "no live prod access" blocker cited throughout this
+    item no longer applies, at least for read-only queries. Full detail:
+    `docs/change-log/2026-09-10-a34-stripe-bucket-recheck.md`.
+    - **`350b5267…` ($33.32): now looks like likely-already-paid, not
+      owed.** A matching payout (paid 2026-08-12) exists now — it simply
+      hadn't synced into the mirror table when the 2026-08-16 audit ran.
+      Same "clean 1:1 pair" evidence class as bucket #4 ($22.43).
+    - **`93a899d5…` ($9.45): still not attributable to one transaction,
+      but the direction changed.** This driver's entire Stripe history (17
+      payments, zero exceptions, including 2 correctly-excluded refunds)
+      shows every payment paid out in full within ~1 day — both `$9.45`
+      events included. No orphaned amount exists anywhere in their record.
+      Leans "likely already paid," same caveat as above.
+    - **If both are accepted**, the $42.77 combined figure moves out of
+      "treat as owed," and the $185.31–$228.08 range collapses toward
+      **$185.31**. Not applied here — needs the same product-owner
+      sign-off every other bucket call in this item has gotten.
+    - **Blended-ledger question — narrowed, not settled.**
+      `driver_stripe_ledger`'s true earliest row is **2026-04-21**, not
+      "May–August" as previously stated (that was based on the 15-bucket
+      sample, not the full table — 357 rows, 50 distinct Stripe accounts,
+      table-wide). Doesn't by itself prove old-app data is blended in —
+      needs Spinr's confirmed launch/dual-run-start date to compare
+      against, which isn't recorded in this file.
+  - **2026-09-10 — closed the "broader pre-launch question" from the
+    migration-approach doc's Phase 6 (raised 2026-08-30, "not yet done as
+    of this edit") for drivers/riders/rides, via live read-only queries
+    against production. Full detail:
+    `docs/change-log/2026-09-10-a34-pre-launch-data-contamination-check.md`.**
+    - **Tool #16 (pre-launch flagging) has, in fact, already run against
+      production and is fully current** — 854/854 dormant legacy drivers
+      flagged, 25/25 pre-launch-dated rides flagged, 0 unflagged remaining.
+      Recomputed the tool's own dormant-candidate SQL live independently;
+      it matched exactly. This corrects the migration-approach doc's "not
+      yet done" framing for the two tables this tool covers.
+    - **New finding: real PII already sits on confirmed-dormant (zero
+      real activity, ever) driver profiles.** Of those 854: **97 have a
+      `sin` value**, **146 have `date_of_birth`**, **241 have at least one
+      `driver_vehicle_history` row** (VIN/insurance/registration). The
+      SIN/DOB backfill (tool #4) and vehicle-history backfill (tool #5)
+      match by phone/driver-row existence only — neither has an activity
+      or launch-date gate, unlike the pre-launch-flag tool built
+      specifically because that gap mattered. Net effect: SIN — the single
+      most sensitive field this codebase stores per CLAUDE.md's PIPEDA
+      section — is retained today for profiles with zero operational
+      footprint. Not a breach (no exposure occurred); a data-minimization/
+      retention-hygiene gap.
+    - **New finding: the same pattern exists for riders, with no flag
+      mechanism at all.** `pre_launch_flag_service.py` only ever wrote
+      `drivers`/`rides`, never `users`. Of 1,132 legacy-imported rider
+      accounts, only 5 carry a pre-launch `created_at` (riders' import
+      doesn't preserve the original signup date the way drivers' does, so
+      date isn't a useful proxy here either — same reason the driver
+      tool's own docstring rejected date-gating). Using the same
+      zero-activity proxy instead: **1,046 of 1,132 (92%) have never taken
+      a single ride in Spinr**, and **153** of those already have
+      `saved_addresses` rows (home/work/favorite backfill, tool #10)
+      attached.
+    - **Checked, not a new gap: insurance-period reconstruction (migration
+      332) is traceable, not silently contaminated.** All 25 pre-launch
+      rides are among the 246 rides migration 332 reconstructed Period 2/3
+      audit rows for (492 rows total) — but both `is_reconstructed = true`
+      and `pre_launch_test = true` mark this population, so an SGI audit
+      pull can identify and exclude it. Recorded for completeness, not
+      flagged as action-needed.
+    - **Recommendation split in two — the cheap piece is now DONE
+      (2026-09-10); the real decision is still open.** Whether to purge
+      (null `sin`/`date_of_birth`, delete the `driver_vehicle_history`/
+      `saved_addresses` rows) for the confirmed-dormant population remains
+      a product-owner/privacy-officer call, same as every other
+      PII-retention decision in this item — **not made here.** The
+      additive, zero-risk piece — extending `pre_launch_flag_service.py`
+      (Migration Checklist tool #16) to also flag dormant `users` (riders)
+      using the same zero-activity proxy already used for drivers — was
+      built on explicit go-ahead: see
+      `docs/change-log/2026-09-10-pre-launch-flag-riders.md`. This
+      population is now identifiable on the admin dashboard going forward
+      without a one-off manual query; it does **not** by itself resolve
+      the purge decision above.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
@@ -3904,14 +3986,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `/earnings`), or is the current split deliberate (balance = withdrawable
     ride money only, earnings = full income picture)?
 - **Admin "total rides" vs rider-app "total rides" use different
-  definitions, unreconciled** (Phase 3 cross-surface finding #10): admin
-  counts all-status lifetime rides; rider-app counts completed-only,
-  period-scoped.
-  - [ ] **Status:** open, low priority — the audit itself frames this as
-    "by design," similar to the T4A-vs-earnings date-bucket difference
-    (finding #8) which is already documented in code as intentional. Likely
-    resolution is a one-line code comment on each definition rather than a
-    behavior change, once product confirms both are meant to differ.
+  definitions** (Phase 3 cross-surface finding #10) — **CLOSED 2026-09-11,
+  documentation-only.** Re-verified against current code (the original
+  finding undercounted it — it's actually a 3-way split, not 2-way):
+  admin (`routes/admin/users.py:254`) is all-status, lifetime; rider-app's
+  `GET /me` hero stat (`routes/auth.py:1643`, feeds `account.tsx`) is
+  completed-only, lifetime; rider-app's `GET /rides/stats`
+  (`routes/rides/queries.py:268`, feeds `activity.tsx`) is completed-only,
+  period-scoped (`period=all` happens to equal the `GET /me` number; other
+  periods don't). Asked the user for a decision — they chose **document
+  only, no behavior change**, matching the audit's own suggested low-risk
+  default and the T4A-vs-earnings precedent (finding #8). One-line comments
+  added at all 3 sites. See `.claude/context/memory.md` for the full
+  decision record.
 - **P2-B — no Change Impact Log exists for the driver or rider bulk-import
   paths themselves** (only booking-import and Stripe-mapping migration have
   runbooks/change-logs, despite both writing directly to `auth`/`users`/
@@ -5515,18 +5602,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   this item's acceptance).
 
 ### B11. Data Transfer export: no dual-approval gate (extends open AI-3) + PIA recommendations not yet implemented
-- [ ] **Status:** in progress (2026-07-29) — R-A through R-F all DONE/resolved.
-  The dual-approval gate itself is now DONE (shipped as part of B10 above,
-  PRs #2819/#2820 — Data Transfer's `export_entities` route is wired through
-  the same shared gate as Compliance). Only R-G remains open, and only
-  because it genuinely requires a human privacy/legal determination — a
-  self-contained request package for that
-  review has been prepared at `reports/legal/data-transfer-implied-consent-review.md`
-  (2026-07-28), but the actual determination is still pending a named
-  reviewer. Plus the still-open AI-3 dual-approval wiring (shared with B10,
-  not specific to this item). The module's P0 gaps (access-control, missing
-  PIA) were fixed 2026-07-28 (PRs #2685, #2687); this item tracks the PIA's
-  own follow-up recommendations.
+- [ ] **Status:** in progress (2026-09-08) — R-A through R-G all
+  DONE/resolved. The dual-approval gate itself is DONE (shipped as part of
+  B10 above, PRs #2819/#2820 — Data Transfer's `export_entities` route is
+  wired through the same shared gate as Compliance). **Only remaining open
+  work:** (1) R-G's own follow-up — drafting and publishing the disclosure
+  language R-G's determination calls for (see R-G entry below for the
+  exact tracking pointer), and (2) A41's separately-tied consent-
+  sufficiency question (see its own note below — not resolved by R-G).
+  The module's P0 gaps (access-control, missing PIA) were fixed 2026-07-28
+  (PRs #2685, #2687); this item tracks the PIA's own follow-up
+  recommendations.
   - **2026-09-07:** the product owner directed that A41's legacy-migration
     consent-legal-sufficiency question (whether the old app's consent basis
     was sufficient for the 2026-07-29 migration — fact sheet already
@@ -5548,6 +5634,34 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     record the determination in the PIA's Section 8/9 sign-off table per
     the request package's own "what a closed-out review looks like"
     instructions, and update this item's Status line when done.
+  - **R-G RESOLVED 2026-09-08 (Spinr Team, Product Owner).** Determination:
+    **option (a) — this secondary use needs a distinct privacy-policy
+    disclosure**, not left as implied consent alone. Recorded in
+    `docs/privacy/2026-07-28-pia-data-transfer-export.md` Section 8 (R-G)
+    and Section 9 (Reviewed by: Spinr Team, Product Owner, 2026-09-08); the
+    request package's own Status table
+    (`reports/legal/data-transfer-implied-consent-review.md`) updated to
+    match. **Follow-up still open** (this determination records the
+    decision, it does not itself draft or publish new legal text): add
+    disclosure language naming the Data Transfer module's internal
+    cross-environment data movement to `docs/legal/privacy-policy.md` —
+    tracked as a new open row in `docs/legal/legal-text-publication-
+    checklist.md`'s `privacy-policy.md` gating-conditions list. That
+    document is **already live in production** (published 2026-08-17,
+    ahead of its own required Saskatchewan/Canada counsel review, with
+    several other gaps already open — signed Supabase DPA, unverified
+    Railway data-region env var, a 2yr-vs-3yr GPS-retention contradiction
+    against `docs/data-classification.md`, and an unprovisioned
+    `accessibility@spinr.ca` contact) — this new disclosure sentence should
+    land at that document's next reviewed/re-published version, not as a
+    standalone unreviewed edit to the already-live text.
+  - **A41's tied-in legacy-migration consent-sufficiency question remains
+    separately open** — the 2026-09-07 entry above grouped it with R-G for
+    reviewer convenience (same blocker: no named reviewer), but it is a
+    different factual/legal question (whether the *old app's* consent
+    basis was sufficient for the 2026-07-29 migration, not this module's
+    ongoing secondary-use question) and was not addressed in this pass. See
+    `docs/audit/2026-08-20-legacy-consent-legal-sufficiency-factsheet.md`.
   - **R-A DONE:** investigating it before implementing found the original
     finding's premise was wrong — `bulk_operations` was never actually
     grantable to a non-super_admin (not in `AVAILABLE_MODULES`/`ALL_MODULES`/
@@ -12998,7 +13112,10 @@ record of what was assumed vs. what was actually true</summary>
   verified against a real EAS build (no EAS/Expo credentials in this
   session) — verified via EAS's own documented defaults, YAML/JSON
   parsing, and a dedicated CI/CD reviewer pass instead.
-- [ ] **Status (superseded by the above):** open. Found 2026-09-02 while reviewing `ci.yml`'s
+- [ ] ~~**Status (superseded by the above):** open.~~ (dead text — the fix
+  above already closed this; kept for the record, not a live status, same
+  convention as this doc's other "superseded by the above" entries) Found
+  2026-09-02 while reviewing `ci.yml`'s
   `mobile-build` job (rider+driver-app native builds gated on `[build]` in
   a `main`-branch commit message, per PR #4871). A related gap in the same
   job (driver-app missing entirely despite `needs: [rider-app-test,
@@ -13063,6 +13180,52 @@ record of what was assumed vs. what was actually true</summary>
     `production` guess specifically (the target state no longer treats
     `main` as ambiguous) but may still matter for confirming `staging`'s
     current/intended behavior before the conditional logic ships.
+
+### C100. `driver-app/__tests__/components/CarMarker.test.tsx` — 7 tests broken by a prior `expo-image` migration the test was never updated for
+- [x] **Status:** CLOSED 2026-09-11 — already fixed by commit `611acfc`
+  ("fix(driver-app): test file queries react-native Image, component
+  renders ExpoImage", PR #5209), merged before this entry's checkbox was
+  ever flipped. Re-verified directly: `npx jest
+  __tests__/components/CarMarker.test.tsx` → 25/25 passing on current
+  `main`. See also the duplicate filing of this same bug below (also
+  closed now) — two different sessions found it independently on
+  2026-09-10, neither aware of the other or of the fix that landed the
+  same day.
+- **Issue/gap:** `CarMarker.tsx:3` imports `Image as ExpoImage` from
+  `expo-image` and renders `<ExpoImage>` (line ~963) as the car icon — but
+  the test file (`CarMarker.test.tsx:3`) still imports `Image` from
+  `'react-native'` and locates the car icon via
+  `UNSAFE_getByType(Image)`/`findByType(Image)`. Since the rendered tree no
+  longer contains a React Native core `Image` node, every one of these
+  lookups throws `No instances found with node type: "Image"`. 7 tests fail
+  in the suite (retry/backoff-then-report, ring-freeze re-arm ×3, iOS
+  rotation-transform), all downstream of the same lookup bug.
+- **Root cause:** a prior commit switched `CarMarker.tsx`'s rendered image
+  element from RN's `Image` to `expo-image`'s (likely the same change as
+  "fix(driver-app): switch CarMarker to ExpoImage for Android marker
+  visibility", visible in recent `main` history) without updating this
+  test file's `Image` lookups to match.
+- **Confirmed not caused by PR #5200**: PR #5200's diff touches only
+  `driver-app/components/toastConfig.tsx`,
+  `driver-app/__tests__/components/toastConfig.theme.test.tsx`, and
+  `ACTION_ITEMS.md` — none of which `CarMarker.tsx`/`CarMarker.test.tsx`
+  import or are imported by. Reproduced identically (`7 failed, 18 passed`)
+  standalone on that PR's branch AND on a clean `git worktree` checkout of
+  `origin/main` at the exact commit PR #5200 is based on
+  (`f9f52c7`) — this is a pre-existing base-branch failure, not something
+  this PR introduced.
+- **Action:** update `CarMarker.test.tsx` to locate the car icon via
+  `expo-image`'s `Image` export (`import { Image as ExpoImage } from
+  'expo-image'`, then `UNSAFE_getByType(ExpoImage)`/`findByType(ExpoImage)`)
+  instead of React Native's core `Image`. No production code change
+  expected — this is a test-only fix for a lookup that fell out of sync
+  with a real, intentional rendering change.
+- **Files:** `driver-app/__tests__/components/CarMarker.test.tsx` (test-only
+  fix expected; `driver-app/components/CarMarker.tsx` itself is not
+  believed to need changes, since its `expo-image` migration was
+  deliberate).
+- **Acceptance:** `npx jest __tests__/components/CarMarker.test.tsx` passes
+  25/25 on `main`.
 
 ## P2 — Operational (no/low code — needs a human with dashboard access)
 
@@ -17381,8 +17544,8 @@ Remaining, roughly in order of user impact:
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
   `utils/rider_emails.py` and go through the policy layer, so the
   `lifecycle_emails_enabled` kill switch covers them.
-- [ ] **N14. Rider email addresses are never verified (R5)** — **partially
-  done.** The verification flow itself now exists and is tested:
+- [x] **N14. Rider email addresses are never verified (R5)** — **CLOSED
+  2026-09-11.** The verification flow itself now exists and is tested:
   `POST /users/verify-email/request` + `POST /users/verify-email/confirm`
   (`routes/users.py`) reuse the corporate portal's exact OTP mechanics
   (`routes/auth.py:744`'s `_check_otp_lockout`/`_record_otp_failure`/
@@ -17441,12 +17604,14 @@ Remaining, roughly in order of user impact:
   schemas/users/auth sweep, 123 across the admin-users-adjacent files — all
   clean, 0 failed. See
   `docs/change-log/2026-08-11-n14-auth-me-email-verified-field.md`.
-  (b) **whether/how to gate anything on `email_verified` remains an open
-  product decision**, not resolved here — nothing was changed to require
-  verification before booking, payouts, or any other flow, and CLAUDE.md's
-  pre-merge gates (feature-flag anything user-visible; no silent behavior
-  change) mean that decision needs explicit product sign-off before any
-  gating ships, not a unilateral backend call.
+  (b) **Decided 2026-09-11: no new gates.** Asked the user directly
+  (candidates offered: gate referral/promo payouts on verified email; add a
+  non-blocking UI nudge only; or leave as-is) — chose to close this with no
+  further gating. Verified email stays purely opt-in/informational for
+  riders everywhere except the pre-existing corporate/join-domain check
+  below, which is unaffected. No code changed by this decision; this entry
+  records the decision so it isn't re-litigated. See
+  `.claude/context/memory.md`.
   **Discovered existing consumer (not introduced by this change):**
   `routes/corporate_rider.py`'s `POST /corporate/join-domain` already 403s
   with `ERR_EMAIL_UNVERIFIED` when `email_verified` is falsy (added in
@@ -17987,27 +18152,54 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   most-recent-wins deliberately, documented in ADR-012, transition test
   added). One pre-existing finding was deferred to **AI18**.
 
-- [ ] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
+- [x] **AI17. AI-chat customer-facing hardening follow-ups (from AI16)** —
   found while root-causing AI16, deliberately not shipped in that PR; each
-  is its own scoped change. (F1) `filter_tool_leakage` runs on the
-  *persisted* reply only (`orchestrator.py`) — a tool name or internal
-  identifier the model prints is seen live by the rider; needs a
-  word-boundary-buffered stream filter in `ai/pii.py` applied at the token
-  yield, behind a `settings` flag (migration + `schemas.py` +
-  `routes/admin/settings.py` + `test_admin_settings_write_allowlist_drift`),
-  default off. (F2) `shared/utils/aiLocationMessages.ts` embeds the raw
-  `vehicle_type_id` UUID in the rider-visible tapped-quote bubble — add a
-  `displayContent` on the local echo (store + screen + admin console
-  mirror) so the model still gets the id and the rider sees prose. (F3)
-  `rider-app/store/aiChatStore.ts` renders the raw server `message` for any
-  unmapped error code — map `conversation_busy`, `provider_error`,
-  `ai_misconfigured`, `not_found` and drop the passthrough. (F4) the
-  assistant hides the fare entirely when no drivers are online, while
-  `rider-app/app/ride-options.tsx` shows prices under a "No cars available"
-  banner — product decision on parity (backend `tools_booking.py` +
-  `FareQuoteCard.tsx` + shared types + prompt, flagged). (F5) nothing clears
-  `ai:quote:{conversation_id}` on "new conversation" or
-  `DELETE /ai/conversations/{id}`; add the delete and a pin-expiry test.
+  is its own scoped change. **All 5 sub-items CLOSED — F1/F2/F3/F5 on
+  2026-09-10 (PR #5177 + a same-day follow-up commit); F4 same day, on the
+  same follow-up branch.**
+  - [x] **F1** — investigated as spec'd ("needs a word-boundary-buffered
+    stream filter... behind a settings flag, default off") and found that
+    premise stale: the buffered stream filter already shipped
+    unconditionally in PR #5138 ("F08") — `ai/stream_filter.py`'s
+    `StreamingOutputFilter` already applies `filter_tool_leakage` +
+    `scrub_pii` to every token before release, not just the persisted
+    copy. Shipping F1 literally (default-off flag) would have regressed a
+    working, security-audited protection to off-by-default. Escalated;
+    resolved instead as `ai_stream_incremental_enabled` (migration 409,
+    default **TRUE** — an operational kill-switch for incremental
+    *release timing*, never a privacy toggle: filtering is unconditional
+    either way). See `docs/change-log/2026-09-10-ai17-f1-stream-filter-kill-switch.md`.
+  - [x] **F2** — `buildQuoteBookingMessage`'s output stayed the literal
+    text sent to the model (`prompts.py` rule 6 needs the vehicle id
+    verbatim); a new sibling `buildQuoteBookingDisplayMessage` plus
+    `AiChatMessage.displayContent` carry the rider/admin-visible prose
+    twin instead, as originally specified. See
+    `docs/change-log/2026-09-10-ai17-f2-hide-vehicle-id-in-chat-bubble.md`.
+  - [x] **F3** — `aiChatStore.ts`'s `ERROR_MESSAGES` map extended
+    (`ai_misconfigured`, `provider_error`) and the raw-`event.data.message`
+    fallback removed entirely; an unmapped future code now always
+    resolves to the generic default instead of leaking backend text. See
+    `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
+  - [x] **F4** — product decision made (parity: AI matches
+    `ride-options.tsx`, not the other way around). `get_fare_quote()`
+    (`backend/ai/tools_booking.py`) now prices an unavailable vehicle type
+    (`available: false`) instead of omitting it, for both partial and
+    total outages, behind `ai_fare_quote_show_unavailable_enabled`
+    (migration 410, default **FALSE** — new behaviour, ships dark, unlike
+    F1's kill-switch above). Recommendation and the booking-shortcut Redis
+    pin always come from available options only, regardless of the flag —
+    an unavailable option showing a price is never bookable through it.
+    `shared/types/ai.ts`'s `FareQuoteOption` gained the field additively;
+    both `rider-app/components/FareQuoteCard.tsx` and the admin AI
+    console (`admin-dashboard/src/app/dashboard/ai-console/page.tsx` —
+    found via blast-radius grep, same shared tool feeds both) dim and
+    disable an unavailable option, "No drivers nearby" instead of
+    ETA/capacity. See
+    `docs/change-log/2026-09-10-ai17-f4-fare-quote-availability-parity.md`.
+  - [x] **F5** — `conversations.py`'s `delete_conversation` now
+    best-effort deletes the `ai:quote:{conversation_id}` Redis pin after
+    the DB rows, same fail-open contract as the pin's own writer. See
+    `docs/change-log/2026-09-10-b9-ai17-f3-f5-rider-app-fixes.md`.
 
 - [x] **AI18. Anonymous web assistant's tool path is dead in production** —
   found during AI16's review round, pre-existing and unrelated to that fix.
@@ -18074,8 +18266,19 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   the heatmap cells. Driver-app already consumes it: `driver-app/app/driver/
   (tabs)/index.tsx` renders a `react-native-maps` `Heatmap` component fed from
   this endpoint. No code change needed; correcting the stale item.
-- [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
-  VoIP is a cost/quality upgrade.
+- [ ] **D5. In-app VoIP / rider↔driver calling** — **premise corrected
+  2026-09-11**: no calling feature exists today (chat-only, by deliberate
+  2026-06 privacy decision — `backend/routes/rides/chat.py:64`, pinned by
+  `test_call_endpoint_removed` in `backend/tests/test_coverage_rides.py`).
+  The old text claiming "Twilio Proxy PSTN masking already covers the need"
+  was stale/wrong — there is no masking fallback in place;
+  `docs/API_REFERENCE.md` incorrectly documented the removed `GET
+  /rides/{ride_id}/call` endpoint as live and has been corrected in the
+  same change. Still genuinely unscoped: no Action/Files/Acceptance
+  criteria. Building any calling feature (VoIP or reintroducing masked
+  PSTN) would mean explicitly revisiting the 2026-06 privacy decision, not
+  just a scope pass — needs product input before it's build-ready. See
+  `.claude/context/memory.md` for the full decision record.
 - [x] **D8. No rate limiting on SIN-touching admin endpoints** — done: added
   4 new `default_limiter.limit(...)` entries in `utils/rate_limiter.py` —
   `admin_sin_reveal_limit` (10/hour) on `POST /admin/drivers/{id}/reveal-sin`,
@@ -18230,6 +18433,545 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
 - **Acceptance:** at least one self-serve corporate account signed and actively booking
   rides; Captain Taxi-style target segment validated or ruled out with a real
   conversation.
+
+### rider-app/driver-app design-system adoption gaps (2026-09-10 research, this session)
+
+Found while building the new `spinr-rider-driver-design-system` skill
+(`.claude/skills/spinr-rider-driver-design-system/SKILL.md`) — two independent
+codebase inventories (rider-app, driver-app), file:line evidence in each.
+These are adoption gaps against an *already-decided* intended system, not
+open design questions — the direction itself is settled; closing these is
+mechanical follow-up work, prioritizable independently.
+
+- [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
+  minority of screens in both apps** — **Status:** in progress —
+  rider-app round 1 landed 2026-09-10 (15 files), round 2 landed
+  2026-09-11 (8 more files, see below); driver-app full rollout (all 42
+  qualifying files) landed 2026-09-11, merged via PR #5244. Do not mark
+  closed until rider-app's remaining files are done — 10 files
+  outstanding per its own note below.
+  - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
+    (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
+    there was no `Text.defaultProps` override or themed `Text` wrapper
+    anywhere in either app — the font only applied where a component
+    explicitly set `fontFamily`. Rider-app: 21 of 64 sampled files did;
+    driver-app: 8 of 61. Everywhere else, `Text` silently rendered the OS
+    system font (San Francisco/Roboto), not the brand typeface.
+  - **Why it matters:** the large majority of both apps' screens are not
+    actually on-brand typography today, despite the font being loaded and
+    "intended" per `.claude/context/brand-spinr.md`.
+  - **Action taken (rider-app only, 2026-09-10):** user-confirmed direction
+    was the themed wrapper (not a sweep) — built
+    `shared/components/Text.tsx`, a drop-in `Text` replacement that
+    defaults `fontFamily` from `style.fontWeight` (400/500/600/700/normal/
+    bold mapped directly to the 4 loaded families; other numeric/keyword
+    weights snapped to the nearest loaded family; no `fontWeight` at all
+    defaults to Regular, matching RN's own implicit normal-weight default
+    so plain body copy's visual weight doesn't change). An explicit
+    `fontFamily` in `style` still overrides it. Unit-tested
+    (`shared/components/__tests__/Text.test.tsx`). Rolled out to 15 of
+    rider-app's ~34 files that had `fontWeight`-only Text with no
+    `fontFamily` anywhere in the file: `app/login.tsx`, `app/wallet.tsx`,
+    `app/(tabs)/account.tsx`, `app/ride-in-progress.tsx`,
+    `app/driver-arrived.tsx`, `app/notifications.tsx`,
+    `app/saved-places.tsx`, `app/scheduled-rides.tsx`, `app/settings.tsx`,
+    `app/safety-hub.tsx`, `app/manage-cards.tsx`, `app/pick-on-map.tsx`,
+    `components/FareQuoteCard.tsx`, `components/BookingProposalCard.tsx`,
+    `components/ConfirmSheet.tsx` (this last one alone fans out to ~15
+    consuming screens, since it's a shared confirm dialog).
+  - **Action taken (rider-app round 2, 2026-09-11):** re-grepped
+    `fontWeight` vs `fontFamily` usage across `rider-app/app` and
+    `rider-app/components` from scratch per this item's own "don't trust
+    the prior count" warning, rather than working off the ~19 estimate
+    above. 40 files matched `fontWeight`: 15 were round 1's already-
+    migrated set (unchanged, listed above); 6 were excluded because they
+    already set `fontFamily` manually somewhere in the file, so they don't
+    meet this item's own "no `fontFamily` anywhere in the file" bar for
+    "unmigrated" even though several are only partially covered —
+    `app/(tabs)/index.tsx`, `app/become-driver.tsx` (only 2 of many `Text`
+    call sites covered), `app/driver-arriving.tsx`, `app/ride-details.tsx`,
+    `app/ride-status.tsx`, `app/ride-tracking-webview.tsx` (its one
+    `fontFamily` is a deliberate monospace override, not brand-font
+    coverage); and 1 (`components/VoltraRideActivity.tsx`) was excluded
+    because it never imports `Text` from `react-native` — it renders
+    through `Voltra.Text`, a `@use-voltra/ios-client` primitive for the iOS
+    Lock Screen/Dynamic Island Live Activity UI, a native SwiftUI-ish
+    renderer this wrapper can't reach and isn't meant to. That left 18 real
+    candidates. This round migrated 8 of them, grouped by flow and split
+    into 3 commits of ≤3 files each per this repo's task-decomposition
+    rule: `app/otp.tsx`, `app/verify-email.tsx`, `app/reactivate-account.tsx`
+    (auth flow); `app/legal.tsx`, `app/legacy-consent-notice.tsx`,
+    `app/policies.tsx` (legal/consent flow); `app/privacy-settings.tsx`,
+    `app/accessibility.tsx` (settings). Same import-only change as round 1
+    — no other `Text` behavior/props touched.
+  - **Action taken (driver-app, 2026-09-11):** re-grepped driver-app fresh
+    per this item's own "lists drift" warning rather than trusting the
+    "8 of 61" figure above — found 42 files under `driver-app/app` and
+    `driver-app/components` that import `Text` directly from
+    `react-native`, use it with `fontWeight` set somewhere in a style, and
+    have zero `fontFamily` occurrences anywhere in the file (one additional
+    file, `app/driver/(tabs)/_layout.tsx`, matched the `fontWeight` grep but
+    was excluded — its one `fontWeight` hit is on an expo-router
+    `tabBarLabelStyle` prop, not a `Text` component this wrapper can reach).
+    Migrated all 42 to `shared/components/Text.tsx` (unmodified from
+    rider-app's build — no new logic, no new test needed) in 5 commits of
+    7–9 files each, grouped by screen area the same way UX2/UX3's
+    driver-app rounds already batch: dashboard (9), ride/earnings (8),
+    auth/onboarding (9), settings/support (9), legal/misc (7). Full
+    Change Impact Log:
+    `docs/change-log/2026-09-11-ux1-driver-app-text-wrapper-rollout.md`.
+  - **Files (driver-app, all 42 — see the change-log doc above for the
+    full per-file table):** dashboard —
+    `app/driver/(tabs)/activity.tsx`, `app/driver/(tabs)/index.tsx`,
+    `components/dashboard/{ActiveRidePanel,DemandLegend,DriverIdlePanel,
+    DriverTopBar,ForecastStrip,HotspotChips,TripCompletedPanel}.tsx`;
+    ride/earnings — `components/panels/RideOfferPanel.tsx`,
+    `components/activity/ActivityView.tsx`,
+    `components/charts/EarningsBarChart.tsx`, `app/driver/payout.tsx`,
+    `app/driver/payout-history.tsx`, `app/driver/tax-documents.tsx`,
+    `app/driver/subscription.tsx`, `app/subscription/success.tsx`;
+    auth/onboarding — `app/login.tsx`, `app/otp.tsx`,
+    `app/profile-setup.tsx`, `app/vehicle-info.tsx`,
+    `app/reactivate-account.tsx`, `app/legacy-consent-notice.tsx`,
+    `app/documents.tsx`, `app/crc-consent.tsx`,
+    `app/driver/stripe-onboarding.tsx`; settings/support —
+    `app/driver/{settings,notifications,addresses,chat,destination-mode,
+    faq,referral,quests}.tsx`, `app/appeal.tsx`; legal/misc —
+    `app/legal.tsx`, `app/policies.tsx`, `app/report-safety.tsx`,
+    `app/index.tsx`, `components/CancelReasonSheet.tsx`,
+    `components/ScreenHeader.tsx`, `components/toastConfig.tsx`. Merged
+    via PR #5244.
+  - **Remaining follow-up scope:** rider-app has 10 more files that still
+    lack `fontFamily` entirely (re-grep before picking the next batch —
+    this list will drift just like the last one did): `app/_layout.tsx`,
+    `app/loyalty.tsx`, `app/referral.tsx`, `app/promotions.tsx`,
+    `app/ai-assistant.tsx`, `app/report-safety.tsx`,
+    `components/CancelReasonSheet.tsx`, `components/FreeCancelTimer.tsx`,
+    `components/SchedulePicker.tsx`, `components/Toast.tsx`. Separately,
+    6 rider-app files with partial/manual `fontFamily` coverage found in
+    round 2 (listed above) are a real but different gap — hand-written
+    literals instead of the wrapper, not closed by this item's acceptance
+    bar — flagged here for a future, separately-scoped pass rather than
+    folded into this count. `components/VoltraRideActivity.tsx` is out of
+    scope permanently (doesn't use RN's `Text`). driver-app has zero
+    remaining — all 42 qualifying files migrated and merged.
+  - **Files:** rider-app — see "Action taken" bullets above for each
+    round's exact list; `shared/components/Text.tsx` is the wrapper
+    (unchanged since round 1). driver-app — see the "Action taken
+    (driver-app...)" bullet above for the full 42-file list and its
+    change-log doc. Full remaining rider-app per-file breakdown: re-grep
+    `fontFamily` vs `fontWeight`-only usage before starting the next batch
+    (not reproduced here to avoid drift from the source).
+  - **Acceptance:** a defined, enforced mechanism exists such that new
+    screens can't silently ship off-brand-font by omission — met for any
+    new rider-app or driver-app screen that imports `Text` from
+    `@shared/components/Text` instead of `react-native` directly; not yet
+    enforced by lint in either app. driver-app's 42 qualifying files are
+    now fully migrated and merged (PR #5244); rider-app has 10 files still
+    outstanding per its own note above — the item stays open until both
+    are done.
+
+- [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
+  exist but are used in only 1–4 files per app** — **Status:** in progress
+  (driver-app: round 1 merged 2026-09-10, round 2 merged 2026-09-11 across
+  4 PRs (48 files total), round 3 cleanup PR #5232 merged 2026-09-11 —
+  driver-app's exact-match `StyleSheet`-block scope is now complete;
+  rider-app: 5 parallel batches, PRs #5238/#5239/#5241/#5242/#5243, all
+  merged 2026-09-11), identified 2026-09-10.
+  - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
+    (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
+    h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
+    `shared/components/{Button,Card,Input}.tsx` and directly imported in
+    only 4 rider-app screens and 1 driver-app screen (`profile.tsx`, which
+    predates this round). Everywhere else, `padding`/`margin`/`fontSize`
+    are ad-hoc numeric literals — thousands of occurrences across both
+    apps, loosely but not strictly clustered near the scale's own values.
+  - **Why it matters:** no enforced spacing/type rhythm means visual
+    inconsistency compounds silently as new screens are added, each picking
+    its own numbers.
+  - **Action:** user direction confirmed 2026-09-10: sweep existing screens
+    to adopt `SPACING`/`FONT`, not just enforce it for new code
+    (`driver-app/eslint.config.js` already has a `warn`-level
+    `no-restricted-syntax` rule for this — see its own comment there).
+    driver-app round 1 (this pass) converted a first, high-traffic batch:
+    only padding/margin/fontSize literals that are an **exact** match for a
+    SPACING/FONT value were swapped; a literal with no exact match (e.g.
+    `paddingVertical: 12`, `fontSize: 18`) was deliberately left as-is
+    rather than forced onto the nearest constant, per this item's own
+    guidance. All swaps found were exact matches — no near-exact literal
+    was rounded onto a constant, so none of this round's diffs change a
+    rendered pixel value.
+  - **Files (driver-app, round 1 — merged 2026-09-10, PR #5218, 9 files,
+    3 commits):**
+    - Main dashboard: `app/driver/(tabs)/index.tsx`,
+      `components/dashboard/DriverTopBar.tsx`,
+      `components/dashboard/DriverIdlePanel.tsx`
+    - Ride/earnings: `app/driver/ride-detail.tsx`,
+      `components/dashboard/TripCompletedPanel.tsx`,
+      `app/driver/payout-history.tsx`
+    - Auth entry + settings: `app/login.tsx`, `app/otp.tsx`,
+      `app/driver/settings.tsx`
+  - **Files (driver-app, round 2 — 4 parallel batches, PRs #5225/#5228/
+    #5226/#5227, merged 2026-09-11 — 39 files total, ~16 commits):**
+    - Batch 1 (PR #5225, onboarding/legal, 9 files): `app/appeal.tsx`,
+      `app/become-driver.tsx`, `app/crc-consent.tsx`,
+      `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
+      `app/profile-setup.tsx`, `app/reactivate-account.tsx`,
+      `app/vehicle-info.tsx`
+    - Batch 2 (PR #5228, money/tax, 9 files): `app/documents.tsx`,
+      `app/driver/payout.tsx`, `app/driver/stripe-onboarding.tsx`,
+      `app/driver/subscription.tsx`, `app/driver/tax-documents.tsx`,
+      `app/subscription/cancel.tsx`, `app/subscription/success.tsx`,
+      `app/driver/quests.tsx`, `app/driver/referral.tsx` — money-adjacent
+      screens (payout/subscription/tax), but only style literals touched;
+      no Decimal/fare/payout-calculation code read or written.
+    - Batch 3 (PR #5226, support/safety/comms, 11 files):
+      `app/driver/addresses.tsx`, `app/driver/chat.tsx`,
+      `app/driver/emergency-contacts.tsx`, `app/driver/faq.tsx`,
+      `app/driver/lost-and-found-chat.tsx`, `app/driver/lost-and-found.tsx`,
+      `app/driver/notifications.tsx`, `app/report-safety.tsx`,
+      `app/driver/destination-mode.tsx`, `app/index.tsx`,
+      `components/CancelReasonSheet.tsx` — `report-safety.tsx`/
+      `emergency-contacts.tsx` are safety-adjacent; styling only, no SOS/
+      contact logic touched.
+    - Batch 4 (PR #5227, dashboard components + shared UI, 10 of the 11
+      assigned files — `app/driver/(tabs)/_layout.tsx` skipped, its
+      padding/fontSize values live only in an inline `screenOptions={{...}}`
+      JSX prop object with no `StyleSheet.create()`/`createStyles()` block,
+      out of scope by this item's own rule):
+      `app/driver/(tabs)/activity.tsx`, `components/AlertDialog.tsx`,
+      `components/ScreenHeader.tsx`, `components/activity/ActivityView.tsx`,
+      `components/dashboard/ActiveRidePanel.tsx`,
+      `components/dashboard/DemandLegend.tsx`,
+      `components/dashboard/ForecastStrip.tsx`,
+      `components/dashboard/HotspotChips.tsx`,
+      `components/panels/RideOfferPanel.tsx`, `components/toastConfig.tsx`
+  - **Files (driver-app, round 3 — cleanup, PR #5232, open 2026-09-11, 5
+    files, 8 literals, 2 commits):** a fresh grep after round 2 found these
+    genuine exact-match misses (sibling properties in the same style object
+    that round 1/2 converted but left one property un-converted):
+    `app/login.tsx` (`inputSection.marginBottom: 24 → SPACING.lg`),
+    `app/driver/ride-detail.tsx` (`tlLine.marginTop: 4 → SPACING.xs`),
+    `app/driver/settings.tsx` (`deleteOverlay.padding` and
+    `deleteModal.padding`, both `24 → SPACING.lg`),
+    `app/report-safety.tsx` (`header.paddingVertical: 16 → SPACING.md`),
+    `components/dashboard/ActiveRidePanel.tsx` (`dot.marginTop` and
+    `destSquare.marginTop`, both `4 → SPACING.xs`, plus
+    `routeLineContainer.paddingLeft: 4 → SPACING.xs` — a partial-miss fix,
+    `marginVertical` on the same line had already been converted in round
+    2, `paddingLeft` had not).
+  - **Round 1's "explicitly not touched" list is now covered:** the 6 files
+    round 1 excluded to avoid clashing with concurrent parallel work
+    (`RideOfferPanel.tsx`, `AlertDialog.tsx`, `ActivityView.tsx`,
+    `documents.tsx`, `payout.tsx`, `ActiveRidePanel.tsx`) are all included in
+    round 2 above (`documents.tsx`/`payout.tsx` in batch 2; the other 4 in
+    batch 4) — the concurrent work that motivated the original exclusion
+    (UX3's Button-adoption migration, UX4's shake-animation migration, and
+    unrelated ride-offer-audio/car-marker fixes) had already merged by the
+    time round 2 started, so round 2 layers on top of it cleanly without
+    touching any of that other work.
+  - **Files (rider-app, 5 parallel batches — PRs #5238/#5239/#5241/#5242/
+    #5243, all merged 2026-09-11 — 51 files total, 12
+    commits, plus 3 supporting jest-mock fixes):** rider-app had never been
+    touched by this item before this round (only 4 screens already imported
+    `SPACING`/`FONT`, matching the original issue text). Same methodology as
+    driver-app: exact-match-only substitution inside `StyleSheet.create()`/
+    `createStyles()` blocks, no rounding, inline JSX `style={{...}}` props
+    out of scope.
+    - Batch 1 (PR #5238, onboarding/legal, 10 files): `app/login.tsx`,
+      `app/otp.tsx`, `app/verify-email.tsx`,
+      `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
+      `app/profile-setup.tsx`, `app/reactivate-account.tsx`,
+      `app/become-driver.tsx` (`FONT`-only import — no `SPACING` exact
+      match existed in this file), `app/accessibility.tsx`. Fully verified,
+      CI green (all 64 check runs completed, none failed).
+    - Batch 2 (PR #5239, money/wallet/loyalty, 11 files):
+      `app/wallet.tsx`, `app/manage-cards.tsx`, `app/payment-confirm.tsx`
+      (padding/margin only — its `fontSize` values are wrapped in a
+      dynamic `sf()` scaler, not bare literals, so out of scope),
+      `app/loyalty.tsx`, `app/promotions.tsx`, `app/referral.tsx`,
+      `app/work-allowance-request.tsx`, `app/work-profile.tsx`,
+      `components/FareQuoteCard.tsx`, `components/BookingProposalCard.tsx`
+      (both grepped — sole real consumer is `app/ai-assistant.tsx`, a
+      sibling batch's file, untouched here), `app/privacy-settings.tsx`
+      (its `SettingRow` subcomponent uses inline JSX `style={[{...}]}`,
+      correctly left untouched). Plus `__tests__/paymentConfirmScreen.test.tsx`
+      (jest mock of `@shared/utils/responsive` switched from a full
+      replacement to `jest.requireActual(...)` spread, since the mock was
+      stripping out the newly-imported `SPACING`). This batch's PR body
+      initially shipped as a placeholder and 2 exact-match literals
+      (`manage-cards.tsx`'s `addCardBtn.paddingVertical`,
+      `referral.tsx`'s `sectionTitle.marginTop`) were missed on the first
+      pass — both caught on independent re-verification and fixed before
+      merge-readiness.
+    - Batch 3 (PR #5241, ride lifecycle/tracking, 12 files):
+      `app/confirm-pickup.tsx`, `app/driver-arrived.tsx`,
+      `app/driver-arriving.tsx`, `app/ride-completed.tsx`,
+      `app/ride-details.tsx`, `app/ride-in-progress.tsx`,
+      `app/ride-options.tsx`, `app/ride-status.tsx`,
+      `app/ride-tracking-webview.tsx`, `app/chat-driver.tsx`,
+      `app/search-destination.tsx`, `app/pick-on-map.tsx` — same `sf()`
+      exclusion as batch 2 applies to `confirm-pickup.tsx`/
+      `driver-arriving.tsx`/`ride-options.tsx`'s dynamically-scaled
+      `fontSize` values. Plus `__tests__/confirmPickupScreen.test.tsx` and
+      `__tests__/driverArrivingScreen.test.tsx` (same `jest.requireActual`
+      mock fix as batch 2, for the same reason). This batch's PR body also
+      initially shipped as a placeholder; fixed on re-verification (the
+      code diff itself was clean both times).
+    - Batch 4 (PR #5242, safety/support, 10 files): `app/ai-assistant.tsx`,
+      `app/emergency-contacts.tsx`, `app/lost-and-found.tsx`,
+      `app/lost-and-found-chat.tsx`, `app/notifications.tsx`,
+      `app/report-safety.tsx`, `app/safety-hub.tsx`,
+      `app/saved-places.tsx`, `app/scheduled-rides.tsx`,
+      `app/settings.tsx`. Clean on first verification — real Change Impact
+      Log, all conversions exact matches.
+    - Batch 5 (PR #5243, tabs/root layout + shared components, 8 of 11
+      assigned files — `app/_layout.tsx`, `app/(tabs)/_layout.tsx`, and
+      `components/VoltraRideActivity.tsx` legitimately skipped, none has a
+      `StyleSheet.create()`/`createStyles()` block, inline JSX/Voltra props
+      only, matching driver-app round 2's `_layout.tsx` precedent):
+      `app/(tabs)/account.tsx`, `app/(tabs)/activity.tsx`,
+      `app/(tabs)/index.tsx`, `components/CancelReasonSheet.tsx`,
+      `components/ConfirmSheet.tsx` (14 real consumers, grepped and
+      confirmed — value-identical substitution only, no prop/signature
+      change), `components/FreeCancelTimer.tsx`, `components/SchedulePicker.tsx`,
+      `components/Toast.tsx` (reached app-wide via `showToast()`/
+      `useToastStore`, 80 call sites — same value-identical guarantee).
+      This batch's PR body was accurate on first verification except for 2
+      minor documentation nits (a stale literal-count table for 5 files,
+      and one file wrongly listed as a `ConfirmSheet` consumer when it only
+      mentions the name in a comment) — both corrected directly.
+  - **Follow-up scope (not done yet):** driver-app's exact-match
+    `StyleSheet`-block sweep is now essentially complete — a fresh grep
+    after round 3 found no remaining untouched files in that scope (an
+    earlier version of this entry's "roughly a dozen more files"/"~50 more
+    files" estimate was never rechecked against a fresh grep and turned out
+    to be stale; corrected here). Remaining scope, for either app: (a)
+    inline-JSX-prop-literal conversion — a different, larger fix (moving
+    `style={{...}}` prop literals to constants, not covered by this item's
+    "StyleSheet blocks only" scope as written), still undecided whether to
+    pursue; (b) rider-app has 3 legitimately-skipped files (see batch 5
+    above) with only inline-JSX-prop styling, same category as (a).
+  - **Acceptance:** new screens have a clear, documented expectation on
+    which to use (met — the `warn`-level lint rule exists) **and** existing
+    screens are actually migrated (met for the `StyleSheet`-block scope in
+    both apps — driver-app complete across rounds 1–3, PR #5232 merged;
+    rider-app complete across its 5 batches, PRs #5238/#5239/#5241/#5242/
+    #5243, all merged 2026-09-11. Item stays open pending a decision on the
+    remaining inline-JSX-prop scope — the ~15 files repo-wide with inline
+    `style={{...}}`-only JSX-prop literals, e.g.
+    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling, are
+    the concrete example of the undecided "(a)" scope above).
+
+- [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
+  — **Status:** closed 2026-09-11, same session that filed it (started
+  2026-09-10) — real call
+  sites migrated where Button's API (or a small, justified extension of
+  it) actually fit; the rest documented as bespoke rather than forced.
+  - **Issue/gap:** the shared `Button` primitive (6 real consumers in
+    rider-app, not the "8" this entry originally said — recounted during
+    this fix) was extracted from driver-app's own `RideOfferPanel`
+    accept/decline buttons but was never adopted back into driver-app
+    itself. Every driver-app button was an independently hand-styled
+    `TouchableOpacity`.
+  - **Fix:** migrated the real call sites onto `Button`:
+    - `RideOfferPanel.tsx` — Decline only (`variant="secondary" size="lg"`,
+      a visual no-op: the extraction source's local iOS-HIG colors already
+      matched the theme tokens Button uses). Accept stays bespoke — its
+      `LinearGradient` fill + two-part "Accept / $X.XX" label was never
+      what `size="lg"` extracted, only the shape (54px/14px radius/
+      spinner-swap/disabled-dim) was.
+    - `AlertDialog.tsx` — default/destructive buttons
+      (`variant="primary"`/`"danger" size="md"`). Cancel stays bespoke:
+      its solid `colors.border` fill + full-contrast `colors.text` label
+      isn't any Button variant, and this dialog backs every `showAlert()`
+      call in the app.
+    - `ActivityView.tsx` — the "Try Again" retry pill
+      (`variant="primary" size="md" icon="refresh"`; radius moves 25px→
+      12px, matching the same radius-consolidation Button already did for
+      its rider-app consumers). "Load more rides" (bordered/outline) is
+      NOT migrated — no variant reproduces an outline look and it's the
+      only call site wanting one.
+    - `documents.tsx` — "Re-upload Document"
+      (`variant="primary" size="sm" icon="cloud-upload-outline"` — an
+      exact style match, visually a no-op). The small square "UPLOAD"
+      icon-over-label tile is NOT migrated (not a horizontal-label CTA).
+    - `payout.tsx` — the SIN-form and GST-form Cancel+Save pairs
+      (`variant="secondary"`/`"primary" size="sm"`; Button's `loading`
+      prop replaces the manual spinner-vs-label ternary). One deliberate
+      visual delta: Cancel gains secondary's 1px border, which it didn't
+      have before — an intentional convergence, not an oversight. The
+      settings-list-row patterns (setup checklist, Email T4A/CSV rows)
+      are NOT migrated (icon+2-line-text+trailing-icon rows, not CTAs).
+    - `shared/components/Button.tsx` gained one small, justified
+      extension: an optional `icon` prop (Ionicons glyph name, rendered
+      before the label), added because two real call sites in this
+      migration (`ActivityView`'s retry pill, `documents.tsx`'s re-upload
+      button) both needed a leading icon and neither could express it
+      through the existing API. Purely additive — every existing rider-app
+      consumer omits it and is unaffected; see
+      `docs/change-log/2026-09-11-ux3-driver-app-button-adoption.md` for
+      the full Change Impact Log.
+    - Explicitly NOT touched (per this item's own original guidance):
+      `DriverIdlePanel`'s GO/STOP toggle (bespoke real-time-motion UI) and
+      all of `ActiveRidePanel.tsx` (a different in-flight change).
+  - **Files:** `shared/components/Button.tsx`,
+    `shared/components/__tests__/Button.test.tsx`,
+    `driver-app/components/panels/RideOfferPanel.tsx`,
+    `driver-app/components/AlertDialog.tsx`,
+    `driver-app/components/activity/ActivityView.tsx`,
+    `driver-app/app/documents.tsx`, `driver-app/app/driver/payout.tsx`.
+  - **Acceptance:** driver-app's common confirm/retry/action buttons route
+    through the shared component where a clean fit exists; every skipped
+    button has a documented reason in its own file (code comment) and
+    above, rather than a forced abstraction.
+
+- [x] **UX4. No shared transition timing/easing system in either app —
+  near-identical interactions independently reimplemented** — **Status:**
+  closed 2026-09-10 for the two originally-named call sites (PR #5213,
+  `fix/ux4-shared-motion-timing`); two more instances of the identical
+  pattern turned up during this fix's own blast-radius grep and were
+  fixed as a residual follow-up 2026-09-11 — see Residual below.
+  - **Issue/gap:** no `TIMING`/`EASING` constants module existed; each
+    screen picked its own `Animated.timing` duration (found ranging
+    50ms–14000ms across both apps) and easing curve (explicit in a handful
+    of files, omitted — falling back to RN's default — in most). Concrete
+    duplication: rider-app's OTP wrong-code shake (`rider-app/app/otp.tsx`,
+    was 60ms/step) and driver-app's PIN wrong-code shake
+    (`driver-app/components/dashboard/ActiveRidePanel.tsx`, was 50ms/step)
+    were the same interaction, independently reimplemented with different
+    offsets and durations.
+  - **Why it matters:** functionally identical interactions feel
+    inconsistent across (and even within) apps for no reason other than
+    independent implementation.
+  - **Fix:** added `shared/utils/motion.ts` exporting `TIMING`/`EASING`
+    constants — kept as a new sibling file rather than folded into
+    `shared/utils/responsive.ts`, since that file is explicitly scoped to
+    device/window-dimension-driven values (breakpoints, scaled fonts), not
+    static motion tokens — plus one shared `shakeHorizontal(value,
+    amplitudes?)` helper. The sequence-construction logic itself (not just
+    the duration/easing numbers) was duplicated between the two call
+    sites, so a thin shared function was judged worth it; a full
+    `useShakeAnimation()` hook was considered and rejected, because
+    rider-app already creates its `Animated.Value` via the local
+    `useAnimatedValue` hook while driver-app creates its ref directly with
+    its own verified-safe `react-hooks/refs` justification comment —
+    forcing one of those two independently-fine, established idioms to
+    change for this alone would be scope beyond what the item asked for,
+    and `shakeHorizontal()` already converges duration + easing + sequence
+    shape without touching either file's value-creation pattern. Amplitude
+    (rider-app 12/8, driver-app 10/6) is passed in by each caller rather
+    than unified, since the item asked to converge duration/easing, not
+    visual amplitude, and changing amplitude would be a visible behavior
+    change this item didn't ask for.
+  - **Residual — found, not fixed:** the same blast-radius grep turned up
+    two more instances of the *exact same* 12/-12/8/-8/0 @ 60ms shake,
+    outside this item's original scope: `rider-app/app/verify-email.tsx:99-103`
+    and `driver-app/app/otp.tsx:153-157` (a separate OTP screen from
+    `ActiveRidePanel`'s PIN entry). Neither was touched here — flagging so
+    a follow-up migrates them onto `shakeHorizontal()` too, rather than
+    this closure being read as "all shake duplication in the codebase is
+    now fixed."
+  - **Residual resolved 2026-09-11:** both flagged call sites migrated onto
+    `shakeHorizontal(shakeAnim)` (default `[12, 8]` amplitude — both used
+    the exact default values already, no visual change). No new shared
+    logic needed; `shakeHorizontal()` and its own test coverage
+    (`shared/utils/__tests__/motion.test.ts`) were already reviewed and
+    merged as part of this same item. Verified against each screen's
+    existing test suite — `rider-app/__tests__/verifyEmailScreen.test.tsx`
+    (17/17 passing) and `driver-app/__tests__/app/otpScreen.test.tsx`
+    (22/22 passing) — neither asserts exact shake timing/duration, only
+    the observable failure behavior (toast shown, code cleared), so
+    converging on the shared 50ms-step/linear-easing implementation
+    changed nothing either test could see. `npx tsc --noEmit` clean and
+    `npx eslint` 0 errors on both files (pre-existing warnings unrelated
+    to the shake block only). All shake-duplication instances found by
+    this item's own investigation are now fixed — no known residual
+    remains.
+  - **Files:** `shared/utils/motion.ts` (new),
+    `shared/utils/__tests__/motion.test.ts` (new), `shared/package.json`
+    (export entry), `rider-app/app/otp.tsx`,
+    `driver-app/components/dashboard/ActiveRidePanel.tsx`,
+    `rider-app/app/verify-email.tsx`, `driver-app/app/otp.tsx`.
+  - **Acceptance:** met for the two originally-named call sites — both
+    now converge on shared `TIMING.shakeStep`/`EASING.shake` via
+    `shakeHorizontal()`, and a documented duration/easing convention exists
+    in `shared/utils/motion.ts` for new motion work. Not met repo-wide —
+    see Residual above.
+
+- [x] **UX5. `driver-app/components/toastConfig.tsx` hardcodes toast colors
+  that match neither the current nor the previous theme tokens, and has no
+  dark-mode awareness** — **Status:** closed 2026-09-10, same session that
+  filed it. This one was a live bug, not just adoption debt — flagged
+  distinctly from UX1–UX4.
+  - **Issue/gap:** `driver-app/components/toastConfig.tsx:8-11`'s
+    `VARIANT_CONFIG` hardcoded `success:'#0d9f6e'`, `error:'#dc2626'`,
+    `warning:'#d97706'`, `info:'#1a73e8'` — none of these matched
+    `shared/theme/index.ts`'s current values, and the file had no
+    `useTheme()` call at all, so toast colors never adapted to dark mode.
+  - **Why it mattered:** toast notifications (a frequent, high-visibility UI
+    element) rendered with off-brand, theme-incorrect colors for every
+    driver, in both light and dark mode.
+  - **Fix:** `SpinrToast` now calls `useTheme()` and resolves background via
+    `colors.success`/`colors.error`/`colors.warning`/`colors.info` per
+    variant, replacing the static hex `VARIANT_CONFIG` bg map (icon glyph
+    names, which aren't a color-drift concern, stay a static lookup).
+  - **Files:** `driver-app/components/toastConfig.tsx`;
+    `driver-app/__tests__/components/toastConfig.theme.test.tsx` (new
+    regression test — light-mode tokens + dark-mode adaptation via a real
+    `ThemeProvider`).
+  - **Verification:** `npx jest __tests__/components/toastConfig` (5/5
+    passing, including the pre-existing a11y suite), `npx tsc --noEmit`
+    clean, `npx eslint` — the 4 `no-restricted-syntax` hardcoded-hex
+    warnings on the old `VARIANT_CONFIG` bg values are gone (14 → 11
+    warnings on the file; the remaining 11 are pre-existing, out of scope —
+    fixed-contrast white text/icon on a colored surface, a documented
+    exception, and padding/fontSize literals, which is UX2's territory, not
+    this item's).
+  - **Not fixed here:** rider-app's `components/Toast.tsx` has the
+    identical hardcoded `VARIANT_CONFIG` (confirmed byte-for-byte same
+    stale hex values) but was not in this item's stated file scope —
+    worth a follow-up item if picked up.
+  - **Acceptance:** driver-app toast colors match the current theme tokens
+    in both light and dark mode. Met.
+
+- [x] **UX6. `rider-app/components/Toast.tsx` had the identical hardcoded
+  toast-color bug UX5 fixed in driver-app, but was out of that item's file
+  scope** — **Status:** closed 2026-09-11, the follow-up UX5 itself flagged.
+  - **Issue/gap:** `rider-app/components/Toast.tsx`'s `VARIANT_CONFIG`
+    hardcoded the identical stale hex values as driver-app's pre-UX5
+    `toastConfig.tsx` (`info:'#1a73e8'`, `success:'#0d9f6e'`,
+    `warning:'#d97706'`, `danger:'#dc2626'`) — none matched
+    `shared/theme/index.ts`'s current tokens, and the component had no
+    `useTheme()` call, so rider toast colors never adapted to dark mode.
+  - **Why it mattered:** rider-app's `Toast.tsx` is the single
+    error/status-announcement path for nearly every form/failure in the app
+    (payment failures, ride cancellations, etc.) — the same
+    frequent/high-visibility surface UX5 flagged for driver-app.
+  - **Fix:** ported UX5's exact pattern — a new `variantConfig(colors,
+    variant)` resolves background via `colors.info`/`success`/`warning`/
+    `danger` per variant (icon glyph names stay a static `ICON_NAMES`
+    lookup, unchanged from before — not a color-drift concern). No changes
+    to `toastStore.ts`'s `ToastVariant` type, animation, gesture, or
+    store/queue logic — color-resolution only.
+  - **Files:** `rider-app/components/Toast.tsx`;
+    `rider-app/components/__tests__/Toast.theme.test.tsx` (new regression
+    test — light-mode tokens across all 4 variants + dark-mode adaptation
+    via a real `ThemeProvider`, mirroring UX5's
+    `toastConfig.theme.test.tsx`).
+  - **Verification:** `npx jest components/__tests__/Toast` (5/5 passing,
+    including the pre-existing `Toast.a11y.test.tsx` suite), `npx tsc
+    --noEmit` clean, `npx eslint` — the `no-restricted-syntax`
+    hardcoded-hex warnings on the file dropped from 14 → 10 (same count UX5
+    reported reducing to on driver-app's file); the remaining 10 are
+    pre-existing and out of scope (fixed-contrast white text/icon on a
+    colored surface — the same documented exception UX5 noted — and
+    padding/fontSize literals, UX2's territory).
+  - **Not fixed here:** UX2 (shared `SPACING`/`FONT` constants) remains
+    open and untouched by this fix. UX4 was open at the time this was
+    written but its residual was separately closed 2026-09-11 — see UX4.
+  - **Acceptance:** rider-app toast colors match the current theme tokens
+    in both light and dark mode. Met.
 
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 
@@ -20662,7 +21404,23 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
-- [ ] **Status (2026-08-31): partial progress, not closed.** Built the
+- [ ] **Status (2026-09-11): more progress, still not closed.** Since
+  2026-08-31, other sessions independently added `saved_addresses`
+  (migration 378, `test_saved_addresses_rls.py`) and the transactional
+  outbox (migration 399, `test_transactional_outbox.py`) — neither reflected
+  in this entry until now. This session added DB-role-level coverage for
+  every table named in the "Remaining scope" list below:
+  `lost_and_found`/`lost_and_found_messages` (migrations 69/69a/115),
+  `referral_payouts` (171), `auto_payout_batches` (314), `complaints` (68),
+  and the `refresh_tokens`/`stripe_events`/`schema_migrations` deny-all
+  policies (26) — 55 new tests, all run against a real local Postgres 16
+  (`116 passed, 0 failed` for the full `tests/rls/` suite, up from 61).
+  Two real, previously-undiscovered bugs surfaced writing these tests —
+  see "Bugs found and fixed" / "Bug found, not fixed" below. Still not
+  closed: the vast majority of the ~127–207 policy-statement estimate is
+  outside this table set (this item has never attempted a full inventory
+  of which tables remain uncovered — that would be its own investigation).
+- **Status (2026-08-31): partial progress, not closed.** Built the
   foundation infrastructure this repo had zero of — a real-Postgres,
   role-switching test fixture — plus DB-role-level coverage for **11
   distinct policies across 5 tables** (`users`, `drivers`, `rides`,
@@ -20697,24 +21455,66 @@ how much they de-risk a public launch._
   those policies as a real numbered migration so `run_migrations.py`
   becomes the source of truth, or add a periodic check that diffs live
   `pg_policies` against this file.
-- **Remaining scope (not done here):** the other ~116–196 policies
-  (depending on denominator) across ~130+ migration files. Highest-value
-  next candidates by policy count, per this session's survey:
-  `lost_and_found`/`lost_and_found_messages` (4 policies each),
-  `referral_payouts` (4), `auto_payout_batches` (4), `complaints` (2),
-  and the `refresh_tokens`/`stripe_events`/`schema_migrations` deny-all
-  policies (migration 26). CI is not wired to run `tests/rls/` yet — no
-  Postgres service container configured for it, so these tests currently
-  only run when a developer points `TEST_DATABASE_URL` at a real Postgres
-  locally.
-- **Files:** `backend/tests/rls/conftest.py`, `test_core_tables_rls.py`,
-  `test_money_and_safety_rls.py` (new); `backend/pytest.ini` (`rls` marker
-  registered); `CLAUDE.md` (Testing Conventions — new RLS tier entry).
+- **Remaining scope (not done here):** the 2026-08-31 list immediately
+  above (`lost_and_found`/`lost_and_found_messages`, `referral_payouts`,
+  `auto_payout_batches`, `complaints`, and migration 26's deny-all
+  policies) is now **done as of 2026-09-11** — see the new status entry
+  and files below. What's genuinely still remaining is everything else in
+  the ~127–207 policy estimate outside the now-covered table set; no
+  session has yet enumerated that residual list. CI is still not wired to
+  run `tests/rls/` — no Postgres service container configured for it, so
+  these tests currently only run when a developer points
+  `TEST_DATABASE_URL` at a real Postgres locally.
+- **Bugs found and fixed (2026-09-11):** writing `test_lost_and_found_rls.py`
+  surfaced a real RLS logic bug in migration 115's `lfm_select`/
+  `lfm_insert` policies: their `EXISTS` subquery reads `lost_and_found`,
+  which is itself RLS-protected (SELECT policy: reporter only), so a
+  *driver* on a case could never satisfy either policy — the subquery's own
+  scan of `lost_and_found` was filtered to zero rows by `lost_and_found`'s
+  policy before the `OR auth.uid() = lf.driver_id` branch ever got a
+  chance to match. Confirmed via a failing test against a real Postgres,
+  not assumed. Fixed in migration 412 with a `SECURITY DEFINER` helper
+  function (`is_party_to_lost_and_found_case`) that performs the
+  reporter/driver membership check without being subject to
+  `lost_and_found`'s own RLS. See migration 412's own header comment for
+  the full writeup and rollback plan.
+- **Bug found, not fixed (needs production DB access):** migration 68
+  (`complaints`) and migration 69 (`lost_and_found`) both declare their
+  `ride_id`/`reporter_id`/(`reported_id`/`resolved_by` for complaints)
+  columns as `UUID REFERENCES rides(id)`/`REFERENCES users(id)`, but the
+  current `backend/supabase_schema.sql` declares `rides.id`/`users.id` as
+  `TEXT` — applying either migration verbatim against that schema raises
+  `psycopg2.errors.DatatypeMismatch` (confirmed in this session's test
+  harness). No later migration corrects either table, and no session has
+  had production DB access to check `information_schema.columns` for
+  these tables' actual live column types. Since both tables are actively
+  used by production code (`complaints` via `routes/admin/support.py` and
+  `services/zoho_desk_integration.py`; `lost_and_found` via its own
+  routes), migration 68/69 must have succeeded at some point — meaning
+  either these FK constraints don't exist in production today (silently
+  dropped or never created when `users`/`rides` moved to `TEXT` ids,
+  if that's what happened), or `supabase_schema.sql`'s current `TEXT`
+  declaration doesn't match live reality. This harness works around it
+  locally (see `conftest.py`'s `pg_conn` fixture, the `_complaints_sql`/
+  `_laf_sql` regex patches) without touching either merged migration —
+  the drift itself is unresolved and needs a human with production access
+  to check the real column types before anyone decides what (if anything)
+  to correct.
+- **Files:** `backend/tests/rls/conftest.py` (extended);
+  `test_core_tables_rls.py`, `test_money_and_safety_rls.py` (2026-08-31);
+  `test_saved_addresses_rls.py`, `test_transactional_outbox.py` (added by
+  other sessions since, undocumented here until now);
+  `test_lost_and_found_rls.py`, `test_referral_and_payout_rls.py`,
+  `test_complaints_and_deny_all_rls.py` (new, 2026-09-11);
+  `backend/migrations/412_lost_and_found_messages_rls_driver_visibility_fix.sql`
+  (new); `backend/pytest.ini` (`rls` marker registered); `CLAUDE.md`
+  (Testing Conventions — RLS tier entry).
 - **Change log:** `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`
-  — full detail, including the exact coverage-fraction accounting and the
-  "what was NOT verified" list (production drift risk above; CI wiring;
-  full-suite co-collection with the mocked test stack not run end-to-end
-  in this sandbox).
+  (original) and `docs/change-log/2026-09-11-rls-coverage-round-2.md` (this
+  session) — full detail, including the exact coverage-fraction accounting
+  and the "what was NOT verified" list (production drift risk above; CI
+  wiring; full-suite co-collection with the mocked test stack not run
+  end-to-end in this sandbox).
 - **Acceptance:** ranked blocker #29 stays open until either (a) CI runs
   `tests/rls/` against a real Postgres on every PR, or (b) a materially
   larger fraction of the 207/127 policies has DB-role-level coverage —
@@ -22085,6 +22885,65 @@ how much they de-risk a public launch._
 - **Files:** `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_db_errors.py`,
   `backend/tests/test_dispatch_match_attempt_branches.py`.
 
+### HM-32. iOS demand heatmap: true raster-gradient renderer (Skia) — implemented, awaiting device/EAS verification
+- [ ] **Status:** code implemented and merged to this session's branch 2026-09-09, same day
+  it was scoped — the user asked to proceed immediately rather than wait for a separate
+  sprint. **Still open**, not closed: nothing in this feature has run on a real device,
+  simulator, or EAS build (this agent environment has neither) — see the full write-up,
+  `docs/change-log/2026-09-09-hm32-skia-gradient-heatmap-ios.md`, whose own "What was NOT
+  verified" section is the actual remaining acceptance-criteria checklist. Do not close
+  this item until an EAS native build has been produced and the heatmap visually confirmed
+  on a real iOS device or simulator.
+  Originally scoped after the user shared a reference screenshot (Uber driver-app demand
+  heatmap: a soft, blurred, continuous gradient) and asked for a recommendation. An
+  immediate incremental improvement shipped the same session first (see
+  `docs/change-log/2026-09-09-heatmap-soft-gradient-style-ios.md`) — this item tracked the
+  fuller fix, which the user then chose to build immediately rather than defer ("do both").
+- **Issue/gap:** Android already renders a true GPU-blended gradient via
+  `react-native-maps`' native `<Heatmap>` layer. iOS (deliberately Apple Maps, not Google
+  Maps — see `driver-app/app.config.ts`'s comment on why switching would be a much bigger
+  change than this one feature warrants) has no native equivalent — the same limitation
+  `HM-GRAD-1` originally worked around. The 2026-09-09 fix (`BLOB_LAYERS` layered circles +
+  `rampColorForRatio` continuous color interpolation in `HeatmapCells.tsx`) is a real,
+  tested improvement but is explicitly a hand-rolled approximation, not a real Gaussian
+  blur — it will still read as "layered circles" up close on iOS, not the seamless blurred
+  raster look in the reference screenshot.
+- **Approach taken:** `@shopify/react-native-skia@2.11.2` added (peer-compatibility verified
+  against this app's real installed `react-native-reanimated`/`react-native-worklets`/React/
+  RN versions, not assumed). New `HeatmapGradientOverlay` component renders each visible
+  cell as a fully-opaque screen-space `Circle` inside one Skia `Group` whose `layer` applies
+  a real image-space Gaussian blur to the rasterized composite — overlapping cells actually
+  merge into one continuous field. Renders as a `MapView` **sibling** (not a child — Skia
+  has no map-annotation slot), positioned via a newly-measured `mapViewport` and a
+  continuously-updating `liveHeatmapRegion` (best-effort drag-follow — true frame sync isn't
+  achievable through `react-native-maps`' public iOS API without a custom native module,
+  confirmed via `react-native-maps#5086`/`#4762`, not assumed). Imported via a lazy
+  `require()`-in-try/catch (matching `carSurface.tsx`'s existing pattern for risky imports)
+  so a stale native binary degrades to "no gradient" instead of crashing.
+- **Why still open despite the code landing same-day:** this is **not OTA-eligible** — a
+  new native dependency needs a full EAS native build + device/App-Store cycle before any
+  driver sees it, and this agent session had no EAS credentials or device/simulator to
+  verify against. Every check that COULD be done without one was: `tsc --noEmit` against
+  the actually-installed package's real type declarations, unit tests against mocked Skia
+  components (including a dedicated test proving the graceful-degradation path), and a
+  researched (not assumed) confirmation of the drag-tracking limitation before committing
+  to an implementation approach.
+- **Acceptance (unchanged, still the bar to close this item):** iOS heatmap reads as a
+  continuous blurred gradient (no visible individual circle/layer edges at normal zoom); no
+  dropped frames panning/zooming with a full-size cell set on a mid-tier iOS device; overlay
+  stays correctly positioned/scaled through zoom and pan; the native module actually links
+  successfully in a real EAS build.
+- **Owner / follow-up:** needs a human with EAS build access to run a native build on this
+  branch and verify on a real device or simulator (this repo's agent sessions cannot trigger
+  EAS builds themselves — see the PR template's own "Native build verification" field).
+  Once verified, flip this item's checkbox and note the build/device result here.
+- **Files:** `driver-app/utils/heatmapColor.ts` (new), `driver-app/hooks/useVisibleHeatmapCells.ts`
+  (new), `driver-app/utils/heatmapProjection.ts` (new),
+  `driver-app/components/dashboard/HeatmapGradientOverlay.tsx` (new),
+  `driver-app/components/dashboard/HeatmapCells.tsx` (refactored), `driver-app/package.json`,
+  `driver-app/app/driver/(tabs)/index.tsx`. Full list and rationale:
+  `docs/change-log/2026-09-09-hm32-skia-gradient-heatmap-ios.md`.
+
 ### C72. `ci-error-audit.yml`'s issue-dedup fingerprint is coarser than the failure it's deduping — unrelated `backend-test` failures fold into one long-lived issue — CLOSED (2026-09-08)
 
 - [x] **Status:** closed 2026-09-08 on `claude/pr-5085-5079-hardening-c72-fingerprint`.
@@ -22206,6 +23065,25 @@ how much they de-risk a public launch._
   decide whether to add `backend-test` (and ideally the whole CI Guard
   Rails summary) to the required list, and whether admin-merge bypass
   should be restricted for rides/payments/auth-surface PRs.
+  - **2026-09-11 — confirmed this is a hard permission boundary, not just a
+    missing tool.** Directly attempted `GET /repos/.../branches/main/protection`
+    against the GitHub API using this session's own token: **403 "Resource
+    not accessible by integration."** Checked why: `GET /repos/.../spinrvm`
+    on the same token returns `"permissions": {"admin": false, "maintain":
+    false, "push": true, "triage": true, "pull": true}` — this session's
+    GitHub access is explicitly scoped to `push` (read/write code, PRs,
+    issues), **not** `admin`, and branch-protection read/write requires
+    `admin` on GitHub's own permission model. This isn't a gap in the MCP
+    tool surface that a different tool would close — it's the credential's
+    actual grant, and per this repo's own least-privilege access policy
+    (project-scoped access per tool, no blanket elevation — see the user's
+    standing access-scoping preference), the right fix is a human with
+    existing repo-admin rights doing the one-time UI check, not elevating
+    this session's token to `admin`. Action (2) above stands unchanged;
+    this only replaces "no tool available" with the precise, verified
+    reason why, and confirms elevating access here isn't the recommended
+    path even though it may be technically possible for the org owner to
+    grant.
 - **Files:** none changed by this finding — process gap, not code. Relevant
   policy source: `CLAUDE.md` § "Pre-merge release gates", rule 9.
 - **What was NOT verified:** the actual branch-protection configuration
@@ -22216,6 +23094,37 @@ how much they de-risk a public launch._
   used" — that needs a human looking at the Branches settings page (or,
   for the bypass question, the merge event's actor/method in the repo's
   audit log, which this session also cannot read).
+  - **2026-09-10 — new evidence narrows this toward admin bypass
+    specifically, still without a direct read of Settings → Branches.**
+    Full detail: `docs/change-log/2026-09-10-a43-admin-bypass-evidence.md`.
+    Four facts, none needing branch-protection read access: (1) PR #5048's
+    author and its `merged_by` are the **same account**, and
+    `list_repository_collaborators` shows that account holds **`admin`**
+    role — the repo's only other collaborator holds `write`; (2) a review
+    was explicitly requested from that other (write-only) collaborator and
+    **never given** (`get_reviews` returns empty) — the merge didn't wait
+    for it; (3) the "CI Guard Rails Summary" bot comment — the repo's own
+    custom merge-blocking gate, not just `backend-test` — didn't post
+    until **31 minutes after** the merge, meaning none of its ten gates had
+    reported in either direction at merge time, not just the one check
+    already known; (4) the PR's own body has a self-authored "Tier 7 ·
+    High-risk stop condition & unmerge trigger" section with "Rollback
+    command verified" and "On-call informed before merge" both left
+    unchecked. Together this is much more consistent with a GitHub
+    repo-admin merging past required reviews/checks (the standard
+    "administrators are exempt unless 'Do not allow bypassing the above
+    settings' is enabled" default) than with "the checks simply aren't
+    required" — a non-admin acting under the same branch protection
+    couldn't have merged with zero reviews the way this admin account did.
+    **Action narrowed accordingly:** a human with repo-admin access should
+    check specifically whether that one setting is on for `main`, rather
+    than auditing the full required-checks list from scratch. Confirmed
+    again, more thoroughly this pass, that no tool in this session's
+    GitHub MCP toolset exposes branch-protection rules or the audit log —
+    `list_branches` was tried and doesn't help here (no per-branch
+    protection detail worth the ~700+-branch pagination cost to find
+    `main`'s row, and even a bare boolean wouldn't reveal which checks are
+    required or whether admins are exempt).
 
 ### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
 
@@ -22383,6 +23292,29 @@ how much they de-risk a public launch._
   check-run timestamps, but not *why* the platform allowed it (config gap
   vs. bypass), which needs human settings-page access this session
   doesn't have.
+- **2026-09-10 — follow-up check while re-examining A43; confirms this
+  entry's diagnosis, surfaces one narrower gap.** Pulled #5048's full CI
+  Guard Rails job list (run `34007800478`) directly. Two separate jobs in
+  two different workflows both ran pytest on this PR: `backend-test`
+  (`ci.yml`) — covered above, genuinely reported `failure` — and a second,
+  parallel job, `shared-coverage-run` / "Run backend test suite with
+  coverage (shared)" (`ci-guardrails.yml`), which reported `success`
+  despite the same 8 failing tests / 41 errors. **That second job's
+  leniency is deliberate, not a bug**: its pytest step ends `|| true` and
+  the job itself carries `continue-on-error: true` by design, so a real
+  test failure can't cascade into skipping the three downstream
+  coverage-floor gates that consume its coverage artifact (see the job's
+  own code comments, referencing
+  `docs/audit/2026-08-27-cicd-gates-guardrails-audit.md` §5). Removing
+  that leniency would reintroduce the cascading-skip problem it was
+  written to prevent — considered and rejected as a fix for this reason.
+  **What is genuinely new:** the "CI Guard Rails Summary" bot comment
+  (even after C74's fix below) has no row for `backend-test`'s result —
+  none of its 10 listed gates check "did the test suite pass." Anyone
+  reading only that one comment, all-green, has zero visibility into
+  whether tests actually passed, on any PR, not just this one. Doesn't
+  change this entry's root cause or Action — it strengthens the case for
+  it, since right now no bot comment surfaces that signal at all.
 
 ### C74. `security-gates.yml`/`ci-guardrails.yml` summary jobs never failed regardless of gate results
 
@@ -23364,6 +24296,49 @@ how much they de-risk a public launch._
   correct, and should still merge (it fixes a genuine defect and is a
   prerequisite for these jobs ever going green), but it does not alone
   close this item.
+- **Mitigation added 2026-09-08 (`claude/pr-5085-5079-hardening-b11-rg-determination`,
+  found while `security-scan` blocked an unrelated docs-only PR #5134):**
+  with the admin toggle's timeline unknown, every PR touching any file was
+  being blocked on a required check that no PR diff can fix — added
+  `continue-on-error: true` to `ci.yml`'s `security-scan` job's "Upload
+  Trivy results to GitHub Security" step (`:975-988`) only, so this one
+  known, repo-wide, non-diff-caused failure stops blocking merges while
+  the admin action above is still pending. This restores that job's actual
+  gating behavior to what it was before this upload step started failing:
+  the filesystem Trivy scan feeding it has no `exit-code` set (unlike
+  `docker-image-scan`'s image scan, which does, at `:1071`, and is
+  unaffected by this — its own upload-sarif call still fails today, just
+  no longer the thing enforcing anything), so this upload was never the
+  thing gating `security-scan` pass/fail even when it worked. **Deeper
+  finding this surfaces, not fixed here:** with Code Scanning disabled,
+  the filesystem Trivy scan's findings currently reach no enforcement path
+  at all — a real security-posture gap, not just a CI-noise one, tracked
+  as its own open thread below rather than fixed unilaterally (adding
+  `exit-code: '1'` to a scan with an unknown-sized existing findings set
+  could immediately red-line `main`; needs a baseline/suppression pass
+  first, a bigger, separate decision). **Second site fixed same day, same
+  PR:** `security-gates.yml`'s G3/Semgrep upload-sarif step (`:386-397`)
+  hit the identical failure, which flipped that job's overall conclusion
+  to `failure` (even though its own Semgrep scan and the SR-03
+  money-safety gate both passed) and cascaded into the required "Security
+  gates summary" check — concretely blocking this PR's mergeability, not
+  just a `main`-branch nuisance. Same `continue-on-error: true` mitigation
+  applied there too; confirmed the underlying gate (SR-03's own
+  `sys.exit(1)` on a real finding) is independent of the upload step and
+  still enforces regardless. **Third and fourth sites fixed same PR, same
+  day:** touching `.github/workflows/**` itself made path-filtering run
+  `security-gates.yml`'s G6/container-scan on this PR too (previously
+  observed `skipped`) — it hit the identical failure and, being in
+  "Security gates summary"'s `needs:` list, would have blocked the PR the
+  same way G3 did. Fixed identically (`:682-685`), confirmed the real
+  enforcing scan (`exit-code: '1'`) and the SARIF-generating trivy-action
+  run both already succeeded before this upload step's failure. Applied
+  the same fix pre-emptively to the 4th and last known site,
+  `ci.yml`'s `docker-image-scan` (`:1109-1122`), for the same reason
+  (workflow-file changes make it run too) rather than wait for a third
+  round-trip to discover it failing. **All 4 known
+  `codeql-action/upload-sarif` call sites in the repo now have this
+  mitigation.**
 - **Verification performed:** read the full `security-scan` and `G3 ·
   Semgrep` job logs for both original failures; re-read every enclosing
   `permissions:` block directly (not via a context-truncated grep this
@@ -23381,7 +24356,7 @@ how much they de-risk a public launch._
   fix, at any of the 4 sites (moot now — Code Scanning being disabled
   repo-wide means the answer is almost certainly "no" for all of them).
 
-### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — fixed on the favored hypothesis, not yet independently reconfirmed
+### C95. `label-run-maestro.yml`'s `Detect native changes and label` job fails with `Repository not found` — fix merged to `main`, verification blocked on C96
 - [x] **Status:** FIX APPLIED 2026-09-08 on `claude/label-run-maestro-contents-perm`,
   at the user's explicit request to apply the same-shape fix already
   described below ("Not fixed here" section — since superseded). Added
@@ -23517,6 +24492,541 @@ how much they de-risk a public launch._
   behavior claimed in hypothesis 1 for this specific repo (asserted from
   general GitHub documentation, not confirmed against this repo's actual
   settings).
+- **Merged to `main` 2026-09-08 21:20 UTC as `64ebc7e` (PR #5133, merged by
+  the user directly) while still in this unconfirmed state.** The merge
+  itself was not blocked by a passing check — it landed during the C96
+  repo-wide GitHub Actions outage (see C96: every job across every
+  workflow rejected at queue time, `runner_id: 0`, no logs, ~20:23 UTC
+  onward), so there was no green run to wait for. Confirmed `main`'s own
+  post-merge run (`64ebc7e`, run `34280021844`) shows the identical C96
+  signature (`conclusion: failure`, 8s wall-clock) rather than either a
+  clean pass or a genuine repeat of the original `Repository not found`
+  error — so this merge adds no new evidence either way. **C95's fix is
+  on `main` and believed correct, but remains unverified by any real CI
+  run; that verification is now blocked entirely on C96 clearing, not on
+  anything specific to this file.** Re-check on the first `main` push or
+  `rider-app`/`driver-app`-touching PR after C96 is confirmed resolved.
+
+### C96. Every GitHub Actions job in the repo started failing near-instantly with no logs, on `main` itself, sometime between ~20:23 and ~21:09 UTC 2026-09-08 — confirmed base-branch-red, not caused by any single PR's diff, and not fixable from this session — CLOSED (cleared 2026-09-09, exact time unconfirmed)
+
+- **Resolution confirmed 2026-09-10, checking `main`'s tip:** the outage is
+  over. `main`'s newest push at the time of this check (commit `746af5f`,
+  PR #5149, `Security Gates` run `34419182471`) shows real CI again: every
+  job has a genuine `runner_id`, multi-second-to-multi-minute step timings
+  (e.g. Semgrep scan 1m44s, admin-dashboard build 69s, pip-audit 47s), and
+  substantive pass/fail results — including real findings (`G4b`/`G4c`
+  yarn/npm audit failures on actual CVEs, not the C96 instant-reject
+  signature). This is the first clean/real run this thread directly
+  observed; the exact clear time is bounded only to "sometime between
+  ~03:49 UTC 2026-09-09 (last confirmed-still-ongoing check, on PR #5143)
+  and ~23:57 UTC 2026-09-09 (this clean run)" — no session watched the
+  transition happen. Total outage duration: **at least ~19.5 hours,
+  possibly up to ~27.5 hours** (from ~20:23 UTC Sep 8) depending where in
+  that ~20-hour window it actually cleared.
+- **Root cause: still not billing-confirmed, but a strong circumstantial
+  candidate exists.** PR #5141 (merged 21:22 UTC Sep 8, mid-outage, by a
+  concurrent session) added a `concurrency:` cancellation group to
+  `ci.yml` — the one heavy 16-job workflow in the repo that had no such
+  group, so every push queued a full new run stacked on any still in
+  flight instead of superseding it. That PR explicitly flagged this as "a
+  plausible contributor... consistent with a spend limit or included-
+  minutes cap... not root-cause-confirmed (that needs GitHub billing/
+  usage access no session here has)." The ~20-27 hour outage window is
+  also consistent with a **daily** Actions spend/minutes cap that resets
+  on a schedule, rather than a one-off platform incident (which would
+  more typically clear on the order of minutes-to-hours, per GitHub's own
+  incident history) — this remains circumstantial, not confirmed, since
+  no session in this repo has GitHub Actions billing/usage-dashboard
+  access to check directly.
+- **Consequence still standing:** PRs #5133, #5134, #5136, #5137, and
+  #5143 (this item's own tracking PR) were all merged by the repo owner
+  during the outage with no real CI evidence — see the update below for
+  detail. None have since been re-verified against a real CI run; if any
+  of their changes need debugging later, remember they were never
+  actually machine-checked before merging, only reasoned about.
+- **Not further investigated:** the exact clear timestamp (would need
+  combing every intermediate `main` push between 03:49 and 23:57 UTC Sep 9
+  — dozens of commits — for the first one with real job durations; not
+  done here since the outage being over is what matters going forward,
+  not the precise minute it ended); whether PR #5141's concurrency fix
+  actually caused the recovery or was coincidental to an independent
+  billing-cap reset.
+- **Update 2026-09-09 ~03:00 UTC:** still OPEN — re-confirmed on `main`'s
+  newest pushes (commits `8faa99b`, `e30fed9`, ~02:52-02:53 UTC), same
+  instant-fail (2-10s), no-logs signature, now **~6.5 hours** of continuous
+  outage. In the meantime the repo owner directly merged 3 PRs (#5134,
+  #5136, #5137) with CI still fully red the whole time — a deliberate,
+  reasonable call given each was independently reviewed as low-risk/
+  docs-or-additive and unrelated to the outage, but it means **none of the
+  fixes/changes in those 3 PRs have any real CI evidence behind them** —
+  including C95's `contents: read` fix (#5133, merged earlier at 21:20 UTC,
+  also during the outage) — treat their correctness as "reasoned, not
+  CI-verified" until a clean run is observed. 3 separate sessions were
+  independently polling GitHub for this same fact on staggered schedules;
+  consolidated into one shared check 2026-09-08 ~22:00 UTC (one session
+  checks, wakes the others only if the fact changes) to stop the redundant
+  polling — see that session's own trigger history if resuming this thread.
+- [x] **Status (historical):** OPEN at the time this line was written —
+  escalated to the user; needs a human with GitHub
+  org/repo billing or Actions-admin access. Found while investigating a CI
+  failure wake on PR #5134 (a docs-only B11/R-G recording PR, whose only
+  code touch is `continue-on-error: true` additions to `ci.yml`/
+  `security-gates.yml` for C94). PR #5134's own CI showed **every single
+  job failing** — not just the 4 known C94 SARIF-upload sites, but
+  `detect-changes`, `security-scan`, `backend-test`, `rider-app-test`,
+  `admin-test`, `driver-app-test`, `python-dependency-audit`, every `G1`-
+  `G7b` job in `security-gates.yml`, `Rider/Driver app E2E tests
+  (Playwright)`, `Visual regression (Playwright)`, `E2E tests
+  (Playwright)` — 12+ distinct jobs across both required workflows, all
+  `conclusion: failure`, most completing in **2-40 seconds** (implausible
+  for real test suites that normally run minutes).
+- **Confirmed NOT this PR's diff, and NOT any single PR's diff** — checked
+  `main`'s own last 3 merge-commit CI runs via `list_workflow_runs`
+  (branch: main, event: push):
+  - PR #5132's merge (`03dfb9f`, ~20:44 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `failure`.
+  - PR #5131's merge (`4fcbecc`, ~20:19-20:40 UTC): `CI/CD Pipeline` →
+    `failure`, `Security Gates` → `cancelled`.
+  - PR #5128's merge (`1306f01`, ~18:12-18:16 UTC): `Security Gates` →
+    `failure`.
+  Three independent merges to `main` itself, by different sessions, all
+  red on both required workflows — this is base-branch-red at the widest
+  possible scope, not a single PR's regression.
+- **Escalating in scale from C94/C47, not the same root cause:**
+  - C94 (still valid, separately) is 4 specific `codeql-action/upload-
+    sarif` steps failing on a repo-setting gap ("Code scanning is not
+    enabled"). That's a narrow, understood, already-mitigated (`continue-
+    on-error: true`) failure mode — it does not explain `backend-test`,
+    `rider-app-test`, `admin-test`, `driver-app-test`, or E2E jobs failing,
+    none of which touch `codeql-action` at all.
+  - C47 (2026-08-27, closed) documented a *similar-shaped* but narrower
+    anomaly: `ci-guardrails.yml` coverage jobs externally cancelled
+    mid-suite (`exit 143`, "runner has received a shutdown signal"),
+    `get_workflow_run_usage` reporting `duration_ms: 0` for every job
+    despite real multi-minute wall-clock execution — flagged then as
+    "GitHub-side runner preemption and an Actions-minutes/spend-limit
+    cutoff are both plausible externally-caused candidates, neither
+    confirmed," with no billing-API access from that session to
+    investigate further. **This looks like the same class of problem,
+    now far more severe**: instead of one job being killed mid-suite
+    after several minutes, essentially *every* job across *every*
+    workflow is failing within seconds, with **zero log content
+    retrievable** (`mcp__github__get_job_logs` returns HTTP 404 for every
+    job ID tried, including `detect-changes`, `security-scan`, and all 4
+    `-test` jobs) — consistent with jobs failing before a runner ever
+    picked them up (queue rejection / spend-limit block), not mid-run.
+  - `mcp__github__pull_request_read` method `get_status` (combined commit
+    status) itself 403'd — `Resource not accessible by integration` —
+    a token-permission gap on this session's GitHub MCP integration
+    specifically, separate from (and not the cause of) the underlying
+    Actions failures themselves (confirmed via `get_check_runs`, which
+    does work and shows the same failures).
+- **What this session could not do:** confirm the root cause. No access
+  from this session to GitHub's own Actions-usage/billing dashboard
+  (`Settings → Billing → Actions` or the org's usage page), no access to
+  the GitHub Status page (`githubstatus.com` — blocked by this session's
+  own network egress proxy, `EGRESS_BLOCKED`), and no permission to
+  trigger a re-run (`actions_run_trigger` 403's the same way it did for
+  C95). Two leading hypotheses, same as C47's, now with much stronger
+  signal toward the first:
+  1. **GitHub Actions spend limit / included-minutes cap reached** for
+     this account — would explain near-instant failure with no logs
+     (jobs rejected at queue time, before a runner is assigned) far
+     better than C47's "cancelled mid-run" pattern did.
+  2. **A GitHub-side platform incident** (Actions infra outage) —
+     unverifiable from this session; a human should check
+     `githubstatus.com` directly, which this session cannot reach.
+- **Action needed (human, not code):** whoever owns this GitHub
+  organization's billing/admin settings should check
+  `https://github.com/organizations/<org>/settings/billing` (or the
+  personal-account equivalent) for an Actions spend-limit/usage-cap hit,
+  and check `githubstatus.com` for an active incident. Until one of those
+  is confirmed and resolved, **every open PR in this repo will show every
+  CI check failing, and this is not a signal about any individual PR's
+  code** — do not merge-block-triage individual PRs' "failures" as if
+  they were real defects until this is ruled out or fixed.
+- **Not fixed here, cannot be fixed from this session:** this is
+  infra/billing, not a workflow YAML defect — no `continue-on-error:`,
+  permissions grant, or code change addresses a spend-limit block or a
+  GitHub-side outage. Flagging per CLAUDE.md's pre-merge release gate #9
+  ("Escalate, don't silently ship, when in doubt") and #8 ("a CI check
+  that's red for a reason unrelated to your diff is a signal the gate
+  itself has decayed, not 'not my problem'").
+- **Verification performed:** `get_check_runs` on PR #5134 (45 check runs,
+  overwhelming majority `failure`); `list_workflow_runs` filtered to
+  `branch: main, event: push` showing 3 independent recent merge commits
+  all red; `list_workflow_jobs` on the specific run confirming job-level
+  timestamps (2-40s durations); `get_job_logs` with `failed_only: true`
+  attempted on all 12 failed jobs in the run — 100% HTTP 404.
+- **What was NOT verified:** the actual root cause (spend-limit vs.
+  platform incident vs. a third unconsidered cause); whether this started
+  exactly between PR #5131's own successful partial run (~20:23 UTC,
+  where `security-scan`'s `actions:read` fix was confirmed working with
+  real log output, before hitting the separate "Code scanning not
+  enabled" error) and this discovery (~21:09-21:11 UTC) — bounded to that
+  ~45-minute window by the available evidence, not narrowed further;
+  whether the same failure is hitting *every* repo under this account or
+  is scoped to this one.
+
+### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
+
+- [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
+  Backend fix (loud Firebase Admin SDK init failure, recommendation #2), the client fallback-toast
+  fix (recommendation #4, see 2026-09-11 correction below — this session's own 2026-09-11
+  status line above wrongly listed #4 as still open two days after it had already shipped
+  2026-09-09; caught by re-reading the actual code rather than trusting the prior note), the
+  delivery-outcome metric (recommendation #3), and the `expo-notifications` dead-code fix
+  (recommendation #6, see 2026-09-11 addendum below — turned out bigger than "cleanup") have all
+  shipped as follow-up PRs — see below. Ops check (confirm the Firebase credential on
+  Fly/Railway, #1) and the iOS background-mode confirmation (#5) remain open — both need access
+  this session doesn't have.
+- **Addendum (2026-09-11) — recommendation #6 turned out to be a real routing gap, not just dead
+  code, and was fixed, untested on a real device (user's explicit choice — see below):**
+  Going deeper on #6 found the original "misleading dead code, cleanup" framing understated it.
+  Confirmed by directly comparing `node_modules/@react-native-firebase/messaging/android/.../
+  AndroidManifest.xml` (no explicit `android:priority`, defaults to 0) against
+  `node_modules/expo-notifications/android/.../AndroidManifest.xml` (`android:priority="-1"`) for
+  the same `com.google.firebase.MESSAGING_EVENT` intent-filter — RNFirebase wins, so
+  expo-notifications never sees an FCM-originated message. Two consequences, not one:
+  - `Notifications.setNotificationHandler` (`_layout.tsx:219-243`) is **not** fully dead as
+    originally framed — it's live for the one notification expo-notifications actually posts
+    itself: the "upload your documents" welcome nudge in
+    `DriverIdlePanel.tsx:175` (`Notifications.scheduleNotificationAsync`, `trigger: null`). Its
+    FCM-push-type suppression list (`new_ride_assignment`/`ride_completed`/etc.) is the part
+    that's dead, since no FCM message ever reaches it.
+  - **The real, previously-unflagged gap:** the tap-routing logic in
+    `addNotificationResponseReceivedListener` and `getInitialNotificationResponseAsync` — written
+    to deep-link `chat_message` → chat screen, `lost_and_found`/`lost_and_found_message` → the
+    lost-and-found chat, `license_backfill_prompt` → profile — can only fire for notifications
+    expo-notifications itself posted. Those three push types are **not** data-only (only
+    `new_ride_assignment`/`live_activity` are, per `backend/features.py`'s `is_data_only` gate),
+    so they carry a real FCM `notification` block that RNFirebase receives and the OS
+    auto-displays. A driver tapping one of those from the lock screen/notification tray while the
+    app is backgrounded or killed almost certainly lands on a generic screen instead of the
+    intended chat/case/profile screen — a real, plausible UX gap, not just stale code. (The
+    `new_ride_assignment` branch in the same listeners is separately redundant-but-harmless: ride
+    offers are data-only and handled entirely by Notifee, confirmed working per the audit's
+    finding #11.) No equivalent RNFirebase-side tap-detection (`onNotificationOpenedApp`/
+    `getInitialNotification`) existed anywhere in the codebase before this fix (confirmed via
+    grep — zero hits).
+  - **Fix shipped:** added `onNotificationOpenedApp`/`getInitialNotification` wrappers to
+    `shared/services/firebase.ts` (RNFirebase v22+ modular API), wired both into
+    `driver-app/app/_layout.tsx`'s `usePushNotificationRouter` alongside the existing
+    expo-notifications listeners, and extracted the shared tap-routing switch into
+    `driver-app/utils/pushNotificationRouting.ts` (dependency-free, unit-tested — 9 new tests)
+    instead of quadruplicating a 4-branch if/else across all four listeners. Corrected the
+    misleading module-level comment on `setNotificationHandler` to describe what it actually
+    governs. Full detail: `docs/change-log/2026-09-11-c97-rec6-fcm-tap-routing.md`.
+  - **Explicitly asked the user how to proceed rather than deciding alone**, since this grew from
+    "low-priority cleanup" into new, live, driver-facing notification-tap-handling code with zero
+    ability to test on a real device in this sandbox — the kind of change CLAUDE.md's own
+    escalation gate calls for a pause on. User chose to ship it now, untested on device; see
+    "What was NOT verified" in the change-log entry for the exact boundary of what was and wasn't
+    confirmed before it merged.
+  - **2026-09-11, this session — superseded my own more conservative finding.** I had
+    independently found the same Android-manifest-priority asymmetry and, not knowing whether
+    `setNotificationHandler` was also live on iOS, stopped short of any code change and re-scoped
+    #6 as blocked on iOS device access. The fix above (from a parallel session, merged into
+    `main` moments later) is more complete: it doesn't touch/remove the handler at all — it adds
+    the missing RNFirebase-side tap routing alongside it, which resolves the real gap without
+    needing the iOS confirmation my more conservative read was waiting on. Deferring to it.
+- **Correction (same day, before the client-side fix shipped):** the client-side finding below
+  originally read as "every notification type except ride offers is silently dropped, foreground
+  and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
+  overstated for background/killed state: only `new_ride_assignment`/`live_activity` are sent
+  data-only — every other type carries a real FCM `notification` block targeting a channel
+  confirmed to exist on-device (`'ride-offers'`, created at cold start via `expo-notifications`,
+  `driver-app/app/_layout.tsx:449`), so Android auto-displays those in background/killed state
+  with no app JS code needing to run. The foreground gap is real but narrower than originally
+  framed: only a message type outside the app's existing explicit list falls through to a silent
+  navigation with no toast — that's what the shipped client-side fix actually closes. Full
+  correction in the audit doc's own "Correction" section, left visible against the original
+  claim rather than silently rewritten.
+- **Two independent findings, either explains the symptom, both may be true at once:**
+  1. **Backend (infra-shaped):** Firebase Admin SDK init falls through to Application Default
+     Credentials on a non-GCP host (Fly/Railway) with the failure wrapped in a bare
+     `except Exception: pass` (`backend/core/security.py:12-29`) — zero log, no startup failure,
+     no metric. The app boots looking healthy; the SDK only visibly fails per-push, later, as a
+     scattered log line with no metric or alert tied to it (`spinr_dispatch_offer_sent_total` is
+     incremented at offer-*claim* time, `routes/rides/matching.py:1270`, not at push-send
+     outcome). This would silently break **every** push type, including ride offers, on whichever
+     host has the gap.
+  2. **Client (code-structural):** on Android, `@react-native-firebase/messaging`'s manifest
+     service takes priority over `expo-notifications`' for the same FCM intent-filter, so
+     `expo-notifications`' handler (`driver-app/app/_layout.tsx:219-243`) is dead code for
+     FCM-originated messages. The app's real foreground listener
+     (`driver-app/hooks/useDriverDashboard.ts:1812-1838`) only branches on
+     `new_ride_assignment`; the background/killed handler
+     (`driver-app/services/backgroundMessaging.ts:159-259`) only branches on
+     `new_ride_assignment`/`ride_cancelled`/`location_health`. Every other data-only type (chat,
+     document/license expiry reminders, generic alerts, promos) is silently dropped, no display,
+     no error. **Ride-offer notifications specifically are confirmed correctly built and
+     displayed end-to-end** — this gap is scoped to every *other* notification type.
+- **The fork that determines priority:** if ride offers themselves are invisible → points at
+  finding 1 (infra), since the client-side ride-offer path is confirmed correct. If ride offers
+  arrive but other types (chat/reminders/alerts) never show → finding 2 (client) alone explains
+  it, no infra involvement needed. Not resolvable from code alone — needs the user to say which
+  they're actually observing.
+- **Verification performed:** two parallel subagent passes, each reading real source and citing
+  file:line for every claim (not inferred from symptoms) — one on the backend send pipeline
+  (re-audited every driver-facing `send_push_notification` call site for a recurrence of the
+  2026-08-11 N3 ID-mismatch bug class; found none), one on the driver-app client pipeline (FCM
+  token registration/refresh, foreground/background handlers, Android notification channel,
+  iOS background-mode config, error-swallowing). Full finding tables with severity ratings in the
+  audit doc.
+- **What was NOT verified:** live production state (whether `FIREBASE_SERVICE_ACCOUNT_JSON` is
+  actually set/valid on Fly and/or Railway today — needs ops access this session doesn't have);
+  whether Sentry is actually receiving the relevant error-level logs via the loguru→Sentry bridge
+  and whether an alert exists on them; the iOS `UIBackgroundModes` finding (flagged SUSPECTED —
+  no compiled iOS build available to confirm against); which of the two findings is the one the
+  user is actually experiencing (the fork above).
+- **Recommendations, in leverage order** (full detail in the audit doc): (1) ops check —
+  confirm the Firebase service-account credential on both hosts, costs nothing, resolves the fork
+  fastest; (2) ~~make the SDK init failure loud instead of silent~~ **DONE**; (3) ~~add a real
+  `spinr_push_send_total{outcome=...}` delivery-outcome metric, since none exists today~~ **DONE
+  2026-09-11** — `backend/features.py::_record_push_outcome`, called at every
+  `_deliver_push_now`/`_send_expo_push` return point (`success`/`stale_token`/`sdk_unavailable`/
+  `failed`). Full detail: `docs/change-log/2026-09-11-push-send-outcome-metric.md`. This is
+  observability only — it does not by itself resolve the fork above (still needs a human to say
+  which symptom they're seeing, or ops access to scrape the new metric); (4) ~~add an explicit
+  fallback-notification path for unhandled FCM message types on the client, closing the
+  silent-drop gap for everything except ride offers~~ **DONE 2026-09-09** (PR #5160) — verified
+  directly by re-reading current `driver-app/hooks/useDriverDashboard.ts` (its foreground
+  `onForegroundMessage` handler's final `else if (data?.type)` branch, ~line 2016) rather than
+  trusting the tracker: it now calls `showToast('info', remoteMessage?.notification?.title ||
+  'New notification', remoteMessage?.notification?.body || 'Tap to view details...')` for any
+  type outside the 5 explicitly-handled ones, with a safe fallback string if the notification
+  block is ever absent. **Background/killed state deliberately got no equivalent change** — PR
+  #5160's own commit message reasoning holds up under independent re-check: every type except
+  `new_ride_assignment`/`live_activity` carries a real FCM `notification` block, which Android/iOS
+  auto-display with zero app code running whether the app is foregrounded, backgrounded, or
+  killed; adding a background-handler fallback for those types would risk a **duplicate**
+  notification, not fix a gap. Confirmed `backgroundMessaging.ts` only branches on
+  `new_ride_assignment`/`ride_cancelled`/`location_health` — by design, not oversight, since
+  display for every other type is already the OS's job. **One un-actioned, forward-looking risk
+  worth naming, not fixing now** (no bug exists today, so no code change follows from this,
+  per the simplicity-first / no-speculative-code rule): if a future push type is ever added as
+  data-only (`is_data_only=True` in `backend/features.py`) without also getting its own
+  Notifee-based background handler like `new_ride_assignment` has, it would be silently invisible
+  in background/killed state with no guard catching the mismatch — nothing enforces "every
+  data-only type has a background display path" today; (5) confirm the iOS background-mode gap
+  against a real build; (6) ~~either wire `expo-notifications`' handler into the real path or
+  remove the now-misleading dead code~~ **DONE 2026-09-11, untested on a real device** — see the
+  2026-09-11 addendum above; wired Firebase's own tap-detection into the router rather than
+  removing the expo-notifications path, since the latter is still genuinely needed for the local
+  welcome-nudge notification.
+
+### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
+
+- [x] **Status:** CLOSED — corrected same day by direct evidence from the user's real machine. The
+  "patch fails to apply" finding below was a sandbox artifact, not a real bug: this cloud
+  session's `node_modules/react-native` install has zero real `.js` source files (only `.d.ts`
+  stubs, see the original finding below), so **any** patch-package run here would fail
+  regardless of whether the patch itself is actually broken. On the user's real Windows machine,
+  `yarn install` for both apps completed and `patch-package` reported **both patches applied
+  successfully**:
+  - `driver-app` (`react-native+0.86.3.patch` against installed `react-native@0.86.3`): applied
+    with **zero warnings**, even running under `patch-package --error-on-warn` (the app's own
+    postinstall script), which would have failed the command on any fuzz/context mismatch. Exact
+    match, no version drift, no problem.
+  - `rider-app` (`react-native+0.86.2.patch` against installed `react-native@0.86.3`): applied
+    successfully, with only patch-package's routine "patch file version mismatch" notice — that
+    warning fires purely from comparing the patch **filename's** version string against the
+    installed package's version string, independent of whether the underlying diff needed any
+    fuzzy matching. It is cosmetic, not a sign the fix is broken or missing.
+  **Corrected conclusion:** the Android Bridgeless crash workaround (8 files, `ActivityIndicator`
+  etc.) has very likely been active and working correctly in both apps' real builds all along —
+  including on EAS builds and any prior local/CI build, none of which run in this stub
+  environment. There is no evidence of an active customer-facing regression. The only real,
+  much smaller remaining item at the time (2026-09-10): `rider-app/patches/react-native+0.86.2.patch`
+  had a stale filename (installed version is 0.86.3) and needed renaming to silence the cosmetic
+  warning — a cleanup, not a crash fix.
+  **Lesson for future sessions:** this cloud sandbox's `node_modules` for `react-native` cannot
+  be trusted to diagnose patch-package or native-module issues — verify findings like this one
+  against a real environment before writing them up as active bugs, per this repo's own
+  verification discipline (`CLAUDE.md`: "never let a tool's own output stand in for
+  verification").
+  **2026-09-11 — fully closed, sibling patch had the same stale-filename issue and was missed
+  by the same-day fix.** The `react-native+0.86.2.patch → +0.86.3.patch` rename above didn't
+  catch its sibling, `rider-app/patches/@react-native+gradle-plugin+0.86.2.patch` — same class
+  of issue (installed `@react-native/gradle-plugin` is `0.86.3` per `rider-app/yarn.lock`, patch
+  filename still said `0.86.2`). Confirmed safe to rename with **zero content change** — its
+  content is byte-identical (`diff` exit 0) to `driver-app/patches/@react-native+gradle-plugin+0.86.3.patch`,
+  which the 2026-09-10 correction above already confirmed applies cleanly on the user's real
+  machine. No sandbox `node_modules` install needed for this one: unlike regenerating a patch's
+  *diff content* (which does need a real RN install per the handoff doc), a pure filename rename
+  of already-proven-identical content is safe to verify from source-controlled files alone.
+  Renamed; updated the 2 exact-filename citations in `docs/android-build-strategy.md` that would
+  otherwise have gone stale from this rename. That doc's own title/"Last verified" line and other
+  in-body "RN 0.86.2" references are separately stale (predate the 0.86.2→0.86.3 bump entirely) —
+  out of scope for this fix, noted here rather than silently left for a future session to
+  rediscover.
+
+- [ ] ~~**Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
+  No code changed; regeneration requires a real `node_modules/react-native` install (local
+  machine or CI), which this Claude Code cloud sandbox does not have — see "Why this can't be
+  finished here" in the doc.~~ (superseded by the correction above — kept for the record, not
+  a live status)
+- **What's broken:** `rider-app/patches/react-native+0.86.2.patch` (stale filename, installed RN
+  is 0.86.3) and `driver-app/patches/react-native+0.86.3.patch` (filename matches, still fails)
+  both fail `patch-package` application against installed `react-native@0.86.3`. Confirmed via
+  direct inspection of `node_modules/react-native` in both apps: none of the patch's 8 target
+  files carry the `PATCH (spinr rider-app/driver-app):` marker, so the fix is not active in
+  either app's current install.
+- **What the patch does:** works around a real Android crash — RN's Android `ActivityIndicator`
+  (and 7 other components: `RefreshControl`, `Switch`, `Modal`, `DebuggingOverlay`,
+  `HScrollViewNativeComponents`, and two `VirtualView` native components) import native
+  components that return a non-renderable object under the New Architecture (Bridgeless),
+  throwing `"Element type is invalid... got: object"` at render time. The fix swaps in a
+  JS-only fallback. Full original patch content (all 8 files, both apps) is intact and
+  version-controlled in the two patch files above — nothing was lost.
+- **Near-miss during investigation:** a diagnostic `patch-package` dry-run inside `driver-app`
+  overwrote `driver-app/patches/react-native+0.86.3.patch` with an unrelated 393,995-line diff
+  (this sandbox's installed `react-native` is a `.d.ts`-only stub — 0 real `.js` files under
+  `Libraries/`, confirmed via `find`/`wc -l` — so any patch generated here is diffed against
+  stub content, not real RN source). Caught via `git status`/`git diff` before commit and
+  reverted with `git checkout --`; repo is clean, both patch files match `git HEAD`. This is
+  the direct evidence for why regeneration must happen outside this environment.
+- **Recommended next step:** per the handoff doc — on a machine/CI with a full real RN install,
+  hand-port each of the 8 files' fix against the current 0.86.3 source (don't assume old hunk
+  context still matches), regenerate via `npx patch-package react-native`, verify on a real
+  Android build/emulator (render-time crash — `tsc`/lint prove nothing), then follow the
+  Change Impact Log gate before merging (customer-facing rendering path, live app testing).
+  Worth checking first whether RN 0.86.3 already fixed the underlying issue upstream, in which
+  case some/all of the 8 may be deletable rather than needing a rewrite.
+- **What was NOT verified:** whether the underlying Bridgeless/`ProgressBarAndroid` bug is still
+  present in RN 0.86.3 upstream (not checked against RN's own changelog/issues); whether the
+  other 7 files' native components have the same failure mode as `ActivityIndicator`'s
+  documented one (inferred by pattern, not confirmed per-file); no Android build/emulator
+  available in this sandbox to reproduce the original crash or verify any fix.
+- **2026-09-10, later same day — handoff doc corrected, upstream cross-check
+  done, answer is no shortcut.** Read the full patch content directly rather
+  than trusting the handoff doc's file list, and fetched real RN 0.86.3
+  source (npm's exact `gitHead` for that version) to check whether any of
+  it's already fixed upstream. Three corrections to the handoff doc:
+  (1) it's **9 files** for driver-app, not 8 — `Libraries/Components/ScrollView/ScrollView.js`
+  was missing from the list entirely; (2) the two apps' patches are **not
+  identical** (driver-app: 612 lines/11 fix markers; rider-app: 518 lines/7,
+  missing `ScrollView.js` and two driver-app-only iOS crash fixes for
+  `ActivityIndicator`/`Modal` — each citing a real prior production crash,
+  BrandSplash and CancelReasonSheet respectively); (3) it's **two unrelated
+  bug classes**, not one — 7 files are the documented Bridgeless
+  runtime-render crash, but the 2 `VirtualView` files are an unrelated
+  codegen **build-time** parse failure ("Unable to determine event
+  arguments"), on a component Spinr doesn't even use. Upstream check: 6 of 9
+  files' exact root-cause lines are byte-identical to the pre-patch state in
+  real RN 0.86.3 source — nothing is fixed upstream, nothing is deletable,
+  the full hand-port this item already called for is still required. Full
+  detail: `docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`
+  (updated in place, not superseded).
+
+### C99. No Fly.io/Railway CLI access AND the Firebase MCP server can't authenticate from this environment — two independent blockers on verifying prod secrets, including C97's own top recommendation
+
+- [ ] **Status:** OPEN — setup gap, needs a human to grant access; not fixable
+  by any session. Surfaced 2026-09-10 when the user asked this session to
+  check whether `FIREBASE_SERVICE_ACCOUNT_JSON` is valid on both Fly.io
+  and Railway — the #1 recommendation in **C97** (driver-app push
+  notifications), which flagged confirming this credential as the fastest,
+  cheapest way to resolve its two-root-cause fork.
+- **Update 2026-09-10, later same day — a second, independent blocker
+  found on the Firebase side itself, not just Fly/Railway:** once the
+  `firebase` MCP server (re)connected to this session, checked whether it
+  could confirm the credential from Firebase's own side (project/service-
+  account existence) as a partial workaround for not having Fly/Railway
+  access. It cannot, for two stacked reasons: (1) `firebase_get_environment`
+  shows `Authenticated User: <NONE>` — no Google account signed in; (2)
+  attempting `firebase_login` to fix that **fails outright**:
+  `Error: Failed to make request to https://auth.firebase.tools/attest` —
+  the OAuth handshake itself can't reach Firebase's auth endpoint from this
+  sandboxed environment, the same category of failure as C96's investigation
+  finding `githubstatus.com` blocked by this session's own egress proxy.
+  This means even a human completing Firebase login elsewhere would not
+  unblock a Claude session here — the session itself cannot complete the
+  handshake, independent of credentials. Two separate blockers now stand
+  between any session in this repo and confirming this one credential:
+  no Fly/Railway access at all, and a Firebase auth flow that can't
+  complete even when a connector is present.
+- **What's missing, confirmed directly:** `which flyctl fly railway` finds
+  none of the three installed in this session's shell; no `mcp__fly*` or
+  `mcp__railway*` tools appear anywhere in this session's tool list
+  (contrast with Vercel, Supabase, GitHub, Figma, which are all connected
+  here). `FIREBASE_SERVICE_ACCOUNT_JSON` lives as a secret inside each
+  platform's own vault (per `CLAUDE.md`'s Deployment section — backend
+  ships to both Fly `yyz` primary and Railway standby), not in this repo,
+  so there is no file this session could read to check it either.
+- **Consequence:** the exact same gap almost certainly blocks
+  `session_012kZfwCw2q9T5T1HjvdXyAK` (C97's own owning session) from
+  confirming its own top recommendation — that session's post-turn status
+  as of 2026-09-10 explicitly reads "need Firebase credential check" as
+  its blocker. Two independent sessions hit the identical wall.
+- **What a human can do right now, without waiting on this being fixed**
+  (commands handed to the user directly, not run here):
+  ```bash
+  # Fly.io — confirms the secret exists + last-set date (never shows the value)
+  flyctl secrets list -a <fly-app-name>
+  # Railway — same idea
+  railway variables --service <service-name>
+  # To actually validate the JSON parses and shows the right project/service-account
+  # (still never prints the private key):
+  flyctl ssh console -a <fly-app-name> -C "python3 -c \"import json,os; d=json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT_JSON']); print(d['project_id'], d['client_email'])\""
+  # railway run <same python one-liner> for the Railway side
+  ```
+- **Fix, if the user wants sessions to do this directly in future:** grant
+  Fly.io and Railway CLI credentials (or connect their respective MCP
+  servers, if/when one exists) to this repo's Claude Code environment —
+  scoped to this project specifically, per the user's own stated policy
+  on project-scoped tool access (never account-wide/all-projects) for
+  CLI-based tech-stack components. This is a connector/environment
+  configuration change, not a code change — no PR can close this item by
+  itself the way most items here are closed.
+- **Not investigated:** whether this account has Fly.io/Railway access
+  configured for *other* repos' Claude Code environments (would confirm
+  this is a per-repo scoping gap rather than a full account-level absence)
+  — out of scope to check from this session, which only sees this repo.
+
+### C100. `driver-app-test` is red on `main`'s own tip — `CarMarker.test.tsx`'s image-decode-retry suite, confirmed unrelated to the commits that happened to be `main`'s HEAD when it failed
+
+- [x] **Status:** CLOSED 2026-09-11 — this is a duplicate filing of the
+  other C100 entry above (both share the item ID "C100," filed by two
+  different sessions on 2026-09-10 investigating two different PRs, each
+  unaware of the other). Already fixed by commit `611acfc` (PR #5209).
+  Re-verified directly: `npx jest __tests__/components/CarMarker.test.tsx`
+  → 25/25 passing on current `main`. Left in place rather than deleted,
+  per the append-only spirit of this log — flagging the duplicate-ID
+  collision itself as a backlog-hygiene note for future item numbering.
+- **Failure:** `__tests__/components/CarMarker.test.tsx`, suite
+  `CarMarker — car-icon decode failure retries then reports once
+  (2026-09-09, "green circle, never a car")` plus one case in
+  `CarMarker — Android ring-change re-arms the frozen snapshot` — 7 tests
+  fail with `No instances found with node type: "Image"` at
+  `UNSAFE_getByType(Image)` call sites (lines 110/141/169/491 as of the
+  2026-09-10 run). Full run: `Test Suites: 1 failed, 138 passed, 139
+  total` / `Tests: 7 failed, 1565 passed, 1572 total`.
+- **Confirmed base-branch-red, not diff-specific:** checked
+  `driver-app-test`'s job on `main`'s own CI/CD Pipeline run for commit
+  `f9f52c7` ("dispatch: reuse PostGIS RPC distance instead of recomputing
+  haversine", #5199 — a backend dispatch change touching no driver-app UI
+  code at all) — same job, same conclusion: `failure`, while every other
+  job in that run (`backend-test`, `rider-app-test`, `admin-test`, both
+  E2E suites) passed. Two unrelated commits, two unrelated diffs, same
+  `driver-app-test` failure — this is `main`'s own state, not a
+  per-PR artifact.
+- **Not root-caused or fixed here** — out of scope for the PR that
+  surfaced it (AI17/F4 doesn't touch `CarMarker.tsx`, its test file, or
+  anything in its import chain; fixing it there would be scope creep past
+  "surgical changes"). The test's own name cites "2026-09-09" as when its
+  scenario was authored — worth checking whether a same-day or
+  since-then change to `CarMarker.tsx`'s image-load/retry logic (or to
+  the RN `Image` mocking setup shared across driver-app's test suite)
+  changed how/whether an `Image` node renders under test, since
+  `UNSAFE_getByType(Image)` finding nothing suggests the component tree
+  under test no longer renders an `Image` node at all in this scenario,
+  not a timing/flake issue.
+- **Files (reference only, no code changed by this entry):**
+  `driver-app/__tests__/components/CarMarker.test.tsx`,
+  `shared/components/CarMarker.tsx` (per C90/C70/the three prior
+  `CarMarker.tsx` change-logs cross-referenced above — the actual
+  component whose retry logic the failing suite exercises).
 
 ## Recently completed (do not redo)
 

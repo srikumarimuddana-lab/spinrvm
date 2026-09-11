@@ -454,8 +454,15 @@ async def escalate_to_support(user: Dict[str, Any], reason: str, category: str) 
             from services.zoho_desk_integration import create_support_ticket
         try:
             transcript = await _recent_transcript(user.get("_conversation_id"))
+            # `reason` is model-relayed free text from the rider/driver's own
+            # conversation (e.g. "my card ending 1234 keeps declining, call me
+            # at 306-555-0100") and can carry the same PII classes scrub_pii
+            # strips from the transcript above -- scrub it before it reaches
+            # the same third-party (Zoho) sink.
             ticket = await create_support_ticket(
-                user=user, message=f"[AI escalation:{category}] {reason}", transcript=transcript
+                user=user,
+                message=scrub_pii(f"[AI escalation:{category}] {reason}"),
+                transcript=transcript,
             )
             result["ticket_number"] = ticket.get("ticketNumber")
             result["message"] += " A support ticket has been opened; we'll follow up by email."

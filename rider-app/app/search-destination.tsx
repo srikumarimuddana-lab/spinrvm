@@ -17,6 +17,7 @@ import * as Location from 'expo-location';
 import { useRideStore } from '../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { showToast } from '../store/toastStore';
 import api from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
@@ -841,7 +842,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
@@ -859,7 +860,7 @@ function createStyles(colors: ThemeColors) {
     },
     inputsContainer: {
       paddingHorizontal: 20,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       backgroundColor: colors.surfaceLight,
     },
     inputRow: {
@@ -870,7 +871,7 @@ function createStyles(colors: ThemeColors) {
       width: 12,
       height: 12,
       borderRadius: 6,
-      marginRight: 16,
+      marginRight: SPACING.md,
     },
     connectorLine: {
       width: 2,
@@ -883,7 +884,7 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       backgroundColor: colors.surface,
       borderRadius: 12,
       borderWidth: 1.5,
@@ -895,12 +896,12 @@ function createStyles(colors: ThemeColors) {
     textInput: {
       flex: 1,
       height: 46,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
     },
     removeButton: {
-      padding: 8,
+      padding: SPACING.sm,
     },
     addStopButton: {
       flexDirection: 'row',
@@ -909,7 +910,7 @@ function createStyles(colors: ThemeColors) {
       marginLeft: 28,
     },
     addStopText: {
-      marginLeft: 8,
+      marginLeft: SPACING.sm,
       fontSize: 14,
       color: colors.primary,
       fontFamily: 'PlusJakartaSans_600SemiBold',
@@ -921,7 +922,7 @@ function createStyles(colors: ThemeColors) {
     loadingRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 10,
     },
     loadingText: {
@@ -933,8 +934,8 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.textDim,
-      marginTop: 16,
-      marginBottom: 8,
+      marginTop: SPACING.md,
+      marginBottom: SPACING.sm,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
     },
@@ -961,12 +962,12 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
     },
     predictionMainText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
     },
     predictionSecondaryText: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
       marginTop: 2,
@@ -989,7 +990,7 @@ function createStyles(colors: ThemeColors) {
     },
     quickChipText: {
       flex: 1,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
@@ -1006,7 +1007,7 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.primary,
       borderRadius: 28,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 10,
     },
     searchRideButtonDisabled: {

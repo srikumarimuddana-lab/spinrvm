@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList,
+  View, StyleSheet, TouchableOpacity, FlatList,
   ActivityIndicator, RefreshControl,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,6 +14,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function ScheduledRidesScreen() {
   const router = useRouter();
@@ -222,7 +224,7 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12, backgroundColor: colors.surface,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, backgroundColor: colors.surface,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backButton: {
@@ -231,7 +233,7 @@ function createStyles(colors: ThemeColors) {
     },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
 
-    list: { padding: 16, paddingBottom: 40 },
+    list: { padding: SPACING.md, paddingBottom: 40 },
     listHeader: { fontSize: 14, fontWeight: '600', color: colors.textDim, marginBottom: 12 },
 
     rideCard: {
@@ -245,7 +247,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.primary + '15', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12,
     },
     timeBadgeImminent: { backgroundColor: colors.warning },
-    timeBadgeText: { fontSize: 13, fontWeight: '700', color: colors.primary },
+    timeBadgeText: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.primary },
     fareText: { fontSize: 18, fontWeight: '800', color: colors.text },
 
     scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
@@ -257,25 +259,25 @@ function createStyles(colors: ThemeColors) {
     routeAddress: { flex: 1, fontSize: 14, color: colors.text },
     routeConnector: {
       width: 2, height: 16, backgroundColor: colors.border,
-      marginLeft: 4, marginVertical: 2,
+      marginLeft: SPACING.xs, marginVertical: 2,
     },
 
     rideFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     rideStats: { flexDirection: 'row', alignItems: 'center' },
-    statText: { fontSize: 13, color: colors.textDim },
-    statDot: { fontSize: 13, color: colors.border },
-    cancelButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
+    statText: { fontSize: FONT.bodySm, color: colors.textDim },
+    statDot: { fontSize: FONT.bodySm, color: colors.border },
+    cancelButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: SPACING.xs },
     cancelText: { fontSize: 14, fontWeight: '600', color: colors.error },
 
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40 },
-    emptyIcon: { marginBottom: 16 },
+    emptyIcon: { marginBottom: SPACING.md },
     emptyText: { fontSize: 18, fontWeight: '700', color: colors.textDim },
-    emptySubtext: { fontSize: 14, color: colors.textDim, textAlign: 'center', marginTop: 8 },
+    emptySubtext: { fontSize: 14, color: colors.textDim, textAlign: 'center', marginTop: SPACING.sm },
     bookButton: {
-      marginTop: 24, backgroundColor: colors.primary, paddingHorizontal: 32, paddingVertical: 14,
+      marginTop: SPACING.lg, backgroundColor: colors.primary, paddingHorizontal: SPACING.xl, paddingVertical: 14,
       borderRadius: 24,
     },
-    bookButtonText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    bookButtonText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#FFF' },
   });
 }

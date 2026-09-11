@@ -8,6 +8,16 @@ import { ActivityIndicator } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import { Button } from '../Button';
 
+// Real Ionicons (@expo/vector-icons) does an async font-load `setState` on
+// mount that logs an "not wrapped in act(...)" warning under
+// react-test-renderer — harmless, but noisy, and unrelated to anything this
+// suite verifies. Mocked the same way driver-app's ActivityView.test.tsx
+// already mocks it, so `findAllByType(Ionicons)` below still matches the
+// (now-mocked) component instance Button.tsx renders.
+jest.mock('@expo/vector-icons', () => ({
+  Ionicons: () => null,
+}));
+
 describe('Button', () => {
   it('renders its label for each variant', () => {
     const { getByText, rerender } = render(<Button variant="primary">Primary</Button>);
@@ -68,5 +78,37 @@ describe('Button', () => {
     expect(queryByText('Submit Report')).toBeNull();
     expect(UNSAFE_getByType(ActivityIndicator)).toBeTruthy();
     expect(getByRole('button').props.accessibilityState.busy).toBe(true);
+  });
+
+  // UX3 (ACTION_ITEMS.md, 2026-09-10): `icon` added for driver-app's
+  // ActivityView "Try Again" retry pill / documents.tsx "Re-upload
+  // Document" — the first two real consumers that needed a leading glyph.
+  it('renders a leading icon before the label when `icon` is provided', () => {
+    const { Ionicons } = require('@expo/vector-icons');
+    const { getByText, UNSAFE_root } = render(<Button icon="refresh">Try Again</Button>);
+
+    expect(getByText('Try Again')).toBeTruthy();
+    expect(UNSAFE_root.findAllByType(Ionicons)).toHaveLength(1);
+  });
+
+  it('omits the icon for every pre-existing consumer that does not pass one', () => {
+    const { Ionicons } = require('@expo/vector-icons');
+    const { getByText, UNSAFE_root } = render(<Button>Plain Label</Button>);
+
+    expect(getByText('Plain Label')).toBeTruthy();
+    expect(UNSAFE_root.findAllByType(Ionicons)).toHaveLength(0);
+  });
+
+  it('hides the icon (along with the label) while loading, same as an icon-less button', () => {
+    const { queryByText, UNSAFE_root } = render(
+      <Button icon="refresh" loading>
+        Try Again
+      </Button>,
+    );
+    const { Ionicons } = require('@expo/vector-icons');
+
+    expect(queryByText('Try Again')).toBeNull();
+    expect(UNSAFE_root.findAllByType(Ionicons)).toHaveLength(0);
+    expect(UNSAFE_root.findAllByType(ActivityIndicator)).toHaveLength(1);
   });
 });

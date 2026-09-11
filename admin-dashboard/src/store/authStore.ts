@@ -30,6 +30,16 @@ export function _resetAuthInitializedForTesting() { _authInitialized = false; _i
 // Concurrent callers await the same promise and share the result.
 let _inflightRefresh: Promise<void> | null = null;
 
+// Reads a cookie value by name from document.cookie. spinr_admin_csrf is
+// deliberately non-HttpOnly (set by /api/admin/auth/{login,refresh,mfa/
+// challenge}) so JS can read it and echo it back as the double-submit
+// X-CSRF-Token header — see set-cookie/route.ts's verifyCsrf.
+function _readCookie(name: string): string | null {
+    if (typeof document === 'undefined') return null;
+    const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return match ? decodeURIComponent(match[1]) : null;
+}
+
 // Cookie helpers — delegate to the Next.js API route so the cookie is set
 // HttpOnly by the server (F-02). document.cookie cannot set HttpOnly.
 // Fire-and-forget: the in-memory token drives API calls; the HttpOnly cookie
@@ -38,7 +48,10 @@ function setAuthCookie(token: string): void {
     if (typeof window === 'undefined') return;
     fetch('/api/auth/set-cookie', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': _readCookie('spinr_admin_csrf') || '',
+        },
         body: JSON.stringify({ token }),
     }).catch((error) => {
         console.error('[AuthStore] Failed to set auth cookie:', error);

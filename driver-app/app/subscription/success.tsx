@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING } from '@shared/utils/responsive';
 import { showToast } from '../../hooks/useToast';
 
 /**
@@ -103,9 +105,9 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',
-      padding: 32,
+      padding: SPACING.xl,
     },
     title: { fontSize: 20, fontWeight: '800', color: colors.text, marginTop: 20, textAlign: 'center' },
-    subtitle: { fontSize: 14, color: colors.textDim, marginTop: 8, textAlign: 'center' },
+    subtitle: { fontSize: 14, color: colors.textDim, marginTop: SPACING.sm, textAlign: 'center' },
   });
 }

@@ -14,6 +14,10 @@ on:
       - 'rider-app/package.json'
       - 'driver-app/package.json'
 
+concurrency:
+  group: mobile-dep-check-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # Node >=22: engines floor of @supabase/supabase-js@2.112.x and react-native@0.87 (CR #4551)
   NODE_VERSION: '22'

@@ -70,6 +70,7 @@ export const COMMAND_PALETTE_ROUTES: CommandPaletteRoute[] = [
     { href: "/dashboard/cloud-messaging", label: "Notifications", group: "Support", module: "notifications" },
 
     { href: "/dashboard/monitoring/redis", label: "Redis & Infra", group: "System", module: "settings" },
+    { href: "/dashboard/monitoring/dispatch-geo", label: "Dispatch Geo Status", group: "System", module: "settings" },
     { href: "/dashboard/sentry-logs", label: "Sentry Issues", group: "System", module: "settings", superAdminOnly: true },
     { href: "/dashboard/stripe-events", label: "Stripe Events", group: "System", module: "settings", superAdminOnly: true },
     { href: "/dashboard/audit-logs", label: "Audit Logs", group: "System", module: "audit" },

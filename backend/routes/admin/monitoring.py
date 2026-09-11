@@ -14,6 +14,7 @@ try:
     from ...db_supabase import _breaker as _db_breaker
     from ...db_supabase import _rows_from_res, count_documents, get_rows, run_sync
     from ...dependencies import get_admin_user
+    from ...services.dispatch_candidates import admin_dispatch_geo_status
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
     from ...utils.driver_online import intent_online
@@ -31,6 +32,7 @@ except ImportError:
     from db_supabase import _breaker as _db_breaker  # type: ignore
     from db_supabase import _rows_from_res, count_documents, get_rows, run_sync
     from dependencies import get_admin_user
+    from services.dispatch_candidates import admin_dispatch_geo_status  # type: ignore
     from supabase_client import supabase
     from utils.audit_logger import log_admin_action  # type: ignore # noqa: F401
     from utils.driver_online import intent_online  # type: ignore
@@ -629,6 +631,27 @@ async def flush_redis_prefix(
         "admin_id": current_admin.get("id"),
         "audit_id": audit_id,
     }
+
+
+@router.get("/dispatch-geo")
+async def get_dispatch_geo_status(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Combined dispatch geo-provider status for the admin dashboard.
+
+    Configured vs. effective provider (a mismatch means a live failover is in
+    effect), H3 index readiness/blockers, last failover event, and a
+    human-readable summary — see `services.dispatch_candidates.
+    admin_dispatch_geo_status` for the full shape. Read-only; see
+    POST /dispatch-geo/rebuild to force a Redis H3 index rebuild.
+    """
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
+    app_settings = await get_app_settings()
+    return await admin_dispatch_geo_status(app_settings)
 
 
 @router.post("/dispatch-geo/rebuild")

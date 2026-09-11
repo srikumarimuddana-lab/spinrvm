@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     FlatList,
     ActivityIndicator,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,6 +17,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface TaxDocument {
     id: string;
@@ -227,7 +228,7 @@ function createStyles(colors: ThemeColors) {
         container: { flex: 1, backgroundColor: colors.background },
         header: {
             paddingBottom: 12,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
         },
         headerRow: {
             flexDirection: 'row',
@@ -245,8 +246,8 @@ function createStyles(colors: ThemeColors) {
         headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
 
         listContent: {
-            paddingHorizontal: 16,
-            paddingTop: 16,
+            paddingHorizontal: SPACING.md,
+            paddingTop: SPACING.md,
         },
 
         infoCard: {
@@ -255,7 +256,7 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
             borderRadius: 12,
             padding: 14,
-            marginBottom: 16,
+            marginBottom: SPACING.md,
             gap: 10,
             borderWidth: 1,
             borderColor: colors.border,
@@ -263,7 +264,7 @@ function createStyles(colors: ThemeColors) {
         infoText: {
             flex: 1,
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             lineHeight: 18,
         },
 
@@ -272,7 +273,7 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 16,
+            padding: SPACING.md,
             marginBottom: 12,
             borderWidth: 1,
             borderColor: colors.border,
@@ -289,13 +290,13 @@ function createStyles(colors: ThemeColors) {
         docInfo: { flex: 1 },
         docType: {
             color: colors.text,
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '700',
             marginBottom: 2,
         },
         docYear: {
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '600',
         },
         docDate: {
@@ -325,7 +326,7 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
             fontSize: 18,
             fontWeight: '600',
-            marginTop: 16,
+            marginTop: SPACING.md,
         },
         emptySub: {
             color: colors.textDim,

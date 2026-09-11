@@ -23,6 +23,10 @@ on:
       - .github/workflows/sync-mobile-lockfiles.yml
   workflow_dispatch:
 
+concurrency:
+  group: sync-mobile-lockfiles-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 

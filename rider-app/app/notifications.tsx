@@ -1,14 +1,16 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList,
+  View, StyleSheet, TouchableOpacity, FlatList,
   ActivityIndicator, RefreshControl,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface AppNotification {
   id: string;
@@ -245,16 +247,16 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12,
+      paddingHorizontal: SPACING.md, paddingVertical: 12,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
-    markAllBtn: { paddingHorizontal: 4, paddingVertical: 6 },
-    markAllText: { fontSize: 13, fontWeight: '600', color: colors.primary },
+    markAllBtn: { paddingHorizontal: SPACING.xs, paddingVertical: 6 },
+    markAllText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.primary },
 
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    list: { padding: 16 },
+    list: { padding: SPACING.md },
 
     card: {
       flexDirection: 'row', alignItems: 'center',
@@ -275,16 +277,16 @@ function createStyles(colors: ThemeColors) {
     },
     cardContent: { flex: 1 },
     cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 },
-    cardTitle: { fontSize: 14, fontWeight: '600', color: colors.text, flex: 1, marginRight: 8 },
+    cardTitle: { fontSize: 14, fontWeight: '600', color: colors.text, flex: 1, marginRight: SPACING.sm },
     cardTitleUnread: { fontWeight: '700' },
-    cardTime: { fontSize: 11, color: colors.textDim },
-    cardBody: { fontSize: 13, color: colors.textDim, lineHeight: 18 },
+    cardTime: { fontSize: FONT.label, color: colors.textDim },
+    cardBody: { fontSize: FONT.bodySm, color: colors.textDim, lineHeight: 18 },
 
     empty: { alignItems: 'center', paddingVertical: 60 },
     emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 14 },
-    emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center' },
+    emptySub: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: SPACING.xs, textAlign: 'center' },
     retryBtn: {
-      marginTop: 16,
+      marginTop: SPACING.md,
       paddingHorizontal: 20,
       paddingVertical: 10,
       borderRadius: 20,

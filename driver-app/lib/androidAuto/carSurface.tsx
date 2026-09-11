@@ -22,6 +22,16 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
+import { darkColors } from '@shared/theme';
+import { selectCarHeatCells } from './carHeatSelection';
+import {
+  HEAT_BLOB_RADIUS_FACTOR,
+  HEAT_RING_STOPS,
+  METERS_PER_LAT_DEG,
+  cellCenter,
+  SOFT_HEAT_RENDER_ENABLED,
+  ringAlphas,
+} from '../heatFalloff';
 import { useDriverStore } from '../../store/driverStore';
 import { useDemandHeatmapView } from '../../hooks/demandHeatmapShared';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
@@ -81,8 +91,15 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 const DEFAULT_CELL_LAT = 0.004;
 const DEFAULT_CELL_LNG = 0.006;
 const CAR_MAX_POLYGONS = 80;
-// Dark-theme ramp (car surface is always dark)
-const CAR_RAMP = ['#4E211E', '#7F2D26', '#B2382E', '#FF453A', '#FF8A80'];
+// The soft path draws HEAT_RING_STOPS.length circles per cell rather than one
+// square, so the cap comes down hard here: 80 squares -> 26x5 = 130 shapes. A
+// head unit is weaker than a phone and nothing in this repo can profile one,
+// so this is deliberately more conservative than the phone's budget.
+const CAR_MAX_SOFT_BLOBS = 26;
+// Dark-theme ramp (car surface is always dark). This was a hand-copied literal
+// of darkColors.heatmapRamp; same five values, just duplicated. Point it at the
+// shared token so the car cannot drift from the phone legend on a retune.
+const CAR_RAMP = darkColors.heatmapRamp;
 
 function cellCorners(lat: number, lng: number, cellLat: number, cellLng: number) {
   const bLat = Math.floor(lat / cellLat) * cellLat;
@@ -95,9 +112,13 @@ function cellCorners(lat: number, lng: number, cellLat: number, cellLng: number)
   ];
 }
 
-function rampColor(weight: number, max: number): { fill: string; stroke: string; sw: number } {
+function rampIndex(weight: number, max: number): number {
   const r = max > 0 ? weight / max : 0;
-  const idx = r < 0.2 ? 0 : r < 0.4 ? 1 : r < 0.6 ? 2 : r < 0.8 ? 3 : 4;
+  return r < 0.2 ? 0 : r < 0.4 ? 1 : r < 0.6 ? 2 : r < 0.8 ? 3 : 4;
+}
+
+function rampColor(weight: number, max: number): { fill: string; stroke: string; sw: number } {
+  const idx = rampIndex(weight, max);
   const hex = CAR_RAMP[idx];
   const [rv, gv, bv] = [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
   return {
@@ -309,17 +330,33 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
     setDebugFact('map', 'TILES RENDERED');
   }, []);
 
+  const carCellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
+  const carCellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
+
   const carHeatCells = useMemo(() => {
     const usable = heatmapStatus === 'ready' || heatmapStatus === 'empty';
     if (!usable || !heatmapCells.length || rideState !== 'idle') return [];
-    return [...heatmapCells]
-      .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lng) && Number.isFinite(c.weight))
-      .sort((a, b) => b.weight - a.weight)
-      .slice(0, CAR_MAX_POLYGONS);
-  }, [heatmapCells, heatmapStatus, rideState]);
-
-  const carCellLat = typeof cellLatDeg === 'number' && cellLatDeg > 0 ? cellLatDeg : DEFAULT_CELL_LAT;
-  const carCellLng = typeof cellLngDeg === 'number' && cellLngDeg > 0 ? cellLngDeg : DEFAULT_CELL_LNG;
+    // Camera state is in the deps on purpose: the shared payload is not
+    // viewport-filtered, so the selection has to re-run as the driver pans or
+    // the budget stays spent on wherever the map used to be.
+    return selectCarHeatCells(heatmapCells, {
+      centerLat,
+      centerLng,
+      delta,
+      cellLat: carCellLat,
+      cellLng: carCellLng,
+      cap: SOFT_HEAT_RENDER_ENABLED ? CAR_MAX_SOFT_BLOBS : CAR_MAX_POLYGONS,
+    });
+  }, [
+    heatmapCells,
+    heatmapStatus,
+    rideState,
+    centerLat,
+    centerLng,
+    delta,
+    carCellLat,
+    carCellLng,
+  ]);
 
   const carHeatMax = useMemo(
     () => carHeatCells.reduce((m, c) => Math.max(m, c.weight), 0),
@@ -402,6 +439,7 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
 
   const MapView = Maps.default;
   const MapsPolygon = Maps.Polygon;
+  const MapsCircle = Maps.Circle;
 
   // NOTE: this JS value does NOT decide whether the native map can render, and
   // must never gate it.
@@ -512,6 +550,29 @@ export function CarMapSurface({ colorScheme }: { colorScheme?: CarColorScheme } 
       >
         {/* Heatmap demand cells — idle state only (HM-30) */}
         {carHeatCells.map((c, i) => {
+          if (SOFT_HEAT_RENDER_ENABLED) {
+            // Same falloff the phone uses, so the head unit and the handset
+            // read as one product rather than squares beside blobs.
+            const hex = CAR_RAMP[rampIndex(c.weight, carHeatMax)];
+            const [rv, gv, bv] = [
+              parseInt(hex.slice(1, 3), 16),
+              parseInt(hex.slice(3, 5), 16),
+              parseInt(hex.slice(5, 7), 16),
+            ];
+            const center = cellCenter(c.lat, c.lng, carCellLat, carCellLng);
+            const outer = carCellLat * METERS_PER_LAT_DEG * HEAT_BLOB_RADIUS_FACTOR;
+            const alphas = ringAlphas(carHeatMax > 0 ? c.weight / carHeatMax : 0);
+            return HEAT_RING_STOPS.map((stop, ring) => (
+              <MapsCircle
+                key={`ch-${i}-${c.lat}-${c.lng}-${stop}`}
+                center={center}
+                radius={outer * stop}
+                fillColor={`rgba(${rv},${gv},${bv},${alphas[ring]})`}
+                strokeColor="transparent"
+                strokeWidth={0}
+              />
+            ));
+          }
           const rc = rampColor(c.weight, carHeatMax);
           return (
             <MapsPolygon

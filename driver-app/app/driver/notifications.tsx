@@ -1,13 +1,13 @@
 import React, { useCallback, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     FlatList,
     Alert,
     ActivityIndicator,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +22,7 @@ import {
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface Notification {
     id: string;
@@ -168,10 +169,11 @@ export default function NotificationsScreen() {
             </LinearGradient>
 
             <FlatList
+                style={{ flex: 1 }}
                 data={notifications}
                 renderItem={renderNotification}
                 keyExtractor={(item) => item.id}
-                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
+                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
                 showsVerticalScrollIndicator={false}
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}
@@ -215,7 +217,7 @@ function createStyles(colors: ThemeColors) {
         container: { flex: 1, backgroundColor: colors.background },
         header: {
             paddingBottom: 14,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
         },
         headerRow: {
             flexDirection: 'row',
@@ -231,8 +233,8 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
         },
         headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
-        markAllBtn: { padding: 8 },
-        markAllText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+        markAllBtn: { padding: SPACING.sm },
+        markAllText: { color: colors.primary, fontSize: FONT.bodySm, fontWeight: '600' },
         unreadCountText: {
             color: colors.textDim,
             fontSize: 12,
@@ -246,7 +248,7 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
             borderRadius: 16,
             padding: 14,
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
             borderWidth: 1,
             borderColor: colors.border,
         },
@@ -266,23 +268,23 @@ function createStyles(colors: ThemeColors) {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: 4,
+            marginBottom: SPACING.xs,
         },
         notifTitle: { color: colors.text, fontSize: 14, fontWeight: '600', flex: 1 },
-        notifTime: { color: colors.textDim, fontSize: 11, marginLeft: 8 },
-        notifBody: { color: colors.textDim, fontSize: 13, lineHeight: 18 },
+        notifTime: { color: colors.textDim, fontSize: FONT.label, marginLeft: SPACING.sm },
+        notifBody: { color: colors.textDim, fontSize: FONT.bodySm, lineHeight: 18 },
         unreadDot: {
             width: 8,
             height: 8,
             borderRadius: 4,
             backgroundColor: colors.primary,
-            marginTop: 8,
+            marginTop: SPACING.sm,
         },
         emptyState: { alignItems: 'center', paddingVertical: 60, gap: 8 },
         emptyTitle: { color: colors.textDim, fontSize: 18, fontWeight: '600' },
-        emptySub: { color: colors.textSecondary, fontSize: 13, textAlign: 'center' },
+        emptySub: { color: colors.textSecondary, fontSize: FONT.bodySm, textAlign: 'center' },
         retryBtn: {
-            marginTop: 8,
+            marginTop: SPACING.sm,
             paddingHorizontal: 20,
             paddingVertical: 10,
             borderRadius: 20,

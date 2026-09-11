@@ -13,8 +13,18 @@ on:
   pull_request:
     branches: [staging]
 
+concurrency:
+  group: test-env-${{ github.ref }}
+  # Never cancel a push-triggered run: build-mobile-test (eas build) and
+  # ota-update-test (eas update, below) push non-idempotent state to Expo --
+  # killing one mid-publish orphans an EAS build or races the `test` OTA
+  # channel between two runs. Same reasoning as ci.yml's own conditional
+  # cancel-in-progress in this same diff, and the pattern every other
+  # deploy-adjacent workflow in this repo already uses (deploy-fly.yml,
+  # deploy-backend*.yml, eas-native-build.yml, submit-play-store.yml).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
-  PYTHON_VERSION: '3.12'
   # 22, not 20: build-mobile-test/ota-update-test below both run "Setup EAS"
   # (expo/expo-github-action, eas-version: latest), which always pulls
   # eas-cli's current dependency tree — @oclif/plugin-autocomplete bumped its
@@ -30,44 +40,7 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # ─── 1. Backend: Lint + Test ───
-  backend-check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Cache pip
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
-
-      - name: Install dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt
-
-      - name: Run tests
-        working-directory: backend
-        env:
-          SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.TEST_SUPABASE_KEY }}
-          JWT_SECRET: test-secret-ci
-          ENV: test
-        # continue-on-error is intentional: TEST_SUPABASE_URL / TEST_SUPABASE_KEY
-        # may be absent on forks or in environments without a test DB, making
-        # integration tests fail for infrastructure reasons rather than code bugs.
-        # Unit tests (pytest -m unit) pass without secrets; full suite needs them.
-        # Remove continue-on-error once TEST_SUPABASE_URL is set on all runners.
-        continue-on-error: true
-        run: pytest --cov --tb=short -q
-
-  # ─── 2. Rider App: TypeScript Check ───
+  # ─── 1. Rider App: TypeScript Check ───
   rider-app-check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -95,7 +68,7 @@ jobs:
         working-directory: rider-app
         run: npx tsc --noEmit
 
-  # ─── 3. Driver App: TypeScript Check ───
+  # ─── 2. Driver App: TypeScript Check ───
   driver-app-check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -123,10 +96,14 @@ jobs:
         working-directory: driver-app
         run: npx tsc --noEmit
 
-  # ─── 4. Staging health check ───
+  # ─── 3. Staging health check ───
+  # No longer `needs: [backend-check]` -- that job was removed (2026-09-10
+  # CI-cost trim, redundant with ci.yml's real backend-test, and already
+  # continue-on-error so it wasn't a meaningful gate for this job anyway).
+  # This job polls a live URL on its own retry loop and never depended on
+  # backend-check's actual outcome.
   staging-health-check:
     runs-on: ubuntu-latest
-    needs: [backend-check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     timeout-minutes: 10
     env:
@@ -166,7 +143,7 @@ jobs:
           echo "::error::Staging backend health check timed out."
           exit 1
 
-  # ─── 5. Build Mobile Apps (Preview) ───
+  # ─── 4. Build Mobile Apps (Preview) ───
   # Native builds are expensive (4 EAS builds per run: 2 apps × 2 platforms),
   # so — same convention as production mobile builds (CLAUDE.md Deployment:
   # EAS only triggered when the commit message contains [build]) — they run
@@ -194,7 +171,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup EAS
-        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
@@ -223,7 +200,7 @@ jobs:
         working-directory: driver-app
         run: eas build --platform all --profile preview --non-interactive
 
-  # ─── 6. OTA Update (fast — no rebuild needed) ───
+  # ─── 5. OTA Update (fast — no rebuild needed) ───
   ota-update-test:
     runs-on: ubuntu-latest
     needs: [rider-app-check, driver-app-check]
@@ -240,7 +217,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup EAS
-        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
+        uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}

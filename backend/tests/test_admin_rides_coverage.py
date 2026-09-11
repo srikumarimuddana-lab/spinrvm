@@ -840,6 +840,25 @@ class TestAdminRegenerateImportedSnapshots:
             "-- rides are being processed sequentially again"
         )
 
+    def test_regenerate_forwards_offset_and_stable_order_to_query(self, client, as_super_admin):
+        """Paging regression: force=true has no self-advancing filter (every
+        call matches the same rows again), so `offset` is the only way a
+        second click can reach rows past the first `limit`-sized window.
+        Without a deterministic `order`, offset-based paging over the same
+        table this endpoint also writes to would be unreliable."""
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch("db_supabase.get_rows", get_rows_mock),
+            patch("routes.admin.rides.log_admin_action", AsyncMock()),
+        ):
+            resp = client.post(
+                "/api/admin/rides/regenerate-imported-snapshots",
+                json={"force": True, "limit": 50, "offset": 50},
+            )
+        assert resp.status_code == 200
+        assert get_rows_mock.call_args.kwargs["offset"] == 50
+        assert get_rows_mock.call_args.kwargs["order"] == "id"
+
 
 class TestAdminRegenerateImportedRoutes:
     """Admin-dashboard equivalent of scripts/backfill_imported_ride_routes.py,
@@ -1021,6 +1040,24 @@ class TestAdminRegenerateImportedRoutes:
             f"expected {_ROUTE_CONCURRENCY} rides in flight at once, saw {max_in_flight} "
             "-- rides are being processed sequentially again"
         )
+
+    def test_regenerate_routes_forwards_offset_and_stable_order_to_query(self, client, as_super_admin):
+        """Same paging regression as the snapshot endpoint's own offset test:
+        the initial 500-row candidate fetch is the only place `offset` can
+        apply (it runs before the `_needs_route`/`limit` slice), so a second
+        force=true click needs it to reach rides past the first window."""
+        get_rows_mock = AsyncMock(return_value=[])
+        with (
+            patch("db_supabase.get_rows", get_rows_mock),
+            patch("routes.admin.rides.log_admin_action", AsyncMock()),
+        ):
+            resp = client.post(
+                "/api/admin/rides/regenerate-imported-routes",
+                json={"force": True, "limit": 50, "offset": 500},
+            )
+        assert resp.status_code == 200
+        assert get_rows_mock.call_args.kwargs["offset"] == 500
+        assert get_rows_mock.call_args.kwargs["order"] == "id"
 
 
 # ---------------------------------------------------------------------------

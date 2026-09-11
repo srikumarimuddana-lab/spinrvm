@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
+import { View, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
+import { Text } from '@shared/components/Text';
 import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteLine } from '@shared/components/RouteLine';
+import { useFocusEffect } from 'expo-router';
 import { RoutePins } from '@shared/components/RoutePins';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore, type OffRouteConfirmation } from '../../../store/driverStore';
@@ -18,9 +20,9 @@ import {
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
-  DemandLegend,
   ForecastStrip,
   HeatmapCells,
+  HeatmapGradientOverlay,
   HotspotChips,
 } from '../../../components/dashboard';
 import { useDemandHeatmap } from '../../../hooks/useDemandHeatmap';
@@ -43,6 +45,7 @@ import {
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, MIN_DISPLAYED_SPEED_MPS } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -272,6 +275,37 @@ function DriverDashboard() {
   // above doesn't cover this transition since rideState stays 'idle' the
   // whole time a driver goes offline and back online.
   const [mapKey, setMapKey] = useState(0);
+  // Remount the car marker every time the Drive tab regains focus.
+  //
+  // Expo Tabs keep this screen mounted on blur but detach the native MapView;
+  // on return the map is re-attached and react-native-maps re-adds the marker
+  // from its existing (frozen) custom-view snapshot — which comes back blank,
+  // so the car AND its presence ring vanish after Drive → Profile → Drive.
+  // Three attempts to make that snapshot survive re-attach (freeze after load,
+  // native Marker.image, never-freeze) all failed in live testing.
+  //
+  // What was observed to bring the car back: going offline → online, which
+  // bumps mapKey above and remounts the whole MapView. A remount creates a
+  // fresh marker whose snapshot is taken from a freshly mounted view. This
+  // applies the same remount to the marker alone on every refocus — cheaper
+  // than remounting the map (no tile reload, no camera reset). The first focus
+  // is the mount itself and is skipped so startup does not mount twice.
+  const [markerFocusKey, setMarkerFocusKey] = useState(0);
+  const driveFocusCountRef = useRef(0);
+  useFocusEffect(
+    useCallback(() => {
+      if (driveFocusCountRef.current++ > 0) setMarkerFocusKey((k) => k + 1);
+    }, []),
+  );
+  // Which MapView instance (by mapKey) has fired onMapReady. `mapPadding` is
+  // withheld until then — see the prop's comment for the crash this prevents.
+  // Keyed on mapKey rather than a plain boolean reset in an effect, so that a
+  // remount reads as not-ready in the SAME render the new key appears in: an
+  // effect-based reset would let the fresh MapView mount with the stale
+  // `true`, then flip the prop to undefined one frame later — and that flip is
+  // itself a padding update landing inside the exact window this guards.
+  const [mapReadyKey, setMapReadyKey] = useState(-1);
+  const mapReady = mapReadyKey === mapKey;
   const prevRideStateRef = useRef(rideState);
   const prevIsOnlineRef = useRef(isOnline);
   useEffect(() => {
@@ -337,12 +371,8 @@ function DriverDashboard() {
   // v2 adds layer selection (HM-12) and surge mirror (HM-11)
   const {
     cells: heatmapCells,
-    status: heatmapStatus,
-    visible: heatmapVisible,
     surge: heatmapSurge,
     isV2: heatmapIsV2,
-    layer: heatmapLayer,
-    setLayer: setHeatmapLayer,
     forecast: heatmapForecast,
     hotspots: heatmapHotspots,
     cellLatDeg: heatmapCellLat,
@@ -362,6 +392,17 @@ function DriverDashboard() {
   const [heatmapRegion, setHeatmapRegion] = useState<
     { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number } | null
   >(null);
+
+  // iOS Skia gradient overlay (HM-32) needs two things HeatmapCells' own
+  // Android/iOS-fallback paths don't: a region that updates DURING a drag
+  // (not just on settle, per the user's explicit "best-effort follow"
+  // choice — onRegionChange is a JS-bridge event, not frame-synced, so this
+  // will visibly lag/stutter on fast pans rather than track perfectly; see
+  // the HM-32 change-log for why true frame sync isn't achievable through
+  // react-native-maps' public API here), and the map container's own pixel
+  // size, to project cells' lat/lng into the overlay canvas's screen space.
+  const [liveHeatmapRegion, setLiveHeatmapRegion] = useState<typeof heatmapRegion>(null);
+  const [mapViewport, setMapViewport] = useState({ width: 0, height: 0 });
 
   // Airport sub-zones — rendered as blue dashed polygons on idle map (HM-21)
   const { zones: airportZones, activeZone: activeAirportZone } = useAirportZones(
@@ -584,7 +625,13 @@ function DriverDashboard() {
     // to us instead of running a second timer against the same endpoint.
     const releasePublisher = registerLiveRoutePublisher();
     fetchLiveRoute();
-    const id = setInterval(fetchLiveRoute, 20000);
+    // Shortened from 20s to 6s (2026-09-09) — live-testing report: the route
+    // line/ETA visibly lagged the car through turns. Must match
+    // lib/androidAuto/useCarLiveRoute.ts's POLL_MS (see its own comment for
+    // why this is safe: self-hosted OSRM absorbs the extra load as infra
+    // cost, and the metered Google Directions fallback stays behind its own
+    // daily-budget circuit breaker regardless of poll frequency).
+    const id = setInterval(fetchLiveRoute, 6000);
     return () => {
       cancelled = true;
       releasePublisher();
@@ -955,7 +1002,21 @@ function DriverDashboard() {
       )}
 
       {/* Map */}
-      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <View
+        style={StyleSheet.absoluteFill}
+        pointerEvents="box-none"
+        // iOS-only: measures the map container so the Skia gradient overlay
+        // (HM-32, rendered as a sibling below, not a MapView child — Skia
+        // draws to its own canvas view, not a react-native-maps annotation)
+        // can project cells' lat/lng into this exact pixel space. This View
+        // and the MapView both use styles.map === StyleSheet.absoluteFill,
+        // so they always occupy identical bounds.
+        onLayout={
+          Platform.OS === 'ios'
+            ? (e) => setMapViewport({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })
+            : undefined
+        }
+      >
       <MapView
         key={mapKey}
         ref={mapRef}
@@ -975,8 +1036,29 @@ function DriverDashboard() {
         // ActiveRidePanel's bigger sheet during navigating_to_pickup/
         // trip_in_progress, tracked via activeSheetExpanded). Every other
         // ride state keeps its existing route-overview framing unpadded.
+        //
+        // WITHHELD UNTIL onMapReady — this is a crash guard, not a nicety.
+        // react-native-maps' MapView.applyBaseMapPadding (Android) guards only
+        // against a zero layout size, NOT against a null GoogleMap — eight other
+        // setters in the same file check `map == null`; this one does not. So a
+        // padding UPDATE that lands after the view is laid out but before
+        // onMapReady (~100-500 ms on every mount and every mapKey remount)
+        // calls GoogleMap.setPadding on null: an unhandled NPE on the main
+        // thread inside a Fabric mount, which blanks the whole React surface —
+        // the "white screen when I reopen the app" report. It is reachable
+        // precisely because this prop is derived from rideState: opening the
+        // app on a pending offer flips rideState to 'ride_offered' via
+        // consumePendingOffer during the very window the map is initialising.
+        // Sentry CRIMSON-SMOKE-7445-SF (driver 2.0.0+25, handled: no).
+        // Passing undefined here means no update is sent until the map exists;
+        // the initial-creation path is separately safe because the view is not
+        // yet laid out then and the native side defers. Visually invisible: the
+        // map has not drawn a tile yet at the point this withholds.
+        onMapReady={() => setMapReadyKey(mapKey)}
         mapPadding={
-          rideState === 'idle'
+          !mapReady
+            ? undefined
+            : rideState === 'idle'
             ? {
                 top: 0, right: 0, left: 0,
                 bottom:
@@ -1018,6 +1100,11 @@ function DriverDashboard() {
             latitudeDelta: region.latitudeDelta,
             longitudeDelta: region.longitudeDelta,
           };
+          // iOS-only: feeds the Skia gradient overlay's best-effort drag
+          // tracking (HM-32). Android never reads liveHeatmapRegion (it
+          // gets a real native gradient layer, no Skia overlay at all), so
+          // skip the extra re-render there entirely.
+          if (Platform.OS === 'ios') setLiveHeatmapRegion(region);
         }}
         onPanDrag={() => {
           // Driver is exploring (heatmap, hotspots) — stop the follow camera
@@ -1030,6 +1117,7 @@ function DriverDashboard() {
         {/* Driver car marker */}
         {location?.coords && (
           <CarMarker
+            key={markerFocusKey}
             coordinate={{
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,
@@ -1203,13 +1291,28 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Demand heatmap — cross-platform cell polygons (HM-05) */}
-        {heatmapCells.length > 0 && Platform.OS !== 'web' && (
+        {/* Demand heatmap — Android only here (HM-05). react-native-maps'
+            native <Heatmap> gradient layer (which HeatmapCells uses on
+            Android) must be a MapView child to render as a map annotation.
+            iOS gets the Skia gradient overlay instead (HM-32, rendered as a
+            sibling below MapView — Skia draws to its own canvas view, not a
+            map annotation, so it can't live in here). Explicitly gated on
+            rideState === 'idle' (not just heatmapCells.length), matching
+            every sibling heatmap widget below: useDemandHeatmap already
+            clears `cells` to [] outside idle, but that gate lived only in
+            the hook, not here — this render had no guard of its own, so the
+            "idle only" invariant held incidentally rather than by
+            construction. driverLocation lets HeatmapCells drop any cell
+            centered close enough to overlap the driver's own CarMarker (see
+            its prop doc — root cause of the "concentric circles around the
+            car icon" report on iOS). */}
+        {rideState === 'idle' && heatmapCells.length > 0 && (
           <HeatmapCells
             cells={heatmapCells}
             region={heatmapRegion}
             cellLatDeg={heatmapCellLat}
             cellLngDeg={heatmapCellLng}
+            driverLocation={location?.coords ?? null}
           />
         )}
 
@@ -1227,6 +1330,47 @@ function DriverDashboard() {
           )
         ))}
       </MapView>
+
+      {/* Demand heatmap — iOS Skia gradient overlay (HM-32). A sibling of
+          MapView, not a child: Skia renders to its own canvas view, which
+          react-native-maps has no slot for as a map annotation (unlike
+          <Heatmap>/<Circle> above, which the native map SDK positions in
+          geo-space itself). Positioned absolutely over the same bounds via
+          mapViewport (measured by the wrapping View's onLayout above), and
+          projects cells into that pixel space itself (utils/
+          heatmapProjection.ts) since it has no native map to anchor to.
+          Same idle-only + driverLocation-exclusion gating as the Android
+          branch above. */}
+      {/* DISABLED 2026-09-10 (incident): driver-app 2.0.03 100% crash on iOS,
+          `TurboModuleRegistry.getEnforcing(...): 'RNSkiaModule' could not be
+          found` — an OTA-pushed JS bundle referencing @shopify/react-native-
+          skia reached iOS binaries that predate the native module. The
+          existing try/catch-around-require() guard in loadSkia() should have
+          caught this (verified: TurboModuleRegistry.getEnforcing's failure
+          is a plain, synchronous, catchable JS throw — confirmed by reading
+          the actual invariant/TurboModuleRegistry source, and this repo's
+          own existing test simulating the identical throw already passes
+          against the unmodified code) — so the exact mechanism is NOT yet
+          confirmed. Rather than trust an unverified guess under incident
+          pressure, this removes the entire require('@shopify/react-native-
+          skia') call from ever executing again: HeatmapCells' Android-only
+          gate above was lifted back to all platforms, restoring its
+          original, Skia-free iOS circle-fallback rendering (safe, unchanged
+          since before HM-32). Re-enable only after: (1) the real Sentry
+          stack trace confirms the actual throw site, and (2) a real EAS
+          native-build device test confirms no crash on both pre- and
+          post-Skia binaries. See
+          docs/change-log/2026-09-10-skia-heatmap-crash-kill-switch.md. */}
+      {false && Platform.OS === 'ios' && rideState === 'idle' && heatmapCells.length > 0 && (
+        <HeatmapGradientOverlay
+          cells={heatmapCells}
+          region={liveHeatmapRegion ?? heatmapRegion}
+          cellLatDeg={heatmapCellLat}
+          cellLngDeg={heatmapCellLng}
+          driverLocation={location?.coords ?? null}
+          viewport={mapViewport}
+        />
+      )}
       </View>
 
       {/* Airport zone chip — shows when driver is inside an airport polygon (HM-21) */}
@@ -1241,25 +1385,6 @@ function DriverDashboard() {
       {rideState === 'idle' && surgeMultiplier > 1.0 && (
         <View style={{ position: 'absolute', bottom: 180, right: 16, zIndex: 55, backgroundColor: colors.primary, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 4 }}>
           <Text style={{ color: colors.surface, fontSize: 13, fontWeight: '700' }}>{surgeMultiplier.toFixed(1)}x</Text>
-        </View>
-      )}
-
-      {/* Demand legend toggle (HM-04 + HM-12 layer selector) — a small
-          top-right icon the driver taps to reveal the legend/layer picker,
-          not a pill sitting open over the map. Top-right is free during
-          `idle` (the only state this renders in): the SOS shield/button use
-          the same corner but only during navigating_to_pickup /
-          arrived_at_pickup / trip_in_progress, which are mutually exclusive
-          with idle. */}
-      {rideState === 'idle' && heatmapVisible && (
-        <View style={{ position: 'absolute', top: insets.top + 4, right: 16, zIndex: 60 }}>
-          <DemandLegend
-            status={heatmapStatus}
-            visible={heatmapVisible}
-            isV2={heatmapIsV2}
-            layer={heatmapLayer}
-            onLayerChange={setHeatmapLayer}
-          />
         </View>
       )}
 
@@ -1534,7 +1659,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.border,
       paddingHorizontal: 14,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.15,
@@ -1565,7 +1690,7 @@ function createStyles(colors: ThemeColors) {
       right: 0,
       backgroundColor: 'rgba(239,68,68,0.92)',
       paddingVertical: 6,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       zIndex: 200,
       alignItems: 'center',
     },
@@ -1576,24 +1701,24 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackTitle: {
       color: colors.text,
-      marginTop: 16,
+      marginTop: SPACING.md,
       fontSize: 17,
       fontWeight: '700',
       textAlign: 'center',
     },
     locationFallbackBody: {
       color: colors.textDim,
-      marginTop: 8,
+      marginTop: SPACING.sm,
       fontSize: 14,
       lineHeight: 20,
       textAlign: 'center',
     },
     locationFallbackBtn: {
-      marginTop: 16,
+      marginTop: SPACING.md,
       backgroundColor: colors.primary,
       borderRadius: 12,
       paddingVertical: 12,
-      paddingHorizontal: 32,
+      paddingHorizontal: SPACING.xl,
     },
     locationFallbackBtnSecondary: {
       backgroundColor: 'transparent',
@@ -1602,7 +1727,7 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackBtnText: {
       color: '#fff',
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
     },
     locationFallbackBtnTextSecondary: {
@@ -1657,7 +1782,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: `${colors.success}0F`,
     },
     countdownText: {
-      fontSize: 22,
+      fontSize: FONT.h3,
       fontWeight: '800',
       color: colors.primary,
     },
@@ -1681,7 +1806,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'flex-end',
     },
     fareLabel: {
-      fontSize: 11,
+      fontSize: FONT.label,
       color: colors.textDim,
       fontWeight: '500',
     },
@@ -1703,7 +1828,7 @@ function createStyles(colors: ThemeColors) {
     routeIconColumn: {
       alignItems: 'center',
       width: 20,
-      paddingTop: 4,
+      paddingTop: SPACING.xs,
     },
     routeDot: {
       width: 10,
@@ -1714,7 +1839,7 @@ function createStyles(colors: ThemeColors) {
       width: 2,
       flex: 1,
       backgroundColor: colors.border,
-      marginVertical: 4,
+      marginVertical: SPACING.xs,
     },
     routeDetails: {
       flex: 1,
@@ -1738,7 +1863,7 @@ function createStyles(colors: ThemeColors) {
     routeDivider: {
       height: 1,
       backgroundColor: colors.border,
-      marginVertical: 8,
+      marginVertical: SPACING.sm,
     },
     // Trip info badges
     tripInfoRow: {
@@ -1746,7 +1871,7 @@ function createStyles(colors: ThemeColors) {
       flexWrap: 'wrap',
       gap: 8,
       paddingHorizontal: 20,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     tripInfoBadge: {
       flexDirection: 'row',
@@ -1777,13 +1902,13 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.dangerBg,
       borderRadius: 16,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 8,
       borderWidth: 1,
       borderColor: '#FECACA',
     },
     declineText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
       color: '#FF4757',
     },
@@ -1794,7 +1919,7 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.primary,
       borderRadius: 16,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 8,
       shadowColor: colors.primary,
       shadowOffset: { width: 0, height: 4 },
@@ -1803,7 +1928,7 @@ function createStyles(colors: ThemeColors) {
       elevation: 6,
     },
     acceptText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '700',
       color: '#fff',
     },

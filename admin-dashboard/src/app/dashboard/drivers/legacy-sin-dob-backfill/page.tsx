@@ -28,8 +28,12 @@ import {
     type SinDobBackfillReportItem,
     type SinDobBackfillFiles,
 } from "@/lib/api";
+import { explainSinDobIssue } from "@/lib/bulk-import-error-help";
 import { PageHeader } from "@/components/page-header";
 import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable } from "@/components/bulk-import/issue-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,14 +44,6 @@ import {
     CardDescription,
     CardContent,
 } from "@/components/ui/card";
-import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableHead,
-    TableRow,
-    TableCell,
-} from "@/components/ui/table";
 import {
     AlertDialog,
     AlertDialogTrigger,
@@ -88,51 +84,17 @@ const REPORT_COLUMNS = [
     { key: "message", label: "message" },
 ];
 
-function IssueTable({ items }: { items: SinDobBackfillReportItem[] }) {
+function SinDobIssueTable({ items }: { items: SinDobBackfillReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-40">Row (old_driver_id)</TableHead>
-                        <TableHead className="w-48">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.old_driver_id}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.old_driver_id}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
-    );
-}
-
-function Stat({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-}) {
-    const toneCls =
-        tone === "error" && value > 0
-            ? "text-destructive"
-            : tone === "warn" && value > 0
-              ? "text-warning"
-              : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
+        <IssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.old_driver_id}-${it.field}-${i}`}
+            getRef={(it) => it.old_driver_id}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="old_driver_id"
+            explain={explainSinDobIssue}
+        />
     );
 }
 
@@ -290,30 +252,53 @@ export default function LegacySinDobBackfillPage() {
                         Backfill SIN and date of birth for drivers already created by the{" "}
                         <Link href="/dashboard/drivers/legacy-import" className="underline">
                             Legacy Driver Import
-                        </Link>{" "}
-                        (Mongo export), using the export&apos;s{" "}
-                        <span className="font-mono">banks.csv</span> and{" "}
-                        <span className="font-mono">drivers.csv</span>. Matches are made by phone
-                        number, and only ever touch drivers already tagged as legacy-imported — a
-                        phone coincidence can never reach an organic driver&apos;s SIN or DOB.
+                        </Link>
+                        .
                     </>
                 }
             />
 
-            <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                <div className="space-y-1">
-                    <p className="font-medium">
-                        A SIN or date of birth already on file is never overwritten.
-                    </p>
-                    <p className="text-muted-foreground">
+            <WhatThisToolDoes
+                what={
+                    <>
+                        Fills in a driver&apos;s Social Insurance Number (SIN) and date of birth,
+                        but only for drivers already created by the Legacy Driver Import who gave
+                        us those numbers on the previous app.
+                    </>
+                }
+                why={
+                    <>
+                        A SIN is required before Stripe will pay a driver, and date of birth feeds
+                        age-related eligibility checks. Without this backfill, every migrated
+                        driver would be stopped and asked to re-enter numbers they already gave us
+                        once.
+                    </>
+                }
+                whichFiles={
+                    <>
+                        The same raw MongoDB export&apos;s <span className="font-mono">banks.csv</span>{" "}
+                        (SIN/DOB, keyed by driver_id) and <span className="font-mono">drivers.csv</span>{" "}
+                        (used only to resolve driver_id to a phone number).
+                    </>
+                }
+                value={
+                    <>
+                        A driver never has to re-type their SIN or date of birth, and this tool
+                        never overwrites a value a driver — or an earlier run — already put on
+                        file.
+                    </>
+                }
+                safetyNote={
+                    <>
                         Whatever is on file — self-entered by the driver, or written by an earlier
                         run of this backfill — always wins. The SIN is written vault-encrypted, the
                         same way a driver&apos;s own SIN entry is stored. Neither value is ever
-                        shown in this tool&apos;s reports.
-                    </p>
-                </div>
-            </div>
+                        shown in this tool&apos;s reports, and only drivers already tagged as
+                        legacy-imported are ever touched — a phone coincidence can never reach an
+                        organic driver&apos;s SIN or DOB.
+                    </>
+                }
+            />
 
             <Card>
                 <CardHeader>
@@ -396,25 +381,25 @@ export default function LegacySinDobBackfillPage() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                            <Stat label="Rows" value={counts?.rows ?? 0} />
-                            <Stat label="Drivers to update" value={counts?.to_update ?? 0} />
-                            <Stat label="Unmatched (skipped)" value={counts?.skipped_unmatched ?? 0} tone="warn" />
-                            <Stat
+                            <StatTile label="Rows" value={counts?.rows ?? 0} />
+                            <StatTile label="Drivers to update" value={counts?.to_update ?? 0} />
+                            <StatTile label="Unmatched (skipped)" value={counts?.skipped_unmatched ?? 0} tone="warn" />
+                            <StatTile
                                 label="Not a legacy driver (skipped)"
                                 value={counts?.skipped_not_legacy_driver ?? 0}
                                 tone="warn"
                             />
-                            <Stat
+                            <StatTile
                                 label="Already on file (skipped)"
                                 value={counts?.skipped_already_on_file ?? 0}
                             />
-                            <Stat
+                            <StatTile
                                 label="Duplicate match (skipped)"
                                 value={counts?.skipped_duplicate_match ?? 0}
                                 tone="warn"
                             />
-                            <Stat label="Warnings" value={report.warnings.length} tone="warn" />
-                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                            <StatTile label="Warnings" value={report.warnings.length} tone="warn" />
+                            <StatTile label="Errors" value={report.errors.length} tone="error" />
                         </div>
 
                         <div className="flex justify-end">
@@ -447,7 +432,7 @@ export default function LegacySinDobBackfillPage() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <SinDobIssueTable items={report.errors} />
                             </div>
                         )}
 
@@ -456,7 +441,7 @@ export default function LegacySinDobBackfillPage() {
                                 <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                                     <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
                                 </h3>
-                                <IssueTable items={report.warnings} />
+                                <SinDobIssueTable items={report.warnings} />
                             </div>
                         )}
 

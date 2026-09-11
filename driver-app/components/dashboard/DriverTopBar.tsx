@@ -1,5 +1,6 @@
 import React, { useMemo, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, StatusBar, Animated, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, StatusBar, Animated, TouchableOpacity } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -7,6 +8,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNetworkStatus } from '@shared/components/OfflineBanner';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import type { ConnectionState } from '../../hooks/useDriverDashboard';
 import type { EarningsSummary } from '../../store/driverStore';
 
@@ -163,7 +165,7 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 5,
       paddingHorizontal: 12,
       borderRadius: 20,
-      marginTop: 8,
+      marginTop: SPACING.sm,
     },
     bannerReconnecting: {
       backgroundColor: colors.warningBg,
@@ -232,7 +234,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       backgroundColor: colors.surface,
       borderRadius: 24,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 10,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 4 },
@@ -243,7 +245,7 @@ function createStyles(colors: ThemeColors) {
       borderColor: colors.border,
     },
     earningsAmount: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '800',
       color: colors.text,
       letterSpacing: -0.3,
@@ -255,7 +257,7 @@ function createStyles(colors: ThemeColors) {
       marginHorizontal: 10,
     },
     earningsTrips: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '600',
       color: colors.textDim,
     },
@@ -264,7 +266,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       gap: 3,
       paddingHorizontal: 10,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       borderRadius: 20,
       backgroundColor: colors.warning,
       shadowColor: '#000',

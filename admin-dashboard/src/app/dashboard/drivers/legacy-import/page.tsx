@@ -21,8 +21,12 @@ import {
     type OrphanedDriverBackfillResult,
     type DriverCreatedAtBackfillResult,
 } from "@/lib/api";
+import { explainLegacyDriverImportIssue } from "@/lib/bulk-import-error-help";
 import { PageHeader } from "@/components/page-header";
 import { BackToMigrationChecklistLink, BULK_OPERATIONS_HREF } from "@/components/bulk-operations-nav";
+import { WhatThisToolDoes } from "@/components/bulk-import/what-this-tool-does";
+import { StatTile } from "@/components/bulk-import/stat-tile";
+import { IssueTable } from "@/components/bulk-import/issue-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -32,14 +36,6 @@ import {
     CardDescription,
     CardContent,
 } from "@/components/ui/card";
-import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableHead,
-    TableRow,
-    TableCell,
-} from "@/components/ui/table";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -96,28 +92,17 @@ const REPORT_COLUMNS = [
     { key: "message", label: "message" },
 ];
 
-function IssueTable({ items }: { items: LegacyDriverImportReportItem[] }) {
+function LegacyDriverIssueTable({ items }: { items: LegacyDriverImportReportItem[] }) {
     return (
-        <div className="overflow-x-auto rounded-md border">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-40">Row (old_driver_id)</TableHead>
-                        <TableHead className="w-48">Field</TableHead>
-                        <TableHead>Message</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((it, i) => (
-                        <TableRow key={`${it.old_driver_id}-${it.field}-${i}`}>
-                            <TableCell className="font-mono text-xs">{it.old_driver_id}</TableCell>
-                            <TableCell className="font-mono text-xs">{it.field}</TableCell>
-                            <TableCell className="text-sm">{it.message}</TableCell>
-                        </TableRow>
-                    ))}
-                </TableBody>
-            </Table>
-        </div>
+        <IssueTable
+            items={items}
+            getRowKey={(it, i) => `${it.old_driver_id}-${it.field}-${i}`}
+            getRef={(it) => it.old_driver_id}
+            getField={(it) => it.field}
+            getMessage={(it) => it.message}
+            refLabel="old_driver_id"
+            explain={explainLegacyDriverImportIssue}
+        />
     );
 }
 
@@ -143,29 +128,6 @@ function buildSummaryText(report: LegacyDriverImportReport): string {
         ...rows.map(([label, value]) => `| ${label} | ${value} |`),
     ];
     return lines.join("\n");
-}
-
-function Stat({
-    label,
-    value,
-    tone,
-}: {
-    label: string;
-    value: number;
-    tone?: "warn" | "error";
-}) {
-    const toneCls =
-        tone === "error" && value > 0
-            ? "text-destructive"
-            : tone === "warn" && value > 0
-              ? "text-warning"
-              : "text-foreground";
-    return (
-        <div className="rounded-md border p-3">
-            <div className={`text-2xl font-semibold ${toneCls}`}>{value}</div>
-            <div className="text-xs text-muted-foreground">{label}</div>
-        </div>
-    );
 }
 
 export default function LegacyDriverImportPage() {
@@ -308,42 +270,61 @@ export default function LegacyDriverImportPage() {
                 title="Legacy Driver Import (Mongo export)"
                 description={
                     <>
-                        Import driver profiles from the previous app&apos;s raw MongoDB export
-                        (<span className="font-mono">drivers.csv</span>). A separate population from
-                        the Saskatoon recruitment sheet — see{" "}
+                        Import driver profiles from the previous app&apos;s raw MongoDB export. A
+                        separate population from the Saskatoon recruitment sheet — see{" "}
                         <Link href="/dashboard/drivers/import" className="underline">
                             Bulk Driver Import
                         </Link>{" "}
-                        for that one. Every newly-created driver here is forced{" "}
-                        <span className="font-mono">needs_review</span>, unverified, and offline
-                        regardless of what the export says — no document files are imported (the
-                        export only has filenames, no images). Once a driver exists here, backfill
-                        their{" "}
-                        <Link href="/dashboard/drivers/legacy-sin-dob-backfill" className="underline">
-                            SIN/DOB
-                        </Link>{" "}
-                        or{" "}
-                        <Link href="/dashboard/drivers/legacy-vehicle-history-backfill" className="underline">
-                            vehicle history
-                        </Link>{" "}
-                        from the same export.
+                        for that one.
                     </>
                 }
             />
 
-            <div className="flex gap-2 rounded-md border border-warning bg-warning/10 p-3 text-sm">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                <div className="space-y-1">
-                    <p className="font-medium">A row can create, link, or enrich — not always a new row.</p>
-                    <p className="text-muted-foreground">
-                        A phone matching an existing account with no driver yet gets a NEW driver
-                        linked to that account (no duplicate account). A phone matching an
-                        existing driver gets that driver&apos;s history enriched instead — no
-                        competing row is created, and none of that driver&apos;s live fields
-                        (name, phone, status, vehicle, rating) are ever touched.
-                    </p>
-                </div>
-            </div>
+            <WhatThisToolDoes
+                what={
+                    <>
+                        Creates a Spinr driver profile for every driver in the previous
+                        app&apos;s raw MongoDB export, matched to an existing Spinr account by
+                        phone when one already exists.
+                    </>
+                }
+                why={
+                    <>
+                        This is the entry point for every other driver-side migration tool on
+                        this page — SIN/DOB, vehicle history, and tax-ID backfills all require the
+                        driver to already exist here first, matched by phone.
+                    </>
+                }
+                whichFiles={
+                    <>
+                        The raw MongoDB export&apos;s <span className="font-mono">drivers.csv</span>{" "}
+                        — only <span className="font-mono">_id</span>,{" "}
+                        <span className="font-mono">name</span>, and{" "}
+                        <span className="font-mono">phone</span> are required; a template with the
+                        full expected column set is available below.
+                    </>
+                }
+                value={
+                    <>
+                        A driver moving from the previous app doesn&apos;t start from a blank
+                        profile — their name, phone, and import history are already there, ready
+                        for the other backfill tools to fill in SIN, vehicle history, and tax IDs.
+                    </>
+                }
+                safetyNote={
+                    <>
+                        A row can create, link, or enrich — not always a new row. A phone matching
+                        an existing account with no driver yet gets a NEW driver linked to that
+                        account (no duplicate account). A phone matching an existing driver gets
+                        that driver&apos;s history enriched instead — no competing row is created,
+                        and none of that driver&apos;s live fields (name, phone, status, vehicle,
+                        rating) are ever touched. Every newly-created driver is forced{" "}
+                        <span className="font-mono">needs_review</span>, unverified, and offline
+                        regardless of what the export says — no document files are imported (the
+                        export only has filenames, no images).
+                    </>
+                }
+            />
 
             <Card>
                 <CardHeader>
@@ -451,13 +432,13 @@ export default function LegacyDriverImportPage() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                            <Stat label="Rows" value={counts?.rows ?? 0} />
-                            <Stat label="New drivers" value={counts?.new_drivers ?? 0} />
-                            <Stat label="Linked to existing account" value={counts?.linked_accounts ?? 0} />
-                            <Stat label="Enriched existing driver" value={counts?.enriched_drivers ?? 0} />
-                            <Stat label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
-                            <Stat label="Warnings" value={report.warnings.length} tone="warn" />
-                            <Stat label="Errors" value={report.errors.length} tone="error" />
+                            <StatTile label="Rows" value={counts?.rows ?? 0} />
+                            <StatTile label="New drivers" value={counts?.new_drivers ?? 0} />
+                            <StatTile label="Linked to existing account" value={counts?.linked_accounts ?? 0} />
+                            <StatTile label="Enriched existing driver" value={counts?.enriched_drivers ?? 0} />
+                            <StatTile label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
+                            <StatTile label="Warnings" value={report.warnings.length} tone="warn" />
+                            <StatTile label="Errors" value={report.errors.length} tone="error" />
                         </div>
 
                         <div className="flex justify-end">
@@ -491,7 +472,7 @@ export default function LegacyDriverImportPage() {
                                         Download errors
                                     </Button>
                                 </div>
-                                <IssueTable items={report.errors} />
+                                <LegacyDriverIssueTable items={report.errors} />
                             </div>
                         )}
 
@@ -500,7 +481,7 @@ export default function LegacyDriverImportPage() {
                                 <h3 className="flex items-center gap-2 text-sm font-semibold text-warning">
                                     <Info className="h-4 w-4" /> Warnings ({report.warnings.length})
                                 </h3>
-                                <IssueTable items={report.warnings} />
+                                <LegacyDriverIssueTable items={report.warnings} />
                             </div>
                         )}
 

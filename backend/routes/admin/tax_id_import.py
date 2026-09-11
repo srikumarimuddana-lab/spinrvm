@@ -15,6 +15,20 @@ Mirrors the mapping-import contract (``stripe_import.py``):
   the background for drivers who already have a Connect account (skipping
   any account where Stripe reports id_number_provided).
 
+A second pair of endpoints, ``.../import/prepare-validate`` and
+``.../import/prepare-commit``, takes the raw MongoDB-export ``banks.csv`` +
+``drivers.csv`` directly instead of a pre-built ``phone,sin,gst_bn`` CSV —
+mirroring ``legacy_sin_dob_backfill.py``'s two-file upload/validate/commit
+shape. The join is the exact, already-tested
+``scripts/build_legacy_tax_id_csv.py:build_rows`` the CLI script uses; the
+resulting rows feed straight into the same ``_build_plan``/``_apply_plan``
+this file's single-CSV path uses, so validation and writes behave
+identically regardless of which upload path produced the rows. This exists
+so an operator never has to build the ready CSV by hand (or paste real SIN/
+GST values into a chat session to get one built) — both raw export files go
+straight from their machine to this endpoint, and neither is written to
+disk here.
+
 CSV format: header ``phone,sin,gst_bn``; phone is the match key, sin/gst_bn
 each optional per row but at least one required.
 
@@ -34,6 +48,7 @@ defence in depth, matching stripe_import.py.
 """
 
 import csv
+import hashlib
 import io
 import logging
 from datetime import datetime, timezone
@@ -46,10 +61,17 @@ try:
     from ...dependencies import get_admin_user
     from ...routes.drivers._shared import _encrypt_driver_pii
     from ...routes.drivers.payouts import _GST_BN_RE, prefill_sin_to_stripe
+    from ...scripts.build_legacy_tax_id_csv import build_rows as _build_legacy_tax_id_rows
+    from ...services.driver_import_service import read_mongo_export_csv_text
     from ...services.stripe_mapping_import_service import _phone_lookup_keys
     from ...settings_loader import get_app_settings
     from ...utils.audit_logger import log_admin_action
     from ...utils.background import spawn
+    from ...utils.driver_import_token import (
+        DriverImportTokenError,
+        sign_driver_import_token,
+        verify_driver_import_token,
+    )
     from ...utils.rate_limiter import tax_id_import_commit_limit, tax_id_import_validate_limit
     from ...utils.sin import sin_last4, validate_sin
 except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
@@ -57,10 +79,17 @@ except ImportError:  # pragma: no cover - dual-import pattern, see CLAUDE.md
     from dependencies import get_admin_user  # type: ignore # noqa: F401
     from routes.drivers._shared import _encrypt_driver_pii  # type: ignore
     from routes.drivers.payouts import _GST_BN_RE, prefill_sin_to_stripe  # type: ignore
+    from scripts.build_legacy_tax_id_csv import build_rows as _build_legacy_tax_id_rows  # type: ignore
+    from services.driver_import_service import read_mongo_export_csv_text  # type: ignore
     from services.stripe_mapping_import_service import _phone_lookup_keys  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore # noqa: F401
     from utils.background import spawn  # type: ignore
+    from utils.driver_import_token import (  # type: ignore
+        DriverImportTokenError,
+        sign_driver_import_token,
+        verify_driver_import_token,
+    )
     from utils.rate_limiter import tax_id_import_commit_limit, tax_id_import_validate_limit  # type: ignore
     from utils.sin import sin_last4, validate_sin  # type: ignore
 
@@ -227,61 +256,57 @@ def _report(plan: dict[str, Any], batch: str, total_rows: int) -> dict[str, Any]
     }
 
 
-async def _push_sins_to_stripe(pushes: list[dict[str, str]], batch: str) -> None:
-    """Background: hand Stripe the freshly-imported SINs, one driver at a time.
+# Guardrails for the raw-export upload path, matching legacy_sin_dob_backfill.py's
+# reasoning: banks.csv/drivers.csv are small (hundreds of rows) with many more
+# columns than the built phone,sin,gst_bn CSV, so these limits are per-file and
+# looser than MAX_CSV_BYTES/MAX_ROWS above.
+MAX_LEGACY_EXPORT_CSV_BYTES = 2_000_000  # 2 MB, per file
+MAX_LEGACY_EXPORT_ROWS = 2_000  # per file
 
-    Uses the same best-effort prefill as onboarding (skips accounts where
-    Stripe already reports id_number_provided; never raises). Sequential on
-    purpose — ≤ MAX_ROWS calls, and Stripe rate limits are shared with the
-    live product.
+
+async def _read_one_legacy_csv(upload: UploadFile) -> tuple[list[dict[str, str]], bytes]:
+    """Read + size-guard one raw Mongo-export CSV. Returns (rows, raw bytes)."""
+    raw = await upload.read()
+    if len(raw) > MAX_LEGACY_EXPORT_CSV_BYTES:
+        raise HTTPException(
+            status_code=413, detail=f"CSV exceeds the {MAX_LEGACY_EXPORT_CSV_BYTES // 1_000_000} MB limit"
+        )
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise HTTPException(status_code=422, detail="CSV must be UTF-8 encoded") from e
+    try:
+        rows = read_mongo_export_csv_text(text)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if len(rows) > MAX_LEGACY_EXPORT_ROWS:
+        raise HTTPException(
+            status_code=422, detail=f"CSV has {len(rows)} rows; the limit is {MAX_LEGACY_EXPORT_ROWS} per import"
+        )
+    return rows, raw
+
+
+async def _read_legacy_export_pair(
+    banks_csv: UploadFile, drivers_csv: UploadFile
+) -> tuple[list[dict[str, str]], list[dict[str, str]], str]:
+    """Read both raw export CSVs and bind a single hash to their combined bytes.
+
+    Mirrors legacy_sin_dob_backfill.py's ``_read_csv_pair``: the commit token
+    is bound to ``sha256(banks_bytes + b"|" + drivers_bytes)``, so swapping
+    either file between validate and commit invalidates the token.
     """
-    settings = await get_app_settings()
-    stripe_secret = settings.get("stripe_secret_key", "")
-    if not stripe_secret:
-        logger.warning("[TAX-ID-IMPORT] Stripe not configured; imported SINs not pushed", extra={"batch": batch})
-        return
-    outcomes: dict[str, int] = {}
-    for p in pushes:
-        out = await prefill_sin_to_stripe({"id": p["driver_id"], "sin": p["sin_token"]}, p["account_id"], stripe_secret)
-        outcomes[out] = outcomes.get(out, 0) + 1
-    logger.info("[TAX-ID-IMPORT] Stripe SIN push finished", extra={"batch": batch, "outcomes": outcomes})
+    bank_rows, banks_raw = await _read_one_legacy_csv(banks_csv)
+    driver_rows, drivers_raw = await _read_one_legacy_csv(drivers_csv)
+    combined_sha256 = hashlib.sha256(banks_raw + b"|" + drivers_raw).hexdigest()
+    return bank_rows, driver_rows, combined_sha256
 
 
-@router.post("/tax-ids/import/validate")
-@tax_id_import_validate_limit
-async def validate_tax_id_import(
-    request: Request,
-    tax_csv: UploadFile = File(...),
-    batch: Optional[str] = Form(None),
-    admin: dict = Depends(get_admin_user),
-):
-    """Dry-run: parse, match, and validate the CSV. No writes."""
-    _require_super_admin(admin)
-    batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    rows = await _read_rows(tax_csv)
-    plan = await _build_plan(rows)
-    return _report(plan, batch, len(rows))
-
-
-@router.post("/tax-ids/import/commit")
-@tax_id_import_commit_limit
-async def commit_tax_id_import(
-    request: Request,
-    tax_csv: UploadFile = File(...),
-    batch: Optional[str] = Form(None),
-    admin: dict = Depends(get_admin_user),
-):
-    """Re-validate and, only if clean, fill the NULL sin/gst_bn columns."""
-    _require_super_admin(admin)
-    batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    rows = await _read_rows(tax_csv)
-    plan = await _build_plan(rows)
-
-    if plan["errors"]:
-        # Same contract as the other importers: refuse with the full report
-        # rather than half-applying a CSV the operator hasn't seen fail.
-        return {**_report(plan, batch, len(rows)), "committed": False}
-
+async def _apply_plan(plan: dict[str, Any], batch: str, admin: dict) -> dict[str, Any]:
+    """Write every update in an already-clean plan (``plan["errors"]`` empty)
+    and audit-log the result. Shared by both commit endpoints below — the
+    single-CSV path and the raw-export path build the same plan shape via
+    ``_build_plan``, so the write logic doesn't need to know which produced it.
+    """
     now = datetime.now(timezone.utc).isoformat()
     written_sin = 0
     written_gst = 0
@@ -357,3 +382,146 @@ async def commit_tax_id_import(
         "stripe_push": stripe_push,
         "warnings": warnings,
     }
+
+
+async def _push_sins_to_stripe(pushes: list[dict[str, str]], batch: str) -> None:
+    """Background: hand Stripe the freshly-imported SINs, one driver at a time.
+
+    Uses the same best-effort prefill as onboarding (skips accounts where
+    Stripe already reports id_number_provided; never raises). Sequential on
+    purpose — ≤ MAX_ROWS calls, and Stripe rate limits are shared with the
+    live product.
+    """
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        logger.warning("[TAX-ID-IMPORT] Stripe not configured; imported SINs not pushed", extra={"batch": batch})
+        return
+    outcomes: dict[str, int] = {}
+    for p in pushes:
+        out = await prefill_sin_to_stripe({"id": p["driver_id"], "sin": p["sin_token"]}, p["account_id"], stripe_secret)
+        outcomes[out] = outcomes.get(out, 0) + 1
+    logger.info("[TAX-ID-IMPORT] Stripe SIN push finished", extra={"batch": batch, "outcomes": outcomes})
+
+
+@router.post("/tax-ids/import/validate")
+@tax_id_import_validate_limit
+async def validate_tax_id_import(
+    request: Request,
+    tax_csv: UploadFile = File(...),
+    batch: Optional[str] = Form(None),
+    admin: dict = Depends(get_admin_user),
+):
+    """Dry-run: parse, match, and validate the CSV. No writes."""
+    _require_super_admin(admin)
+    batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    rows = await _read_rows(tax_csv)
+    plan = await _build_plan(rows)
+    return _report(plan, batch, len(rows))
+
+
+@router.post("/tax-ids/import/commit")
+@tax_id_import_commit_limit
+async def commit_tax_id_import(
+    request: Request,
+    tax_csv: UploadFile = File(...),
+    batch: Optional[str] = Form(None),
+    admin: dict = Depends(get_admin_user),
+):
+    """Re-validate and, only if clean, fill the NULL sin/gst_bn columns."""
+    _require_super_admin(admin)
+    batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    rows = await _read_rows(tax_csv)
+    plan = await _build_plan(rows)
+
+    if plan["errors"]:
+        # Same contract as the other importers: refuse with the full report
+        # rather than half-applying a CSV the operator hasn't seen fail.
+        return {**_report(plan, batch, len(rows)), "committed": False}
+
+    return await _apply_plan(plan, batch, admin)
+
+
+@router.post("/tax-ids/import/prepare-validate")
+@tax_id_import_validate_limit
+async def validate_tax_id_import_from_legacy_export(
+    request: Request,
+    banks_csv: UploadFile = File(...),
+    drivers_csv: UploadFile = File(...),
+    batch: Optional[str] = Form(None),
+    admin: dict = Depends(get_admin_user),
+):
+    """Dry-run over the raw Mongo-export ``banks.csv`` + ``drivers.csv``,
+    instead of a pre-built ``phone,sin,gst_bn`` CSV. No writes.
+
+    Joins server-side via the same, already production-verified
+    ``build_rows()`` the CLI script (``scripts/build_legacy_tax_id_csv.py``)
+    uses, then runs the result through the exact same ``_build_plan()`` the
+    single-CSV path uses below — validation behaves identically regardless of
+    which upload path produced the rows.
+
+    Like ``legacy_sin_dob_backfill.py``, the response carries a
+    validation_token bound to (batch, sha256(banks_bytes + b"|" +
+    drivers_bytes), admin.id); ``/prepare-commit`` requires it.
+    """
+    _require_super_admin(admin)
+    batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    bank_rows, driver_rows, csv_sha256 = await _read_legacy_export_pair(banks_csv, drivers_csv)
+    rows, build_stats = _build_legacy_tax_id_rows(bank_rows, driver_rows)
+    if not rows:
+        raise HTTPException(status_code=422, detail="No rows with a SIN or GST/HST BN matched a driver by phone")
+    plan = await _build_plan(rows)
+    validation_token = sign_driver_import_token(batch=batch, csv_sha256=csv_sha256, admin_id=admin["id"])
+    report = _report(plan, batch, len(rows))
+    report["validation_token"] = validation_token
+    # Join-level counts (unmatched/duplicate/missing-both) so the operator can
+    # see why the row count is lower than banks.csv's own row count, without
+    # any of it ever naming a phone/SIN/GST value.
+    report["join_stats"] = {
+        "banks_rows": build_stats["banks_rows"],
+        "unmatched_no_phone": build_stats["unmatched_no_phone"],
+        "skipped_no_sin_or_gst": build_stats["skipped_no_sin_or_gst"],
+        "duplicate_phone_groups": build_stats["duplicate_phone_groups"],
+    }
+    return report
+
+
+@router.post("/tax-ids/import/prepare-commit")
+@tax_id_import_commit_limit
+async def commit_tax_id_import_from_legacy_export(
+    request: Request,
+    banks_csv: UploadFile = File(...),
+    drivers_csv: UploadFile = File(...),
+    batch: Optional[str] = Form(None),
+    validation_token: str = Form(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Re-validate the same two raw export files and, only if clean, apply
+    the fill — identical write path to ``commit_tax_id_import`` above (both
+    call ``_apply_plan``), just fed rows built from banks.csv+drivers.csv
+    instead of a pre-built CSV.
+
+    Requires validation_token from a prior /prepare-validate call for this
+    exact (batch, combined CSV bytes, admin), same gap-#45-shaped guarantee
+    as the single-CSV commit's sibling tools.
+    """
+    _require_super_admin(admin)
+    batch = batch or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    bank_rows, driver_rows, csv_sha256 = await _read_legacy_export_pair(banks_csv, drivers_csv)
+    try:
+        verify_driver_import_token(validation_token, batch=batch, csv_sha256=csv_sha256, admin_id=admin["id"])
+    except DriverImportTokenError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Validate these CSVs before committing (or re-validate — a file or batch changed): {e}",
+        ) from e
+    rows, _build_stats = _build_legacy_tax_id_rows(bank_rows, driver_rows)
+    plan = await _build_plan(rows)
+
+    if plan["errors"]:
+        # Data (or the matched drivers' already-on-file state) changed since
+        # the operator validated. Refuse but return 200 with committed=false
+        # and the full report, same contract as commit_tax_id_import above.
+        return {**_report(plan, batch, len(rows)), "committed": False}
+
+    return await _apply_plan(plan, batch, admin)

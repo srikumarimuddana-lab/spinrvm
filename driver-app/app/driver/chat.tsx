@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     FlatList,
@@ -9,6 +8,7 @@ import {
     Platform,
     KeyboardAvoidingView,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -19,6 +19,7 @@ import api from '@shared/api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const QUICK_MESSAGES = [
     'On my way!',
@@ -312,7 +313,7 @@ function createStyles(colors: ThemeColors) {
         container: { flex: 1, backgroundColor: colors.background },
         header: {
             paddingBottom: 12,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
         },
         headerRow: {
             flexDirection: 'row',
@@ -331,9 +332,9 @@ function createStyles(colors: ThemeColors) {
         headerName: { color: colors.text, fontSize: 17, fontWeight: '700' },
         headerSub: { color: colors.textDim, fontSize: 12, marginTop: 1 },
         messageList: {
-            paddingHorizontal: 16,
-            paddingTop: 16,
-            paddingBottom: 8,
+            paddingHorizontal: SPACING.md,
+            paddingTop: SPACING.md,
+            paddingBottom: SPACING.sm,
             flexGrow: 1,
         },
         messageBubbleRow: {
@@ -369,22 +370,22 @@ function createStyles(colors: ThemeColors) {
         },
         bubbleText: { color: colors.text, fontSize: 14, lineHeight: 20 },
         myBubbleText: { color: '#fff' },
-        bubbleFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 4 },
+        bubbleFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: SPACING.xs },
         bubbleTime: { color: colors.textDim, fontSize: 10 },
         myBubbleTime: { color: 'rgba(255,255,255,0.6)' },
         typingRow: {
             flexDirection: 'row',
             alignItems: 'flex-end',
-            paddingHorizontal: 16,
-            paddingBottom: 4,
+            paddingHorizontal: SPACING.md,
+            paddingBottom: SPACING.xs,
             gap: 8,
         },
         typingBubble: {
             backgroundColor: colors.surfaceLight,
             borderRadius: 18,
             borderBottomLeftRadius: 4,
-            paddingHorizontal: 16,
-            paddingVertical: 8,
+            paddingHorizontal: SPACING.md,
+            paddingVertical: SPACING.sm,
         },
         typingDots: {
             color: colors.textDim,
@@ -397,8 +398,8 @@ function createStyles(colors: ThemeColors) {
             paddingVertical: 80,
             gap: 8,
         },
-        emptyChatText: { color: colors.textDim, fontSize: 16, fontWeight: '600' },
-        emptyChatSub: { color: colors.textSecondary, fontSize: 13 },
+        emptyChatText: { color: colors.textDim, fontSize: FONT.bodyLg, fontWeight: '600' },
+        emptyChatSub: { color: colors.textSecondary, fontSize: FONT.bodySm },
         quickReplies: {
             paddingVertical: 10,
             borderTopWidth: 1,
@@ -406,13 +407,13 @@ function createStyles(colors: ThemeColors) {
         },
         quickReplyBtn: {
             paddingHorizontal: 14,
-            paddingVertical: 8,
+            paddingVertical: SPACING.sm,
             backgroundColor: colors.surface,
             borderRadius: 20,
             borderWidth: 1,
             borderColor: colors.border,
         },
-        quickReplyText: { color: colors.text, fontSize: 13, fontWeight: '500' },
+        quickReplyText: { color: colors.text, fontSize: FONT.bodySm, fontWeight: '500' },
         inputContainer: {
             flexDirection: 'row',
             alignItems: 'center',
@@ -428,7 +429,7 @@ function createStyles(colors: ThemeColors) {
             flex: 1,
             backgroundColor: colors.surfaceLight,
             borderRadius: 24,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
             paddingVertical: 10,
             color: colors.text,
             fontSize: 14,

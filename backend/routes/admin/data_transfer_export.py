@@ -48,6 +48,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _require_super_admin(admin: dict) -> None:
+    """Re-check the role per handler, as every other PII-export/import
+    router in this package does.
+
+    The router is already included behind ``require_super_admin``; this is
+    the same belt-and-braces every sibling super_admin-class router uses, so
+    the guard survives a future re-mount under a weaker dependency.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Data Transfer export requires super_admin")
+
+
 # A batch that's too large would tie up the background task for a long time;
 # cap it the same way driver_import/rider_import cap CSV rows. Backgrounding
 # removes the request-timeout pressure this cap originally guarded against,
@@ -310,6 +323,7 @@ async def export_entities(
     utils/rate_limiter.py for the threat model this guards against. SlowAPI
     needs a parameter named ``request`` typed as starlette Request; do not
     remove it (same requirement as dsar_export_limit in tax_exports.py)."""
+    _require_super_admin(admin)
     if not body.entities:
         raise HTTPException(status_code=400, detail="No entities selected")
     if len(body.entities) > MAX_ENTITIES_PER_EXPORT:

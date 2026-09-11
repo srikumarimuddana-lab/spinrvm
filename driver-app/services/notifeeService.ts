@@ -36,8 +36,19 @@ const RIDE_OFFER_CHANNEL_ID = 'ride-offers-v3';
 // offer panel. Android sound is channel-level and the in-app MP3 loop
 // (useRideOfferSound) is already ringing, so this channel is silent —
 // otherwise the driver hears two overlapping loops.
-const RIDE_OFFER_SILENT_CHANNEL_ID = 'ride-offers-fg-v1';
-const STALE_CHANNEL_IDS = ['ride-offers-v2'];
+//
+// fg-v2: DEFAULT importance, no vibration. fg-v1 was HIGH with a vibration
+// pattern, which was harmless while this channel was only ever reached by an
+// *update* to an already-posted notification. It is not harmless now that the
+// handover below cancels first and posts a NEW notification: HIGH peeks a
+// heads-up banner over the offer panel the driver is already looking at, and
+// re-buzzes on every foreground. The in-app paths vibrate explicitly
+// (useDriverDashboard.ts), so the channel must not.
+// Channel config is immutable once created on a device (see the v3 note
+// above), so this needed a new id — editing fg-v1 would have been a silent
+// no-op on every install that already has it.
+const RIDE_OFFER_SILENT_CHANNEL_ID = 'ride-offers-fg-v2';
+const STALE_CHANNEL_IDS = ['ride-offers-v2', 'ride-offers-fg-v1'];
 const RIDE_OFFER_NOTIFICATION_ID = 'ride-offer-current';
 const RIDE_OFFER_CATEGORY_ID = 'ride-offer';
 const DEFAULT_RIDE_OFFER_TIMEOUT_MS = 15_000;
@@ -79,20 +90,34 @@ export interface RideOfferDisplayData {
 
 let channelReadyPromise: Promise<void> | null = null;
 let rideOfferDismissTimer: ReturnType<typeof setTimeout> | null = null;
+// Absolute deadline for the offer currently on screen, pinned the first time
+// we see that ride. See getRideOfferTimeoutMs.
+let rideOfferDeadline: { rideId: string; expiresAtMs: number } | null = null;
 
 function getRideOfferTimeoutMs(offer: RideOfferDisplayData): number {
+    // `offer_expires_at` is already absolute, so a re-post recomputes the same
+    // deadline and needs no memory. The other two branches are RELATIVE, and a
+    // handover re-posts this same notification id mid-offer — so recomputing
+    // them would hand the card a fresh countdown_seconds (or a fresh 15s) on
+    // every handover and the card would outlive the backend's offer. Pin them
+    // to an absolute deadline on first sight of the ride and reuse it.
     if (offer.offer_expires_at) {
         const expiresAtMs = new Date(offer.offer_expires_at).getTime();
         if (Number.isFinite(expiresAtMs)) {
+            rideOfferDeadline = { rideId: offer.ride_id, expiresAtMs };
             return Math.max(0, expiresAtMs - Date.now());
         }
     }
 
-    if (typeof offer.countdown_seconds === 'number' && offer.countdown_seconds > 0) {
-        return offer.countdown_seconds * 1000;
+    if (rideOfferDeadline && rideOfferDeadline.rideId === offer.ride_id) {
+        return Math.max(0, rideOfferDeadline.expiresAtMs - Date.now());
     }
 
-    return DEFAULT_RIDE_OFFER_TIMEOUT_MS;
+    const relativeMs = typeof offer.countdown_seconds === 'number' && offer.countdown_seconds > 0
+        ? offer.countdown_seconds * 1000
+        : DEFAULT_RIDE_OFFER_TIMEOUT_MS;
+    rideOfferDeadline = { rideId: offer.ride_id, expiresAtMs: Date.now() + relativeMs };
+    return relativeMs;
 }
 
 function scheduleRideOfferDismiss(timeoutMs: number): void {
@@ -102,6 +127,13 @@ function scheduleRideOfferDismiss(timeoutMs: number): void {
 
     rideOfferDismissTimer = setTimeout(() => {
         rideOfferDismissTimer = null;
+        // Clear the pinned deadline on the auto-dismiss path too, not just in
+        // dismissRideOfferNotification(). Otherwise an already-elapsed deadline
+        // survives for this ride_id, and a later post for the SAME ride — which
+        // utils/push_retry.py does on a dispatch retry — resolves a timeout of 0
+        // and is dismissed before it ever renders. Only bites a payload with no
+        // `offer_expires_at` (the absolute branch recomputes and overwrites).
+        rideOfferDeadline = null;
         notifee.cancelNotification(RIDE_OFFER_NOTIFICATION_ID).catch(() => undefined);
     }, timeoutMs);
 }
@@ -135,9 +167,8 @@ export async function ensureNotifeeReady(): Promise<void> {
                 id: RIDE_OFFER_SILENT_CHANNEL_ID,
                 name: 'Ride Offers (in-app)',
                 description: 'New ride requests while the app is open — sound comes from the app itself',
-                importance: AndroidImportance.HIGH,
-                vibration: true,
-                vibrationPattern: [300, 500, 300, 500],
+                importance: AndroidImportance.DEFAULT,
+                vibration: false,
                 visibility: AndroidVisibility.PUBLIC,
             });
 
@@ -182,7 +213,17 @@ export async function ensureNotifeeReady(): Promise<void> {
                 },
             ]);
         }
-    })();
+    })().catch((e) => {
+        // Never cache a failure. A single transient createChannel /
+        // requestPermission error used to disable every later notification for
+        // the whole process lifetime, because the rejected promise stayed in
+        // the cache and every subsequent call re-awaited it. That was already
+        // wrong; it is worse now that displayRideOfferNotification's handover
+        // depends on being reachable in order to go SILENT, so a poisoned cache
+        // would mean a ride-offer ringtone nothing can stop.
+        channelReadyPromise = null;
+        throw e;
+    });
     return channelReadyPromise;
 }
 
@@ -203,15 +244,70 @@ export async function ensureNotifeeReady(): Promise<void> {
  * Haptics → Sound Effects): no channel sound / APNs sound / loop, but the
  * heads-up card and full-screen wake still fire — the driver opted out of
  * noise, not of seeing offers.
+ *
+ * `reclaim: true` is the reverse handover: the app is going to the background
+ * mid-offer, so the OS notification has to take the ring BACK (expo-audio
+ * pauses the in-app player on the background transition, leaving the driver
+ * with nothing). Loud like a fresh offer, but without the full-screen intent —
+ * relaunching the activity the driver just left would be hostile.
  */
 export async function displayRideOfferNotification(
     offer: RideOfferDisplayData,
-    opts?: { silent?: boolean; muted?: boolean },
+    opts?: { silent?: boolean; muted?: boolean; reclaim?: boolean },
 ): Promise<void> {
-    await ensureNotifeeReady();
     const silent = opts?.silent === true;
     // Everything audible keys off `muted`; visibility behaviour keys off `silent`.
     const muted = silent || opts?.muted === true;
+    const reclaim = opts?.reclaim === true;
+
+    // HANDOVER, not an update — this is the fix for the overlapping ringtones.
+    //
+    // A loud notification already on screen is looping its channel ringtone via
+    // FLAG_INSISTENT, which @notifee/react-native documents as repeating "until
+    // the notification is cancelled or the notification window is opened"
+    // (src/types/NotificationAndroid.ts, AndroidFlags). Re-posting the same id
+    // on the silent channel is an UPDATE, and nothing in Notifee's contract
+    // says an update stops an in-flight insistent ring. (Stock AOSP's
+    // buzzBeepBlinkLocked may clear it via clearSoundLocked(); that is an
+    // undocumented implementation detail and OEM-dependent, so it is not
+    // something the driver's alert can rest on.) Cancel explicitly instead.
+    //
+    // Both handover directions cancel first, so the channel actually changes
+    // rather than relying on an update being honoured: `silent` hands the ring
+    // to the in-app MP3 loop, `reclaim` hands it back to the OS.
+    //
+    // Deliberately ABOVE ensureNotifeeReady(): cancelling needs no channel, and
+    // hoisting it means a slow cold-start setup (two createChannel calls, N
+    // deleteChannel calls and requestPermission) cannot hold the ring open.
+    // Guarded on `silent`/`reclaim`, never on `muted`: a muted driver still
+    // gets the card, and there is no ring to hand over.
+    // Failure is swallowed — if there was nothing to cancel, or the native call
+    // is in a bad state, the post below must still run.
+    if ((silent || reclaim) && Platform.OS === 'android') {
+        try {
+            await notifee.cancelNotification(RIDE_OFFER_NOTIFICATION_ID);
+        } catch {
+            /* nothing posted yet, or a bad native state — the post still runs */
+        }
+    }
+
+    // A setup failure must NOT abort the post, now that the cancel above has
+    // already run. Android channels are created once and persist on the device,
+    // so a transient failure here (native error, permission race) usually still
+    // leaves a postable channel — whereas aborting leaves the driver with no
+    // card at all. For `reclaim` that is outright SILENCE: the in-app tone has
+    // already been stopped by the caller and this post is the only remaining
+    // alert. Log loudly rather than swallow (CLAUDE.md), then try anyway; the
+    // two-tier fallback around displayNotification below covers a genuinely
+    // unpostable state.
+    try {
+        await ensureNotifeeReady();
+    } catch (e) {
+        console.error(
+            '[Notifee] channel/permission setup failed — posting the ride offer anyway:',
+            e,
+        );
+    }
 
     const timeoutMs = getRideOfferTimeoutMs(offer);
     if (timeoutMs <= 0) {
@@ -314,7 +410,9 @@ export async function displayRideOfferNotification(
             // USE_FULL_SCREEN_INTENT permission (added by config plugin).
             // Skipped for the foreground variant: the app is already on
             // screen and relaunching the activity would jolt the driver.
-            ...(silent ? {} : { fullScreenAction: { id: 'default', launchActivity: 'default' } }),
+            // Also skipped for `reclaim`: the driver just backgrounded the app
+            // themselves, and slamming the activity back would fight them.
+            ...(silent || reclaim ? {} : { fullScreenAction: { id: 'default', launchActivity: 'default' } }),
             // Heads-up takes priority over silent notifications
             asForegroundService: false,
             loopSound: !muted,
@@ -390,6 +488,11 @@ export async function dismissRideOfferNotification(): Promise<void> {
         clearTimeout(rideOfferDismissTimer);
         rideOfferDismissTimer = null;
     }
+    // The offer is over, so the pinned deadline must not leak into the next one
+    // (a different ride_id would ignore it anyway, but a re-offer of the SAME
+    // ride would otherwise inherit the old, already-elapsed deadline and the
+    // card would be dismissed instantly).
+    rideOfferDeadline = null;
     try {
         await notifee.cancelNotification(RIDE_OFFER_NOTIFICATION_ID);
     } catch {

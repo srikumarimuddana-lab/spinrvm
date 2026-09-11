@@ -92,3 +92,22 @@ script and start a new session," or `feature-dev`/`/spinr-feature` becoming unav
 2. Pilot scoped to one surface first: `/understand backend` (highest LOC, most tribal
    knowledge, most onboarding value) rather than the whole monorepo in one run.
 3. Leave `--auto-update` off until the generated graph has been reviewed once.
+
+## Outcome (2026-09-11, first fresh session after enablement) — rolled back
+
+Step 1 above failed. Evidence from the fresh session's own `/tmp/claude-code.log`:
+
+- The bootstrap reconcile step logged `[reconcile] 1 marketplace(s):
+  claude-plugins-official(install)` — `understand-anything` was never attempted at all
+  (no clone, no HTTP error logged for it specifically). This differs from the
+  `karpathy-skills` incident's explicit 403 — here the entry was silently dropped from the
+  reconcile list rather than rejected — but the practical effect is the same: it never synced.
+  `/root/.claude/plugins/known_marketplaces.json` and `/root/.claude/plugins/marketplaces/`
+  confirm only `claude-plugins-official` is present.
+- Collateral damage matched the `karpathy-skills` precedent: `feature-dev` also came up
+  unregistered this session (`Found 0 plugins (0 enabled, 0 disabled)` in the log; the
+  `ListPlugins` tool returned an empty list). Neither `/understand` nor a `feature-dev` slash
+  command appeared in the session's loaded skill/command list.
+
+Per the rollback plan above, the two `.claude/settings.json` entries were removed in the PR
+that added this section. No other files were touched.

@@ -26,6 +26,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { getProfileSetupError, isProfileSetupValid } from '../utils/profileSetupSchema';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
@@ -380,15 +381,15 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surfaceLight },
     scrollView: { flex: 1 },
-    scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
-    headerContainer: { alignItems: 'center', marginBottom: 32, position: 'relative' },
+    scrollContent: { flexGrow: 1, paddingHorizontal: SPACING.lg },
+    headerContainer: { alignItems: 'center', marginBottom: SPACING.xl, position: 'relative' },
     backButton: {
-      position: 'absolute', left: 0, top: 0, padding: 8,
+      position: 'absolute', left: 0, top: 0, padding: SPACING.sm,
       backgroundColor: colors.surface, borderRadius: 12,
       shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
     },
-    avatarContainer: { position: 'relative', marginBottom: 16 },
+    avatarContainer: { position: 'relative', marginBottom: SPACING.md },
     avatarCircle: {
       width: 90, height: 90, borderRadius: 45,
       backgroundColor: `${colors.primary}15`,
@@ -402,45 +403,45 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 2, borderColor: colors.surfaceLight,
     },
     title: { fontSize: 28, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, marginBottom: 6 },
-    subtitle: { fontSize: 15, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, textAlign: 'center' },
+    subtitle: { fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, textAlign: 'center' },
     signedInCard: {
       flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.surface, paddingHorizontal: 16, paddingVertical: 12,
+      backgroundColor: colors.surface, paddingHorizontal: SPACING.md, paddingVertical: 12,
       borderRadius: 16, marginTop: 20,
       shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.05, shadowRadius: 8, elevation: 2, width: '100%',
     },
-    signedInText: { flex: 1, fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim, marginLeft: 10 },
+    signedInText: { flex: 1, fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim, marginLeft: 10 },
     signedInPhone: { color: colors.text, fontFamily: 'PlusJakartaSans_700Bold' },
-    changeText: { color: colors.primary, fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13 },
+    changeText: { color: colors.primary, fontFamily: 'PlusJakartaSans_700Bold', fontSize: FONT.bodySm },
     formCard: {
-      backgroundColor: colors.surface, borderRadius: 24, padding: 24,
+      backgroundColor: colors.surface, borderRadius: 24, padding: SPACING.lg,
       shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.05, shadowRadius: 12, elevation: 3, marginBottom: 24,
+      shadowOpacity: 0.05, shadowRadius: 12, elevation: 3, marginBottom: SPACING.lg,
     },
     inputContainer: { marginBottom: 20 },
     inputLabel: {
-      fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
-      letterSpacing: 1, marginBottom: 8, marginLeft: 4,
+      fontSize: FONT.label, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
+      letterSpacing: 1, marginBottom: SPACING.sm, marginLeft: SPACING.xs,
     },
     inputBox: {
       flexDirection: 'row', alignItems: 'center',
       backgroundColor: colors.surfaceLight, borderWidth: 1.5, borderColor: 'transparent',
-      borderRadius: 16, height: 56, paddingHorizontal: 16,
+      borderRadius: 16, height: 56, paddingHorizontal: SPACING.md,
     },
     inputBoxFocused: { borderColor: colors.primary, backgroundColor: `${colors.primary}05` },
     inputIcon: { marginRight: 12 },
     textInput: {
-      flex: 1, fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold',
+      flex: 1, fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text, includeFontPadding: false,
     },
-    dropdownContainer: { marginTop: 8, backgroundColor: colors.surfaceLight, borderRadius: 16, overflow: 'hidden' },
-    dropdownOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16 },
+    dropdownContainer: { marginTop: SPACING.sm, backgroundColor: colors.surfaceLight, borderRadius: 16, overflow: 'hidden' },
+    dropdownOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: SPACING.md },
     dropdownOptionBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
     dropdownOptionSelected: { backgroundColor: `${colors.primary}10` },
-    dropdownOptionText: { fontSize: 15, fontFamily: 'PlusJakartaSans_500Medium', color: colors.text },
+    dropdownOptionText: { fontSize: FONT.bodyMd, fontFamily: 'PlusJakartaSans_500Medium', color: colors.text },
     dropdownOptionTextActive: { fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary },
-    tosContainer: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 32, paddingHorizontal: 8 },
+    tosContainer: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: SPACING.xl, paddingHorizontal: SPACING.sm },
     checkbox: {
       width: 24, height: 24, borderRadius: 8, borderWidth: 2, borderColor: colors.textDim,
       justifyContent: 'center', alignItems: 'center', marginRight: 12, marginTop: 2,
@@ -455,6 +456,6 @@ function createStyles(colors: ThemeColors) {
       shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
     },
     submitBtnDisabled: { backgroundColor: colors.border, shadowOpacity: 0, elevation: 0 },
-    submitBtnText: { color: '#FFF', fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', marginRight: 8 },
+    submitBtnText: { color: '#FFF', fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', marginRight: SPACING.sm },
   });
 }

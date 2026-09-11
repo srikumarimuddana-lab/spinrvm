@@ -6,6 +6,7 @@ import { createLogger } from '@shared/utils/logger';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const log = createLogger('Index');
 
@@ -168,15 +169,15 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.background,
       alignItems: 'center',
       justifyContent: 'center',
-      paddingHorizontal: 32,
+      paddingHorizontal: SPACING.xl,
     },
     reconnectingText: {
       marginTop: 12,
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       color: '#666',
     },
     hintText: {
-      marginTop: 24,
+      marginTop: SPACING.lg,
       fontSize: 14,
       color: '#888',
       textAlign: 'center',
@@ -187,7 +188,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 20,
     },
     escapeButtonText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '600',
       color: '#6C63FF',
     },

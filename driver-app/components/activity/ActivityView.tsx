@@ -14,6 +14,7 @@ import { useFocusEffect } from "expo-router/react-navigation";
 import { useDriverStore } from '../../store/driverStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 
 // Two accent colors with no equivalent in the shared theme token set (purple
 // for bonus/quest amounts, sky blue for the "Avg per Trip" stat) — matches
@@ -434,16 +435,23 @@ export default function ActivityView() {
           <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
           <Text style={styles.errorTitle}>Couldn&apos;t load your earnings</Text>
           <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
-          <TouchableOpacity
+          {/* UX3 (ACTION_ITEMS.md): migrated onto the shared Button (the
+              "retry pill") — variant="primary" size="md" already matches
+              this pill's fill/text; the corner radius moves from a 25px pill
+              to Button's 12px, the same kind of radius consolidation
+              Button.tsx's own doc comment describes doing for its other
+              migrated consumers. */}
+          <Button
+            variant="primary"
+            size="md"
+            fullWidth={false}
+            icon="refresh"
             style={styles.retryBtn}
-            activeOpacity={0.8}
             onPress={loadData}
-            accessibilityRole="button"
             accessibilityLabel="Retry loading earnings"
           >
-            <Ionicons name="refresh" size={18} color="#fff" />
-            <Text style={styles.retryBtnText}>Try Again</Text>
-          </TouchableOpacity>
+            Try Again
+          </Button>
         </View>
       ) : (
         <>
@@ -642,6 +650,13 @@ export default function ActivityView() {
       ListFooterComponent={
         !loading && canLoadMoreHistory ? (
           <View style={styles.ridesSection}>
+            {/* Not migrated (UX3, ACTION_ITEMS.md): this is a bordered
+                "outline" treatment (colors.primary border + text, colors.surface
+                fill) that none of Button's three variants (primary/secondary/
+                danger) reproduce, and it's the only call site in this
+                migration's scope wanting one — adding a 4th variant for a
+                single consumer would be speculative per CLAUDE.md's
+                "Simplicity first". Left as its own TouchableOpacity. */}
             <TouchableOpacity
               style={[styles.loadMoreButton, loadingMore && styles.loadMoreButtonDisabled]}
               activeOpacity={0.8}
@@ -746,21 +761,11 @@ function createStyles(colors: ThemeColors) {
       textAlign: 'center',
       lineHeight: 20,
     },
+    // Fill/radius/padding/text now come from the shared Button
+    // (variant="primary" size="md" icon="refresh") — this only supplies the
+    // spacing above it.
     retryBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
       marginTop: 24,
-      backgroundColor: colors.primary,
-      paddingHorizontal: 24,
-      paddingVertical: 12,
-      borderRadius: 25,
-      minHeight: 44,
-    },
-    retryBtnText: {
-      color: '#fff',
-      fontSize: 16,
-      fontWeight: '600',
     },
     // Earnings card
     card: {

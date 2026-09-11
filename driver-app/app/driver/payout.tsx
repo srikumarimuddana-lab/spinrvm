@@ -22,6 +22,7 @@ import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { Button } from '@shared/components/Button';
 import { isGstBnValid, isGstBnOnFile, isSinValid } from '../../utils/payoutFormsSchema';
 
 function PayoutScreen() {
@@ -668,27 +669,39 @@ function PayoutScreen() {
                                 staff can access it solely for tax filing or a correction you
                                 request, and every access is logged.
                             </Text>
+                            {/* UX3 (ACTION_ITEMS.md): migrated onto the shared Button
+                                (variant="secondary"/"primary" size="sm") —
+                                borderRadius:10/fontSize~14/fontWeight:600 already matched
+                                this form's own cancelBtn/saveBtn styles. Button's `loading`
+                                prop replaces the inline ActivityIndicator-vs-Text ternary
+                                (identical behavior: spinner swaps in, onPress blocked while
+                                pending). One visible change: Cancel now has secondary's 1px
+                                border, which this button previously didn't — a small,
+                                deliberate convergence onto the shared "secondary" look;
+                                see the Change Impact Log. */}
                             <View style={styles.gstFormButtons}>
-                                <TouchableOpacity
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    fullWidth={false}
                                     style={styles.cancelBtn}
                                     onPress={() => {
                                         setSinInput('');
                                         setShowSinForm(false);
                                     }}
                                 >
-                                    <Text style={styles.cancelBtnText}>Cancel</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
+                                    Cancel
+                                </Button>
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    fullWidth={false}
                                     style={styles.saveBtn}
+                                    loading={updateDriverMe.isPending}
                                     onPress={handleSaveSin}
-                                    disabled={updateDriverMe.isPending}
                                 >
-                                    {updateDriverMe.isPending ? (
-                                        <ActivityIndicator size="small" color="#fff" />
-                                    ) : (
-                                        <Text style={styles.saveBtnText}>Save</Text>
-                                    )}
-                                </TouchableOpacity>
+                                    Save
+                                </Button>
                             </View>
                         </View>
                     </View>
@@ -717,24 +730,28 @@ function PayoutScreen() {
                                 GST/HST with the CRA from your first fare — the $30,000 small-supplier
                                 threshold does not apply to ride-sharing.
                             </Text>
+                            {/* UX3 (ACTION_ITEMS.md): same Button migration as the SIN form's
+                                Cancel/Save pair above — see that comment. */}
                             <View style={styles.gstFormButtons}>
-                                <TouchableOpacity
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    fullWidth={false}
                                     style={styles.cancelBtn}
                                     onPress={() => setShowGstForm(false)}
                                 >
-                                    <Text style={styles.cancelBtnText}>Cancel</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
+                                    Cancel
+                                </Button>
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    fullWidth={false}
                                     style={styles.saveBtn}
+                                    loading={updateDriverMe.isPending}
                                     onPress={handleSaveGst}
-                                    disabled={updateDriverMe.isPending}
                                 >
-                                    {updateDriverMe.isPending ? (
-                                        <ActivityIndicator size="small" color="#fff" />
-                                    ) : (
-                                        <Text style={styles.saveBtnText}>Save</Text>
-                                    )}
-                                </TouchableOpacity>
+                                    Save
+                                </Button>
                             </View>
                         </View>
                     </View>
@@ -1132,22 +1149,11 @@ function createStyles(colors: ThemeColors) {
             gap: 12,
             marginTop: 16,
         },
-        cancelBtn: {
-            flex: 1,
-            paddingVertical: 12,
-            borderRadius: 10,
-            backgroundColor: colors.surfaceLight,
-            alignItems: 'center',
-        },
-        cancelBtnText: { color: colors.textDim, fontSize: 14, fontWeight: '600' },
-        saveBtn: {
-            flex: 2,
-            paddingVertical: 12,
-            borderRadius: 10,
-            backgroundColor: colors.primary,
-            alignItems: 'center',
-        },
-        saveBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+        // Fill/radius/padding/text now come from the shared Button
+        // (variant="secondary"/"primary" size="sm") — these only supply each
+        // button's share of the gstFormButtons row.
+        cancelBtn: { flex: 1 },
+        saveBtn: { flex: 2 },
 
         inputLabel: {
             color: colors.text,

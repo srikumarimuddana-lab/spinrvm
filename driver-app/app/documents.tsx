@@ -17,6 +17,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
 import { ScreenHeader } from '../components/ScreenHeader';
 
@@ -421,13 +422,20 @@ export default function DocumentsScreen() {
                                             <Text style={styles.rejectReason}>{frontDoc.rejection_reason}</Text>
                                         </View>
                                     )}
-                                    <TouchableOpacity
+                                    {/* UX3 (ACTION_ITEMS.md): migrated onto the shared Button
+                                        (variant="primary" size="sm" icon="cloud-upload-outline") —
+                                        borderRadius:10/fontSize:13/fontWeight:600 already matched
+                                        this button's own reuploadBtn/reuploadBtnText styles, so
+                                        the swap is visually a no-op. */}
+                                    <Button
+                                        variant="primary"
+                                        size="sm"
+                                        icon="cloud-upload-outline"
                                         style={styles.reuploadBtn}
                                         onPress={() => handleUpload(req.id, 'front')}
                                     >
-                                        <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
-                                        <Text style={styles.reuploadBtnText}>Re-upload Document</Text>
-                                    </TouchableOpacity>
+                                        Re-upload Document
+                                    </Button>
                                 </View>
                             )}
 
@@ -461,6 +469,11 @@ export default function DocumentsScreen() {
                                         );
                                     })()}
                                 </View>
+                                {/* Not migrated (UX3, ACTION_ITEMS.md): a compact 44px square
+                                    icon-over-label tile, not a horizontal text CTA — Button's
+                                    children model assumes a single-line label (plus an optional
+                                    leading icon), not a 2-line icon-over-text stack. Genuinely
+                                    bespoke; left as its own TouchableOpacity. */}
                                 <TouchableOpacity
                                     style={styles.uploadBtn}
                                     onPress={() => handleUpload(req.id, 'front')}
@@ -638,20 +651,11 @@ function createStyles(colors: ThemeColors) {
             paddingVertical: 6,
             borderRadius: 8,
         },
+        // Fill/radius/padding/text now come from the shared Button
+        // (variant="primary" size="sm" icon="cloud-upload-outline") — this
+        // only supplies the spacing above it.
         reuploadBtn: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            backgroundColor: colors.primary,
-            paddingVertical: 10,
-            borderRadius: 10,
             marginTop: 8,
-        },
-        reuploadBtnText: {
-            color: '#fff',
-            fontSize: 13,
-            fontWeight: '600',
         },
         uploadBtn: {
             padding: 8,

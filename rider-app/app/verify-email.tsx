@@ -20,6 +20,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { tKey } from '../i18n';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
+import { shakeHorizontal } from '@shared/utils/motion';
 
 const CODE_LENGTH_MIN = 4;
 const CODE_LENGTH_MAX = 6;
@@ -95,13 +96,7 @@ export default function VerifyEmailScreen() {
   }, [countdown]);
 
   const triggerShake = () => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
-    ]).start();
+    shakeHorizontal(shakeAnim);
   };
 
   const handleCodeChange = (text: string) => {

@@ -18,6 +18,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { shakeHorizontal } from '@shared/utils/motion';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
 import { showAlert } from '../AlertDialog';
@@ -314,15 +315,10 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   if (!ride) return null;
 
   // ── PIN verification ────────────────────────────────────────
-  const triggerShake = () => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 6, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -6, duration: 50, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
-    ]).start();
-  };
+  // Shared shake sequence/timing/easing (ACTION_ITEMS.md UX4) — same
+  // amplitude as before (10/6), now sharing its step duration+easing with
+  // rider-app's OTP shake instead of a locally hardcoded 50ms/step.
+  const triggerShake = () => shakeHorizontal(shakeAnim, [10, 6]);
 
   // Auto-submit when the 4th digit lands. On a wrong code: shake, surface an
   // inline error and clear the boxes so the driver can retry. On success the

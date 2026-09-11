@@ -24995,6 +24995,21 @@ how much they de-risk a public launch._
   2026-09-11 addendum above; wired Firebase's own tap-detection into the router rather than
   removing the expo-notifications path, since the latter is still genuinely needed for the local
   welcome-nudge notification.
+- **Status update 2026-09-11 (this session):** recommendations **2, 3, 4 now all fully addressed.**
+  #3 and #4's foreground half were found already shipped by other sessions before this one started
+  (re-verified directly by reading current code, not by trusting this file); this session's own
+  contribution was #2's remaining Sentry-tagging half (`core/security.py`'s already-loud log
+  failure now also fires an explicitly `domain=drivers`/`surface=backend`-tagged
+  `sentry_sdk.capture_exception`, since the loguru-only `tags_from_log_extra` bridge doesn't cover
+  this module's stdlib `logging` calls) and #4's remaining background/killed half
+  (`backgroundMessaging.ts` gets a log-only fallback for a data-only type outside the 3
+  explicitly-handled ones — deliberately no notification display, since one would duplicate what
+  the OS already shows for every non-data-only type per the correction above; closes the
+  "un-actioned, forward-looking risk" this entry already named). Full detail, blast-radius greps,
+  and verification: `docs/change-log/2026-09-11-c97-push-notification-fixes.md`. **Still open:**
+  #1 (ops check on Fly/Railway Firebase credential) — blocked on C99, no ops access from any
+  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — needs a real compiled iOS build not
+  available here.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 

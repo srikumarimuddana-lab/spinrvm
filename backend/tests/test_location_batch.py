@@ -109,6 +109,58 @@ def test_v2_batch_persists_before_updating_the_live_marker(monkeypatch: pytest.M
     assert events == ["persist", "marker"]
 
 
+def test_v2_batch_rejects_a_ride_assigned_to_another_driver_as_not_found(monkeypatch: pytest.MonkeyPatch):
+    """Ownership moved from the DB filter ({id, driver_id}) to Python so the
+    driver and ride reads can run concurrently. The contract must not
+    change: a ride that is not this driver's is 404, never a 409 hint that
+    it exists in some state."""
+    _install_driver_and_ride(monkeypatch, _ride(driver_id="driver_2"))
+    persist = AsyncMock()
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+
+    assert excinfo.value.status_code == 404
+    persist.assert_not_called()
+
+
+def test_v2_batch_reads_driver_and_ride_concurrently(monkeypatch: pytest.MonkeyPatch):
+    """Both reads must be in flight before either resolves — one Supabase
+    round-trip instead of two on the < 150 ms location-write SLA path."""
+    import asyncio as _asyncio
+
+    started: list[str] = []
+    release = _asyncio.Event()
+
+    async def get_rows(table, filters, **kwargs):
+        if table not in ("drivers", "rides"):
+            return []  # e.g. the revoked-session guard's app_settings read
+        started.append(table)
+        # The first of the two reads blocks until the other has ALSO started;
+        # a sequential implementation deadlocks here and the test times out.
+        if len(started) < 2:
+            await _asyncio.wait_for(release.wait(), timeout=2)
+        else:
+            release.set()
+        if table == "drivers":
+            return [{"id": "driver_1", "user_id": "user_1", "is_online": False}]
+        return [_ride()]
+
+    monkeypatch.setattr(location.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(location.db_supabase, "update_one", AsyncMock())
+
+    async def persist(driver_id, ride_id, session_id, points, *, active_ride, driver_last_known=None):
+        return _result()
+
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+
+    response = _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+
+    assert response == _result().ack.to_dict()
+    assert sorted(started) == ["drivers", "rides"]
+
+
 def test_v2_batch_skips_live_marker_update_when_integrity_check_rejects(monkeypatch: pytest.MonkeyPatch):
     """A38/A40 finding #7: v2 must run the same spoofing/teleport guard as v1
     before trusting a point for the driver's live `lat`/`lng` marker."""

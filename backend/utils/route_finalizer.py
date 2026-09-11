@@ -404,6 +404,17 @@ def _is_due(route: Dict[str, Any], now: datetime) -> bool:
     return retry_at is None or retry_at <= now
 
 
+# The two queue polls below run every tick (15 s) on every replica. They only
+# need the claim keys — never the geometry. `ride_routes` carries
+# `phase_polylines` (raw GPS per phase) and `road_polyline` (the OSRM-matched
+# path) as jsonb, so a `select *` pulled every queued ride's full trace through
+# PostgREST on each tick; on the 2026-09-11 test ride these two polls were the
+# slowest requests Supabase served (9.2 s, 5.9 s, 5.2 s, 5.0 s, 4.7 s, all
+# HTTP 200) while the app's own SQL averaged single-digit ms.
+CLAIM_POLL_COLUMNS = "ride_id,processing_status,next_retry_at"
+RECOVER_POLL_COLUMNS = "ride_id,processing_status,processing_claimed_at"
+
+
 async def claim_next_pending_route(candidates: Optional[list[Dict[str, Any]]] = None) -> Optional[str]:
     """Atomically claim one due pending route; losers receive ``None``."""
     if candidates is None:
@@ -412,6 +423,7 @@ async def claim_next_pending_route(candidates: Optional[list[Dict[str, Any]]] = 
             {"processing_status": "pending"},
             order="next_retry_at",
             limit=20,
+            columns=CLAIM_POLL_COLUMNS,
         )
     now = _now()
     for route in candidates:
@@ -435,6 +447,7 @@ async def recover_stale_route_claims() -> int:
         {"processing_status": "processing"},
         order="processing_claimed_at",
         limit=100,
+        columns=RECOVER_POLL_COLUMNS,
     )
     recovered = 0
     now = _now()
@@ -908,9 +921,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         # its own flag (not p2_route_geometry_enabled or a payment flag) so a
         # dark rollout costs zero extra OSRM/Google calls until enabled.
         try:
-            _spoof_check_enabled = bool(
-                ((await get_app_settings()) or {}).get("gps_spoof_charge_gate_enabled", False)
-            )
+            _spoof_check_enabled = bool(((await get_app_settings()) or {}).get("gps_spoof_charge_gate_enabled", False))
         except Exception:
             logger.error(
                 "gps_spoof_charge_gate_enabled flag read failed for ride_id=%s; treating as off",

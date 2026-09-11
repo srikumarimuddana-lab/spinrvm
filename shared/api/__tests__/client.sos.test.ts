@@ -35,6 +35,11 @@ jest.mock('../../config/spinr.config', () => ({
   default: { backendUrl: 'http://localhost:8000' },
 }));
 
+const mockAddBreadcrumb = jest.fn();
+jest.mock('../../services/errorReporting', () => ({
+  addBreadcrumb: (...a: unknown[]) => mockAddBreadcrumb(...a),
+}));
+
 jest.mock('../../services/firebase', () => ({
   auth: { currentUser: null, onAuthStateChanged: null },
   isFirebaseConfigured: false,
@@ -122,6 +127,108 @@ describe('shared/api/client — SOS exempt from 401→logout interceptor', () =>
 
     expect(mockLogout).toHaveBeenCalled();
     expect(hasAuthToken()).toBe(false);
+  });
+
+  // 2026-09-11 (ride SPR-T9NYPB): a 401 during a background relaunch, before
+  // authStore.initialize() had registered the refresh callback, made this
+  // backstop call logout() — which deletes the stored refresh token. The
+  // next foreground open went straight to OTP and the backend never saw a
+  // refresh attempt. With a refresh token on disk and no callback yet, the
+  // session must be left for initialize() to try.
+  describe('G2 backstop before auth init', () => {
+    // The fix is native-only: authStore keeps the refresh token in SecureStore;
+    // on web it is an HttpOnly cookie the client cannot read, so web keeps the
+    // old clear-and-logout behaviour. These cases run the Android path.
+    const SecureStoreMock = require('expo-secure-store');
+    const PlatformMock = require('react-native').Platform;
+
+    const storeRefreshToken = (value: string | null) => {
+      SecureStoreMock.getItemAsync.mockImplementation((key: string) =>
+        Promise.resolve(key === 'refresh_token' ? value : null),
+      );
+    };
+
+    beforeEach(() => {
+      PlatformMock.OS = 'android';
+    });
+    afterEach(() => {
+      PlatformMock.OS = 'web';
+      SecureStoreMock.getItemAsync.mockImplementation(() => Promise.resolve(null));
+    });
+
+    it('keeps the stored refresh token and does not log out when no refresh callback is registered yet', async () => {
+      storeRefreshToken('stored-refresh-token');
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).not.toHaveBeenCalled();
+      // The dead access token is still dropped so nothing keeps sending it.
+      expect(hasAuthToken()).toBe(false);
+      expect(SecureStoreMock.getItemAsync).toHaveBeenCalledWith('refresh_token');
+      expect(SecureStoreMock.deleteItemAsync).not.toHaveBeenCalledWith('refresh_token');
+    });
+
+    it('still clears the session when there is no stored refresh token to recover', async () => {
+      storeRefreshToken(null);
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).toHaveBeenCalled();
+    });
+
+    it('on web (HttpOnly cookie, nothing readable) the backstop behaves as before', async () => {
+      PlatformMock.OS = 'web';
+      _storage.refresh_token = 'would-be-ignored';
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).toHaveBeenCalled();
+    });
+
+    // PIPEDA: query strings on this client carry raw coordinates
+    // (`/drivers/nearby?lat=…&lng=…`), phone numbers and addresses. The
+    // breadcrumb must carry the path only — found by spinr-security-auditor
+    // on the first cut of this change.
+    it('never puts the query string in the Sentry breadcrumb (raw GPS in /drivers/nearby)', async () => {
+      storeRefreshToken('stored-refresh-token');
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/drivers/nearby?lat=50.4452&lng=-104.6189')).rejects.toThrow();
+
+      expect(mockAddBreadcrumb).toHaveBeenCalledTimes(1);
+      const crumb = String(mockAddBreadcrumb.mock.calls[0][0]);
+      expect(crumb).toContain('/drivers/nearby');
+      expect(crumb).not.toContain('lat=');
+      expect(crumb).not.toContain('50.4452');
+      expect(crumb).not.toContain('-104.6189');
+    });
+
+    it('redacts the query string on the clearing branch as well', async () => {
+      storeRefreshToken(null);
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/users/search?phone=%2B13065551234')).rejects.toThrow();
+
+      const crumb = String(mockAddBreadcrumb.mock.calls[0][0]);
+      expect(crumb).toContain('/users/search');
+      expect(crumb).not.toContain('phone=');
+      expect(crumb).not.toContain('3065551234');
+    });
+
+    it('still clears the session on a retry-after-refresh 401 even with a stored token (fresh credential rejected)', async () => {
+      _storage.refresh_token = 'stored-refresh-token';
+      // A registered callback that "succeeds" — the retried request then 401s
+      // again, which is the server rejecting a freshly minted token.
+      setRefreshCallback(jest.fn().mockResolvedValue(true));
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).toHaveBeenCalled();
+    });
   });
 
   it('401 on /users/emergency-contacts is NOT exempt', async () => {

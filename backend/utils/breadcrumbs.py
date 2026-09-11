@@ -662,6 +662,7 @@ async def persist_ride_breadcrumbs(
         points = points[-MAX_BREADCRUMB_BATCH:]
 
     rows: List[Dict[str, Any]] = []
+    no_capture_time_rejected = 0
     for p in points:
         lat = _coord(p, "lat", "latitude")
         lng = _coord(p, "lng", "longitude")
@@ -679,6 +680,17 @@ async def persist_ride_breadcrumbs(
             p.get("captured_at") or p.get("device_timestamp") or p.get("recorded_at") or p.get("timestamp")
         )
         received_at = datetime.now(timezone.utc)
+        # ADR 016, ingestion invariant I5: a point with no capture time cannot
+        # be placed on a ride's trail. Stamping it with the receive time put
+        # it wherever the server happened to be when the message landed — on
+        # ride SPR-T9NYPB (2026-09-11) 13 such rows were exact copies of fixes
+        # 25–203 s older (the app re-sends its cached last fix on every
+        # WebSocket reconnect), so the plotted path ran backwards at each one
+        # and the daily report gained ~2 km. Rejected, not re-stamped. Idle
+        # points (no active ride) keep the old behaviour: they are not trail.
+        if captured_at is None and ride_id is not None:
+            no_capture_time_rejected += 1
+            continue
         bounded_captured_at = _bounded_capture_time(captured_at, received_at)
         # Discard points captured before this ride's window (pre-ride / stale).
         if captured_at is not None and window_start is not None and bounded_captured_at < window_start:
@@ -703,6 +715,27 @@ async def persist_ride_breadcrumbs(
             }
         )
 
+    if no_capture_time_rejected:
+        # Degraded-but-handled: warning + metric, never Sentry (CLAUDE.md
+        # observability conventions). ids only.
+        logger.warning(
+            "trail: rejected %d point(s) with no capture time for driver_id=%s ride_id=%s",
+            no_capture_time_rejected,
+            driver_id,
+            ride_id,
+        )
+        try:
+            try:
+                from .metrics import inc as _metric_inc
+            except ImportError:
+                from utils.metrics import inc as _metric_inc  # type: ignore
+            _metric_inc(
+                "spinr_drivers_trail_point_rejected_total",
+                {"reason": "no_capture_time"},
+                no_capture_time_rejected,
+            )
+        except Exception:
+            logger.debug("trail rejection metric unavailable", exc_info=True)
     if not rows:
         return 0
     await db_supabase.insert_many("driver_location_history", rows)

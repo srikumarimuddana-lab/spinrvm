@@ -21,3 +21,4 @@ ADRs capture the context, decision, and consequences of significant technical ch
 | [ADR-013](013-zod-incremental-risk-first-form-validation.md) | Zod, adopted incrementally and risk-ordered, for frontend form validation | Accepted |
 | [ADR-014](014-distributed-tracing-deferred.md) | Full distributed tracing (OpenTelemetry) deferred until multi-replica latency debugging is actually painful | Accepted |
 | [ADR-015](015-web-token-storage.md) | Web auth token storage — sessionStorage + mitigations (short-term) / Edge BFF (long-term) | Accepted (short-term); Deferred (long-term) |
+| [ADR-016](016-measured-distance-single-source-of-truth.md) | One measured distance per ride — classified GPS trail, finalizer as authority, flag-switched readers; receipts label the quoted distance | Proposed (awaiting 4 product sign-offs, §7) |

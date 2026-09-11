@@ -334,6 +334,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // show the ride-offer panel like an incoming call when the app is
         // backgrounded or killed. See plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
+        // android:largeHeap="true". Two Google Maps GL views (phone + Android
+        // Auto virtual display) blew the default 256 MB heap mid-ride on
+        // 2026-09-11 (Sentry CRIMSON-SMOKE-7445-SX). Mitigation only — the
+        // remount churn is fixed in lib/androidAuto. See plugins/withLargeHeap.js.
+        './plugins/withLargeHeap',
         // @notifee/react-native ships its Android core module as a local .aar, not via any
         // public Maven registry — without this, :app:debugRuntimeClasspath fails to resolve
         // app.notifee:core on every local build. See plugins/withNotifeeMavenRepo.js.

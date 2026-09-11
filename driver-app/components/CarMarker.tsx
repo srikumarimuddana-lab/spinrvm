@@ -281,11 +281,10 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // momentary nearby-but-wrong-direction segment (a divided road, an
     // out-and-back street, a crossing street at an intersection) can't win
     // the nearest-distance search and flip the bearing 90–180° for one tick.
-    // Not explicitly reset on a route refresh: snapToRoute's own fallback
-    // (an unrestricted search whenever the continuity window finds nothing
-    // within maxSnapMeters) already covers a stale index from a genuinely
-    // different route, without losing continuity on the common case of a
-    // live-route poll re-fetching the same path.
+    // Re-based (not cleared) whenever routeCoordinates changes identity — see
+    // the routeRef effect below. snapToRoute's unrestricted fallback only
+    // kicks in when the continuity window finds NOTHING within maxSnapMeters,
+    // which is not the case near a turn on a re-anchored live route.
     const lastRouteSegmentIndexRef = useRef<number | null>(null);
     // Timestamped fix queue the playback ticker consumes. Seeded lazily on
     // first ingest so the initializer stays pure.
@@ -327,7 +326,34 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // effect, declared BEFORE the consumers so it runs first each commit.
     const routeRef = useRef(routeCoordinates);
     useEffect(() => {
+        const prev = routeRef.current;
         routeRef.current = routeCoordinates;
+        if (prev === routeCoordinates) return;
+        // Re-base the continuity hint on the NEW polyline. Segment indices are
+        // only meaningful against the array they came from, and the in-trip
+        // live route is re-anchored at the car's current position on every
+        // 6 s poll — so index 5 of the old route is index ~0 of the new one.
+        // Carrying the old index forward as `preferredFromIndex` restricted
+        // the next search to segments AHEAD of the car; approaching a turn,
+        // the first segment inside that window was the post-turn one, and
+        // the icon took its bearing (90° off) while the car was still on the
+        // straight — the "car drives sideways" seen on the 2026-09-11 test
+        // ride. Snapping the marker's current position onto the new route
+        // with an unrestricted search gives the right starting segment
+        // without losing continuity across a same-path re-poll. Not clearing
+        // to null, deliberately: that would let a nearby wrong-direction
+        // segment win the very next tick (the case the hint exists for).
+        if (!routeCoordinates || routeCoordinates.length < 2) {
+            lastRouteSegmentIndexRef.current = null;
+            return;
+        }
+        const rebased = snapToRoute(
+            prevTargetRef.current,
+            routeCoordinates,
+            MAX_ROUTE_SNAP_M,
+            null,
+        );
+        lastRouteSegmentIndexRef.current = rebased?.segmentIndex ?? null;
     }, [routeCoordinates]);
 
     // Continuously-accumulated rotation (can exceed 0–360 so shortest-arc

@@ -248,6 +248,24 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
                 f"audience={row.get('audience')})"
             )
             return None
+        # One cascade per dead row. The cascade answers the first replay by
+        # revoking everything issued BEFORE detection; a second replay of the
+        # same row can only come from a holder of that already-dead credential,
+        # and re-cascading revokes sessions minted AFTER the first response —
+        # sessions that holder never had. Observed 2026-09-09/10: one stale
+        # install replayed a token revoked 2026-08-26 three times, and each
+        # replay logged the same driver out of their live device mid-shift
+        # (Sentry CRIMSON-SMOKE-7445-B/C). The replay is still logged and
+        # alerted every time; only the destructive step is not repeated.
+        if await _reuse_already_handled(row):
+            logger.warning(
+                "refresh: replay of an already-cascaded revoked token — "
+                "returning 401 without a second cascade "
+                f"(row_id={row.get('id')} user_id={row.get('user_id')} "
+                f"audience={row.get('audience')} original_revoked_at={row.get('revoked_at')})"
+            )
+            _capture_reuse_event(row, repeated=True)
+            return None
         await _handle_refresh_token_reuse(row)
         return None
 
@@ -263,6 +281,100 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         return None
 
     return row
+
+
+REUSE_AUDIT_ACTION = "refresh_token_reuse_detected"
+
+
+async def _reuse_already_handled(row: dict) -> bool:
+    """True when this exact revoked row has already triggered the cascade.
+
+    Reads the audit_logs row the cascade writes (Step 4 below) rather than a
+    new column: the record is already the 7-year forensic trail for the
+    event, and a user has a handful of these at most. Any read failure
+    answers False, which keeps the conservative path (cascade) — never the
+    other way round.
+    """
+    user_id = row.get("user_id") or ""
+    row_id = row.get("id") or ""
+    if not user_id or not row_id:
+        return False
+    try:
+        # Newest first: a user's reuse records accrue for 7 years, and the
+        # row being checked is the one most recently written. Without an
+        # explicit order a >100-row history could push it past the limit and
+        # re-run the cascade this check exists to suppress.
+        rows = await db.get_rows(
+            "audit_logs",
+            {"action": REUSE_AUDIT_ACTION, "entity_id": user_id},
+            order="created_at",
+            desc=True,
+            limit=100,
+        )
+    except Exception as e:
+        logger.opt(exception=True).error(
+            f"reuse-cascade: audit lookup failed, defaulting to cascade (user={user_id}): {e}"
+        )
+        return False
+    for audit in rows or []:
+        details = audit.get("details")
+        if isinstance(details, str):
+            try:
+                details = json.loads(details)
+            except ValueError:
+                continue
+        # Only a FULLY successful cascade counts. Steps 2 and 3 are each
+        # best-effort; if either failed (a Supabase blip during revoke-all)
+        # the audit row still lands, but the response is incomplete — an
+        # attacker's rotated-forward token could still be live — and the next
+        # replay must run the cascade again. Rows written before this flag
+        # existed have no `cascade_ok` and are treated as not handled, which
+        # errs toward one extra cascade, never toward a suppressed one.
+        if isinstance(details, dict) and details.get("replayed_row_id") == row_id and details.get("cascade_ok") is True:
+            return True
+    return False
+
+
+def _capture_reuse_event(row: dict, *, repeated: bool) -> None:
+    """Tagged Sentry event for the alert rule (tag:spinr_alert). No-op when
+    SENTRY_DSN is unset. Best-effort; never blocks the caller. A repeated
+    replay of an already-cascaded row is a warning with its own tag so the
+    on-call rule can keep paging on first detection without paging on every
+    later replay from the same stale install."""
+    user_id = row.get("user_id") or ""
+    audience = row.get("audience") or ""
+    row_id = row.get("id") or ""
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.capture_message(
+            "REFRESH TOKEN REPLAY (already cascaded)" if repeated else "REFRESH TOKEN REUSE DETECTED",
+            level="warning" if repeated else "error",
+            tags={
+                "spinr_alert": "refresh_token_replay_repeat" if repeated else "refresh_token_reuse",
+                "audience": audience or "unknown",
+                "domain": "auth",
+                "surface": "backend",
+            },
+            contexts={
+                "refresh_token_reuse": {
+                    "row_id": row_id,
+                    "user_id": user_id,
+                    "audience": audience,
+                    "original_revoked_at": str(row.get("revoked_at")),
+                    "replaced_by": str(row.get("replaced_by")),
+                    "repeated": repeated,
+                },
+            },
+        )
+    except Exception as e:
+        # Sentry not configured / import failed / network. For a FIRST
+        # detection the call site's logger.error still reaches Sentry through
+        # the loguru bridge (ERROR level). A repeat is logged at WARNING, which
+        # the bridge does not forward — so if this capture fails, a repeat
+        # replay is in the logs and the audit trail but not alerted. Accepted:
+        # the cascade for that row has already run, and the credential is dead.
+        logger.debug(f"refresh-token-reuse Sentry capture skipped: {e}")
 
 
 async def _handle_refresh_token_reuse(row: dict) -> None:
@@ -291,38 +403,12 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         f"row_id={row_id} user_id={user_id} audience={audience} "
         f"original_revoked_at={row.get('revoked_at')} replaced_by={row.get('replaced_by')}"
     )
-    # Explicit tagged Sentry event so the alert rule can match on
-    # tag:spinr_alert=refresh_token_reuse (PagerDuty → on-call).
-    # No-op when SENTRY_DSN is unset. Best-effort; never blocks the cascade.
-    try:
-        import sentry_sdk  # type: ignore
-
-        sentry_sdk.capture_message(
-            "REFRESH TOKEN REUSE DETECTED",
-            level="error",
-            tags={
-                "spinr_alert": "refresh_token_reuse",
-                "audience": audience or "unknown",
-                "domain": "auth",
-                "surface": "backend",
-            },
-            contexts={
-                "refresh_token_reuse": {
-                    "row_id": row_id,
-                    "user_id": user_id,
-                    "audience": audience,
-                    "original_revoked_at": str(row.get("revoked_at")),
-                    "replaced_by": str(row.get("replaced_by")),
-                },
-            },
-        )
-    except Exception as e:
-        # Sentry not configured / import failed / network — the logger.error
-        # above already carries the same signal via the loguru→Sentry bridge.
-        logger.debug(f"refresh-token-reuse Sentry capture skipped: {e}")
+    _capture_reuse_event(row, repeated=False)
 
     # Step 2: token_version bump. Pick the right table by audience.
     new_version: Optional[int] = None
+    bump_ok = False
+    revoke_ok = False
     target_table: Optional[str] = None
     try:
         if audience in _USERS_TABLE_AUDIENCES:
@@ -346,6 +432,9 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 {"id": user_id},
                 {"$set": bump},
             )
+        # A bump that is not applicable (admin-001's env-var creds, an
+        # unknown audience) is complete by design, not a failure.
+        bump_ok = True
     except Exception as e:
         logger.error(f"reuse-cascade: token_version bump failed (table={target_table} user={user_id}): {e}")
 
@@ -353,6 +442,7 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
     revoked_count = 0
     try:
         revoked_count = await revoke_all_for_user(user_id) if user_id else 0
+        revoke_ok = True
     except Exception as e:
         logger.error(f"reuse-cascade: revoke_all_for_user failed (user={user_id}): {e}")
 
@@ -396,13 +486,16 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
             "replaced_by": row.get("replaced_by"),
             "cascade_token_version": new_version,
             "cascade_refresh_revoked": revoked_count,
+            # Read back by _reuse_already_handled: a repeat replay of this row
+            # skips the cascade only when both destructive steps succeeded.
+            "cascade_ok": bump_ok and revoke_ok,
             "detected_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.insert_one(
             "audit_logs",
             {
                 "id": str(uuid.uuid4()),
-                "action": "refresh_token_reuse_detected",
+                "action": REUSE_AUDIT_ACTION,
                 "entity_type": "user",
                 "entity_id": user_id or "unknown",
                 "actor_id": "system:refresh_reuse_detector",

@@ -467,7 +467,15 @@ function RootLayout() {
         await initFirebaseServices();
         await requestNotificationPermission();
 
-        captureMessage('driver-app cold start', 'log');
+        // Lifecycle marker, kept as an event on purpose: it is the only
+        // relaunch counter this app has. On the 2026-09-11 test ride it was
+        // how the seven mid-ride process deaths were counted — five of them
+        // left no crash record at all. Fingerprinted so it groups as one
+        // named info issue instead of an "anonymous" error-looking one.
+        captureMessage('driver-app cold start', 'log', {
+          fingerprint: ['driver-app', 'lifecycle', 'cold-start'],
+          tags: { event_kind: 'lifecycle' },
+        });
 
         // Android notification channels. Android 8+ REQUIRES a channel
         // or FCM messages are silently dropped. `ride-offers` is MAX

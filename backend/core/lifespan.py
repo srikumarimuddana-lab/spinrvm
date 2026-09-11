@@ -13,6 +13,11 @@ except ImportError:  # pragma: no cover - import style varies by entrypoint
 
 from supabase_client import supabase
 
+try:
+    from utils.loop_start_offset import loop_start_offset_seconds
+except ImportError:  # pragma: no cover - import style varies by entrypoint
+    from ..utils.loop_start_offset import loop_start_offset_seconds  # type: ignore
+
 
 # Global database reference accessible via app state
 async def init_database():
@@ -243,6 +248,20 @@ async def lifespan(app: FastAPI):
 
     async def _restartable(name: str, coro_factory):
         """Wrap a background loop so an uncaught crash auto-restarts after 5s."""
+        # De-phase the fleet of loops. Every loop body ticks first and sleeps
+        # after, so without this all 41 fire in the same second at boot (and on
+        # every deploy), and loops sharing an interval stay phase-locked for
+        # the life of the process — the two 15 s loops, the 60 s pair, the
+        # 5 min group. On the 2026-09-11 test ride Supabase's slowest requests
+        # were exactly those aligned polls queueing on each other (3–9 s for
+        # queries whose SQL took single-digit ms, including a primary-key
+        # lookup on `settings`). A one-off random start offset, bounded by the
+        # loop's own cadence, spreads the boot burst and leaves each loop on
+        # its own phase thereafter. Replay-safety is untouched: nothing about
+        # WHAT a tick does changes, only when its first tick lands.
+        offset = loop_start_offset_seconds(name)
+        if offset > 0:
+            await asyncio.sleep(offset)
         while True:
             try:
                 await coro_factory()

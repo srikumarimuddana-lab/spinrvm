@@ -4,6 +4,7 @@ Split from ``backend/routes/drivers.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import asyncio
 import uuid
 from typing import Literal
 
@@ -175,9 +176,9 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
         except ImportError:
             from settings_loader import get_app_settings  # type: ignore
         settings = await get_app_settings() or {}
-    except Exception:
+    except Exception as exc:
         logger.error("idle batch settings read failed; rejecting batch as retryable", exc_info=True)
-        raise HTTPException(status_code=503, detail="Settings unavailable")
+        raise HTTPException(status_code=503, detail="Settings unavailable") from exc
     if not settings.get("idle_location_v2_enabled", False):
         raise HTTPException(status_code=409, detail="Idle location recording is not enabled")
     if not driver.get("is_online"):
@@ -232,17 +233,24 @@ async def _persist_v2_idle_batch(request: IdleLocationBatchRequest, current_user
 
 async def _persist_v2_location_batch(request: LocationBatchRequest, current_user: dict) -> dict:
     """Authorize and persist one acknowledged v2 outbox batch before marker updates."""
-    driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    # The driver row and the ride row are independent reads; issue them
+    # together and check ride ownership in Python instead of serialising the
+    # second read behind the first. This path is on the < 150 ms driver
+    # location-write SLA and measured p50 232 ms / p95 288 ms on 2026-09-11,
+    # dominated by sequential Supabase round-trips (~20-25 ms each from Fly
+    # yyz to ca-central-1). Persist-before-marker ordering below is untouched.
+    driver_rows, rides = await asyncio.gather(
+        db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1),
+        db_supabase.get_rows("rides", {"id": request.ride_id}, limit=1),
+    )
     if not driver_rows:
         raise HTTPException(status_code=403, detail="Driver profile required")
     driver = driver_rows[0]
 
-    rides = await db_supabase.get_rows(
-        "rides",
-        {"id": request.ride_id, "driver_id": driver["id"]},
-        limit=1,
-    )
-    if not rides:
+    # Same contract as the previous {id, driver_id} filter: a ride that is not
+    # this driver's — including an unassigned one — is "not found", never a
+    # hint that it exists.
+    if not rides or rides[0].get("driver_id") != driver["id"]:
         raise HTTPException(status_code=404, detail="Assigned ride not found")
     ride = rides[0]
     if ride.get("status") == "completed":

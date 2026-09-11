@@ -13,6 +13,18 @@ import pytest
 RIDER = {"id": "rider_u", "role": "rider"}
 
 
+@pytest.fixture(autouse=True)
+async def _clear_live_route_cache():
+    """The route caches its response in Redis (in-process dict when REDIS_URL
+    is unset, as here). Every case starts and ends with an empty cache so a
+    hit in one case can never come from another."""
+    from utils.redis_client import redis_delete_pattern
+
+    await redis_delete_pattern("live_route:*")
+    yield
+    await redis_delete_pattern("live_route:*")
+
+
 def _ride(status, **over):
     r = {
         "id": "r1",
@@ -124,3 +136,107 @@ async def test_empty_when_no_driver_position():
     assert out["breadcrumb_trail"] == []
     assert "args" not in cap
     assert "breadcrumb_args" not in cap
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-ride response cache (2026-09-11): rider + driver each poll every ~6 s and
+# every call cost an OSRM route + a snapped trail (p95 1.7 s). Same ride, leg
+# and ~11 m position bucket → one computation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_second_poll_in_the_same_position_bucket_is_served_from_cache():
+    from backend.routes import rides as rides_mod
+
+    calls = {"n": 0}
+    cap = {}
+    result = {"polyline": [[50.44, -104.63], [50.40, -104.66]], "eta_seconds": 420, "distance_km": 3.1}
+
+    async def _compute_route(flat, flng, tlat, tlng):
+        calls["n"] += 1
+        return dict(result)
+
+    g, r, _c, b = _patches(_ride("in_progress"), driver_pos={"lat": 50.44, "lng": -104.63}, compute=None, capture=cap)
+    with g, r, b, patch("utils.route_distance.compute_route", _compute_route):
+        first = await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+        # The other party polls the same ride while the car is still there
+        # (within 4 dp ≈ 11 m).
+        second = await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+
+    assert calls["n"] == 1
+    assert second == first
+    assert second["destination"] == "dropoff" and second["eta_seconds"] == 420
+
+
+@pytest.mark.asyncio
+async def test_a_moved_driver_misses_the_cache_and_recomputes():
+    from backend.routes import rides as rides_mod
+
+    calls = {"n": 0}
+    cap = {}
+    result = {"polyline": [[50.44, -104.63], [50.40, -104.66]], "eta_seconds": 420, "distance_km": 3.1}
+
+    async def _compute_route(flat, flng, tlat, tlng):
+        calls["n"] += 1
+        return dict(result)
+
+    g1, r1, _c, b1 = _patches(
+        _ride("in_progress"), driver_pos={"lat": 50.44, "lng": -104.63}, compute=None, capture=cap
+    )
+    with g1, r1, b1, patch("utils.route_distance.compute_route", _compute_route):
+        await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+    # ~110 m further along (1e-3 deg) — a different bucket.
+    g2, r2, _c, b2 = _patches(
+        _ride("in_progress"), driver_pos={"lat": 50.441, "lng": -104.63}, compute=None, capture=cap
+    )
+    with g2, r2, b2, patch("utils.route_distance.compute_route", _compute_route):
+        await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_leg_change_at_the_same_position_misses_the_cache():
+    """Pickup → in_progress at the same spot must not serve the pickup route."""
+    from backend.routes import rides as rides_mod
+
+    seen = []
+    cap = {}
+
+    async def _compute_route(flat, flng, tlat, tlng):
+        seen.append((tlat, tlng))
+        return {"polyline": [[flat, flng], [tlat, tlng]], "eta_seconds": 100, "distance_km": 1.0}
+
+    pos = {"lat": 50.45, "lng": -104.62}
+    g1, r1, _c, b1 = _patches(_ride("driver_arrived"), driver_pos=pos, compute=None, capture=cap)
+    with g1, r1, b1, patch("utils.route_distance.compute_route", _compute_route):
+        a = await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+    g2, r2, _c, b2 = _patches(_ride("in_progress"), driver_pos=pos, compute=None, capture=cap)
+    with g2, r2, b2, patch("utils.route_distance.compute_route", _compute_route):
+        b_ = await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+
+    assert a["destination"] == "pickup" and b_["destination"] == "dropoff"
+    assert seen == [(50.45, -104.62), (50.40, -104.66)]
+
+
+@pytest.mark.asyncio
+async def test_failed_provider_result_is_not_cached():
+    """An empty result must be retried on the next poll, not pinned for the TTL."""
+    from backend.routes import rides as rides_mod
+
+    calls = {"n": 0}
+    cap = {}
+
+    async def _compute_route(flat, flng, tlat, tlng):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else {"polyline": [[1, 2]], "eta_seconds": 5, "distance_km": 0.1}
+
+    g, r, _c, b = _patches(_ride("in_progress"), driver_pos={"lat": 50.44, "lng": -104.63}, compute=None, capture=cap)
+    with g, r, b, patch("utils.route_distance.compute_route", _compute_route):
+        first = await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+        second = await rides_mod.get_live_route(ride_id="r1", current_user=RIDER)
+
+    assert first["polyline"] == [] and first["eta_seconds"] is None
+    assert second["eta_seconds"] == 5
+    assert calls["n"] == 2

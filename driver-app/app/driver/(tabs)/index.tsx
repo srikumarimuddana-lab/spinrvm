@@ -308,15 +308,40 @@ function DriverDashboard() {
   const mapReady = mapReadyKey === mapKey;
   const prevRideStateRef = useRef(rideState);
   const prevIsOnlineRef = useRef(isOnline);
+  // Never remount the MapView while the activity is paused. Removing a
+  // react-native-maps MapView from the tree while the app is in the background
+  // runs GoogleMap's onPause on a map whose deferred-lifecycle state is null —
+  // a main-thread NPE that kills the process (Sentry CRIMSON-SMOKE-7445-PV,
+  // both events `in_foreground: false`, 2026-09-11 13:58 and 14:21 UTC during
+  // live testing). The trigger was this very remount: a relaunch in the
+  // background (Android Auto rebinding the car service while the phone is
+  // locked) hydrates isOnline false → true with the screen still off. Park the
+  // remount and replay it on the next 'active' — the map is a fresh instance
+  // by the time the driver looks at it either way.
+  const pendingMapRemountRef = useRef(false);
   useEffect(() => {
     const prevRideState = prevRideStateRef.current;
     const prevOnline = prevIsOnlineRef.current;
-    if ((rideState === 'idle' && prevRideState !== 'idle') || (isOnline && !prevOnline)) {
+    const wantsRemount =
+      (rideState === 'idle' && prevRideState !== 'idle') || (isOnline && !prevOnline);
+    const paused = AppState.currentState === 'background' || AppState.currentState === 'inactive';
+    if (wantsRemount && paused) {
+      pendingMapRemountRef.current = true;
+    }
+    if (wantsRemount && !paused) {
       setMapKey((k) => k + 1);
     }
     prevRideStateRef.current = rideState;
     prevIsOnlineRef.current = isOnline;
   }, [rideState, isOnline]);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active' || !pendingMapRemountRef.current) return;
+      pendingMapRemountRef.current = false;
+      setMapKey((k) => k + 1);
+    });
+    return () => sub.remove();
+  }, []);
 
   // Live ETA from Google Directions — refreshed every 60s, with a stationary
   // skip so a parked driver doesn't burn API calls when nothing has changed.

@@ -81,6 +81,11 @@ export const useCarMapCamera = create<CarMapCameraState>((set) => ({
   zoomOut: () => set((s) => ({ delta: zoomOutDelta(s.delta) })),
   pan: (translationX, translationY) =>
     set((s) => {
+      // A non-finite translation would poison the offset for the rest of the
+      // session (NaN + anything is NaN), and a NaN camera centre is silently
+      // dropped by Google Maps — leaving the map wherever it was, including
+      // its factory world view. Ignore the sample instead.
+      if (!Number.isFinite(translationX) || !Number.isFinite(translationY)) return {};
       const scale = s.delta / PAN_UNITS_PER_SCREEN;
       return {
         // Dragging the map right moves the viewport LEFT (west), hence the

@@ -21,9 +21,11 @@ from typing import Any, Dict, Optional
 try:
     from .company_details import to_latin1
     from .datetime_utils import parse_iso_utc
+    from .receipt_distance import fare_basis_distance_km
 except ImportError:
     from utils.company_details import to_latin1  # type: ignore
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.receipt_distance import fare_basis_distance_km  # type: ignore
 
 _CENT = Decimal("0.01")
 _BRAND = (238, 43, 43)  # #ee2b2b
@@ -83,7 +85,8 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     dist = _d(ride.get("distance_fare"))
     time_ = _d(ride.get("time_fare"))
     booking = _d(ride.get("booking_fee"))
-    distance_km = _d(ride.get("distance_km"))
+    # Labelled with the distance the fare was priced on (see receipt_distance.py).
+    distance_km = _d(fare_basis_distance_km(ride))
     duration_min = ride.get("duration_minutes") or 0
     surge = _d(ride.get("surge_multiplier") or 1)
 

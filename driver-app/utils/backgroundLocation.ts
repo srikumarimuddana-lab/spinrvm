@@ -1,3 +1,4 @@
+import { AppState, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
@@ -517,6 +518,20 @@ function _isBackgroundedForegroundServiceRejection(e: unknown): boolean {
 export async function reassertDispatchTaskUnlocked(): Promise<void> {
   try {
     if (!(await Location.hasStartedLocationUpdatesAsync(TASK_NAME))) return;
+    // Android refuses the re-promotion unless the activity is resumed:
+    // expo-location's startLocationUpdatesAsync throws
+    // ForegroundServiceStartNotAllowedException before touching the task
+    // whenever its own foregrounded flag is false (LocationModule.kt,
+    // `!AppForegroundedSingleton.isForegrounded && options.foregroundService`).
+    // The running task is untouched by that throw, so a backgrounded re-assert
+    // can neither repair nor harm anything — it only costs a native call and a
+    // Sentry error per driver per minute (CRIMSON-SMOKE-7445-PP: every event
+    // `in_foreground: false`, 2026-09-11 test ride). Park it and replay once
+    // on the next foreground, which is the earliest the repair can succeed.
+    if (Platform.OS === 'android' && AppState.currentState !== 'active') {
+      deferReassertUntilForeground();
+      return;
+    }
     const { status } = await Location.getBackgroundPermissionsAsync();
     if (status !== 'granted') return;
     let tripActive = false;
@@ -531,7 +546,11 @@ export async function reassertDispatchTaskUnlocked(): Promise<void> {
     console.log('[BgLocation] Dispatch task re-asserted');
   } catch (e) {
     if (_isBackgroundedForegroundServiceRejection(e)) {
+      // Reached only if the app backgrounded between the AppState check above
+      // and the native call (or on a platform without that gate). Same
+      // handling as the gate: park it, replay once on the next foreground.
       console.warn('[BgLocation] Re-assert deferred — foreground service restart blocked while backgrounded');
+      deferReassertUntilForeground();
       return;
     }
     recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', location: 'reassert_failed' });
@@ -540,6 +559,31 @@ export async function reassertDispatchTaskUnlocked(): Promise<void> {
 
 export function reassertDispatchTask(): Promise<void> {
   return runExclusive('bg-reassert', reassertDispatchTaskUnlocked);
+}
+
+// One-shot foreground replay for a re-assert that was skipped while the app
+// was backgrounded. A single listener is installed lazily on first deferral
+// and removed once it fires, so an app that never backgrounds mid-shift
+// carries no subscription at all. The replay goes through the locked
+// variant — by the time the activity resumes we no longer hold any caller's
+// arbiter lock.
+let foregroundReassertSub: { remove: () => void } | null = null;
+
+function deferReassertUntilForeground(): void {
+  if (foregroundReassertSub) return;
+  console.log('[BgLocation] Re-assert deferred until the app is foregrounded');
+  foregroundReassertSub = AppState.addEventListener('change', (next) => {
+    if (next !== 'active') return;
+    foregroundReassertSub?.remove();
+    foregroundReassertSub = null;
+    reassertDispatchTask().catch(() => {});
+  });
+}
+
+/** @internal Test-only — drop a pending foreground replay between cases. */
+export function _resetDeferredReassert(): void {
+  foregroundReassertSub?.remove();
+  foregroundReassertSub = null;
 }
 
 /**

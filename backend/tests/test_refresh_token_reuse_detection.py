@@ -184,6 +184,178 @@ async def test_rotation_replay_past_grace_window_still_cascades():
     cascade_mock.assert_called_once()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# One cascade per dead row (2026-09-11). A stale install replayed a token
+# revoked 2026-08-26 three times on 09-09/09-10 and each replay re-ran the
+# full cascade, logging the same driver out of their LIVE device mid-shift.
+# The first replay still cascades; later replays of the same row are logged
+# and alerted (warning, distinct tag) but do not revoke again.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _audit_row_for(replayed_row_id: str) -> dict:
+    import json
+
+    return {
+        "id": "audit-prev",
+        "action": "refresh_token_reuse_detected",
+        "entity_type": "user",
+        "entity_id": "user-rider-1",
+        "details": json.dumps({"replayed_row_id": replayed_row_id, "audience": "rider", "cascade_ok": True}),
+    }
+
+
+@pytest.mark.asyncio
+async def test_replay_of_already_cascaded_row_does_not_cascade_again():
+    cascade_mock = AsyncMock()
+    capture_mock = MagicMock()
+    row = _revoked_row()
+    row["replaced_by"] = None  # explicit-logout revocation, well past any grace
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[_audit_row_for(row["id"])])),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", capture_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("stale-install-raw")
+
+    assert result is None, "still a generic 401 — no oracle"
+    cascade_mock.assert_not_called()
+    capture_mock.assert_called_once()
+    assert capture_mock.call_args.kwargs.get("repeated") is True
+
+
+@pytest.mark.asyncio
+async def test_replay_of_a_different_dead_row_still_cascades():
+    """An audit record for ANOTHER revoked row of the same user must not
+    suppress the cascade for this one — the match is per row, not per user."""
+    cascade_mock = AsyncMock()
+    row = _revoked_row()
+    row["replaced_by"] = None
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[_audit_row_for("rtk-some-other-row")])),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("stale-install-raw")
+
+    assert result is None
+    cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_audit_lookup_failure_defaults_to_cascade():
+    """A failed audit read must never SUPPRESS the security response."""
+    cascade_mock = AsyncMock()
+    row = _revoked_row()
+    row["replaced_by"] = None
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("stale-install-raw")
+
+    assert result is None
+    cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_first_replay_cascade_writes_the_audit_row_the_dedupe_reads():
+    """Round-trip: the cascade's audit insert carries replayed_row_id under the
+    same action the dedupe filters on, so the second replay is recognised."""
+    import json
+
+    inserted: list[dict] = []
+
+    async def _insert_one(table, doc):
+        inserted.append((table, doc))
+        return {"id": "audit-1"}
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "user-rider-1", "token_version": 0})),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import REUSE_AUDIT_ACTION, _handle_refresh_token_reuse, _reuse_already_handled
+
+        row = _revoked_row()
+        await _handle_refresh_token_reuse(row)
+
+    audit_inserts = [doc for table, doc in inserted if table == "audit_logs"]
+    assert len(audit_inserts) == 1
+    doc = audit_inserts[0]
+    assert doc["action"] == REUSE_AUDIT_ACTION
+    assert json.loads(doc["details"])["replayed_row_id"] == row["id"]
+
+    # And the dedupe reads exactly that shape back.
+    with patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[doc])):
+        assert await _reuse_already_handled(row) is True
+
+
+@pytest.mark.asyncio
+async def test_partial_cascade_does_not_suppress_the_next_replay():
+    """Security review finding: Steps 2/3 are each best-effort and the audit
+    row is written regardless. If revoke-all failed (a Supabase blip) an
+    attacker's rotated-forward token is still live, so the next replay of the
+    same row MUST cascade again. The audit row records cascade_ok=False and
+    the dedupe ignores it."""
+    import json
+
+    inserted: list[dict] = []
+
+    async def _insert_one(table, doc):
+        inserted.append((table, doc))
+        return {"id": "audit-1"}
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "user-rider-1", "token_version": 0})),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(side_effect=RuntimeError("db blip"))),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse, _reuse_already_handled
+
+        row = _revoked_row()
+        await _handle_refresh_token_reuse(row)
+
+    doc = [d for t, d in inserted if t == "audit_logs"][0]
+    assert json.loads(doc["details"])["cascade_ok"] is False
+
+    with patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[doc])):
+        assert await _reuse_already_handled(row) is False
+
+
+@pytest.mark.asyncio
+async def test_pre_flag_audit_rows_do_not_suppress_the_cascade():
+    """Audit rows written before cascade_ok existed carry no flag: treat as
+    not handled (one extra cascade), never as handled."""
+    row = _revoked_row()
+    legacy = _audit_row_for(row["id"])
+    import json
+
+    d = json.loads(legacy["details"])
+    d.pop("cascade_ok")
+    legacy["details"] = json.dumps(d)
+
+    with patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[legacy])):
+        from utils.refresh_tokens import _reuse_already_handled
+
+        assert await _reuse_already_handled(row) is False
+
+
 @pytest.mark.asyncio
 async def test_recent_revocation_without_rotation_still_cascades():
     """A token revoked WITHOUT a replacement (explicit logout / a prior

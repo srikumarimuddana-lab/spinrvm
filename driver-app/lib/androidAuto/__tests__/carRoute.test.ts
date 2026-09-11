@@ -200,9 +200,20 @@ describe('car surface route presentation contract (carSurface.tsx)', () => {
   it('draws the stored route through the shared RouteLine + RoutePins', () => {
     expect(source).toContain("RouteLine = require('@shared/components/RouteLine').RouteLine");
     expect(source).toContain("RoutePins = require('@shared/components/RoutePins').RoutePins");
-    expect(source).toContain('<RouteLine path={livePath ?? route.polyline} />');
+    expect(source).toContain('<RouteLine key={`route-line-${route.leg}`} path={livePath ?? route.polyline} />');
     expect(source).toContain('<RoutePins');
     expect(source).toContain('dropoff={route.leg === \'dropoff\' ? route.destination : null}');
+  });
+
+  // The leg used to be part of the MapView key, so every pickup → dropoff →
+  // idle transition tore down and re-created the Google Maps GL view inside
+  // the VirtualDisplay on the main thread — the Complete Trip "isn't
+  // responding" on the 2026-09-11 test ride, and a share of its 256 MB heap
+  // OOM. The overlay cleanup that key bought now lives on the overlays.
+  it('keeps one native map per connection: the leg keys the overlays, not the MapView', () => {
+    expect(source).toContain('key={`car-map-${surfaceGeneration}`}');
+    expect(source).not.toContain("key={`${route ? route.leg : 'idle'}-${surfaceGeneration}`}");
+    expect(source).toContain('key={`route-pins-${route.leg}`}');
   });
 
   it('drops the bespoke SPINR_RED Polyline + bare destination Marker', () => {

@@ -1038,6 +1038,59 @@ describe('map recenter control', () => {
     // so the pre-existing `+ insets.bottom` formula yields NaN in Jest only.)
     expect(after.props.mapPadding).toHaveProperty('bottom');
   });
+
+  // Crash guard (Sentry CRIMSON-SMOKE-7445-PV): removing the MapView from the
+  // tree while the activity is paused runs GoogleMap.onPause on a map with no
+  // lifecycle state — a main-thread NPE that killed the process twice during
+  // the 2026-09-11 test ride, both with in_foreground:false. The remount that
+  // offline → online triggers must therefore wait for the app to be active.
+  // A remounted MapView is a fresh instance that has not fired onMapReady, so
+  // mapPadding going back to undefined is the observable proof of a remount.
+  describe('MapView remount while the app is backgrounded', () => {
+    const AppStateMock = require('react-native/Libraries/AppState/AppState').default;
+
+    afterEach(() => {
+      AppStateMock.currentState = 'active';
+    });
+
+    async function renderOfflineAndReady() {
+      mockDashboardState = { ...mockDashboardState, isOnline: false };
+      const r = await renderScreen();
+      act(() => { r.root.findByType('MapView' as any).props.onMapReady(); });
+      expect(r.root.findByType('MapView' as any).props.mapPadding).toBeDefined();
+      return r;
+    }
+
+    it('remounts immediately on offline → online while active', async () => {
+      const r = await renderOfflineAndReady();
+      mockDashboardState = { ...mockDashboardState, isOnline: true };
+      await act(async () => { r.update(<DriverDashboardScreen />); await flush(); });
+      expect(r.root.findByType('MapView' as any).props.mapPadding).toBeUndefined();
+    });
+
+    it('defers the remount while backgrounded and replays it on the next active', async () => {
+      const r = await renderOfflineAndReady();
+
+      AppStateMock.currentState = 'background';
+      mockDashboardState = { ...mockDashboardState, isOnline: true };
+      await act(async () => { r.update(<DriverDashboardScreen />); await flush(); });
+      // Still the same, ready MapView — nothing was torn down in the background.
+      expect(r.root.findByType('MapView' as any).props.mapPadding).toBeDefined();
+
+      // A non-active transition must not release it either.
+      act(() => { appStateListeners.forEach((cb) => cb('inactive')); });
+      expect(r.root.findByType('MapView' as any).props.mapPadding).toBeDefined();
+
+      AppStateMock.currentState = 'active';
+      act(() => { appStateListeners.forEach((cb) => cb('active')); });
+      expect(r.root.findByType('MapView' as any).props.mapPadding).toBeUndefined();
+
+      // Replayed once, not on every later foreground.
+      act(() => { r.root.findByType('MapView' as any).props.onMapReady(); });
+      act(() => { appStateListeners.forEach((cb) => cb('active')); });
+      expect(r.root.findByType('MapView' as any).props.mapPadding).toBeDefined();
+    });
+  });
 });
 
 describe('follow-camera throttle (CAMERA_ANIM_MS coalescing)', () => {

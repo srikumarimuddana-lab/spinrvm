@@ -4,6 +4,17 @@ import { Circle } from 'react-native-maps';
 import { HeatmapCells } from '../../components/dashboard/HeatmapCells';
 import type { HeatmapCell } from '../../hooks/useDemandHeatmap';
 
+// This file tests the region-viewport-filter and driver-exclusion LOGIC
+// (renderer-agnostic), not the soft-vs-legacy rendering shape — that's
+// HeatmapCellsSoft.test.tsx's job. Force the legacy (flag-off) path here, the
+// same way that sibling file forces the soft path on, so this suite's
+// "2 circles per surviving cell" counting and exclusion-radius geometry stay
+// exactly as originally written regardless of the real flag's shipped value.
+jest.mock('../../lib/heatFalloff', () => ({
+  ...jest.requireActual('../../lib/heatFalloff'),
+  SOFT_HEAT_RENDER_ENABLED: false,
+}));
+
 // This app's jest-expo preset defaults Platform.OS to 'ios', so
 // USE_NATIVE_GRADIENT (computed once at HeatmapCells' module-load time) is
 // false here — the iOS soft-blob path (two <Circle> elements per surviving

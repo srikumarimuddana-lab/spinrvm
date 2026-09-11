@@ -3,6 +3,16 @@ import { cellCenter } from '../../lib/heatFalloff';
 import { useVisibleHeatmapCells } from '../useVisibleHeatmapCells';
 import type { HeatmapCell } from '../useDemandHeatmap';
 
+// This suite documents/tests the exclusion-zone geometry against the legacy
+// (flag-off) blob radius factor explicitly (see the comments below) — force
+// it regardless of the real flag's shipped value, so these numbers stay
+// exactly as originally derived rather than silently tracking whichever
+// geometry happens to be live.
+jest.mock('../../lib/heatFalloff', () => ({
+  ...jest.requireActual('../../lib/heatFalloff'),
+  SOFT_HEAT_RENDER_ENABLED: false,
+}));
+
 describe('cellCenter', () => {
   it('buckets a raw lat/lng onto the grid and returns the cell midpoint', () => {
     // cellLat=0.01, cellLng=0.01: 52.104 buckets to [52.10, 52.11), midpoint 52.105.

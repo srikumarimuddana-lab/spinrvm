@@ -103,10 +103,13 @@ describe('paintedPeakAlpha', () => {
 });
 
 describe('SOFT_HEAT_RENDER_ENABLED', () => {
-  // Guards the release gate, not the maths: this renderer has never been seen
-  // on Apple Maps, Google Maps or an Auto head unit, so it must ship dark.
-  it('is off until native screenshots exist for all three surfaces', () => {
-    expect(SOFT_HEAT_RENDER_ENABLED).toBe(false);
+  // Guards the release gate, not the maths: flipped on 2026-09-11 after a
+  // live driver confirmed the flag-off "square boundary" look on both the
+  // phone and the Android Auto car display — the native-device evidence this
+  // flag was shipped dark waiting for. See its own doc comment and
+  // docs/change-log/2026-09-11-heatmap-soft-render-enabled.md.
+  it('is on now that native-device evidence exists for the reported bug', () => {
+    expect(SOFT_HEAT_RENDER_ENABLED).toBe(true);
   });
 });
 

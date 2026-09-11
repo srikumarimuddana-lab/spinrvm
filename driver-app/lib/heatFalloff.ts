@@ -76,17 +76,19 @@ export const HEAT_BLOB_RADIUS_FACTOR = 1.35;
 export const HEAT_NATIVE_LAYER_ALPHA = 0.42;
 
 /**
- * Ships dark. The soft path changes how an already-shipped driver-facing map
- * looks, and nothing in this repo can screenshot Apple Maps, Google Maps or an
- * Android Auto head unit — so it stays off until someone captures native
- * evidence on all three. Flip to true in its own commit + OTA.
+ * Flipped on 2026-09-11 after a live driver confirmed the flag-off "square
+ * boundary" look on both the phone (Android native <Heatmap> hard-edged
+ * gradient stops / iOS flat two-circle stand-in) and the Android Auto car
+ * display (hard-edged square grid cells, lib/androidAuto/carSurface.tsx) —
+ * the exact native-device evidence this flag's own prior comment said it was
+ * waiting for. See docs/change-log/2026-09-11-heatmap-soft-render-enabled.md.
  *
  * This is a build-time constant, not a remote kill switch: the renderer is
  * entirely client-side, so a remote toggle would mean a new app_settings
  * column plumbed through the heatmap endpoint. That is a reasonable follow-up
- * but is not needed to ship this dark.
+ * but was not needed to ship this.
  */
-export const SOFT_HEAT_RENDER_ENABLED = false;
+export const SOFT_HEAT_RENDER_ENABLED = true;
 
 /** `#RRGGBB` -> `rgba(r,g,b,a)`. Shared so both renderers build colour the same way. */
 export function hexToRgba(hex: string, alpha: number): string {

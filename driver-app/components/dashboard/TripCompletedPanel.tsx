@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, BackHandler, ScrollView } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, TextInput, Share, BackHandler, ScrollView } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';

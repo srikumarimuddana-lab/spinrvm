@@ -246,9 +246,15 @@ subquery.
   `information_schema.columns` access this session does not have. Do not
   treat the "not fixed" bug above as anything but an open, human-actionable
   finding.
-- **CI wiring still not done** — `tests/rls/` still has no Postgres service
-  container in any GitHub Actions workflow; these 55 new tests will
-  self-skip in CI exactly like the original 32, until that's wired up.
+- **Correction, same day:** this bullet originally claimed "CI wiring still
+  not done." That was wrong when written, not just later invalidated —
+  `ci.yml`'s `backend-test` job has run `tests/rls/` against a real
+  `postgres:15` service container on every backend-touching PR since
+  commit `81d7c42` (2026-09-08, three days before this session's work).
+  Confirmed directly from PR #5247's own CI job logs: all 116 tests,
+  including all 55 new ones from this session, ran and passed as part of
+  that job — they did not self-skip. See `ACTION_ITEMS.md` C49's matching
+  correction for the full account.
 - **Full-suite co-collection with the mocked `backend/tests/conftest.py`
   stack was not run end-to-end in this sandbox** — same limitation as
   2026-08-31 (this sandbox lacks the backend's other ~149 dependencies);

@@ -5,6 +5,7 @@ import {
 import { create } from 'zustand';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { Button } from '@shared/components/Button';
 
 interface AlertButton {
   text: string;
@@ -98,30 +99,45 @@ export const AlertDialog: React.FC = () => {
           {buttons.map((btn, i) => {
             const isDestructive = btn.style === 'destructive';
             const isCancel = btn.style === 'cancel';
-            return (
-              <TouchableOpacity
-                key={i}
-                style={[
-                  styles.button,
-                  isDestructive && styles.buttonDestructive,
-                  isCancel && styles.buttonCancel,
-                  !isDestructive && !isCancel && styles.buttonPrimary,
-                  buttons.length === 1 && styles.buttonFull,
-                ]}
-                onPress={() => handlePress(btn)}
-                activeOpacity={0.8}
-              >
-                <Text
-                  style={[
-                    styles.buttonText,
-                    isDestructive && styles.buttonTextDestructive,
-                    isCancel && styles.buttonTextCancel,
-                    !isDestructive && !isCancel && styles.buttonTextPrimary,
-                  ]}
+            const isSingle = buttons.length === 1;
+
+            // Cancel deliberately stays its own bespoke TouchableOpacity (UX3,
+            // ACTION_ITEMS.md): its solid colors.border fill + full-contrast
+            // colors.text label isn't what any shared Button variant renders —
+            // variant="secondary" is a lighter, dimmed-text/bordered look built
+            // for a different context (RideOfferPanel's Decline), and swapping
+            // to it here would visibly mute every "Cancel" in the app (this
+            // dialog backs every showAlert() call). Not a clean fit; left as-is.
+            if (isCancel) {
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={[styles.button, styles.buttonCancel, isSingle && styles.buttonFull]}
+                  onPress={() => handlePress(btn)}
+                  activeOpacity={0.8}
                 >
-                  {btn.text}
-                </Text>
-              </TouchableOpacity>
+                  <Text style={[styles.buttonText, styles.buttonTextCancel]}>{btn.text}</Text>
+                </TouchableOpacity>
+              );
+            }
+
+            // Default ("primary") and destructive buttons map cleanly onto the
+            // shared Button (variant="primary"/"danger", size="md" — its
+            // borderRadius:12/fontSize:15/fontWeight:600 already match this
+            // dialog's own button/buttonText styles). textStyle preserves the
+            // PlusJakartaSans font family Button doesn't set by default.
+            return (
+              <Button
+                key={i}
+                variant={isDestructive ? 'danger' : 'primary'}
+                size="md"
+                fullWidth={false}
+                style={isSingle ? styles.buttonFullBase : styles.buttonFlexBase}
+                textStyle={styles.buttonFontFamily}
+                onPress={() => handlePress(btn)}
+              >
+                {btn.text}
+              </Button>
             );
           })}
         </View>
@@ -193,11 +209,18 @@ const createStyles = (colors: ThemeColors) =>
       flex: undefined,
       paddingHorizontal: 48,
     },
-    buttonPrimary: {
-      backgroundColor: colors.primary,
+    // Layout-only counterparts of `button`/`buttonFull` for the two branches
+    // now rendered as a shared Button (which supplies its own fill/radius/
+    // padding via variant+size) — these just reproduce the same flex/width
+    // behavior at this call site.
+    buttonFlexBase: {
+      flex: 1,
     },
-    buttonDestructive: {
-      backgroundColor: colors.danger,
+    buttonFullBase: {
+      paddingHorizontal: 48,
+    },
+    buttonFontFamily: {
+      fontFamily: 'PlusJakartaSans_600SemiBold',
     },
     buttonCancel: {
       backgroundColor: colors.border,
@@ -205,12 +228,6 @@ const createStyles = (colors: ThemeColors) =>
     buttonText: {
       fontSize: 15,
       fontFamily: 'PlusJakartaSans_600SemiBold',
-    },
-    buttonTextPrimary: {
-      color: '#FFF',
-    },
-    buttonTextDestructive: {
-      color: '#FFF',
     },
     buttonTextCancel: {
       color: colors.text,

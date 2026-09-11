@@ -24346,9 +24346,11 @@ how much they de-risk a public launch._
 ### C97. Driver-app push notifications reported "not visible," long-standing — two independent, compounding root causes found, neither fixed yet
 
 - [ ] **Status:** OPEN — audit written (`docs/audit/2026-09-10-driver-app-notification-delivery-audit.md`).
-  Backend fix (loud Firebase Admin SDK init failure) and a narrowed client-side fix (foreground
-  fallback toast) shipped as follow-up PRs — see below. Ops check (confirm the Firebase
-  credential on Fly/Railway) and the metric/iOS recommendations remain open.
+  Backend fix (loud Firebase Admin SDK init failure), a narrowed client-side fix (foreground
+  fallback toast), and the delivery-outcome metric (recommendation #3) shipped as follow-up PRs —
+  see below. Ops check (confirm the Firebase credential on Fly/Railway) and the client
+  fallback-path/iOS recommendations (#4, #5, #6) remain open — all need ops/real-device access
+  this session doesn't have.
 - **Correction (same day, before the client-side fix shipped):** the client-side finding below
   originally read as "every notification type except ride offers is silently dropped, foreground
   and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
@@ -24401,8 +24403,13 @@ how much they de-risk a public launch._
   user is actually experiencing (the fork above).
 - **Recommendations, in leverage order** (full detail in the audit doc): (1) ops check —
   confirm the Firebase service-account credential on both hosts, costs nothing, resolves the fork
-  fastest; (2) make the SDK init failure loud instead of silent; (3) add a real
-  `spinr_push_send_total{outcome=...}` delivery-outcome metric, since none exists today; (4) add
+  fastest; (2) ~~make the SDK init failure loud instead of silent~~ **DONE**; (3) ~~add a real
+  `spinr_push_send_total{outcome=...}` delivery-outcome metric, since none exists today~~ **DONE
+  2026-09-11** — `backend/features.py::_record_push_outcome`, called at every
+  `_deliver_push_now`/`_send_expo_push` return point (`success`/`stale_token`/`sdk_unavailable`/
+  `failed`). Full detail: `docs/change-log/2026-09-11-push-send-outcome-metric.md`. This is
+  observability only — it does not by itself resolve the fork above (still needs a human to say
+  which symptom they're seeing, or ops access to scrape the new metric); (4) add
   an explicit fallback-notification path for unhandled FCM message types on the client, closing
   the silent-drop gap for everything except ride offers; (5) confirm the iOS background-mode gap
   against a real build; (6) either wire `expo-notifications`' handler into the real path or

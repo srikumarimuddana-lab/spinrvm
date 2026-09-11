@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Image as RNImage, Platform, View } from 'react-native';
+import { Animated, Easing, Platform, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 import {
@@ -111,9 +111,10 @@ interface CarMarkerProps {
      * online-idle, or a trip already in progress).
      *
      * ONLY pass this on a screen that renders a single CarMarker at a time
-     * (a driver's own vehicle, or a rider's one assigned driver). On Android
-     * the ring is a sibling Marker (the car uses a native bitmap icon). Never
-     * wire this prop on a multi-marker screen (e.g. rider-app nearby drivers).
+     * (a driver's own vehicle, or a rider's one assigned driver). The ring and
+     * the car share ONE marker whose snapshot never freezes, so a multi-marker
+     * screen would re-snapshot every marker every frame — never wire this prop
+     * there (e.g. rider-app's nearby-drivers map, `(tabs)/index.tsx`).
      */
     ring?: { color: string; pulsing: boolean } | null;
     /**
@@ -189,22 +190,28 @@ const MAX_IMAGE_RETRIES = 3;
 /**
  * Top-down car marker using the transparent PNG from shared/assets.
  *
- * Android: native `Marker.image` (Google Maps BitmapDescriptor). The icon is
- * a GPU texture the map SDK owns — the same path Uber/Lyft use — so tab
- * blur / MapView detach cannot blank a frozen custom-view snapshot. Presence
- * ring, when set, is a sibling Marker (custom views on the same Marker as
- * `image` force the snapshot path). Bundled assets are 44×44 @1x / @2x / @3x,
- * matching the previous 40dp Image size. iOS: child <View><Image/></View>
- * with a view-transform for heading (Apple Maps ignores Marker.rotation).
+ * Both platforms render the car (and the optional presence ring) as child
+ * views of ONE Marker, with `tracksViewChanges` left permanently TRUE.
+ * Rendering via `size`-controlled <View><Image/></View> rather than the native
+ * `image` prop is also what makes `size` mean anything — the native prop draws
+ * at the asset's own pixel size.
+ *
+ * The never-freeze rule is load-bearing and was learned twice in production;
+ * see the long comment at the `tracksViewChanges` prop below before changing
+ * it. Short version: Android snapshots a custom-view marker to a bitmap, Expo
+ * Tabs detach the native MapView on blur, and ANY strategy that lets the car
+ * stop re-rendering (a frozen snapshot, or a native `Marker.image` whose
+ * expo-updates `file://` asset goes through Fresco's Drawee) loses the car on
+ * re-attach. The presence ring survived both failures precisely because it
+ * kept tracking on.
+ *
+ * iOS must also keep it true for a second, independent reason: Apple Maps
+ * ignores Marker.rotation, so heading is a view transform and freezing the
+ * snapshot would pin the PNG pointing north forever.
  *
  * Transparent backgrounds are set on every wrapper layer (and on the Marker
  * itself) to kill the default Android callout-style bubble that
  * react-native-maps otherwise draws around custom child views.
- *
- * iOS keeps `tracksViewChanges` true (Apple Maps is a live view; freezing
- * would pin the PNG north). Android's car icon is not a custom view, so it
- * does not snapshot. The optional Android ring sibling keeps tracking on
- * (one extra Marker, cheap) so a pulse still paints.
  *
  * Movement: PLAYBACK BUFFER (the Lyft technique). Incoming fixes are queued
  * with their REAL measurement timestamps and the marker renders the car
@@ -232,7 +239,8 @@ const MAX_IMAGE_RETRIES = 3;
  * can be < 3 m while the car is still moving.
  *
  * Mount animation: a one-shot spring scale+opacity "pop in" on iOS only.
- * Android skips it — the car is a native bitmap, not a view that can fade in.
+ * Android starts at scale/opacity 1 — the first snapshot must already contain
+ * a visible car, or the marker's initial bitmap is the empty frame.
  */
 const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
@@ -251,9 +259,6 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     mapHeadingRef,
 }) => {
     const markerRef = useRef<any>(null);
-    // Android presence-ring sibling (native `image` icons cannot host child
-    // views without falling back to the snapshot path this component left).
-    const ringMarkerRef = useRef<any>(null);
     // Stable Animated holders created once; reading .current at init is safe.
     // eslint-disable-next-line react-hooks/refs
     const animatedRegion = useRef(
@@ -628,7 +633,6 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 const node = markerRef.current;
                 if (node?.animateMarkerToCoordinate) {
                     node.animateMarkerToCoordinate(target, TICK_MS);
-                    ringMarkerRef.current?.animateMarkerToCoordinate?.(target, TICK_MS);
                     if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
                     resyncTimerRef.current = setTimeout(() => setAndroidCoord(target), TICK_MS);
                 } else {
@@ -742,9 +746,6 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         if (imageRetryTimerRef.current) clearTimeout(imageRetryTimerRef.current);
     }, []);
     const useCustomImage = !!imageUri && !imageFailed;
-    const androidMarkerImage = useCustomImage
-        ? { uri: imageUri as string }
-        : CAR_IMAGES[variant];
 
     // Do not silently swallow a decode failure (CLAUDE.md: DB/auth/payment
     // errors must surface loudly — the same applies here, since a silently
@@ -774,54 +775,6 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         });
     }, []);
 
-    // Android-only: restore the error path the native-icon switch removed.
-    //
-    // On Android the car is now `Marker.image`, resolved INSIDE the native map
-    // SDK, which exposes no JS error callback — and the <ExpoImage onError>
-    // below is in the iOS-only branch, so it can never fire. Without this, a
-    // dead or 404 `marker_image_url` left the driver with no visible car for the
-    // rest of their session AND reported nothing: handleImageError's fallback,
-    // its retry/backoff and its one-shot captureException were all unreachable.
-    // That is exactly the silent failure CLAUDE.md forbids ("never replace a
-    // failing call with a generic fallback path that hides the symptom").
-    //
-    // Probing with react-native's Image.prefetch (NOT expo-image's, which uses
-    // Glide) is deliberate: on Android it runs through Fresco, the same image
-    // pipeline react-native-maps' MapMarker.setImage() uses for an http(s) uri.
-    // So a pass also warms the exact cache the marker is about to read, and a
-    // failure routes into the identical handleImageError path iOS already uses —
-    // same bundled-car fallback, same retry semantics, same single Sentry
-    // report. Bundled variants never reach here; they are `require()`d modules.
-    //
-    // Scoped to http(s) only: a `file://`/`asset://`/`data:` source is resolved
-    // locally by the SDK and a prefetch miss there would be a false negative
-    // that hid a perfectly good icon behind the fallback.
-    useEffect(() => {
-        if (!isAndroid || !imageUri || imageFailed) return;
-        if (!/^https?:\/\//i.test(imageUri)) return;
-        let probe: Promise<boolean> | undefined;
-        try {
-            probe = RNImage.prefetch?.(imageUri);
-        } catch {
-            probe = undefined;
-        }
-        // A real Android build always has Image.prefetch; Jest's react-native
-        // Image mock does not. Skip the probe rather than throw inside a passive
-        // effect — a crashed effect would cost the marker entirely, which is
-        // worse than the unprobed icon this is guarding.
-        if (!probe || typeof probe.then !== 'function') return;
-        let cancelled = false;
-        probe
-            .then((ok) => {
-                if (!cancelled && !ok) handleImageError();
-            })
-            .catch(() => {
-                if (!cancelled) handleImageError();
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [imageUri, imageFailed, handleImageError, isAndroid]);
 
     // Android: plain Marker + native animator (see the teleport-guard note
     // above). iOS: Marker.Animated + AnimatedRegion, which is smooth there.
@@ -892,59 +845,35 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     /* eslint-enable react-hooks/refs */
     const outerSize = ring ? ringMaxDiameter : size;
 
-    if (isAndroid) {
-        // Native BitmapDescriptor icon + optional sibling ring. Children on
-        // the car Marker would set hasCustomMarkerView and snapshot again.
-        return (
-            <>
-                {ring ? (
-                    <Marker
-                        ref={ringMarkerRef}
-                        coordinate={androidCoord}
-                        anchor={{ x: 0.5, y: 0.5 }}
-                        flat
-                        tracksViewChanges
-                        zIndex={zIndex - 1}
-                        identifier={identifier ? `${identifier}-ring` : undefined}
-                        style={{ backgroundColor: 'transparent' }}
-                    >
-                        <View
-                            pointerEvents="none"
-                            style={{
-                                width: ringMaxDiameter,
-                                height: ringMaxDiameter,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                backgroundColor: 'transparent',
-                            }}
-                        >
-                            <View style={staticRingStyle as any} />
-                            {ring.pulsing && <Animated.View style={pulseRingAnimatedStyle as any} />}
-                        </View>
-                    </Marker>
-                ) : null}
-                <Marker
-                    ref={markerRef}
-                    coordinate={androidCoord}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                    flat
-                    rotation={androidRotation}
-                    image={androidMarkerImage}
-                    tracksViewChanges={false}
-                    zIndex={zIndex}
-                    identifier={identifier}
-                />
-            </>
-        );
-    }
-
     return (
         <MarkerComponent
             ref={markerRef}
-            coordinate={animatedRegion as any}
+            coordinate={isAndroid ? androidCoord : (animatedRegion as any)}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            rotation={rotationAnim as any}
+            rotation={isAndroid ? androidRotation : (rotationAnim as any)}
+            // NEVER freeze the snapshot, on either platform.
+            //
+            // Android renders a custom-view marker as a bitmap snapshot of this
+            // React view. Two previous approaches both lost the car:
+            //   1. Freeze after load (tracksViewChanges -> false). Expo Tabs keep
+            //      this tree mounted but detach the native MapView on blur; the
+            //      marker is re-created against an already-frozen snapshot and
+            //      ExpoImage never re-fires onLoad, so the car came back blank.
+            //   2. Native `Marker.image` instead of a child view. That removed the
+            //      snapshot but moved the car onto the Fresco/Drawee icon path
+            //      (an expo-updates asset resolves to a file:// uri, which
+            //      MapMarker.setImage routes through Drawee — not a synchronous
+            //      drawable), which does NOT survive the same re-attach. Verified
+            //      in live testing: the car still vanished, this time with no red
+            //      default pin, i.e. the marker drew with an empty bitmap.
+            // The evidence that settles it: the presence ring survived BOTH of
+            // those transitions, and the ring is a custom view with tracking left
+            // on. So keep the car on that same path and never freeze it.
+            // Cost: one marker re-snapshots per frame. Accepted — this component
+            // renders the driver's own single vehicle (the `ring` prop's docblock
+            // already forbids wiring it on a multi-marker screen), and the ring
+            // was already paying exactly this cost unconditionally.
             tracksViewChanges
             zIndex={zIndex}
             identifier={identifier}
@@ -977,7 +906,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 {/* eslint-disable-next-line react-hooks/refs -- mountAnimatedStyle is a plain object computed above from the stable mountAnim ref value, not a fresh ref read */}
                 <Animated.View style={mountAnimatedStyle}>
                     <Animated.View
-                        testID="car-marker-ios-rotate"
+                        testID={isAndroid ? undefined : 'car-marker-ios-rotate'}
                         pointerEvents="none"
                         style={iosRotateStyle ?? { width: size, height: size }}
                     >

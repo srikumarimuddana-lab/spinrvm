@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { shakeHorizontal } from '@shared/utils/motion';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
 import { showAlert } from '../AlertDialog';
@@ -806,8 +807,8 @@ function createStyles(colors: ThemeColors) {
     },
     dragHandleContainer: {
       alignItems: 'center',
-      paddingTop: 8,
-      paddingBottom: 4,
+      paddingTop: SPACING.sm,
+      paddingBottom: SPACING.xs,
     },
     dragHandle: {
       width: 36,
@@ -820,7 +821,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingBottom: 12,
     },
     statusIconBg: {
@@ -830,7 +831,7 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
     },
-    statusText: { fontSize: 15, fontWeight: '800' },
+    statusText: { fontSize: FONT.bodyMd, fontWeight: '800' },
     statusSub: { fontSize: 12, fontWeight: '600', color: colors.textDim, marginTop: 1, fontVariant: ['tabular-nums'] },
     earningsBox: {
       alignItems: 'center',
@@ -844,7 +845,7 @@ function createStyles(colors: ThemeColors) {
     earningsBreakdown: { fontSize: 9, fontWeight: '600', color: colors.success, marginTop: 2, fontVariant: ['tabular-nums'] },
 
     sheet: {
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingTop: 2,
     },
 
@@ -876,7 +877,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     riderAvatarText: { fontSize: 18, fontWeight: '800', color: colors.primary },
-    riderName: { fontSize: 15, fontWeight: '700', color: colors.text },
+    riderName: { fontSize: FONT.bodyMd, fontWeight: '700', color: colors.text },
     noteBanner: {
       flexDirection: 'row',
       gap: 8,
@@ -887,7 +888,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 12,
       marginBottom: 12,
     },
-    noteLabel: { fontSize: 11, fontWeight: '700', color: colors.primary, marginBottom: 2 },
+    noteLabel: { fontSize: FONT.label, fontWeight: '700', color: colors.primary, marginBottom: 2 },
     noteText: { fontSize: 14, color: colors.text, lineHeight: 19 },
     quietBanner: {
       flexDirection: 'row',
@@ -899,7 +900,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 12,
       marginBottom: 12,
     },
-    quietLabel: { fontSize: 11, fontWeight: '700', color: '#8B5CF6', marginBottom: 2 },
+    quietLabel: { fontSize: FONT.label, fontWeight: '700', color: '#8B5CF6', marginBottom: 2 },
     quietText: { fontSize: 14, color: colors.text, lineHeight: 19 },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
     ratingText: { fontSize: 12, fontWeight: '600', color: colors.textDim },
@@ -920,18 +921,18 @@ function createStyles(colors: ThemeColors) {
     dot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
     destSquare: { width: 10, height: 10, borderRadius: 2, marginTop: 4, backgroundColor: colors.error },
     routeLabel: { fontSize: 9, fontWeight: '800', color: colors.textDim, letterSpacing: 0.8, marginBottom: 2 },
-    routeAddress: { fontSize: 13, fontWeight: '600', color: colors.text, lineHeight: 18 },
-    routeLineContainer: { paddingLeft: 4, marginVertical: 4 },
+    routeAddress: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.text, lineHeight: 18 },
+    routeLineContainer: { paddingLeft: 4, marginVertical: SPACING.xs },
     routeLine: { width: 2, height: 16, backgroundColor: colors.border, marginLeft: 3 },
 
     otpCard: {
       backgroundColor: colors.surfaceLight,
       borderRadius: 14,
-      padding: 16,
+      padding: SPACING.md,
       marginBottom: 14,
       alignItems: 'center',
     },
-    otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+    otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: SPACING.xs },
     otpTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
     otpSub: { fontSize: 12, color: colors.textDim, marginBottom: 14 },
     otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14, justifyContent: 'center' },
@@ -948,16 +949,16 @@ function createStyles(colors: ThemeColors) {
     },
     otpBoxFilled: { borderColor: colors.primary, backgroundColor: `${colors.primary}08` },
     otpBoxError: { borderColor: colors.error, backgroundColor: `${colors.error}08` },
-    otpStatusRow: { height: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-    otpErrorText: { fontSize: 12, color: colors.error, fontWeight: '600', marginBottom: 8, textAlign: 'center' },
-    otpDigit: { fontSize: 32, fontWeight: '800', color: colors.text },
+    otpStatusRow: { height: 20, justifyContent: 'center', alignItems: 'center', marginBottom: SPACING.sm },
+    otpErrorText: { fontSize: 12, color: colors.error, fontWeight: '600', marginBottom: SPACING.sm, textAlign: 'center' },
+    otpDigit: { fontSize: FONT.h1, fontWeight: '800', color: colors.text },
     keypad: {
       flexDirection: 'row',
       flexWrap: 'wrap',
       justifyContent: 'center',
       gap: 8,
       width: '100%',
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     kpBtn: {
       width: '28%',
@@ -971,7 +972,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1.5,
       borderColor: colors.border,
     },
-    kpText: { fontSize: 26, fontWeight: '700', color: colors.text },
+    kpText: { fontSize: FONT.h2, fontWeight: '700', color: colors.text },
     skipBtn: { display: 'none' as any },
     skipText: { fontSize: 12, color: colors.textDim, fontWeight: '600' },
 
@@ -984,7 +985,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       gap: 8,
     },
-    actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+    actionPrimaryText: { fontSize: FONT.bodyMd, fontWeight: '700', color: '#fff' },
     // Charcoal in light mode, white in dark mode — the "open external
     // navigation" action, distinct from green trip-advancing actions.
     actionNeutral: { backgroundColor: colors.text },
@@ -1000,13 +1001,13 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1.5,
       borderColor: colors.border,
     },
-    actionSecondaryText: { fontSize: 15, fontWeight: '700' },
+    actionSecondaryText: { fontSize: FONT.bodyMd, fontWeight: '700' },
     actionSecondaryDisabled: {
       opacity: 0.45,
     },
 
-    cancelBtn: { paddingVertical: 12, alignItems: 'center', marginTop: 4 },
-    cancelText: { fontSize: 13, fontWeight: '600', color: colors.error },
+    cancelBtn: { paddingVertical: 12, alignItems: 'center', marginTop: SPACING.xs },
+    cancelText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.error },
   });
 }
 

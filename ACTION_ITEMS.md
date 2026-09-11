@@ -18509,10 +18509,11 @@ mechanical follow-up work, prioritizable independently.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
-  (driver-app rounds 1-2 merged 2026-09-11, 48 files total; round 3 —
-  a small cleanup of exact-match literals rounds 1-2 missed inside
-  already-touched files, PR #5232 — opened 2026-09-11), identified
-  2026-09-10.
+  (driver-app: round 1 merged 2026-09-10, round 2 merged 2026-09-11 across
+  4 PRs (48 files total), round 3 cleanup PR #5232 merged 2026-09-11 —
+  driver-app's exact-match `StyleSheet`-block scope is now complete;
+  rider-app: 5 parallel batches, PRs #5238/#5239/#5241/#5242/#5243, all
+  merged 2026-09-11), identified 2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
     h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
@@ -18581,6 +18582,20 @@ mechanical follow-up work, prioritizable independently.
       `components/dashboard/ForecastStrip.tsx`,
       `components/dashboard/HotspotChips.tsx`,
       `components/panels/RideOfferPanel.tsx`, `components/toastConfig.tsx`
+  - **Files (driver-app, round 3 — cleanup, PR #5232, open 2026-09-11, 5
+    files, 8 literals, 2 commits):** a fresh grep after round 2 found these
+    genuine exact-match misses (sibling properties in the same style object
+    that round 1/2 converted but left one property un-converted):
+    `app/login.tsx` (`inputSection.marginBottom: 24 → SPACING.lg`),
+    `app/driver/ride-detail.tsx` (`tlLine.marginTop: 4 → SPACING.xs`),
+    `app/driver/settings.tsx` (`deleteOverlay.padding` and
+    `deleteModal.padding`, both `24 → SPACING.lg`),
+    `app/report-safety.tsx` (`header.paddingVertical: 16 → SPACING.md`),
+    `components/dashboard/ActiveRidePanel.tsx` (`dot.marginTop` and
+    `destSquare.marginTop`, both `4 → SPACING.xs`, plus
+    `routeLineContainer.paddingLeft: 4 → SPACING.xs` — a partial-miss fix,
+    `marginVertical` on the same line had already been converted in round
+    2, `paddingLeft` had not).
   - **Round 1's "explicitly not touched" list is now covered:** the 6 files
     round 1 excluded to avoid clashing with concurrent parallel work
     (`RideOfferPanel.tsx`, `AlertDialog.tsx`, `ActivityView.tsx`,
@@ -18591,38 +18606,98 @@ mechanical follow-up work, prioritizable independently.
     unrelated ride-offer-audio/car-marker fixes) had already merged by the
     time round 2 started, so round 2 layers on top of it cleanly without
     touching any of that other work.
-  - **Files (driver-app, round 3 — cleanup, PR #5232, opened 2026-09-11,
-    5 files, 1 commit):** a fresh repo-wide grep after rounds 1-2 merged
-    found **no untouched driver-app files left** for this sweep — every
-    match traced back to a file rounds 1-2 already edited. What remained
-    were 8 individual exact-match literals those rounds missed inside
-    `StyleSheet.create()`/`createStyles()` blocks they'd already converted
-    (e.g. one property on a line converted, a sibling property on the same
-    line not): `app/login.tsx`, `app/driver/ride-detail.tsx`,
-    `app/driver/settings.tsx`, `app/report-safety.tsx`,
-    `components/dashboard/ActiveRidePanel.tsx`. This closes out driver-app's
-    exact-match `StyleSheet`-block sweep — round 3 is not expected to have
-    a round 4 behind it under this same methodology.
-  - **Corrected finding (2026-09-11):** the "~50 more files" / "roughly a
-    dozen more files" follow-up estimates in earlier revisions of this
-    bullet were never rechecked against a clean grep after each round
-    actually merged — they were carried-forward guesses, not measurements.
-    The real, verified remaining scope for driver-app is not "more files"
-    but a genuinely different, bigger scope decision: whether to also
-    convert inline `style={{...}}` JSX-prop literals (out of scope for
-    every round so far, on the explicit rule that only static
-    `StyleSheet.create()`/`createStyles()` blocks are touched) — these
-    exist in ~15 files repo-wide, including
-    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling. That
-    decision has not been made; nothing has been converted under it.
-  - **Follow-up scope (not done yet):** the inline-JSX-prop scope decision
-    above, if taken; all of rider-app (a separate parallel round under a
-    related item, not tracked by this bullet, and not yet started).
+  - **Files (rider-app, 5 parallel batches — PRs #5238/#5239/#5241/#5242/
+    #5243, all merged 2026-09-11 — 51 files total, 12
+    commits, plus 3 supporting jest-mock fixes):** rider-app had never been
+    touched by this item before this round (only 4 screens already imported
+    `SPACING`/`FONT`, matching the original issue text). Same methodology as
+    driver-app: exact-match-only substitution inside `StyleSheet.create()`/
+    `createStyles()` blocks, no rounding, inline JSX `style={{...}}` props
+    out of scope.
+    - Batch 1 (PR #5238, onboarding/legal, 10 files): `app/login.tsx`,
+      `app/otp.tsx`, `app/verify-email.tsx`,
+      `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
+      `app/profile-setup.tsx`, `app/reactivate-account.tsx`,
+      `app/become-driver.tsx` (`FONT`-only import — no `SPACING` exact
+      match existed in this file), `app/accessibility.tsx`. Fully verified,
+      CI green (all 64 check runs completed, none failed).
+    - Batch 2 (PR #5239, money/wallet/loyalty, 11 files):
+      `app/wallet.tsx`, `app/manage-cards.tsx`, `app/payment-confirm.tsx`
+      (padding/margin only — its `fontSize` values are wrapped in a
+      dynamic `sf()` scaler, not bare literals, so out of scope),
+      `app/loyalty.tsx`, `app/promotions.tsx`, `app/referral.tsx`,
+      `app/work-allowance-request.tsx`, `app/work-profile.tsx`,
+      `components/FareQuoteCard.tsx`, `components/BookingProposalCard.tsx`
+      (both grepped — sole real consumer is `app/ai-assistant.tsx`, a
+      sibling batch's file, untouched here), `app/privacy-settings.tsx`
+      (its `SettingRow` subcomponent uses inline JSX `style={[{...}]}`,
+      correctly left untouched). Plus `__tests__/paymentConfirmScreen.test.tsx`
+      (jest mock of `@shared/utils/responsive` switched from a full
+      replacement to `jest.requireActual(...)` spread, since the mock was
+      stripping out the newly-imported `SPACING`). This batch's PR body
+      initially shipped as a placeholder and 2 exact-match literals
+      (`manage-cards.tsx`'s `addCardBtn.paddingVertical`,
+      `referral.tsx`'s `sectionTitle.marginTop`) were missed on the first
+      pass — both caught on independent re-verification and fixed before
+      merge-readiness.
+    - Batch 3 (PR #5241, ride lifecycle/tracking, 12 files):
+      `app/confirm-pickup.tsx`, `app/driver-arrived.tsx`,
+      `app/driver-arriving.tsx`, `app/ride-completed.tsx`,
+      `app/ride-details.tsx`, `app/ride-in-progress.tsx`,
+      `app/ride-options.tsx`, `app/ride-status.tsx`,
+      `app/ride-tracking-webview.tsx`, `app/chat-driver.tsx`,
+      `app/search-destination.tsx`, `app/pick-on-map.tsx` — same `sf()`
+      exclusion as batch 2 applies to `confirm-pickup.tsx`/
+      `driver-arriving.tsx`/`ride-options.tsx`'s dynamically-scaled
+      `fontSize` values. Plus `__tests__/confirmPickupScreen.test.tsx` and
+      `__tests__/driverArrivingScreen.test.tsx` (same `jest.requireActual`
+      mock fix as batch 2, for the same reason). This batch's PR body also
+      initially shipped as a placeholder; fixed on re-verification (the
+      code diff itself was clean both times).
+    - Batch 4 (PR #5242, safety/support, 10 files): `app/ai-assistant.tsx`,
+      `app/emergency-contacts.tsx`, `app/lost-and-found.tsx`,
+      `app/lost-and-found-chat.tsx`, `app/notifications.tsx`,
+      `app/report-safety.tsx`, `app/safety-hub.tsx`,
+      `app/saved-places.tsx`, `app/scheduled-rides.tsx`,
+      `app/settings.tsx`. Clean on first verification — real Change Impact
+      Log, all conversions exact matches.
+    - Batch 5 (PR #5243, tabs/root layout + shared components, 8 of 11
+      assigned files — `app/_layout.tsx`, `app/(tabs)/_layout.tsx`, and
+      `components/VoltraRideActivity.tsx` legitimately skipped, none has a
+      `StyleSheet.create()`/`createStyles()` block, inline JSX/Voltra props
+      only, matching driver-app round 2's `_layout.tsx` precedent):
+      `app/(tabs)/account.tsx`, `app/(tabs)/activity.tsx`,
+      `app/(tabs)/index.tsx`, `components/CancelReasonSheet.tsx`,
+      `components/ConfirmSheet.tsx` (14 real consumers, grepped and
+      confirmed — value-identical substitution only, no prop/signature
+      change), `components/FreeCancelTimer.tsx`, `components/SchedulePicker.tsx`,
+      `components/Toast.tsx` (reached app-wide via `showToast()`/
+      `useToastStore`, 80 call sites — same value-identical guarantee).
+      This batch's PR body was accurate on first verification except for 2
+      minor documentation nits (a stale literal-count table for 5 files,
+      and one file wrongly listed as a `ConfirmSheet` consumer when it only
+      mentions the name in a comment) — both corrected directly.
+  - **Follow-up scope (not done yet):** driver-app's exact-match
+    `StyleSheet`-block sweep is now essentially complete — a fresh grep
+    after round 3 found no remaining untouched files in that scope (an
+    earlier version of this entry's "roughly a dozen more files"/"~50 more
+    files" estimate was never rechecked against a fresh grep and turned out
+    to be stale; corrected here). Remaining scope, for either app: (a)
+    inline-JSX-prop-literal conversion — a different, larger fix (moving
+    `style={{...}}` prop literals to constants, not covered by this item's
+    "StyleSheet blocks only" scope as written), still undecided whether to
+    pursue; (b) rider-app has 3 legitimately-skipped files (see batch 5
+    above) with only inline-JSX-prop styling, same category as (a).
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use (met — the `warn`-level lint rule exists) **and** existing
-    screens are actually migrated (met for driver-app's `StyleSheet`-block
-    scope as of round 3; not started for rider-app; inline-JSX-prop styling
-    is a separate, undecided scope for both apps).
+    screens are actually migrated (met for the `StyleSheet`-block scope in
+    both apps — driver-app complete across rounds 1–3, PR #5232 merged;
+    rider-app complete across its 5 batches, PRs #5238/#5239/#5241/#5242/
+    #5243, all merged 2026-09-11. Item stays open pending a decision on the
+    remaining inline-JSX-prop scope — the ~15 files repo-wide with inline
+    `style={{...}}`-only JSX-prop literals, e.g.
+    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling, are
+    the concrete example of the undecided "(a)" scope above).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started

@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import json
+
 from . import _deps
 from ._deps import (  # noqa: F401
     APIRouter,
@@ -15,6 +17,24 @@ from ._deps import (  # noqa: F401
 )
 
 router = APIRouter()
+
+# Per-ride response cache for the live route. The rider app AND the driver app
+# (phone + Android Auto share one poller) each call this every ~6 s during a
+# trip, and every call costs an OSRM route + an OSRM-snapped breadcrumb trail
+# on top of three Supabase reads — Sentry traces on 2026-09-11 put it at p50
+# 366 ms / p95 1.7 s. Keyed on the ride, the active leg and the driver's
+# position rounded to 4 dp (~11 m), so a stationary car (red light, pickup
+# wait) or the two pollers landing within the same window share one
+# computation, while a moving car naturally misses and recomputes. Only
+# non-empty results are cached, so a failed provider call is retried on the
+# next poll rather than pinned for the TTL. Ephemeral (Redis, seconds), never
+# logged — the key carries a coarse position, not the trail.
+LIVE_ROUTE_CACHE_TTL_SECONDS = 6
+LIVE_ROUTE_CACHE_PREFIX = "live_route:"
+
+
+def live_route_cache_key(ride_id: str, destination: str, o_lat: float, o_lng: float) -> str:
+    return f"{LIVE_ROUTE_CACHE_PREFIX}{ride_id}:{destination}:{round(float(o_lat), 4)}:{round(float(o_lng), 4)}"
 
 
 @router.get("/{ride_id}/live-route")
@@ -81,9 +101,24 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
         return empty
 
     try:
+        from ...utils.redis_client import redis_get, redis_set
         from ...utils.route_distance import compute_route
     except ImportError:
+        from utils.redis_client import redis_get, redis_set  # type: ignore
         from utils.route_distance import compute_route  # type: ignore
+
+    cache_key = live_route_cache_key(ride_id, destination, float(o_lat), float(o_lng))
+    try:
+        cached = await redis_get(cache_key)
+    except Exception as exc:
+        # A cache read failure must cost a recompute, never the response.
+        _deps.logger.warning(f"live-route cache read failed for ride_id={ride_id}: {exc}")
+        cached = None
+    if cached:
+        try:
+            return json.loads(cached)
+        except ValueError:
+            pass  # unreadable entry — fall through and recompute
 
     # 1. Optimal route to destination (for ETA + "where are they headed")
     result = await compute_route(float(o_lat), float(o_lng), float(dest_lat), float(dest_lng))
@@ -103,5 +138,10 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
         destination=[float(dest_lat), float(dest_lng)],
     )
     result["breadcrumb_trail"] = breadcrumb_trail
+
+    try:
+        await redis_set(cache_key, json.dumps(result), ttl=LIVE_ROUTE_CACHE_TTL_SECONDS)
+    except Exception as exc:
+        _deps.logger.warning(f"live-route cache write failed for ride_id={ride_id}: {exc}")
 
     return result

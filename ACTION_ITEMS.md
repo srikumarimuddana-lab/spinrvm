@@ -24524,14 +24524,29 @@ how much they de-risk a public launch._
   etc.) has very likely been active and working correctly in both apps' real builds all along —
   including on EAS builds and any prior local/CI build, none of which run in this stub
   environment. There is no evidence of an active customer-facing regression. The only real,
-  much smaller remaining item: `rider-app/patches/react-native+0.86.2.patch` has a stale
-  filename (installed version is 0.86.3) and should be renamed/regenerated to silence the
-  cosmetic warning — a cleanup, not a crash fix. No urgency; do it opportunistically.
+  much smaller remaining item at the time (2026-09-10): `rider-app/patches/react-native+0.86.2.patch`
+  had a stale filename (installed version is 0.86.3) and needed renaming to silence the cosmetic
+  warning — a cleanup, not a crash fix.
   **Lesson for future sessions:** this cloud sandbox's `node_modules` for `react-native` cannot
   be trusted to diagnose patch-package or native-module issues — verify findings like this one
   against a real environment before writing them up as active bugs, per this repo's own
   verification discipline (`CLAUDE.md`: "never let a tool's own output stand in for
   verification").
+  **2026-09-11 — fully closed, sibling patch had the same stale-filename issue and was missed
+  by the same-day fix.** The `react-native+0.86.2.patch → +0.86.3.patch` rename above didn't
+  catch its sibling, `rider-app/patches/@react-native+gradle-plugin+0.86.2.patch` — same class
+  of issue (installed `@react-native/gradle-plugin` is `0.86.3` per `rider-app/yarn.lock`, patch
+  filename still said `0.86.2`). Confirmed safe to rename with **zero content change** — its
+  content is byte-identical (`diff` exit 0) to `driver-app/patches/@react-native+gradle-plugin+0.86.3.patch`,
+  which the 2026-09-10 correction above already confirmed applies cleanly on the user's real
+  machine. No sandbox `node_modules` install needed for this one: unlike regenerating a patch's
+  *diff content* (which does need a real RN install per the handoff doc), a pure filename rename
+  of already-proven-identical content is safe to verify from source-controlled files alone.
+  Renamed; updated the 2 exact-filename citations in `docs/android-build-strategy.md` that would
+  otherwise have gone stale from this rename. That doc's own title/"Last verified" line and other
+  in-body "RN 0.86.2" references are separately stale (predate the 0.86.2→0.86.3 bump entirely) —
+  out of scope for this fix, noted here rather than silently left for a future session to
+  rediscover.
 
 - [ ] ~~**Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
   No code changed; regeneration requires a real `node_modules/react-native` install (local

@@ -18546,6 +18546,43 @@ mechanical follow-up work, prioritizable independently.
   - **Acceptance:** driver-app toast colors match the current theme tokens
     in both light and dark mode. Met.
 
+- [x] **UX6. `rider-app/components/Toast.tsx` had the identical hardcoded
+  toast-color bug UX5 fixed in driver-app, but was out of that item's file
+  scope** — **Status:** closed 2026-09-11, the follow-up UX5 itself flagged.
+  - **Issue/gap:** `rider-app/components/Toast.tsx`'s `VARIANT_CONFIG`
+    hardcoded the identical stale hex values as driver-app's pre-UX5
+    `toastConfig.tsx` (`info:'#1a73e8'`, `success:'#0d9f6e'`,
+    `warning:'#d97706'`, `danger:'#dc2626'`) — none matched
+    `shared/theme/index.ts`'s current tokens, and the component had no
+    `useTheme()` call, so rider toast colors never adapted to dark mode.
+  - **Why it mattered:** rider-app's `Toast.tsx` is the single
+    error/status-announcement path for nearly every form/failure in the app
+    (payment failures, ride cancellations, etc.) — the same
+    frequent/high-visibility surface UX5 flagged for driver-app.
+  - **Fix:** ported UX5's exact pattern — a new `variantConfig(colors,
+    variant)` resolves background via `colors.info`/`success`/`warning`/
+    `danger` per variant (icon glyph names stay a static `ICON_NAMES`
+    lookup, unchanged from before — not a color-drift concern). No changes
+    to `toastStore.ts`'s `ToastVariant` type, animation, gesture, or
+    store/queue logic — color-resolution only.
+  - **Files:** `rider-app/components/Toast.tsx`;
+    `rider-app/components/__tests__/Toast.theme.test.tsx` (new regression
+    test — light-mode tokens across all 4 variants + dark-mode adaptation
+    via a real `ThemeProvider`, mirroring UX5's
+    `toastConfig.theme.test.tsx`).
+  - **Verification:** `npx jest components/__tests__/Toast` (5/5 passing,
+    including the pre-existing `Toast.a11y.test.tsx` suite), `npx tsc
+    --noEmit` clean, `npx eslint` — the `no-restricted-syntax`
+    hardcoded-hex warnings on the file dropped from 14 → 10 (same count UX5
+    reported reducing to on driver-app's file); the remaining 10 are
+    pre-existing and out of scope (fixed-contrast white text/icon on a
+    colored surface — the same documented exception UX5 noted — and
+    padding/fontSize literals, UX2's territory).
+  - **Not fixed here:** UX2 (shared `SPACING`/`FONT` constants) and UX4
+    (shared shake-animation timing) remain open and untouched by this fix.
+  - **Acceptance:** rider-app toast colors match the current theme tokens
+    in both light and dark mode. Met.
+
 ## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
 
 _Not launch-gating, but every mature platform at this stage has them. Ordered by

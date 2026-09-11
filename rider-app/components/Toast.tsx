@@ -11,13 +11,29 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useToastStore, type ToastVariant } from '../store/toastStore';
 import { useAnimatedValue, useStableRef } from '../hooks/useAnimatedValue';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
-const VARIANT_CONFIG: Record<ToastVariant, { bg: string; icon: string }> = {
-  info: { bg: '#1a73e8', icon: 'information-circle' },
-  success: { bg: '#0d9f6e', icon: 'checkmark-circle' },
-  warning: { bg: '#d97706', icon: 'warning' },
-  danger: { bg: '#dc2626', icon: 'alert-circle' },
+// Icon glyphs only — colors come from the live theme (see variantConfig
+// below), so this stays in sync with shared/theme/index.ts automatically
+// instead of needing a second hardcoded palette kept in sync by hand.
+// Same split as driver-app/components/toastConfig.tsx's ICON_NAMES (UX5).
+const ICON_NAMES: Record<ToastVariant, string> = {
+  info: 'information-circle',
+  success: 'checkmark-circle',
+  warning: 'warning',
+  danger: 'alert-circle',
 };
+
+function variantConfig(colors: ThemeColors, variant: ToastVariant) {
+  const bgByVariant: Record<ToastVariant, string> = {
+    info: colors.info,
+    success: colors.success,
+    warning: colors.warning,
+    danger: colors.danger,
+  };
+  return { bg: bgByVariant[variant], icon: ICON_NAMES[variant] };
+}
 
 const DEFAULT_DURATION = 4000;
 
@@ -30,6 +46,7 @@ function liveRegionFor(variant: ToastVariant): 'assertive' | 'polite' {
 
 export default function Toast() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const current = useToastStore((s) => s.current);
   const dismiss = useToastStore((s) => s.dismiss);
 
@@ -122,7 +139,7 @@ export default function Toast() {
 
   if (!current) return null;
 
-  const config = VARIANT_CONFIG[current.variant];
+  const config = variantConfig(colors, current.variant);
 
   return (
     <Animated.View

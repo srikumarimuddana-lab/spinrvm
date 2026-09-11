@@ -699,7 +699,7 @@ class TestCompanyEmailOtpErrorBranches:
             patch("backend.routes.auth.set_csrf_cookie"),
             patch("backend.routes.auth._alert_if_new_device", alert_mock),
         ):
-            result = await verify_company_email_otp(
+            await verify_company_email_otp(
                 _request(), MagicMock(), CompanyEmailOtpVerifyRequest(email="brandnew@corp.com", code="1234")
             )
 

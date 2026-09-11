@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { ToastConfigParams } from 'react-native-toast-message';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Icon glyphs only — colors come from the live theme (see ICON_NAMES usage
 // below), so this stays in sync with `shared/theme/index.ts` automatically
@@ -82,9 +83,9 @@ export const toastConfig = {
 
 const styles = StyleSheet.create({
   container: {
-    marginHorizontal: 16,
+    marginHorizontal: SPACING.md,
     borderRadius: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACING.md,
     paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -96,6 +97,6 @@ const styles = StyleSheet.create({
   },
   icon: { marginRight: 12 },
   textWrap: { flex: 1 },
-  title: { color: '#FFF', fontSize: 15, fontWeight: '600' },
-  message: { color: 'rgba(255,255,255,0.9)', fontSize: 13, marginTop: 2 },
+  title: { color: '#FFF', fontSize: FONT.bodyMd, fontWeight: '600' },
+  message: { color: 'rgba(255,255,255,0.9)', fontSize: FONT.bodySm, marginTop: 2 },
 });

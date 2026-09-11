@@ -9,6 +9,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../../store/languageStore';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import ActivityView from '../../../components/activity/ActivityView';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 function ActivityScreen() {
   const insets = useSafeAreaInsets();
@@ -50,7 +51,7 @@ function createStyles(colors: ThemeColors) {
     },
     header: {
       paddingHorizontal: 20,
-      paddingBottom: 16,
+      paddingBottom: SPACING.md,
       borderBottomLeftRadius: 28,
       borderBottomRightRadius: 28,
       shadowColor: '#000',
@@ -76,7 +77,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       backgroundColor: '#fff',
       paddingHorizontal: 14,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       borderRadius: 20,
       gap: 6,
       shadowColor: '#000',
@@ -87,7 +88,7 @@ function createStyles(colors: ThemeColors) {
     },
     payoutBtnText: {
       color: colors.primaryDark,
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '700',
     },
   });

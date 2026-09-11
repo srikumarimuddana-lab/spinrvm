@@ -129,6 +129,30 @@ def test_not_yet_backfilled_blocks_the_row(tmp_path, monkeypatch):
     assert row.blocked_reason == "not_yet_backfilled"
 
 
+def test_explicit_null_old_payout_gst_amount_blocks_not_crashes(tmp_path, monkeypatch):
+    """meta['old_payout_gst_amount'] present but JSON null (not merely
+    absent) must be treated the same as not-yet-backfilled -- to_decimal(str(None))
+    raises InvalidOperation, so this must never reach that call."""
+    bookings_csv = tmp_path / "bookings.csv"
+    _write_bookings_csv(bookings_csv, [{"_id": "old-1", "payout_gst_amount": "1.00"}])
+    candidates = [
+        {
+            "id": "ride-1",
+            "legacy_import_metadata": {"source": SOURCE, "old_booking_id": "old-1", "old_payout_gst_amount": None},
+            "tax_amount": 0.30,
+            "total_fare": 20.00,
+        }
+    ]
+    monkeypatch.setattr(svc, "supabase", _fake_supabase_table(candidates))
+
+    plan = svc.build_backfill_plan(bookings_csv)  # must not raise
+
+    assert plan.stats["applyable"] == 0
+    assert plan.stats["blocked_not_yet_backfilled"] == 1
+    (row,) = plan.rows
+    assert row.blocked_reason == "not_yet_backfilled"
+
+
 def test_sanity_outlier_flagged_but_still_applyable(tmp_path, monkeypatch):
     """CSV validation passes (stored == source), but the value is far from
     5% of total_fare -- flagged for a human to eyeball, not blocked, since
@@ -189,6 +213,12 @@ def test_render_update_sql_only_includes_applyable_rows(tmp_path, monkeypatch):
     # Optimistic-concurrency guard present: only overwrite if tax_amount is
     # still what this plan observed.
     assert "r.tax_amount = v.old_tax_amount" in sql
+    # Guard clause reuses the shared IMPORT_SOURCE constant rather than a
+    # second hardcoded copy of the string that could drift out of sync.
+    assert f"= '{svc.IMPORT_SOURCE}'" in sql
+    # Decimal amount lands as a bare JSON number, never routed through
+    # float() (which would risk binary-float drift in committed SQL).
+    assert '"amount": 1.00' in sql
 
 
 def test_render_update_sql_with_no_applyable_rows_is_a_noop_comment(tmp_path, monkeypatch):

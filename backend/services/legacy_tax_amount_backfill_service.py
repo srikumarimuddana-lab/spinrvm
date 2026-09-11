@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -152,7 +151,11 @@ def build_backfill_plan(bookings_csv: Path | str) -> BackfillPlan:
         old_tax_amount = to_decimal(str(r.get("tax_amount") or "0"))
         total_fare = to_decimal(str(r.get("total_fare") or "0"))
 
-        if "old_payout_gst_amount" not in meta:
+        if meta.get("old_payout_gst_amount") is None:
+            # Covers both "key absent" and "key present but explicitly
+            # null" -- either way there's nothing valid to validate yet,
+            # and this must be a per-row block, not a crash that aborts
+            # the whole plan (to_decimal(str(None)) raises InvalidOperation).
             plan.rows.append(
                 BackfillRow(
                     ride_id=r["id"],
@@ -282,13 +285,20 @@ def render_update_sql(plan: BackfillPlan) -> str:
 
     values_lines = []
     for row in applyable:
-        breakdown = {"GST": {"rate": 5.0, "amount": float(row.new_tax_amount)}} if row.new_tax_amount > ZERO else {}
+        # Built from the Decimal's own str() -- never float() -- since a
+        # quantized Decimal (e.g. "1.00") is already a valid unquoted JSON
+        # number literal. No json.dumps() needed for this fixed shape.
+        if row.new_tax_amount > ZERO:
+            breakdown_json = f'{{"GST": {{"rate": 5.0, "amount": {row.new_tax_amount}}}}}'
+        else:
+            breakdown_json = "{}"
+        ride_id_sql = str(row.ride_id).replace("'", "''")
         values_lines.append(
             "  ('{ride_id}', {old:.2f}, {new:.2f}, '{breakdown}'::jsonb)".format(
-                ride_id=row.ride_id,
+                ride_id=ride_id_sql,
                 old=row.old_tax_amount,
                 new=row.new_tax_amount,
-                breakdown=json.dumps(breakdown).replace("'", "''"),
+                breakdown=breakdown_json.replace("'", "''"),
             )
         )
 
@@ -304,7 +314,7 @@ def render_update_sql(plan: BackfillPlan) -> str:
     w(",\n".join(values_lines))
     w("\n) AS v(id, old_tax_amount, new_tax_amount, new_tax_breakdown)\n")
     w("WHERE r.id = v.id::text\n")
-    w("  AND r.legacy_import_metadata->>'source' = 'legacy_mongo_booking_import'\n")
+    w(f"  AND r.legacy_import_metadata->>'source' = '{IMPORT_SOURCE}'\n")
     w("  AND r.tax_amount = v.old_tax_amount\n")
     w("RETURNING r.id;\n")
     return buf.getvalue()

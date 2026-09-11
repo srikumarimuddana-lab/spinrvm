@@ -256,7 +256,7 @@ function createStyles(colors: ThemeColors) {
         statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 12, padding: SPACING.md, alignItems: 'center' },
         statValue: { fontSize: 22, fontWeight: '700', color: colors.primary },
         statLabel: { fontSize: 12, color: colors.textDim, marginTop: SPACING.xs },
-        sectionTitle: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 24, marginBottom: 12 },
+        sectionTitle: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: SPACING.lg, marginBottom: 12 },
         termsCard: { backgroundColor: colors.surface, borderRadius: 12, padding: SPACING.md },
         termsText: { fontSize: FONT.bodySm, lineHeight: 20, color: colors.textDim },
         empty: { backgroundColor: colors.surface, borderRadius: 12, padding: 32, alignItems: 'center' },

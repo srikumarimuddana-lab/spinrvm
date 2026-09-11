@@ -718,7 +718,7 @@ function createStyles(colors: ThemeColors) {
     // Add Card button (rich list-item style)
     addCardBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 14,
-      paddingVertical: 16, paddingHorizontal: SPACING.md, borderRadius: 16,
+      paddingVertical: SPACING.md, paddingHorizontal: SPACING.md, borderRadius: 16,
       borderWidth: 1.5, borderColor: colors.primary, borderStyle: 'dashed',
       backgroundColor: colors.dangerBg,
       marginTop: SPACING.xs,

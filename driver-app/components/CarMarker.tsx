@@ -111,10 +111,13 @@ interface CarMarkerProps {
      * online-idle, or a trip already in progress).
      *
      * ONLY pass this on a screen that renders a single CarMarker at a time
-     * (a driver's own vehicle, or a rider's one assigned driver). The ring and
-     * the car share ONE marker whose snapshot never freezes, so a multi-marker
-     * screen would re-snapshot every marker every frame — never wire this prop
-     * there (e.g. rider-app's nearby-drivers map, `(tabs)/index.tsx`).
+     * (a driver's own vehicle, or a rider's one assigned driver). While
+     * `pulsing` is true this forces Android's `tracksViewChanges` to stay
+     * true for as long as the ring pulses — cheap for exactly one marker,
+     * but the same perf trap the mount-bounce animation above was built to
+     * avoid if it were ever applied per-marker on a multi-marker screen
+     * (e.g. rider-app's nearby-drivers map, `(tabs)/index.tsx`) — never wire
+     * this prop there.
      */
     ring?: { color: string; pulsing: boolean } | null;
     /**
@@ -190,28 +193,20 @@ const MAX_IMAGE_RETRIES = 3;
 /**
  * Top-down car marker using the transparent PNG from shared/assets.
  *
- * Both platforms render the car (and the optional presence ring) as child
- * views of ONE Marker, with `tracksViewChanges` left permanently TRUE.
- * Rendering via `size`-controlled <View><Image/></View> rather than the native
- * `image` prop is also what makes `size` mean anything — the native prop draws
- * at the asset's own pixel size.
- *
- * The never-freeze rule is load-bearing and was learned twice in production;
- * see the long comment at the `tracksViewChanges` prop below before changing
- * it. Short version: Android snapshots a custom-view marker to a bitmap, Expo
- * Tabs detach the native MapView on blur, and ANY strategy that lets the car
- * stop re-rendering (a frozen snapshot, or a native `Marker.image` whose
- * expo-updates `file://` asset goes through Fresco's Drawee) loses the car on
- * re-attach. The presence ring survived both failures precisely because it
- * kept tracking on.
- *
- * iOS must also keep it true for a second, independent reason: Apple Maps
- * ignores Marker.rotation, so heading is a view transform and freezing the
- * snapshot would pin the PNG pointing north forever.
+ * Renders the car image via a child <View><Image/></View> (not the native
+ * `image` prop) so `size` controls the rendered dimensions — the native
+ * prop renders at the PNG's physical size which is far too large.
  *
  * Transparent backgrounds are set on every wrapper layer (and on the Marker
  * itself) to kill the default Android callout-style bubble that
  * react-native-maps otherwise draws around custom child views.
+ *
+ * Snapshot lifecycle: `tracksViewChanges` stays true until the car PNG has
+ * actually decoded (Image onLoad) plus a short settle delay, then flips false
+ * for perf. The previous fixed 800 ms timer raced slow image decodes (cold
+ * start, low-end Android, map remounts) and could permanently snapshot an
+ * empty view — an invisible car. A hard cap stops per-frame re-snapshots if
+ * onLoad never fires; a late onLoad re-arms one final snapshot.
  *
  * Movement: PLAYBACK BUFFER (the Lyft technique). Incoming fixes are queued
  * with their REAL measurement timestamps and the marker renders the car
@@ -238,9 +233,17 @@ const MAX_IMAGE_RETRIES = 3;
  * annotation. See coalescePlaybackBearing() for why a 500 ms tick's chord
  * can be < 3 m while the car is still moving.
  *
- * Mount animation: a one-shot spring scale+opacity "pop in" on iOS only.
- * Android starts at scale/opacity 1 — the first snapshot must already contain
- * a visible car, or the marker's initial bitmap is the empty frame.
+ * Mount animation: a one-shot spring scale+opacity "pop in" plays every time
+ * this component mounts — first appearance, and any full remount (e.g. the
+ * mapKey remount in (tabs)/index.tsx used to recover a stale marker after
+ * offline->online). Deliberately NOT a looping/pulsing animation: a
+ * continuous animation would force Android's `tracksViewChanges` to stay
+ * true forever, re-snapshotting the marker every frame — the exact perf
+ * regression the settle-then-freeze lifecycle above exists to avoid. A
+ * short, one-shot spring (native-driven, cheap) avoids that: it finishes
+ * within the existing post-image-load settle window, so Android's own
+ * JS-driven rotation/position animations are unaffected and the native
+ * snapshot still freezes on schedule.
  */
 const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
@@ -661,11 +664,79 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    const [tracksViewChanges, setTracksViewChanges] = useState(true);
+    const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Whether the car Image has ever actually decoded — read by the ring
+    // re-arm effect below to decide whether a fresh snapshot can safely
+    // re-freeze quickly or must wait for the image itself.
+    const hasLoadedImageRef = useRef(false);
+    useEffect(() => {
+        // Hard cap: never re-snapshot indefinitely even if onLoad is lost.
+        const cap = setTimeout(() => setTracksViewChanges(false), 5000);
+        return () => {
+            clearTimeout(cap);
+            if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        };
+    }, []);
     const handleImageLoaded = () => {
-        // iOS keeps tracksViewChanges true; onLoad is a safe no-op.
+        // Image bitmap is decoded — force a tracksViewChanges false→true
+        // transition so Android Google Maps re-snapshots the marker with the
+        // car visible. setTracksViewChanges(true) when already true is a
+        // React no-op (no re-render, no bitmap re-capture). The brief false
+        // is invisible — the next-frame true commits a fresh snapshot.
+        hasLoadedImageRef.current = true;
+        setTracksViewChanges(false);
+        requestAnimationFrame(() => {
+            setTracksViewChanges(true);
+            if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+            settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        });
     };
 
-    // One-shot "pop in" on iOS only. Android's car is a native bitmap.
+    // Re-arm the snapshot on ANY ring identity change (color or presence),
+    // not just a transition into pulsing. Root cause (live-testing reports:
+    // "only a green circle, no car icon" — persisting even after going back
+    // offline): index.tsx forces a full MapView remount on offline→online
+    // (see its mapKey comment — a fix for a DIFFERENT bug, the car icon
+    // never reappearing after that same transition). That remount restarts
+    // this component fresh, with the online-idle ring present from frame
+    // one — a race between the car Image's decode and whatever moment the
+    // native renderer happens to snapshot. If the ring (a plain colored
+    // View, paints instantly) wins that race, the snapshot freezes with the
+    // ring but no car — and because a frozen Android marker snapshot
+    // ignores every later prop change, that broken bitmap then persists
+    // through subsequent transitions too, including going offline again
+    // (ring prop back to null), since nothing re-arms tracksViewChanges on
+    // that change either. Keying an effect on the ring's own identity closes
+    // both gaps: any appearance, color change, or disappearance of the ring
+    // now gets at least one fresh snapshot attempt.
+    const ringChangeKey = ring ? `${ring.color}:${ring.pulsing}` : null;
+    const prevRingChangeKeyRef = useRef<string | null>(null);
+    useEffect(() => {
+        const changed = prevRingChangeKeyRef.current !== ringChangeKey;
+        prevRingChangeKeyRef.current = ringChangeKey;
+        if (!changed) return;
+        setTracksViewChanges(true);
+        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        if (hasLoadedImageRef.current) {
+            // Image is already decoded — safe to re-freeze on the same
+            // schedule handleImageLoaded uses.
+            settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+        }
+        // Else: leave tracksViewChanges true. The image hasn't loaded yet on
+        // this mount, so freezing now would just reproduce the bug this
+        // effect exists to fix — handleImageLoaded (once the image actually
+        // decodes) or the mount effect's 5s hard cap above will freeze it
+        // instead.
+    }, [ringChangeKey]);
+
+    // One-shot "pop in" on mount (iOS only). On Android, Google Maps renders
+    // custom markers as a bitmap snapshot of the React view. Starting at
+    // opacity 0 / scale 0 means the first snapshot captures the ring (outside
+    // this wrapper) but not the car (inside it, invisible). Native-driver
+    // animations don't reliably trigger the re-snapshot mechanism, so the
+    // bitmap can freeze ring-only — the "green circle, no car" bug. Starting
+    // at 1 on Android ensures the car is visible from the very first frame.
     // eslint-disable-next-line react-hooks/refs
     const mountAnim = useRef(new Animated.Value(isAndroid ? 1 : 0)).current;
     useEffect(() => {
@@ -730,14 +801,8 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // Reported to error tracking at most once per mount — a flapping image
     // must not spam Sentry every retry cycle.
     const imageErrorReportedRef = useRef(false);
-    // Resetting on a URL change is the whole point: a corrected upload must get
-    // a fresh attempt rather than staying on the bundled fallback for the life
-    // of the component. react-hooks/set-state-in-effect reports on the setState
-    // calls themselves, so the directive has to sit on them — it previously sat
-    // on the `useEffect(` line, where it suppressed nothing and was itself
-    // flagged as an unused directive while the real error still fired.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setImageFailed(false);
         setImageAttempt(0);
         imageErrorReportedRef.current = false;
@@ -756,6 +821,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // shipping with no vehicle icon for the rest of their session.
     const handleImageError = useCallback(() => {
         setImageFailed(true);
+        setTracksViewChanges(true);
         setImageAttempt((attempt) => {
             if (attempt >= MAX_IMAGE_RETRIES) {
                 if (!imageErrorReportedRef.current) {
@@ -774,7 +840,6 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             return attempt;
         });
     }, []);
-
 
     // Android: plain Marker + native animator (see the teleport-guard note
     // above). iOS: Marker.Animated + AnimatedRegion, which is smooth there.
@@ -844,6 +909,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         : null;
     /* eslint-enable react-hooks/refs */
     const outerSize = ring ? ringMaxDiameter : size;
+    // Android: freeze the custom-view snapshot after the image loads (rotation
+    // is a native GMSMarker prop, independent of the bitmap). iOS Apple Maps
+    // ignores Marker.rotation, so heading is a view transform — freezing the
+    // snapshot would pin the PNG north forever. Single marker on this screen.
+    const effectiveTracksViewChanges = isAndroid
+        ? (ring?.pulsing ? true : tracksViewChanges)
+        : true;
 
     return (
         <MarkerComponent
@@ -852,29 +924,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={isAndroid ? androidRotation : (rotationAnim as any)}
-            // NEVER freeze the snapshot, on either platform.
-            //
-            // Android renders a custom-view marker as a bitmap snapshot of this
-            // React view. Two previous approaches both lost the car:
-            //   1. Freeze after load (tracksViewChanges -> false). Expo Tabs keep
-            //      this tree mounted but detach the native MapView on blur; the
-            //      marker is re-created against an already-frozen snapshot and
-            //      ExpoImage never re-fires onLoad, so the car came back blank.
-            //   2. Native `Marker.image` instead of a child view. That removed the
-            //      snapshot but moved the car onto the Fresco/Drawee icon path
-            //      (an expo-updates asset resolves to a file:// uri, which
-            //      MapMarker.setImage routes through Drawee — not a synchronous
-            //      drawable), which does NOT survive the same re-attach. Verified
-            //      in live testing: the car still vanished, this time with no red
-            //      default pin, i.e. the marker drew with an empty bitmap.
-            // The evidence that settles it: the presence ring survived BOTH of
-            // those transitions, and the ring is a custom view with tracking left
-            // on. So keep the car on that same path and never freeze it.
-            // Cost: one marker re-snapshots per frame. Accepted — this component
-            // renders the driver's own single vehicle (the `ring` prop's docblock
-            // already forbids wiring it on a multi-marker screen), and the ring
-            // was already paying exactly this cost unconditionally.
-            tracksViewChanges
+            tracksViewChanges={effectiveTracksViewChanges}
             zIndex={zIndex}
             identifier={identifier}
             style={{ backgroundColor: 'transparent' }}

@@ -195,3 +195,36 @@ One marker re-snapshots per frame. Accepted deliberately: this renders the drive
 - **This has not been confirmed on the device either.** It is grounded in the ring surviving the exact transition that blanks the car, which is strong evidence but still inference about the native layer — not an observed fix. Ship it to the `preview` channel and reproduce Drive → Profile → Drive before trusting it.
 - **The per-frame re-snapshot cost was not measured.** No frame timing was taken on a real device, on any OEM. If the driver map regresses visibly on a low-end handset, the next step is re-freezing on a *focus-aware* trigger rather than reverting to a native icon.
 - **Two prior theories about this bug have now been wrong in production.** Treat this one as a hypothesis under test until a device says otherwise.
+
+---
+
+## 13. §12 made it worse — CarMarker restored to the pre-#5219 original (2026-09-11)
+
+**Shipped via OTA after PR #5220 merged, confirmed on device: the map is now empty — no car AND no ring.** Before #5220 the ring at least rendered. §12's "never freeze the snapshot" removed the one step that made the marker draw at all.
+
+What the three shipped versions actually did, side by side:
+
+| Version | `tracksViewChanges` on Android | Observed |
+|---|---|---|
+| Original (pre-#5219, `6c7a4fc2b`) | `true`, then `false` ~350 ms after image load | Car + ring visible on load; car lost after Drive → Profile → Drive |
+| #5219 | car: native `Marker.image`; ring: sibling custom view, `true` permanent | Ring visible; car lost after tab switch |
+| #5220 (§12) | one custom-view marker, `true` permanent | **Nothing renders** |
+
+The only runtime difference between the original and #5220 is that the original eventually freezes. So the freeze is what produces a valid snapshot in this environment, and a permanently-tracking custom-view marker with the car's `rotation` prop produces an empty one. §12's reasoning — "the ring survived with tracking on, so tracking on is the surviving path" — held for the ring in isolation and did not hold for the combined marker. It was inference about the native layer, stated as such in §12's "not verified", and it was wrong.
+
+No native error was recorded for the #5220 bundle (Sentry, `release:com.spinr.driver@2.0.0+25`, last hour); the marker fails silently.
+
+### Action
+
+`driver-app/components/CarMarker.tsx` and its test are restored byte-for-byte from `6c7a4fc2b` — the last version observed to show the car. This deliberately **re-introduces the original tab-switch loss** (§1), because a car that disappears after a tab switch is strictly better than a car that never appears.
+
+Removed with it, since they only existed for the two failed approaches: the sibling ring, `androidMarkerImage`, the `Image.prefetch` probe, and the never-freeze rule. The pre-existing freeze-after-load machinery (`setTracksViewChanges`, the ring re-arm effect, `handleImageLoaded`) is back exactly as it was.
+
+### Verification
+
+- `npx jest __tests__/components/CarMarker.test.tsx __tests__/app/driverDashboardScreen.test.tsx` — **80 passed** (the restored test file is the original 26-test suite).
+- `npx tsc --noEmit` — **0 errors**.
+
+### What happens next — and what does NOT
+
+Three theories about this bug have now been wrong in production, each one plausible, each one shipped on inference. **No fourth theory ships.** The next change to this component must be a diagnostic build to the `preview` channel that logs, at the moment of the tab switch and again on return: whether `CarMarker` is mounted, the Marker's `tracksViewChanges` value, whether `onLoad` fired for the current `ExpoImage` instance, the wrapper's measured layout size, and whether `mapKey` changed — so the fix is read from evidence rather than reasoned from the ring.

@@ -22,6 +22,7 @@ import {
   requestNotificationPermission,
   openNotificationSettings,
 } from '@shared/services/firebase';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function PrivacySettingsScreen() {
   const router = useRouter();
@@ -266,12 +267,12 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+      paddingHorizontal: SPACING.md, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
     content: { padding: 20, paddingBottom: 40 },
-    sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: 8, marginTop: 16 },
+    sectionTitle: { fontSize: FONT.bodySm, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: SPACING.sm, marginTop: SPACING.md },
     card: { backgroundColor: colors.surfaceLight, borderRadius: 16, paddingHorizontal: 14 },
     footerText: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: 24, lineHeight: 18 },
   });

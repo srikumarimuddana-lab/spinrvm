@@ -18527,10 +18527,10 @@ mechanical follow-up work, prioritizable independently.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
-  (driver-app round 1 merged 2026-09-10; round 2 — 4 parallel batches, 39
-  more files, PRs #5225/#5226/#5227/#5228 — all merged 2026-09-11), still
-  open overall: driver-app has a follow-up batch remaining (see below) and
-  rider-app hasn't started, identified 2026-09-10.
+  (driver-app rounds 1-2 merged 2026-09-11, 48 files total; round 3 —
+  a small cleanup of exact-match literals rounds 1-2 missed inside
+  already-touched files, PR #5232 — opened 2026-09-11), identified
+  2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
     h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
@@ -18565,8 +18565,7 @@ mechanical follow-up work, prioritizable independently.
     - Auth entry + settings: `app/login.tsx`, `app/otp.tsx`,
       `app/driver/settings.tsx`
   - **Files (driver-app, round 2 — 4 parallel batches, PRs #5225/#5228/
-    #5226/#5227, opened 2026-09-11, open/pending review — 39 files total,
-    ~16 commits):**
+    #5226/#5227, merged 2026-09-11 — 39 files total, ~16 commits):**
     - Batch 1 (PR #5225, onboarding/legal, 9 files): `app/appeal.tsx`,
       `app/become-driver.tsx`, `app/crc-consent.tsx`,
       `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
@@ -18610,18 +18609,38 @@ mechanical follow-up work, prioritizable independently.
     unrelated ride-offer-audio/car-marker fixes) had already merged by the
     time round 2 started, so round 2 layers on top of it cleanly without
     touching any of that other work.
-  - **Follow-up scope (not done yet):** driver-app has roughly a dozen more
-    files still carrying ad-hoc literals per a repo grep, plus
-    `app/driver/(tabs)/_layout.tsx`'s inline `screenOptions` styling (a
-    different fix — moving inline JSX-prop literals to constants, not
-    covered by this item's "StyleSheet blocks only" scope as written); all
-    of rider-app is untouched by this bullet (a separate parallel round
-    under a related item, not tracked here).
+  - **Files (driver-app, round 3 — cleanup, PR #5232, opened 2026-09-11,
+    5 files, 1 commit):** a fresh repo-wide grep after rounds 1-2 merged
+    found **no untouched driver-app files left** for this sweep — every
+    match traced back to a file rounds 1-2 already edited. What remained
+    were 8 individual exact-match literals those rounds missed inside
+    `StyleSheet.create()`/`createStyles()` blocks they'd already converted
+    (e.g. one property on a line converted, a sibling property on the same
+    line not): `app/login.tsx`, `app/driver/ride-detail.tsx`,
+    `app/driver/settings.tsx`, `app/report-safety.tsx`,
+    `components/dashboard/ActiveRidePanel.tsx`. This closes out driver-app's
+    exact-match `StyleSheet`-block sweep — round 3 is not expected to have
+    a round 4 behind it under this same methodology.
+  - **Corrected finding (2026-09-11):** the "~50 more files" / "roughly a
+    dozen more files" follow-up estimates in earlier revisions of this
+    bullet were never rechecked against a clean grep after each round
+    actually merged — they were carried-forward guesses, not measurements.
+    The real, verified remaining scope for driver-app is not "more files"
+    but a genuinely different, bigger scope decision: whether to also
+    convert inline `style={{...}}` JSX-prop literals (out of scope for
+    every round so far, on the explicit rule that only static
+    `StyleSheet.create()`/`createStyles()` blocks are touched) — these
+    exist in ~15 files repo-wide, including
+    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling. That
+    decision has not been made; nothing has been converted under it.
+  - **Follow-up scope (not done yet):** the inline-JSX-prop scope decision
+    above, if taken; all of rider-app (a separate parallel round under a
+    related item, not tracked by this bullet, and not yet started).
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use (met — the `warn`-level lint rule exists) **and** existing
-    screens are actually migrated (partially met — driver-app rounds 1+2
-    merged, ~12 files + `_layout.tsx`'s inline styling still outstanding;
-    rider-app not yet started; not yet complete for either app).
+    screens are actually migrated (met for driver-app's `StyleSheet`-block
+    scope as of round 3; not started for rider-app; inline-JSX-prop styling
+    is a separate, undecided scope for both apps).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started

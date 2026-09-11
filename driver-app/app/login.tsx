@@ -398,7 +398,7 @@ function createStyles(colors: ThemeColors) {
       lineHeight: 22,
     },
     inputSection: {
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
     inputLabel: {
       fontSize: FONT.label,

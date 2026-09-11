@@ -21,8 +21,9 @@ so you know what to unblock and who needs to do it.
 |---|---|---|
 | Android — run tests on your own laptop | 🟢 Ready today | Just needs Android Studio + Maestro installed (Part A below) |
 | Android — run tests automatically on every relevant PR | 🟡 Built, but switched off | The wiring exists; 2 access keys need to be added by a repo admin (Part D) |
-| iOS — run tests on your own laptop | 🟡 Mac + Xcode only | Maestro cannot test iOS from Windows or Linux, full stop (Part B) |
-| iOS — run tests automatically in CI | 🔴 Not built yet | Needs an Apple Developer account connected — a business step, not a coding one (Part D) |
+| iOS — run tests on your own laptop | 🟡 Mac + Xcode only | Maestro cannot test iOS from Windows or Linux **locally**, full stop (Part B) |
+| iOS — run tests **in the cloud** (no Mac needed) | 🟡 One real blocker, not "needs a Mac" | Needs an Apple Developer account connected inside EAS — a business step, not a coding one, and **not** a Mac requirement (Part F, added 2026-09-11) |
+| iOS — run tests automatically in CI, hands-off | 🔴 Not built yet | Same blocker as above, plus one small workflow addition (Part D/F) |
 | DAST (security-scanning the live app) | 🔴 Scaffolded, not active | Needs a "staging" environment to scan, which doesn't exist yet (Part E) |
 | SAST (security-scanning the source code) | 🟢 Already running | Runs on every single pull request today — different from DAST, explained below |
 
@@ -167,10 +168,15 @@ layer standing in for the other side. Full details and troubleshooting:
 
 ## Part B — Set up for iOS testing
 
-**Read this first:** Maestro's iOS support only works on a Mac with Xcode
-installed. There is no way around this — not from Windows, not from Linux,
-locally or in the cloud-free way Part A describes for Android. If your
-laptop isn't a Mac, skip to **"If you're not on a Mac"** below.
+**Read this first:** running Maestro's iOS tests **locally, on your own
+laptop**, only works on a Mac with Xcode installed — there's no way around
+that specific case, not from Windows, not from Linux. That is *not* the
+same as saying iOS testing needs a Mac, full stop — it doesn't. **If you
+want iOS testing without owning a Mac, skip straight to Part F** — cloud
+device testing (Maestro Cloud or a couple of strong alternatives) runs iOS
+tests from an ordinary Linux CI machine, no Mac anywhere in the chain. Come
+back to this Part B only if you specifically want to run things by hand on
+your own machine.
 
 ### If you're on a Mac
 
@@ -202,14 +208,19 @@ laptop isn't a Mac, skip to **"If you're not on a Mac"** below.
 
 ### If you're not on a Mac
 
-You genuinely cannot run Maestro's iOS tests locally. Your options:
-- **Borrow/use a Mac** (even briefly) for the one-time local run above.
-- **Wait for the iOS CI lane** — see Part D. This needs an Apple Developer
-  account connected to the project first, which hasn't happened yet.
+You genuinely cannot run Maestro's iOS tests **locally on your own
+machine**. Your options:
+- **Use cloud device testing instead — Part F.** This is the real answer
+  for most people in this situation: no Mac required anywhere, real or
+  simulated iPhones run in someone else's data center, and it reuses the
+  same 12 flow files. Start there.
+- **Borrow/use a Mac** (even briefly) if you specifically want to debug a
+  flow interactively with `maestro studio`, which only makes sense running
+  locally.
 - **TestFlight manual testing** — once an iOS build is submitted to Apple's
   TestFlight (Apple's beta-testing platform), you can test the real app by
   hand on any iPhone without needing a Mac yourself. This is manual, not
-  automated, but it's the practical fallback today.
+  automated, but it's a useful fallback for exploratory testing.
 
 ---
 
@@ -373,6 +384,92 @@ a person to make, not something any workflow can do.
 
 ---
 
+## Part F — Cloud device testing: Maestro Cloud vs. the alternatives
+
+*(Added 2026-09-11, in response to: "can we test the Android and iOS app on
+Maestro or any other product in the cloud, and what's the best solution
+going forward?")*
+
+### The headline finding
+
+**None of the cloud options below need you to own a Mac.** That's the
+biggest thing this research changed from what Part B says above. Owning a
+Mac only matters if you want to run Maestro **locally, on your own
+laptop**. Every cloud device-testing product — Maestro Cloud included —
+builds and runs the iOS app on infrastructure the vendor owns, triggered
+from an ordinary Linux CI machine (this repo's GitHub Actions runners are
+already Linux). The same is true of Expo's own build service (EAS Build):
+it compiles the iOS app on Expo's cloud Mac infrastructure no matter what
+machine you run `eas build` from.
+
+### So what's actually blocking cloud iOS testing today?
+
+One thing, and it isn't a Mac: **an Apple Developer Program account
+($99/year) needs to be connected inside EAS** so it can produce a signed
+iOS build. That's the same blocker already named in Part D/`ACTION_ITEMS.md`
+B25 — this research doesn't change it, it just clears up *why* it's the
+blocker (identity/signing, not compute).
+
+**One genuinely free interim option, worth doing before spending anything:**
+EAS can build an iOS **Simulator** build (`"simulator": true` in a build
+profile) with **no Apple Developer account at all** — it can't install on a
+real iPhone, but Maestro Cloud can run a Simulator build in its hosted
+farm. That means iOS cloud testing could start this week, at zero new
+cost beyond normal EAS/Maestro Cloud usage, using the same 12 existing flow
+files, well before anyone decides on the $99/year account. Today,
+`rider-app/eas.json`/`driver-app/eas.json`'s `test` profile (the one
+`maestro-e2e.yml` uses) has no iOS entry at all — adding one, plus an iOS
+job in `maestro-e2e.yml` mirroring the existing Android job, is a small,
+isolated change I can draft on request (see the question at the end of
+this guide).
+
+### The options, compared
+
+| Product | Runs your existing 12 Maestro flows as-is? | Real iOS devices (not just simulator)? | Needs a Mac anywhere? | Rough cost (unverified against primary pricing pages — confirm before budgeting) | Verdict for Spinr |
+|---|---|---|---|---|---|
+| **Maestro Cloud (mobile.dev)** | ✅ Yes — it's Maestro's own hosted runner | Simulators confirmed; real-device coverage referenced but not independently confirmed | ❌ No | ~$250/device/month (per concurrent slot), 7-day free trial | 🟢 **Top pick** — already wired into `maestro-e2e.yml`, zero rewrite, zero new integration work |
+| **BrowserStack App Automate** | ✅ Yes — native, documented Maestro support | ✅ Yes, real devices | ❌ No | ~$249/month (1 parallel slot), scales with parallelism | 🟢 Strongest fallback if you want confirmed real-device coverage or Maestro Cloud's pricing doesn't work out |
+| **LambdaTest / TestMu AI** | ✅ Added Maestro + HyperExecute support (Jan 2026) | Real device cloud | ❌ No | Not confirmed this session | 🟡 New enough to be worth a trial, not enough track record yet to lead with |
+| **Bitrise (Device Cloud for Maestro)** | ✅ Marketplace step | Real devices | ❌ No | Bundled CI + device-farm pricing | 🟡 Only worth it if you'd also want to replace GitHub Actions itself |
+| **devicelab-dev/maestro-runner** (open-source) | ✅ Maestro-compatible | Depends which backend farm you point it at | ❌ No | Free tool — you still pay whatever device farm it drives | 🟡 Interesting, but a small third-party project — pilot it, don't bet production QA on it sight-unseen |
+| **Sauce Labs** | ❌ No native support (Appium/Espresso/XCTest only) | ✅ Yes | ❌ No | ~$199–249/month+ | 🔴 Would mean abandoning or rewriting all 12 existing flows — not worth it |
+| **Firebase Test Lab** | ❌ No — Espresso/XCTest/Robo only | ✅ Yes | ❌ No | Free daily quota, then pay-as-you-go | 🔴 Same rewrite problem — Spinr's existing Firebase usage doesn't change this |
+| **AWS Device Farm** | ❌ No native support (generic custom scripting only) | ✅ Yes | ❌ No | Not confirmed | 🔴 More DIY glue work than any option above, no upside to compensate |
+
+**One naming trap worth knowing about:** AWS Marketplace lists something
+called "Maestro Cloud Control (MCC)" — that's an unrelated cloud-gaming/VDI
+product, nothing to do with mobile.dev's Maestro. Don't let the name
+confuse a vendor search.
+
+### Why Sauce Labs, Firebase Test Lab, and AWS Device Farm are ruled out here
+
+All three would throw away the 12 flow files that already exist and pass
+locally — Spinr would be rewriting the same test coverage in a different
+tool's language (Appium/Espresso/XCTest) for no functional gain. That's a
+real cost with no offsetting benefit today. Worth revisiting only if a
+specific requirement shows up that only one of them can meet (e.g., a
+compliance reason to use AWS specifically).
+
+### What "best solution going forward" means concretely
+
+1. **Use Maestro Cloud** — it's not a new decision, it's finishing a
+   decision already made and half-built in this repo. Do Part D's two
+   steps (add the 2 secrets, fire the workflow once) to get Android cloud
+   testing live.
+2. **For iOS, don't wait on the Apple Developer account to start.** Get an
+   iOS Simulator build added to the `test` profile and an iOS job added to
+   `maestro-e2e.yml` — free, unblocks real cloud iOS coverage this week.
+3. **Decide on the Apple Developer Program account ($99/yr) separately, on
+   its own timeline** — it upgrades Simulator coverage to real-device
+   coverage and unlocks TestFlight distribution, but it's not gating step
+   1 or 2.
+4. **Keep BrowserStack App Automate in your back pocket**, not as a
+   day-one build — it's the most credible fallback if Maestro Cloud's
+   pricing or device coverage doesn't work out at scale, and it costs
+   nothing to know that today since it needs no flow rewrite either.
+
+---
+
 ## My recommendation
 
 Do these in this order — each one is independently useful even if the next
@@ -385,11 +482,15 @@ one is delayed:
    task turns "tests exist but never run" into "tests run automatically on
    every relevant PR." Do this before investing more in new test flows;
    there's no point writing more tests for a pipe that's currently closed.
-3. **iOS CI and the staging environment are real projects, not quick
-   fixes** — sequence them based on what you're shipping next (if an iOS
-   release is imminent, prioritize Apple Developer provisioning; if a
-   security review or launch is imminent, prioritize the staging
-   environment for DAST).
+3. **For iOS, don't wait — get cloud coverage this week via Part F's free
+   Simulator-build path**, then decide on the $99/yr Apple Developer
+   account on its own timeline once you want real-device coverage or
+   TestFlight distribution. This is the update from the earlier version of
+   this guide: iOS cloud testing was never actually blocked on owning a
+   Mac, only on one config addition.
+4. **The staging environment (for DAST) is the one genuinely bigger
+   project here** — sequence it based on what's next (prioritize it ahead
+   of a security review or public launch).
 
 ---
 
@@ -399,11 +500,14 @@ one is delayed:
 |---|---|---|---|
 | A. Run local Android tests, work through the 🔲 manual items in `docs/MOBILE_SMOKE.md` | You / QA | Nothing | Your laptop only |
 | B. Add `EXPO_TOKEN` + `MAESTRO_CLOUD_API_KEY` repo secrets, hand-fire the workflow once | Repo/org admin | Nothing | GitHub repo settings only |
-| C. Provision an Apple Developer account inside EAS for the iOS CI lane | Whoever owns Apple Developer access | Nothing | EAS project config only |
-| D. Stand up the staging environment (`ACTION_ITEMS.md` E1), then set `STAGING_URL` | Infra/DevOps | Nothing (independent project) | New Fly.io app + Supabase project |
+| C. Add an iOS Simulator build profile + iOS job to `maestro-e2e.yml` (Part F) | Whoever's driving mobile CI | Track B's secrets, to actually run it | `eas.json` (both apps) + `maestro-e2e.yml` |
+| D. Decide on and provision an Apple Developer account inside EAS (real-device iOS, TestFlight) | Whoever owns Apple Developer access | Nothing — independent of Track C | EAS project config only |
+| E. Stand up the staging environment (`ACTION_ITEMS.md` E1), then set `STAGING_URL` | Infra/DevOps | Nothing (independent project) | New Fly.io app + Supabase project |
 
-None of these four touch the same files or systems, so they're safe to run
-at the same time without stepping on each other.
+None of these five touch the same files or systems (Track C and D both
+touch "iOS CI" as a topic but not the same actual settings — C is a code
+change, D is an account/credential action), so they're safe to run at the
+same time without stepping on each other.
 
 ---
 

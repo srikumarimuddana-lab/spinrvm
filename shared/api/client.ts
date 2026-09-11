@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import SpinrConfig from '../config/spinr.config';
+import { addBreadcrumb } from '../services/errorReporting';
 import { clampToastMessage, TOAST_MESSAGE_MAX } from '../utils/toastMessage';
 
 
@@ -169,6 +170,25 @@ export function setSuppressRefreshSignOut(v: boolean): void {
 
 export function setRefreshCallback(fn: RefreshFn): void {
   _refreshCallback = fn;
+}
+
+/**
+ * Whether a refresh token is persisted for this install — i.e. whether a
+ * session exists that authStore.initialize() could still restore. Read-only;
+ * mirrors the storage split authStore uses (SecureStore natively, session
+ * storage on web). Any read failure counts as "none", which keeps the caller
+ * on the conservative (clear) path.
+ */
+async function hasStoredRefreshToken(): Promise<boolean> {
+  try {
+    if (Platform.OS === 'web') {
+      return typeof sessionStorage !== 'undefined' && !!sessionStorage.getItem('refresh_token');
+    }
+    const SecureStore = require('expo-secure-store');
+    return !!(await SecureStore.getItemAsync('refresh_token'));
+  } catch {
+    return false;
+  }
 }
 
 // ── Proactive token refresh ──
@@ -1079,7 +1099,8 @@ const handleApiError = async (
   // failures — clearing here would hard-sign-out a driver mid-shift on
   // a flaky connection and force a fresh OTP login.
   if (response.status === 401 && !isSosUrl(url) && !refreshAttempted) {
-    console.log('[API] 401 Unauthorized — clearing session');
+    // The access token in memory is dead either way; drop it so nothing else
+    // keeps sending it.
     setInMemoryToken(null);
     try {
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -1090,13 +1111,30 @@ const handleApiError = async (
       }
     } catch { /* best-effort clear */ }
 
-    // Lazily import the auth store to avoid circular deps. The store's
-    // logout() clears user/token/isAuthenticated — the layout effects
-    // in both apps watch isAuthenticated and redirect to /login.
-    try {
-      const { useAuthStore } = require('../store/authStore');
-      useAuthStore.getState().logout();
-    } catch { /* store may not be initialized yet on cold start */ }
+    // No refresh callback yet means authStore.initialize() has not run in
+    // this process — so nothing here has TRIED the stored refresh token, and
+    // that token is the whole session. logout() deletes it. That is how the
+    // 2026-09-11 test ride (SPR-T9NYPB) lost its session mid-trip: a request
+    // 401'd during a background relaunch, before initialize(), the backstop
+    // wiped the refresh token, and the next foreground open went straight to
+    // OTP — the backend never received a refresh attempt at all. When a
+    // refresh token is on disk and no one has tried it, reject and leave the
+    // decision to initialize(), which refreshes on its first run and only
+    // logs out on a definitive 401 of its own.
+    if (!_refreshCallback && (await hasStoredRefreshToken())) {
+      console.log('[API] 401 before auth init — refresh token untouched, deferring to initialize()');
+      addBreadcrumb(`api 401 pre-init on ${method} ${url} — session kept for initialize()`);
+    } else {
+      console.log('[API] 401 Unauthorized — clearing session');
+      addBreadcrumb(`api 401 ${method} ${url} — clearing session (refreshCallback=${!!_refreshCallback}, retry=${isRetryAttempt})`);
+      // Lazily import the auth store to avoid circular deps. The store's
+      // logout() clears user/token/isAuthenticated — the layout effects
+      // in both apps watch isAuthenticated and redirect to /login.
+      try {
+        const { useAuthStore } = require('../store/authStore');
+        useAuthStore.getState().logout();
+      } catch { /* store may not be initialized yet on cold start */ }
+    }
   }
 
   // Phase 2B: throw SpinrApiError so consumers can read messageKey,

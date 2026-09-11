@@ -124,6 +124,47 @@ describe('shared/api/client — SOS exempt from 401→logout interceptor', () =>
     expect(hasAuthToken()).toBe(false);
   });
 
+  // 2026-09-11 (ride SPR-T9NYPB): a 401 during a background relaunch, before
+  // authStore.initialize() had registered the refresh callback, made this
+  // backstop call logout() — which deletes the stored refresh token. The
+  // next foreground open went straight to OTP and the backend never saw a
+  // refresh attempt. With a refresh token on disk and no callback yet, the
+  // session must be left for initialize() to try.
+  describe('G2 backstop before auth init', () => {
+    it('keeps the stored refresh token and does not log out when no refresh callback is registered yet', async () => {
+      _storage.refresh_token = 'stored-refresh-token';
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).not.toHaveBeenCalled();
+      // The dead access token is still dropped so nothing keeps sending it.
+      expect(hasAuthToken()).toBe(false);
+      expect(_storage.refresh_token).toBe('stored-refresh-token');
+    });
+
+    it('still clears the session when there is no stored refresh token to recover', async () => {
+      delete _storage.refresh_token;
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).toHaveBeenCalled();
+    });
+
+    it('still clears the session on a retry-after-refresh 401 even with a stored token (fresh credential rejected)', async () => {
+      _storage.refresh_token = 'stored-refresh-token';
+      // A registered callback that "succeeds" — the retried request then 401s
+      // again, which is the server rejecting a freshly minted token.
+      setRefreshCallback(jest.fn().mockResolvedValue(true));
+      _mockFetch.mockResolvedValue(make401Response());
+
+      await expect(api.get('/rides/active')).rejects.toThrow();
+
+      expect(mockLogout).toHaveBeenCalled();
+    });
+  });
+
   it('401 on /users/emergency-contacts is NOT exempt', async () => {
     _mockFetch.mockResolvedValue(make401Response());
 

@@ -25069,6 +25069,45 @@ how much they de-risk a public launch._
   the full hand-port this item already called for is still required. Full
   detail: `docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`
   (updated in place, not superseded).
+- **2026-09-11 — independently reproduced in-sandbox, closing the remaining
+  verification gap.** This session's cloud sandbox, unlike 2026-09-10's,
+  produced a genuinely real `node_modules/react-native` install for both
+  apps (`yarn install`, no `--ignore-scripts` limitation on the *content* —
+  confirmed via `find node_modules/react-native/Libraries -name '*.js' | wc -l`
+  → 450 real `.js` files in both apps, not the 0-real-file/`.d.ts`-only stub
+  that caused the original 2026-09-10 false alarm). Whether this reflects a
+  fixed sandbox image, a difference in how the install was invoked, or just
+  session-to-session variance in this cloud environment is not established —
+  future sessions should not assume either state without checking.
+  Followed the safety protocol this item itself established (never run
+  `npx patch-package <pkgname>` in *create* mode, which regenerates and
+  overwrites the patch file — the cause of the 2026-09-10 near-miss): backed
+  up both apps' `patches/` directories out-of-repo first, then ran plain
+  `npx patch-package --error-on-warn` (*apply* mode — reads `patches/`,
+  writes only to `node_modules/`, never touches the patch files). Result for
+  both apps: **exit 0, zero warnings**, matching the user's real-machine
+  report exactly:
+  - `driver-app`: all 9 target files now carry the `PATCH (spinr...)` marker
+    (`ActivityIndicator.js`, `RefreshControl.js`, `ScrollView.js`, `Switch.js`,
+    `DebuggingOverlay.js`, `Modal.js`, `HScrollViewNativeComponents.js`, both
+    `VirtualView*NativeComponent.js` files) — matches the 9-file count this
+    item's handoff doc corrected to.
+  - `rider-app`: 7 of its 8 target files carry the marker; the 8th,
+    `HScrollViewNativeComponents.js`, applied its one-line hunk (`import View
+    from '.../View/View'`) exactly as diffed — confirmed by grepping the
+    installed file for that exact import line — but that hunk itself never
+    contained a `PATCH (spinr...)` comment, so its absence is expected, not a
+    sign of partial application.
+  - Both apps' `patches/*.patch` files confirmed byte-identical to the
+    pre-run backup afterward (`diff -r`) and `git status --short` on both
+    `patches/` directories stayed clean throughout — the patch content itself
+    was never at risk this time.
+  No source file was modified by this verification (`node_modules` is
+  git-ignored; `git status --short` for the whole repo, excluding
+  `node_modules`, was empty before and after). **No hand-port, regeneration,
+  or PR is needed** — the closure recorded above (2026-09-10/11, from the
+  user's real machine) was already correct; this only adds a second,
+  independent, in-sandbox data point to it. Status stays CLOSED.
 
 ### C99. No Fly.io/Railway CLI access AND the Firebase MCP server can't authenticate from this environment — two independent blockers on verifying prod secrets, including C97's own top recommendation
 

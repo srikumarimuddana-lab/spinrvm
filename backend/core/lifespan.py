@@ -440,6 +440,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to import safety checkin loop: {e}")
 
+    # Route-deviation safety alert — every 30s: for in_progress rides,
+    # checks whether the driver's current position has been sustained more
+    # than 500m off the planned route for 60+ seconds, and escalates an
+    # open safety incident if so. Gated by app_settings.route_deviation_
+    # alert_enabled (default off — dark-launched, new behavior).
+    try:
+        from utils.route_deviation_alerter import route_deviation_alert_loop
+
+        _spawn("route_deviation_alerter (30s)", route_deviation_alert_loop)
+    except Exception as e:
+        logger.opt(exception=True).error(f"Failed to import route deviation alerter loop: {e}")
+
     # PII retention purge — daily SECURITY DEFINER call to anonymize
     # ride GPS at 3y, hard-delete rides at 7y, delete location history
     # / chat / stripe events at 90d, delete expired refresh tokens after
@@ -752,6 +764,7 @@ async def lifespan(app: FastAPI):
             "route_gap_monitor (15s)",
             "stale_intent_reconciler (15min)",
             "safety_checkin (30s)",
+            "route_deviation_alerter (30s)",
             "retention_purge (24h)",
             "data_export_purge (1h)",
             "reconciliation (daily 02:00 UTC)",

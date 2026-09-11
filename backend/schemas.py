@@ -512,6 +512,12 @@ class AppSettings(BaseModel):
     # flip off only to silence an alert-noise incident, not as a correctness
     # control.
     stale_in_progress_ride_alert_enabled: bool = True
+    # Kill switch for the live route-deviation safety alert
+    # (utils/route_deviation_alerter.py). Alert-only — never mutates ride
+    # state or insurance periods — but unlike the check above this is a
+    # brand-new safety-team-paging behavior, not an established one, so it
+    # defaults OFF: ship dark, verify in staging, then flip on.
+    route_deviation_alert_enabled: bool = False
     # ── Notification throttling (quiet hours + daily cap) ────────────────
     # Master kill switch. Defaults OFF: existing push/SMS/email delivery is
     # unchanged until an admin opts in after staging verification. Global for

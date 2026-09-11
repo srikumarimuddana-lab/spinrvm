@@ -228,3 +228,21 @@ Removed with it, since they only existed for the two failed approaches: the sibl
 ### What happens next — and what does NOT
 
 Three theories about this bug have now been wrong in production, each one plausible, each one shipped on inference. **No fourth theory ships.** The next change to this component must be a diagnostic build to the `preview` channel that logs, at the moment of the tab switch and again on return: whether `CarMarker` is mounted, the Marker's `tracksViewChanges` value, whether `onLoad` fired for the current `ExpoImage` instance, the wrapper's measured layout size, and whether `mapKey` changed — so the fix is read from evidence rather than reasoned from the ring.
+
+---
+
+## 14. Remount the marker on Drive-tab refocus (2026-09-11)
+
+**New evidence from live testing: going offline → online brings the car back after a tab switch.** That path bumps `mapKey` (`index.tsx:275`) and remounts the whole `MapView`; a remount creates a fresh marker whose snapshot is taken from a freshly mounted view. So a remount is *observed* to restore the marker, whereas every attempt to make the existing snapshot survive re-attach (§2, §12) failed.
+
+This is not a fourth theory about the native snapshot. It replays an action the device has shown to work, on a different trigger.
+
+**Fix:** `index.tsx` keys `CarMarker` on a counter that increments every time the Drive tab regains focus (`useFocusEffect`), skipping the first focus so startup does not mount twice. Marker-only, not `mapKey`: no tile reload, no camera reset. `CarMarker.tsx` is untouched — still the pre-#5219 original from §13.
+
+**Cost:** one marker remount per return to the Drive tab — the playback buffer re-seeds from the current fix. Brief marker re-appearance is possible on return; that replaces "marker absent until offline/online" and is strictly better.
+
+**If this does not restore the car:** the escalation is to bump `mapKey` on refocus instead — the exact mechanism observed to work — accepting the map reload. Nothing else on this component ships without that.
+
+Test: `driverDashboardScreen.test.tsx` — the `CarMarker` mock now counts mounts; one test asserts a refocus mounts a fresh marker and the first focus does not. The suite needed an `expo-router` mock (its real module pulls an ESM dependency Jest cannot parse); other screen tests already have one.
+
+Not verified on a device — grounded in the offline→online observation, not a reproduction of this exact change.

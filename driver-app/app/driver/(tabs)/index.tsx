@@ -4,6 +4,7 @@ import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteLine } from '@shared/components/RouteLine';
+import { useFocusEffect } from 'expo-router';
 import { RoutePins } from '@shared/components/RoutePins';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore, type OffRouteConfirmation } from '../../../store/driverStore';
@@ -273,6 +274,28 @@ function DriverDashboard() {
   // above doesn't cover this transition since rideState stays 'idle' the
   // whole time a driver goes offline and back online.
   const [mapKey, setMapKey] = useState(0);
+  // Remount the car marker every time the Drive tab regains focus.
+  //
+  // Expo Tabs keep this screen mounted on blur but detach the native MapView;
+  // on return the map is re-attached and react-native-maps re-adds the marker
+  // from its existing (frozen) custom-view snapshot — which comes back blank,
+  // so the car AND its presence ring vanish after Drive → Profile → Drive.
+  // Three attempts to make that snapshot survive re-attach (freeze after load,
+  // native Marker.image, never-freeze) all failed in live testing.
+  //
+  // What was observed to bring the car back: going offline → online, which
+  // bumps mapKey above and remounts the whole MapView. A remount creates a
+  // fresh marker whose snapshot is taken from a freshly mounted view. This
+  // applies the same remount to the marker alone on every refocus — cheaper
+  // than remounting the map (no tile reload, no camera reset). The first focus
+  // is the mount itself and is skipped so startup does not mount twice.
+  const [markerFocusKey, setMarkerFocusKey] = useState(0);
+  const driveFocusCountRef = useRef(0);
+  useFocusEffect(
+    useCallback(() => {
+      if (driveFocusCountRef.current++ > 0) setMarkerFocusKey((k) => k + 1);
+    }, []),
+  );
   // Which MapView instance (by mapKey) has fired onMapReady. `mapPadding` is
   // withheld until then — see the prop's comment for the crash this prevents.
   // Keyed on mapKey rather than a plain boolean reset in an effect, so that a
@@ -1093,6 +1116,7 @@ function DriverDashboard() {
         {/* Driver car marker */}
         {location?.coords && (
           <CarMarker
+            key={markerFocusKey}
             coordinate={{
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,

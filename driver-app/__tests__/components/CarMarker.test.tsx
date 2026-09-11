@@ -343,6 +343,71 @@ describe('CarMarker — onBearingChange (shared bearing source for map camera + 
   });
 });
 
+describe('CarMarker — route-snap continuity hint survives a re-anchored live route (2026-09-11, "car drives sideways")', () => {
+  // Degrees per metre at ~50°N: 1e-5° lat ≈ 1.11 m; use 1e-4° steps ≈ 11 m.
+  const LAT0 = 50.4452;
+  const LNG0 = -104.6189;
+  const north = (m: number) => LAT0 + m * 9e-6;
+  const east = (m: number) => LNG0 + m * 1.4e-5;
+  const mockPlaybackPosition = playbackPosition as jest.Mock;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    mockPlaybackPosition.mockReturnValue(null);
+  });
+
+  it('re-bases the segment hint on the new polyline instead of ratcheting into the post-turn segment', () => {
+    // Route 1: a long straight road north, 12 segments of ~11 m. The car is
+    // ~66 m up it, so the ticker snaps to segment ~6 and keeps that index.
+    const route1 = Array.from({ length: 13 }, (_, i) => ({ latitude: north(i * 11), longitude: LNG0 }));
+    const car = { latitude: north(66), longitude: LNG0 };
+    mockPlaybackPosition.mockReturnValue({ coordinate: car, bearing: 0, mode: 'interpolating' });
+
+    const onBearingChange = jest.fn();
+    const { rerender, unmount } = render(
+      <CarMarker coordinate={car} routeCoordinates={route1} onBearingChange={onBearingChange} />,
+    );
+    act(() => { jest.advanceTimersByTime(500); });
+    expect(onBearingChange).toHaveBeenLastCalledWith(expect.any(Number));
+    const straightBearing = onBearingChange.mock.calls.at(-1)![0] as number;
+    expect(Math.min(straightBearing, 360 - straightBearing)).toBeLessThan(5); // north
+
+    // Route 2: the live-route poll re-anchors at the car — segment 0 now
+    // starts where the car is — and the road turns EAST 30 m ahead. With the
+    // old index (~6) carried forward, the constrained search began at the
+    // post-turn segments, found the corner within 35 m, and the icon took the
+    // east-bound bearing while the car still drove north.
+    const route2 = [
+      car,
+      { latitude: north(66 + 11), longitude: LNG0 },
+      { latitude: north(66 + 22), longitude: LNG0 },
+      { latitude: north(66 + 30), longitude: LNG0 }, // corner
+      { latitude: north(66 + 30), longitude: east(11) },
+      { latitude: north(66 + 30), longitude: east(22) },
+      { latitude: north(66 + 30), longitude: east(33) },
+      { latitude: north(66 + 30), longitude: east(44) },
+      { latitude: north(66 + 30), longitude: east(55) },
+      { latitude: north(66 + 30), longitude: east(66) },
+    ];
+    // Car has crept ~4 m north — still on the straight, well before the corner.
+    const carNext = { latitude: north(70), longitude: LNG0 };
+    mockPlaybackPosition.mockReturnValue({ coordinate: carNext, bearing: 0, mode: 'interpolating' });
+    rerender(
+      <CarMarker coordinate={carNext} routeCoordinates={route2} onBearingChange={onBearingChange} />,
+    );
+    act(() => { jest.advanceTimersByTime(500); });
+
+    const afterRefresh = onBearingChange.mock.calls.at(-1)![0] as number;
+    // Still north (0/360), NOT east (90).
+    expect(Math.min(afterRefresh, 360 - afterRefresh)).toBeLessThan(10);
+    expect(Math.abs(afterRefresh - 90)).toBeGreaterThan(45);
+    unmount();
+  });
+});
+
 describe('CarMarker — Android rotation interpolates through a turn, not a single snap (2026-09-09, "no smooth animation")', () => {
   const coord = { latitude: 50.4452, longitude: -104.6189 };
   const originalPlatformOS = Platform.OS;

@@ -5710,6 +5710,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `accessibility@spinr.ca` contact) — this new disclosure sentence should
     land at that document's next reviewed/re-published version, not as a
     standalone unreviewed edit to the already-live text.
+    - **2026-09-11: disclosure language drafted.** Added to
+      `docs/legal/privacy-policy.md` Section 6 (plus pre-publication note 6
+      tying every factual claim — `super_admin`-only access, the required
+      `reason` field, no third-party recipient — back to the code that
+      verifies it), with `docs/legal/legal-text-publication-checklist.md`
+      and the request package's Status table updated to match. A
+      `spinr-legal-readiness-reviewer` pass confirmed all three factual
+      claims against the actual code. **Still open:** this is a draft-only
+      addition to the repo source file — the already-live production policy
+      text does not yet carry this sentence, per the "next reviewed/
+      re-published version, not a standalone edit" rule above.
   - **A41's tied-in legacy-migration consent-sufficiency question remains
     separately open** — the 2026-09-07 entry above grouped it with R-G for
     reviewer convenience (same blocker: no named reviewer), but it is a

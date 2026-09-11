@@ -1143,7 +1143,7 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
          eligible immediately) precisely so today's 97 candidates get one
          more purge-eligibility window past what "already dormant" alone
          would justify.
-      - **Built, not yet run:** `backend/migrations/412_purge_driver_pii_secret_fn.sql`
+      - **Built, not yet run:** `backend/migrations/413_purge_driver_pii_secret_fn.sql`
         adds a `purge_driver_pii_secret(secret_id)` RPC — deleting the
         actual `vault.secrets` ciphertext, not just nulling the column
         reference (migration 289's own top comment already warned that

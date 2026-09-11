@@ -26,7 +26,7 @@ legacy-imported driver profiles still carry a real SIN:
 reference.** Migration 289's own top comment already warns that nulling
 ``drivers.sin`` alone orphans the vault row without deleting it -- "the
 ciphertext is unreachable but retained, which is a PIPEDA problem, not a
-clean [purge]." Migration 412 (``purge_driver_pii_secret`` RPC) closes that
+clean [purge]." Migration 413 (``purge_driver_pii_secret`` RPC) closes that
 gap; this module calls it before nulling the column, in that order, matching
 289's own note ("run that BEFORE dropping the column").
 
@@ -119,7 +119,7 @@ def build_sin_purge_plan(*, today: date | None = None) -> SinPurgePlan:
 
 
 def purge_pii_secret(secret_id: str | None) -> bool:
-    """Delete a driver-PII vault.secrets row via migration 412's RPC.
+    """Delete a driver-PII vault.secrets row via migration 413's RPC.
     Returns whether a row was actually deleted."""
     if not secret_id:
         return False

@@ -26,7 +26,7 @@ Safety, enforced in the service layer (not repeated here):
   - the grace-period gate is a hard code check in ``apply_sin_purge``, not
     just a documented convention -- passing ``--apply`` before the cutoff
     date refuses and exits non-zero rather than purging early.
-  - deletes the actual vault.secrets ciphertext (migration 412's
+  - deletes the actual vault.secrets ciphertext (migration 413's
     ``purge_driver_pii_secret`` RPC) before nulling the column reference --
     see migration 289's own warning that nulling the column alone orphans
     the secret without deleting it.

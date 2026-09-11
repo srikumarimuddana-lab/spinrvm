@@ -1,4 +1,4 @@
--- Migration 412: purge_driver_pii_secret() — delete a driver-PII vault secret
+-- Migration 413: purge_driver_pii_secret() — delete a driver-PII vault secret
 --
 -- CONTEXT: migration 289's own top comment already documents this gap —
 -- "Dropping `sin` orphans rows in `vault.secrets` — it does NOT delete the

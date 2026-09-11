@@ -42,7 +42,7 @@ Presented the finding plainly to the product owner via `AskUserQuestion`
 
 Built:
 
-- **`backend/migrations/412_purge_driver_pii_secret_fn.sql`** — new
+- **`backend/migrations/413_purge_driver_pii_secret_fn.sql`** — new
   `purge_driver_pii_secret(secret_id text) RETURNS boolean` RPC, modeled
   directly on the existing `encrypt_driver_pii`/`decrypt_driver_pii`
   pattern (migrations 32→78→137→138) and the more recent
@@ -128,7 +128,7 @@ snapshot.
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/migrations/412_purge_driver_pii_secret_fn.sql` | New — `purge_driver_pii_secret` RPC | Delete the actual vault ciphertext, not just the column reference |
+| `backend/migrations/413_purge_driver_pii_secret_fn.sql` | New — `purge_driver_pii_secret` RPC | Delete the actual vault ciphertext, not just the column reference |
 | `backend/services/dormant_driver_sin_purge_service.py` | New — plan/apply/print_report | The purge logic, grace-period gate, conflict guard |
 | `backend/scripts/purge_dormant_driver_sin.py` | New — CLI wrapper | Human-triggered, dry-run-default entry point |
 | `backend/tests/test_dormant_driver_sin_purge_service.py` | New — 13 tests | Cover grace period, candidate selection, apply ordering, conflicts |
@@ -142,7 +142,7 @@ against.
 
 ## 8. Rollback plan
 
-`coordinated` — **the migration itself** (`412_...sql`, adding the RPC) is
+`coordinated` — **the migration itself** (`413_...sql`, adding the RPC) is
 `git-revert-safe`: `DROP FUNCTION IF EXISTS public.purge_driver_pii_secret(text);`,
 no data affected, stated in the migration's own top comment. **A purge run**
 (once one has actually happened, on or after 2026-09-26) is **not
@@ -167,7 +167,7 @@ affected driver re-submitting their SIN.
   the new RPC or service; confirmed no other reader of `drivers.sin`
   behaves differently for a null value than it already does today for a
   driver who never had one.
-- [x] `spinr-migration-reviewer` run on `412_purge_driver_pii_secret_fn.sql`
+- [x] `spinr-migration-reviewer` run on `413_purge_driver_pii_secret_fn.sql`
   before merge. **Verdict: SAFE TO APPLY, no blockers** — confirmed correct
   numbering, append-only, reversible-on-paper, forward-compatible against
   live traffic, and the exact post-138/359 `SECURITY DEFINER`/search_path/

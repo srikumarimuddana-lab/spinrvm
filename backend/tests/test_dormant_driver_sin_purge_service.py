@@ -91,7 +91,7 @@ class _RpcCall:
 
     def execute(self):
         self.recorder.setdefault("rpc_calls", []).append((self.name, dict(self.params)))
-        # Real purge_driver_pii_secret (migration 412) returns whether a row
+        # Real purge_driver_pii_secret (migration 413) returns whether a row
         # was actually deleted -- true for any non-empty secret_id here.
         return _Result(bool(self.params.get("secret_id")))
 

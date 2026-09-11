@@ -23233,11 +23233,54 @@ how much they de-risk a public launch._
     `main`'s row, and even a bare boolean wouldn't reveal which checks are
     required or whether admins are exempt).
 
-### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
+### B42. `payment_failed` Stripe webhook events were silently dropped — CLOSED 2026-09-11 (fixed, remediated; scope was much larger than the original 36-minute framing)
 
 > **P0-severity, filed here only by chronology** — see the note at the top of
 > the `## P0` section above.
 
+- [x] **Status:** CLOSED 2026-09-11. The Supabase-access blocker below
+  resolved itself between 2026-09-07 and today (this session's connector
+  now reaches `soavhtdhefowwvforzwb`/`spinrmobileapp`, confirmed
+  production — see `.claude/context/connector-scoping.md`'s 2026-09-08
+  entry) but nobody had gone back to re-run the query until this session
+  did. **The real scope was far bigger than the original title's "~36
+  minutes":** live query found **53 of the 55 `payment_intent.
+  payment_failed` events this project has ever received (2026-07-15
+  through 2026-09-11 — i.e. still actively happening today, not a
+  one-off historical window) were permanently stuck unprocessed.**
+  **Root cause:** `routes/webhooks.py`'s CAS write for this handler sets
+  `rides.payment_failure_reason` — a column no migration had ever
+  created. Every real invocation raised, uncaught (the write, unlike the
+  sibling CAS *read* a few lines above, had no try/except/unclaim guard),
+  permanently losing the event to Stripe's dedup-on-retry. **Fix:**
+  migration 414 adds the missing column; `webhooks.py`'s write is now
+  wrapped in the same try/except + unclaim + 503 pattern the read
+  already uses (structural fix — covers this bug's class, not just this
+  instance); regression test added. **Data remediation** (applied
+  directly to production ahead of the PR, same session): triaged all 53
+  by the linked ride's current state — 44 still `pending`/no PI (the
+  ride had already been correctly auto-cancelled by the booking flow;
+  only the payment-status *label* was missing) updated to `failed` with
+  the real failure reason, using the exact same CAS predicate the live
+  code uses; 5 already `paid` via a later successful retry left
+  untouched (matches the code's own "already settled, ignore stale
+  failure" branch — the same race N1's CAS logic exists to prevent); 4
+  orphaned (no matching ride, different/earlier failure pattern, flagged
+  as a small separate open question, not re-investigated here) marked
+  processed with no ride to update. `stripe_events.processed_at` is now
+  set on all 53. Full detail, exact queries, and row-level accounting:
+  `docs/change-log/2026-09-11-b42-payment-failed-webhook-remediation.md`.
+  **Related, independently fixed the same day:** PR #5250 fixed a
+  *different* bug in the *charge-creation* layer
+  (`utils/stripe_charge.py`) that was the actual reason 49 of these 53
+  payments failed at Stripe's end in the first place (an account not
+  enrolled in Stripe's incremental-authorization feature). That fix
+  stops the failures from happening; this fix is why the resulting
+  failure *webhooks*, once sent, were never recorded — two distinct bugs
+  in two distinct code paths, both needed fixing, neither one fixes the
+  other.
+- **Original investigation (2026-09-07, kept for the record — the
+  Supabase-access blocker it describes has since resolved, see above):**
 - [ ] **Status:** open, blocked on data access — found 2026-09-07 while
   reviewing PR #5050's own body, which disclosed the defect and fixed the
   code path but did not include a production data remediation step.

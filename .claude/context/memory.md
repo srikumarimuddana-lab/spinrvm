@@ -27,6 +27,24 @@ a pointer/rationale log, not a narrative.
 
 ## Entries
 
+- **2026-09-11 — D5, in-app VoIP: premise was stale, corrected but still
+  unscoped.** D5's original text claimed "Twilio Proxy PSTN masking already
+  covers the need" — false. `backend/routes/rides/chat.py:64` and
+  `test_call_endpoint_removed` (`backend/tests/test_coverage_rides.py`)
+  confirm the `GET /{ride_id}/call` endpoint was deliberately **removed**
+  in 2026-06: rider↔driver contact is chat-only by privacy decision (real
+  phone numbers were exposed to the other party, which is why it was
+  pulled). `docs/API_REFERENCE.md` still documented the removed endpoint
+  as live — corrected in the same change. Asked the user how to handle
+  it — they chose to fix the stale doc and correct D5's premise only, not
+  to scope a build. **D5 remains open and unscoped** (no
+  Action/Files/Acceptance criteria) — it just no longer rests on a false
+  premise. If a future session is tempted to build VoIP or reintroduce
+  masked PSTN calling, know that doing so means explicitly revisiting the
+  2026-06 chat-only privacy decision, not just picking up a scoped ticket —
+  that's a product call, not an engineering one. See `ACTION_ITEMS.md` D5
+  for full history.
+
 - **2026-09-11 — A28, "total rides" definitions: intentionally different,
   document only, no behavior change.** The audit (Phase 3 cross-surface
   finding #10) originally framed this as a simple 2-way split ("admin:

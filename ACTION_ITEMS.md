@@ -18256,8 +18256,19 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   the heatmap cells. Driver-app already consumes it: `driver-app/app/driver/
   (tabs)/index.tsx` renders a `react-native-maps` `Heatmap` component fed from
   this endpoint. No code change needed; correcting the stale item.
-- [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
-  VoIP is a cost/quality upgrade.
+- [ ] **D5. In-app VoIP / rider↔driver calling** — **premise corrected
+  2026-09-11**: no calling feature exists today (chat-only, by deliberate
+  2026-06 privacy decision — `backend/routes/rides/chat.py:64`, pinned by
+  `test_call_endpoint_removed` in `backend/tests/test_coverage_rides.py`).
+  The old text claiming "Twilio Proxy PSTN masking already covers the need"
+  was stale/wrong — there is no masking fallback in place;
+  `docs/API_REFERENCE.md` incorrectly documented the removed `GET
+  /rides/{ride_id}/call` endpoint as live and has been corrected in the
+  same change. Still genuinely unscoped: no Action/Files/Acceptance
+  criteria. Building any calling feature (VoIP or reintroducing masked
+  PSTN) would mean explicitly revisiting the 2026-06 privacy decision, not
+  just a scope pass — needs product input before it's build-ready. See
+  `.claude/context/memory.md` for the full decision record.
 - [x] **D8. No rate limiting on SIN-touching admin endpoints** — done: added
   4 new `default_limiter.limit(...)` entries in `utils/rate_limiter.py` —
   `admin_sin_reveal_limit` (10/hour) on `POST /admin/drivers/{id}/reveal-sin`,

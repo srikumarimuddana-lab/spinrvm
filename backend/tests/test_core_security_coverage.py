@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -61,6 +62,17 @@ import pytest
 from backend.core import security
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def fake_sentry_sdk(monkeypatch):
+    """Fake `sentry_sdk` module for `_report_firebase_init_failure`'s lazy
+    `import sentry_sdk` (same shape as `utils/driver_statement_pdf.py`'s
+    capture site) — insert into `sys.modules` so the in-function import
+    resolves to this fake instead of hitting the real SDK / needing a DSN."""
+    fake = MagicMock()
+    monkeypatch.setitem(sys.modules, "sentry_sdk", fake)
+    return fake
 
 
 FAKE_SERVICE_ACCOUNT = {
@@ -101,10 +113,12 @@ def test_configured_happy_path_uses_certificate_credentials(monkeypatch, fake_fi
     fake_firebase_admin.initialize_app.assert_called_once_with(fake_cert)
 
 
-def test_configured_initialize_app_value_error_is_swallowed_silently(monkeypatch, fake_firebase_admin, caplog):
+def test_configured_initialize_app_value_error_is_swallowed_silently(
+    monkeypatch, fake_firebase_admin, fake_sentry_sdk, caplog
+):
     """Firebase raises ValueError when the default app is already
     initialized — the inner `except ValueError: pass` swallows it with no
-    logging at all (not even a warning)."""
+    logging at all (not even a warning), and no Sentry event either."""
     _set_service_account_json(monkeypatch, json.dumps(FAKE_SERVICE_ACCOUNT))
 
     fake_credentials_cls = MagicMock()
@@ -116,14 +130,16 @@ def test_configured_initialize_app_value_error_is_swallowed_silently(monkeypatch
         security.init_firebase()  # must not raise
 
     assert "Firebase initialization failed" not in caplog.text
+    fake_sentry_sdk.capture_exception.assert_not_called()
 
 
 def test_configured_initialize_app_non_value_error_propagates_to_outer_handler(
-    monkeypatch, fake_firebase_admin, caplog
+    monkeypatch, fake_firebase_admin, fake_sentry_sdk, caplog
 ):
     """A non-ValueError from initialize_app() is NOT caught by the inner
     `except ValueError` — it propagates and is caught by the outer
-    `except Exception`, which logs an error with exc_info."""
+    `except Exception`, which logs an error with exc_info and reports a
+    Sentry event tagged domain=drivers, surface=backend."""
     _set_service_account_json(monkeypatch, json.dumps(FAKE_SERVICE_ACCOUNT))
 
     fake_credentials_cls = MagicMock()
@@ -135,9 +151,10 @@ def test_configured_initialize_app_non_value_error_propagates_to_outer_handler(
         security.init_firebase()  # must not raise — outer handler catches it
 
     assert "Firebase initialization failed" in caplog.text
+    fake_sentry_sdk.capture_exception.assert_called_once_with(tags={"domain": "drivers", "surface": "backend"})
 
 
-def test_configured_invalid_json_is_caught_by_outer_handler(monkeypatch, fake_firebase_admin, caplog):
+def test_configured_invalid_json_is_caught_by_outer_handler(monkeypatch, fake_firebase_admin, fake_sentry_sdk, caplog):
     _set_service_account_json(monkeypatch, "{not valid json")
 
     with caplog.at_level(logging.ERROR, logger="backend.core.security"):
@@ -145,10 +162,11 @@ def test_configured_invalid_json_is_caught_by_outer_handler(monkeypatch, fake_fi
 
     assert "Firebase initialization failed" in caplog.text
     fake_firebase_admin.initialize_app.assert_not_called()
+    fake_sentry_sdk.capture_exception.assert_called_once_with(tags={"domain": "drivers", "surface": "backend"})
 
 
 def test_configured_certificate_construction_failure_is_caught_by_outer_handler(
-    monkeypatch, fake_firebase_admin, caplog
+    monkeypatch, fake_firebase_admin, fake_sentry_sdk, caplog
 ):
     _set_service_account_json(monkeypatch, json.dumps(FAKE_SERVICE_ACCOUNT))
 
@@ -161,6 +179,7 @@ def test_configured_certificate_construction_failure_is_caught_by_outer_handler(
 
     assert "Firebase initialization failed" in caplog.text
     fake_firebase_admin.initialize_app.assert_not_called()
+    fake_sentry_sdk.capture_exception.assert_called_once_with(tags={"domain": "drivers", "surface": "backend"})
 
 
 # ── No-service-account-JSON branch (ADC / default credentials) ─────────────
@@ -183,13 +202,19 @@ def test_unconfigured_empty_string_also_takes_default_credentials_branch(monkeyp
     fake_firebase_admin.initialize_app.assert_called_once_with()
 
 
-def test_unconfigured_initialize_app_failure_is_logged_loudly(monkeypatch, fake_firebase_admin, caplog):
+def test_unconfigured_initialize_app_failure_is_logged_loudly(
+    monkeypatch, fake_firebase_admin, fake_sentry_sdk, caplog
+):
     """C97 (2026-09-10): this call site used to have its own local
     `except Exception: pass` swallowing the failure with NO log at all —
     the exact gap that let Firebase silently fail to initialize on a
     non-GCP host with no service-account JSON set, with the app booting
     looking healthy and FCM permanently, silently non-functional. Now
-    logs loudly, matching every other failure branch in this function."""
+    logs loudly, matching every other failure branch in this function, and
+    (this session's addition) reports an explicitly-tagged Sentry event —
+    see `_report_firebase_init_failure`'s docstring for why an explicit
+    capture is needed here (the loguru-only `tags_from_log_extra` bridge
+    does not apply to this module's stdlib `logging` calls)."""
     _set_service_account_json(monkeypatch, None)
     fake_firebase_admin.initialize_app.side_effect = RuntimeError("no default credentials found")
 
@@ -197,3 +222,22 @@ def test_unconfigured_initialize_app_failure_is_logged_loudly(monkeypatch, fake_
         security.init_firebase()  # must not raise
 
     assert "Firebase initialization failed" in caplog.text
+    fake_sentry_sdk.capture_exception.assert_called_once_with(tags={"domain": "drivers", "surface": "backend"})
+
+
+def test_unconfigured_initialize_app_failure_sentry_capture_failure_is_swallowed(
+    monkeypatch, fake_firebase_admin, fake_sentry_sdk, caplog
+):
+    """If the Sentry capture itself raises (SDK not installed, misconfigured,
+    whatever), `_report_firebase_init_failure` must swallow it — telemetry
+    can never be the reason Firebase init fails to complete — and fall back
+    to a debug log rather than propagating."""
+    _set_service_account_json(monkeypatch, None)
+    fake_firebase_admin.initialize_app.side_effect = RuntimeError("no default credentials found")
+    fake_sentry_sdk.capture_exception.side_effect = RuntimeError("sentry sdk not configured")
+
+    with caplog.at_level(logging.DEBUG):
+        security.init_firebase()  # must not raise even though Sentry capture itself raises
+
+    assert "Firebase initialization failed" in caplog.text
+    assert "Sentry capture unavailable" in caplog.text

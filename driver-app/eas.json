@@ -48,6 +48,9 @@
         "EXPO_PUBLIC_ENV": "preview",
         "EXPO_USE_PRECOMPILED_MODULES": "0",
         "SENTRY_ALLOW_FAILURE": "true"
+      },
+      "android": {
+        "resourceClass": "large"
       }
     },
     "production": {
@@ -58,6 +61,9 @@
       "env": {
         "EXPO_PUBLIC_ENV": "production",
         "EXPO_USE_PRECOMPILED_MODULES": "0"
+      },
+      "android": {
+        "resourceClass": "large"
       }
     }
   },

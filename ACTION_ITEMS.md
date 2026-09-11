@@ -1167,6 +1167,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
         admin-dashboard button — a destructive PII purge stays a
         deliberate, manually-triggered action, not a one-click UI affordance
         or an automatic cron).
+      - **The other three fields from the same 2026-09-10 finding
+        (`date_of_birth` — 146 profiles, `driver_vehicle_history` — 241
+        profiles, dormant riders' `saved_addresses` — 153 profiles):
+        explicitly decided to wait, not silently dropped.** Asked via
+        `AskUserQuestion` on 2026-09-11 whether to build purge tools for any
+        of the three now — product-owner answer: **none for now**, deliberately
+        paced so the SIN tool actually runs (2026-09-26+) and is observed
+        working correctly before building three more tools on the same
+        pattern. If/when any of these is picked back up, the product owner
+        has already indicated a preference to reuse the same 180-day
+        post-launch grace period and the same `pre_launch_test = true`
+        dormant-population definition, for consistency with the SIN tool —
+        not a fresh rule per field.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as

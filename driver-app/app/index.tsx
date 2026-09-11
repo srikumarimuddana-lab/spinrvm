@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, AppStateStatus, View, Text, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
+import { AppState, AppStateStatus, View, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useRouter, useNavigationContainerRef } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { createLogger } from '@shared/utils/logger';

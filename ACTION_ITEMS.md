@@ -17508,6 +17508,33 @@ Remaining, roughly in order of user impact:
     rollback, this becomes a same-shape removal to N8's
     `utils/receipt_email.py` deletion. See
     `docs/change-log/2026-08-31-n11c-legacy-receipt-shell-investigation.md`.
+  - **Re-checked 2026-09-11 (read-only, `email_send_log` on
+    `soavhtdhefowwvforzwb`) — still not ready, and the gap widened, not
+    narrowed:**
+    - **Receipt**: now qualifies on its own — 15 `sent` (0 `failed`) since
+      the flag went live, spanning 2026-08-18 through **today**
+      (2026-09-11), 24 continuous days with zero rollback. This alone would
+      clear the "several weeks, clean" bar.
+    - **Spinr Pass invoice**: **zero rows of any status** since the flag
+      went live 2026-08-18 — not "still short of the bar," literally no
+      branded-path activity at all in the 24 days since the last check
+      found the same zero. The last invoice email of any kind (branded or
+      legacy) was a failure on 2026-07-29, three weeks *before* the flag
+      existed. There is still no evidence the branded invoice path has ever
+      fired in production.
+    - **Still do not delete.** Deleting the invoice's `_LEGACY_*` fallback
+      now would remove the only invoice-email path with any confirmed
+      history, in favor of one that has never been observed to work.
+    - **New finding, not previously flagged**: 24 days of zero
+      `subscription_invoice` activity of any kind is itself worth checking
+      — either genuinely no billing events required an invoice email in
+      that window (plausible if Spinr Pass subscriptions are still low
+      volume), or the invoice-send path (branded or legacy) is silently not
+      firing at all. Recommend a human/future session check
+      `subscriptions`/billing-cycle activity for the same window against
+      whether an invoice email *should* have fired — this item's own scope
+      is the deletion decision, not diagnosing a possibly-separate send-path
+      bug, so not investigated further here.
 - [x] **N12. No visual/snapshot regression tooling for email** — **partially
   closed (2026-08-12).** The "nothing pins the whole rendered document" half
   is fixed: new `backend/tests/_html_snapshot.py` (golden-file diffing
@@ -21555,10 +21582,19 @@ how much they de-risk a public launch._
   is **No-Go** — the P0–P2 query-optimization work (≈80% shipped, see the plan's
   §3) may already meet the < 2 s offer→accept and < 300 ms fare-estimate SLAs at
   500 drivers, and gate G3 exists to find out.
-- **Action (Phase 0, in order):** T2 retro `spinr-dispatch-reviewer` pass on
-  `backend/routes/rides/matching.py:821-886` (self-disclosed as never run in
-  `docs/change-log/2026-08-27-p2-dispatch-loop-optimization.md`) → T3 additive
-  per-phase timing metrics in `repositories/_base.py` `run_sync` and the dispatch
+- **Action (Phase 0, in order):** ~~T2 retro `spinr-dispatch-reviewer` pass on
+  `backend/routes/rides/matching.py:821-886`~~ **T2 done — correcting a stale
+  pointer found 2026-09-11.** The line above (and the "self-disclosed as never
+  run" note in `docs/change-log/2026-08-27-p2-dispatch-loop-optimization.md`)
+  was never updated after the fact: T2 actually ran 2026-09-02, produced
+  `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`, and its findings are
+  the direct source of C54 and C55 below (both closed) — see either closed
+  item's own "Found during C50's T2 retro" note, which is what surfaced this
+  correction. A 2026-09-11 session nearly re-dispatched this exact retro as
+  fresh work off this stale line; verify the change-log/audit-doc trail
+  before trusting an "Action" list's ordering, same lesson this file's own
+  history keeps teaching. Next actionable step is **T3**: additive per-phase
+  timing metrics in `repositories/_base.py` `run_sync` and the dispatch
   attempt → T4 staging (E1 — three human actions) → T5 run
   `loadtest/locustfile.py` at 600 users against staging and record the numbers
   → T6 confirm pooler mode/port/pool-size/IPv4 reachability on the real project

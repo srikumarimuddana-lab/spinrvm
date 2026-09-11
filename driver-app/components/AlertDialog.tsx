@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { Button } from '@shared/components/Button';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface AlertButton {
   text: string;
@@ -164,13 +165,13 @@ const createStyles = (colors: ThemeColors) =>
       backgroundColor: 'rgba(0,0,0,0.5)',
       justifyContent: 'center',
       alignItems: 'center',
-      paddingHorizontal: 32,
+      paddingHorizontal: SPACING.xl,
     },
     dialog: {
       width: Math.min(width - 64, 340),
       backgroundColor: colors.surface,
       borderRadius: 20,
-      padding: 24,
+      padding: SPACING.lg,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 8 },
       shadowOpacity: 0.15,
@@ -182,7 +183,7 @@ const createStyles = (colors: ThemeColors) =>
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
       textAlign: 'center',
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     message: {
       fontSize: 14,
@@ -190,7 +191,7 @@ const createStyles = (colors: ThemeColors) =>
       color: colors.textSecondary,
       textAlign: 'center',
       lineHeight: 20,
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
     buttonRow: {
       flexDirection: 'row',
@@ -207,7 +208,7 @@ const createStyles = (colors: ThemeColors) =>
     },
     buttonFull: {
       flex: undefined,
-      paddingHorizontal: 48,
+      paddingHorizontal: SPACING.xxl,
     },
     // Layout-only counterparts of `button`/`buttonFull` for the two branches
     // now rendered as a shared Button (which supplies its own fill/radius/
@@ -217,7 +218,7 @@ const createStyles = (colors: ThemeColors) =>
       flex: 1,
     },
     buttonFullBase: {
-      paddingHorizontal: 48,
+      paddingHorizontal: SPACING.xxl,
     },
     buttonFontFamily: {
       fontFamily: 'PlusJakartaSans_600SemiBold',
@@ -226,7 +227,7 @@ const createStyles = (colors: ThemeColors) =>
       backgroundColor: colors.border,
     },
     buttonText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_600SemiBold',
     },
     buttonTextCancel: {

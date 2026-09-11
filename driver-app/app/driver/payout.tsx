@@ -24,6 +24,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { Button } from '@shared/components/Button';
 import { isGstBnValid, isGstBnOnFile, isSinValid } from '../../utils/payoutFormsSchema';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 function PayoutScreen() {
     const router = useRouter();
@@ -837,7 +838,7 @@ function createStyles(colors: ThemeColors) {
         container: { flex: 1, backgroundColor: colors.background },
         header: {
             paddingBottom: 12,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
         },
         headerRow: {
             flexDirection: 'row',
@@ -856,14 +857,14 @@ function createStyles(colors: ThemeColors) {
 
         balanceCard: {
             backgroundColor: colors.primary,
-            marginHorizontal: 16,
-            marginTop: 16,
+            marginHorizontal: SPACING.md,
+            marginTop: SPACING.md,
             borderRadius: 20,
-            padding: 24,
+            padding: SPACING.lg,
         },
         balanceLabel: {
             color: 'rgba(255,255,255,0.7)',
-            fontSize: 11,
+            fontSize: FONT.label,
             letterSpacing: 1.5,
             fontWeight: '600',
             textAlign: 'center',
@@ -873,12 +874,12 @@ function createStyles(colors: ThemeColors) {
             fontSize: 48,
             fontWeight: '800',
             textAlign: 'center',
-            marginVertical: 8,
+            marginVertical: SPACING.sm,
         },
         balanceDetails: {
             flexDirection: 'row',
-            marginTop: 16,
-            paddingTop: 16,
+            marginTop: SPACING.md,
+            paddingTop: SPACING.md,
             borderTopWidth: 1,
             borderTopColor: 'rgba(255,255,255,0.2)',
         },
@@ -886,7 +887,7 @@ function createStyles(colors: ThemeColors) {
         balanceItemLabel: {
             color: 'rgba(255,255,255,0.7)',
             fontSize: 10,
-            marginBottom: 4,
+            marginBottom: SPACING.xs,
         },
         balanceItemValue: {
             color: '#fff',
@@ -901,7 +902,7 @@ function createStyles(colors: ThemeColors) {
         payoutScheduleCard: {
             flexDirection: 'row',
             alignItems: 'center',
-            marginHorizontal: 16,
+            marginHorizontal: SPACING.md,
             marginTop: 12,
             padding: 14,
             backgroundColor: colors.surface,
@@ -914,7 +915,7 @@ function createStyles(colors: ThemeColors) {
             color: colors.textDim,
         },
         payoutScheduleDate: {
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '700',
             color: colors.text,
             marginTop: 1,
@@ -925,13 +926,13 @@ function createStyles(colors: ThemeColors) {
             color: colors.primary,
             backgroundColor: `${colors.primary}1A`,
             paddingHorizontal: 10,
-            paddingVertical: 4,
+            paddingVertical: SPACING.xs,
             borderRadius: 8,
         },
 
         section: {
-            paddingHorizontal: 16,
-            marginTop: 24,
+            paddingHorizontal: SPACING.md,
+            marginTop: SPACING.lg,
         },
         sectionHeader: {
             flexDirection: 'row',
@@ -953,7 +954,7 @@ function createStyles(colors: ThemeColors) {
         },
         sectionSubtitle: {
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             lineHeight: 18,
             marginTop: -6,
             marginBottom: 12,
@@ -964,12 +965,12 @@ function createStyles(colors: ThemeColors) {
         checklistCard: {
             backgroundColor: colors.surface,
             borderRadius: 16,
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
         },
         stepRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingVertical: 16,
+            paddingVertical: SPACING.md,
             gap: 12,
         },
         stepRowBorder: {
@@ -992,7 +993,7 @@ function createStyles(colors: ThemeColors) {
         },
         stepTitle: {
             color: colors.text,
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '600',
         },
         stepTitleMuted: {
@@ -1031,7 +1032,7 @@ function createStyles(colors: ThemeColors) {
         infoRowText: {
             flex: 1,
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             lineHeight: 18,
         },
 
@@ -1039,13 +1040,13 @@ function createStyles(colors: ThemeColors) {
         stripeCard: {
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 16,
+            padding: SPACING.md,
             flexDirection: 'row',
             alignItems: 'center',
         },
         stripeIconContainer: { marginRight: 12 },
-        stripeTitle: { color: colors.text, fontSize: 16, fontWeight: '600' },
-        stripeSubtitle: { color: colors.textDim, fontSize: 13, marginTop: 2 },
+        stripeTitle: { color: colors.text, fontSize: FONT.bodyLg, fontWeight: '600' },
+        stripeSubtitle: { color: colors.textDim, fontSize: FONT.bodySm, marginTop: 2 },
 
         // Stripe Setup Card
         stripeSetupCard: {
@@ -1069,15 +1070,15 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
             fontSize: 18,
             fontWeight: '700',
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
             textAlign: 'center',
         },
         stripeSetupDesc: {
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             textAlign: 'center',
             lineHeight: 18,
-            marginBottom: 16,
+            marginBottom: SPACING.md,
         },
         requirementsList: {
             width: '100%',
@@ -1104,7 +1105,7 @@ function createStyles(colors: ThemeColors) {
         },
         stripeSetupBtnText: {
             color: '#fff',
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '700',
         },
 
@@ -1112,12 +1113,12 @@ function createStyles(colors: ThemeColors) {
         gstForm: {
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 16,
+            padding: SPACING.md,
         },
         gstCard: {
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 16,
+            padding: SPACING.md,
             flexDirection: 'row',
             alignItems: 'center',
         },
@@ -1127,7 +1128,7 @@ function createStyles(colors: ThemeColors) {
         },
         gstValue: {
             color: colors.text,
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '500',
             marginTop: 2,
         },
@@ -1136,18 +1137,18 @@ function createStyles(colors: ThemeColors) {
             fontSize: 12,
             lineHeight: 17,
             marginBottom: 12,
-            marginTop: 4,
+            marginTop: SPACING.xs,
         },
         gstNote: {
             color: colors.textDim,
-            fontSize: 11,
-            marginTop: 8,
+            fontSize: FONT.label,
+            marginTop: SPACING.sm,
             fontStyle: 'italic',
         },
         gstFormButtons: {
             flexDirection: 'row',
             gap: 12,
-            marginTop: 16,
+            marginTop: SPACING.md,
         },
         // Fill/radius/padding/text now come from the shared Button
         // (variant="secondary"/"primary" size="sm") — these only supply each
@@ -1157,8 +1158,8 @@ function createStyles(colors: ThemeColors) {
 
         inputLabel: {
             color: colors.text,
-            fontSize: 13,
-            marginBottom: 4,
+            fontSize: FONT.bodySm,
+            marginBottom: SPACING.xs,
             fontWeight: '600',
         },
         textInput: {
@@ -1166,7 +1167,7 @@ function createStyles(colors: ThemeColors) {
             borderRadius: 12,
             paddingHorizontal: 14,
             paddingVertical: 12,
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             color: colors.text,
         },
 
@@ -1175,14 +1176,14 @@ function createStyles(colors: ThemeColors) {
         payoutCard: {
             backgroundColor: colors.surface,
             borderRadius: 16,
-            padding: 16,
+            padding: SPACING.md,
         },
 
         infoNote: {
             flexDirection: 'row',
             alignItems: 'flex-start',
-            marginHorizontal: 16,
-            marginTop: 24,
+            marginHorizontal: SPACING.md,
+            marginTop: SPACING.lg,
             padding: 14,
             backgroundColor: colors.surface,
             borderRadius: 12,
@@ -1191,7 +1192,7 @@ function createStyles(colors: ThemeColors) {
         infoText: {
             flex: 1,
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             lineHeight: 18,
         },
 
@@ -1209,7 +1210,7 @@ function createStyles(colors: ThemeColors) {
         },
         docRowTitle: {
             color: colors.text,
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             fontWeight: '600',
         },
         docRowSub: {

@@ -748,7 +748,7 @@ function createStyles(colors: ThemeColors) {
         tlRow: { flexDirection: 'row', gap: 12 },
         tlSpine: { alignItems: 'center', width: 14 },
         tlDot: { width: 14, height: 14, borderRadius: 7, marginTop: 3 },
-        tlLine: { width: 2, flex: 1, backgroundColor: colors.border, marginTop: 4 },
+        tlLine: { width: 2, flex: 1, backgroundColor: colors.border, marginTop: SPACING.xs },
         tlContent: { flex: 1 },
         tlLabel: { fontSize: 14, fontWeight: '600', color: colors.text },
         tlSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },

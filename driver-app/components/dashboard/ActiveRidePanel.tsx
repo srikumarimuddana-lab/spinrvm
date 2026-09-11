@@ -918,11 +918,11 @@ function createStyles(colors: ThemeColors) {
     },
 
     routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-    dot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
-    destSquare: { width: 10, height: 10, borderRadius: 2, marginTop: 4, backgroundColor: colors.error },
+    dot: { width: 10, height: 10, borderRadius: 5, marginTop: SPACING.xs },
+    destSquare: { width: 10, height: 10, borderRadius: 2, marginTop: SPACING.xs, backgroundColor: colors.error },
     routeLabel: { fontSize: 9, fontWeight: '800', color: colors.textDim, letterSpacing: 0.8, marginBottom: 2 },
     routeAddress: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.text, lineHeight: 18 },
-    routeLineContainer: { paddingLeft: 4, marginVertical: SPACING.xs },
+    routeLineContainer: { paddingLeft: SPACING.xs, marginVertical: SPACING.xs },
     routeLine: { width: 2, height: 16, backgroundColor: colors.border, marginLeft: 3 },
 
     otpCard: {

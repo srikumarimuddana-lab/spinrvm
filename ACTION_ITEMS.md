@@ -4032,14 +4032,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `/earnings` and driver statements include; `/earnings`-family endpoints
   trust the stored `driver_earnings` column directly. Undocumented as
   intentional or accidental.
-  - [ ] **Status:** open — needs a product decision, not a blind code
-    change. Reconciling the two compositions either way is a money-visible
-    behavior change on a live-tested surface (driver balance/payout
-    figures) and CLAUDE.md requires escalation when blast radius/intent is
-    unclear on a surface like this. Flag to product/finance: should
-    `payable_balance` include bonuses/cancellation fees (making it match
-    `/earnings`), or is the current split deliberate (balance = withdrawable
-    ride money only, earnings = full income picture)?
+  - [x] **Status:** CLOSED — stale checkbox, corrected 2026-09-11. This was
+    already decided and shipped the same day it was filed:
+    `docs/change-log/2026-08-12-balance-earnings-composition-parity.md`
+    records the user's 2026-08-12 decision (`payable_balance` should
+    include everything `/earnings` does), a `spinr-money-auditor` review,
+    and 367 passing tests. `backend/routes/drivers/earnings.py`'s
+    `get_driver_balance` already sums `total_incentives`/`total_cancel_fees`
+    into `total_earnings`/`payable_balance`, matching `/earnings`'
+    composition exactly. This checkbox was simply never flipped after the
+    fix merged — re-verified directly against current code before closing,
+    not assumed from the change-log alone.
 - **Admin "total rides" vs rider-app "total rides" use different
   definitions** (Phase 3 cross-surface finding #10) — **CLOSED 2026-09-11,
   documentation-only.** Re-verified against current code (the original

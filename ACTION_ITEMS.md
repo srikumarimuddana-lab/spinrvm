@@ -13174,8 +13174,15 @@ record of what was assumed vs. what was actually true</summary>
     current/intended behavior before the conditional logic ships.
 
 ### C100. `driver-app/__tests__/components/CarMarker.test.tsx` — 7 tests broken by a prior `expo-image` migration the test was never updated for
-- [ ] **Status:** open, found 2026-09-10 while investigating an unrelated
-  CI failure on PR #5200 (a driver-app toast-color fix).
+- [x] **Status:** CLOSED 2026-09-11 — already fixed by commit `611acfc`
+  ("fix(driver-app): test file queries react-native Image, component
+  renders ExpoImage", PR #5209), merged before this entry's checkbox was
+  ever flipped. Re-verified directly: `npx jest
+  __tests__/components/CarMarker.test.tsx` → 25/25 passing on current
+  `main`. See also the duplicate filing of this same bug below (also
+  closed now) — two different sessions found it independently on
+  2026-09-10, neither aware of the other or of the fix that landed the
+  same day.
 - **Issue/gap:** `CarMarker.tsx:3` imports `Image as ExpoImage` from
   `expo-image` and renders `<ExpoImage>` (line ~963) as the car icon — but
   the test file (`CarMarker.test.tsx:3`) still imports `Image` from
@@ -24617,13 +24624,14 @@ how much they de-risk a public launch._
 
 ### C100. `driver-app-test` is red on `main`'s own tip — `CarMarker.test.tsx`'s image-decode-retry suite, confirmed unrelated to the commits that happened to be `main`'s HEAD when it failed
 
-- [ ] **Status:** OPEN — confirmed base-branch-red, not caused by this
-  session's own PR (#5203, AI17/F4 — touches only backend, `shared/types/ai.ts`,
-  `rider-app/components/FareQuoteCard.tsx`, and
-  `admin-dashboard/src/app/dashboard/ai-console/page.tsx`, none of which
-  `CarMarker.tsx` or its test import). Found via PR #5203's own
-  `driver-app-test` CI failure, then verified independently against
-  `main`'s own history rather than assumed.
+- [x] **Status:** CLOSED 2026-09-11 — this is a duplicate filing of the
+  other C100 entry above (both share the item ID "C100," filed by two
+  different sessions on 2026-09-10 investigating two different PRs, each
+  unaware of the other). Already fixed by commit `611acfc` (PR #5209).
+  Re-verified directly: `npx jest __tests__/components/CarMarker.test.tsx`
+  → 25/25 passing on current `main`. Left in place rather than deleted,
+  per the append-only spirit of this log — flagging the duplicate-ID
+  collision itself as a backlog-hygiene note for future item numbering.
 - **Failure:** `__tests__/components/CarMarker.test.tsx`, suite
   `CarMarker — car-icon decode failure retries then reports once
   (2026-09-09, "green circle, never a car")` plus one case in

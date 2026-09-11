@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
-import { Platform } from 'react-native';
+import { Image as RNImage, Platform } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { Image } from 'expo-image';
 import { CarMarker } from '../../components/CarMarker';
@@ -472,7 +472,7 @@ describe('CarMarker — physics-based jump rejection (ingestFix)', () => {
   });
 });
 
-describe('CarMarker — Android ring-change re-arms the frozen snapshot', () => {
+describe('CarMarker — Android ring is a sibling Marker (car stays a native icon)', () => {
   const coord = { latitude: 50.4452, longitude: -104.6189 };
   const originalPlatformOS = Platform.OS;
 
@@ -485,84 +485,40 @@ describe('CarMarker — Android ring-change re-arms the frozen snapshot', () => 
     Platform.OS = originalPlatformOS;
   });
 
-  // Fires the car Image's onLoad, then lets its 350ms settle timer freeze
-  // tracksViewChanges — the ordinary (working) mount path.
-  function loadImageAndSettle(root: any) {
-    act(() => {
-      root.findByType(Image).props.onLoad();
-    });
-    act(() => {
-      jest.advanceTimersByTime(350);
-    });
+  function carAndRing(root: { findAllByType: (t: any) => any[] }) {
+    const markers = root.findAllByType(Marker);
+    return {
+      markers,
+      car: markers.find((m) => m.props.image),
+      ringMarker: markers.find((m) => !m.props.image),
+    };
   }
 
-  it('immediately re-arms tracksViewChanges when the ring prop changes after freezing', () => {
+  it('adds a tracking ring Marker when the ring appears, without dropping Marker.image on the car', () => {
     const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={null} />);
-    loadImageAndSettle(UNSAFE_root);
+    expect(UNSAFE_root.findByType(Marker).props.image).toBeTruthy();
     expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
 
-    // Ring appears (e.g. going online while idle) — must re-arm immediately,
-    // before any timer advances, so the native renderer gets a fresh chance
-    // to snapshot the car image alongside the now-visible ring.
     rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
-
-    // And settles back to false on the same 350ms schedule, since the image
-    // was already loaded before this ring change.
-    act(() => {
-      jest.advanceTimersByTime(350);
-    });
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+    const { markers, car, ringMarker } = carAndRing(UNSAFE_root);
+    expect(markers).toHaveLength(2);
+    expect(car.props.image).toBeTruthy();
+    expect(car!.props.tracksViewChanges).toBe(false);
+    expect(ringMarker!.props.tracksViewChanges).toBe(true);
 
     unmount();
   });
 
-  it('re-arms again when the ring disappears (e.g. going back offline), clearing a stale frozen ring', () => {
+  it('removes the ring Marker when going offline and keeps the native car icon', () => {
     const { UNSAFE_root, rerender, unmount } = render(
       <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />,
     );
-    loadImageAndSettle(UNSAFE_root);
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+    expect(carAndRing(UNSAFE_root).markers).toHaveLength(2);
 
     rerender(<CarMarker coordinate={coord} ring={null} />);
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
-
-    unmount();
-  });
-
-  it('does not re-freeze prematurely if the ring changes before the image has ever loaded', () => {
-    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={null} />);
-    // No onLoad fired yet — tracksViewChanges is still true from mount.
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
-
-    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
-    // Still true — must not schedule a 350ms freeze ahead of the image
-    // actually loading, or this reproduces the exact bug being fixed.
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
-    act(() => {
-      jest.advanceTimersByTime(350);
-    });
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
-
-    // Only the hard cap (or a real onLoad) may freeze it from here.
-    act(() => {
-      jest.advanceTimersByTime(5000);
-    });
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
-
-    unmount();
-  });
-
-  it('is a no-op when re-rendered with the same ring identity (no redundant re-arm)', () => {
-    const ring = { color: '#10B981', pulsing: false };
-    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={ring} />);
-    loadImageAndSettle(UNSAFE_root);
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
-
-    // Same color/pulsing, new object identity (e.g. a parent re-render) —
-    // must NOT re-arm; only an actual identity (color/pulsing) change should.
-    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
+    const marker = UNSAFE_root.findByType(Marker);
+    expect(marker.props.image).toBeTruthy();
+    expect(marker.props.tracksViewChanges).toBe(false);
 
     unmount();
   });
@@ -618,6 +574,102 @@ describe('CarMarker — Android does not use the iOS rotate wrapper', () => {
   it('does not render car-marker-ios-rotate (Marker.rotation is the Android path)', () => {
     const { queryByTestId, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
     expect(queryByTestId('car-marker-ios-rotate')).toBeNull();
+    unmount();
+  });
+});
+
+describe('CarMarker — Android native map icon (not a custom-view snapshot)', () => {
+  const coord = { latitude: 50.4452, longitude: -104.6189 };
+  const originalPlatformOS = Platform.OS;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+  });
+
+  it('passes a bitmap to Marker.image and does not mount an ExpoImage child', () => {
+    const { UNSAFE_root, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
+    const marker = UNSAFE_root.findByType(Marker);
+    expect(marker.props.image).toBeTruthy();
+    expect(marker.props.tracksViewChanges).toBe(false);
+    expect(marker.props.rotation).toBeDefined();
+    expect(() => UNSAFE_root.findByType(Image)).toThrow();
+    unmount();
+  });
+
+  // Marker.image is resolved inside the native map SDK and has no JS error
+  // callback, and the <ExpoImage onError> fallback lives in the iOS-only
+  // branch — so without an explicit probe a dead marker_image_url left the
+  // driver with no car and reported nothing. These two pin the probe.
+  it('falls back to the bundled car when a custom marker_image_url fails to load', async () => {
+    const prefetch = jest.spyOn(RNImage, 'prefetch').mockResolvedValue(false as never);
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} imageUri="https://cdn.example.com/dead.png" />,
+    );
+
+    expect(prefetch).toHaveBeenCalledWith('https://cdn.example.com/dead.png');
+    // Flush the prefetch promise so handleImageError's setState lands.
+    await act(async () => { await Promise.resolve(); });
+
+    const image = UNSAFE_root.findByType(Marker).props.image;
+    // Bundled variants are require()'d modules, never { uri }.
+    expect(image?.uri).toBeUndefined();
+    expect(image).toBeTruthy();
+    prefetch.mockRestore();
+    unmount();
+  });
+
+  it('keeps a custom marker_image_url that loads successfully', async () => {
+    const prefetch = jest.spyOn(RNImage, 'prefetch').mockResolvedValue(true as never);
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} imageUri="https://cdn.example.com/live.png" />,
+    );
+    await act(async () => { await Promise.resolve(); });
+
+    expect(UNSAFE_root.findByType(Marker).props.image).toEqual({
+      uri: 'https://cdn.example.com/live.png',
+    });
+    prefetch.mockRestore();
+    unmount();
+  });
+
+  it('does not probe a non-http source — a local uri would false-negative', () => {
+    const prefetch = jest.spyOn(RNImage, 'prefetch');
+    const { unmount } = render(
+      <CarMarker coordinate={coord} imageUri="file:///data/user/0/car.png" />,
+    );
+    expect(prefetch).not.toHaveBeenCalled();
+    prefetch.mockRestore();
+    unmount();
+  });
+
+  it('keeps the car on Marker.image when a presence ring is shown (ring is a sibling Marker)', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />,
+    );
+    const markers = UNSAFE_root.findAllByType(Marker);
+    expect(markers).toHaveLength(2);
+    const car = markers.find((m: { props: { image?: unknown } }) => m.props.image);
+    const ringMarker = markers.find((m: { props: { image?: unknown } }) => !m.props.image);
+    expect(car).toBeTruthy();
+    expect(car!.props.tracksViewChanges).toBe(false);
+    expect(ringMarker).toBeTruthy();
+    expect(ringMarker!.props.tracksViewChanges).toBe(true);
+    expect(() => UNSAFE_root.findByType(Image)).toThrow();
+    unmount();
+  });
+
+  it('uses a remote uri on Marker.image for an admin-uploaded custom marker', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} imageUri="https://cdn.example/marker.png" />,
+    );
+    expect(UNSAFE_root.findByType(Marker).props.image).toEqual({
+      uri: 'https://cdn.example/marker.png',
+    });
     unmount();
   });
 });

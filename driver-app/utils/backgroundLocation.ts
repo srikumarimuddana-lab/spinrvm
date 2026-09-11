@@ -546,7 +546,11 @@ export async function reassertDispatchTaskUnlocked(): Promise<void> {
     console.log('[BgLocation] Dispatch task re-asserted');
   } catch (e) {
     if (_isBackgroundedForegroundServiceRejection(e)) {
+      // Reached only if the app backgrounded between the AppState check above
+      // and the native call (or on a platform without that gate). Same
+      // handling as the gate: park it, replay once on the next foreground.
       console.warn('[BgLocation] Re-assert deferred — foreground service restart blocked while backgrounded');
+      deferReassertUntilForeground();
       return;
     }
     recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', location: 'reassert_failed' });

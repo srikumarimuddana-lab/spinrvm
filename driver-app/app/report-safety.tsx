@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TextInput,
     TouchableOpacity,
@@ -10,6 +9,7 @@ import {
     Platform,
     Alert,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

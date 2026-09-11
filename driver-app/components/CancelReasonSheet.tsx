@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Text, TouchableOpacity, View, StyleSheet, Modal, TextInput,
+  TouchableOpacity, View, StyleSheet, Modal, TextInput,
   KeyboardAvoidingView, Platform, Pressable, ScrollView,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';

@@ -22806,6 +22806,25 @@ how much they de-risk a public launch._
   decide whether to add `backend-test` (and ideally the whole CI Guard
   Rails summary) to the required list, and whether admin-merge bypass
   should be restricted for rides/payments/auth-surface PRs.
+  - **2026-09-11 — confirmed this is a hard permission boundary, not just a
+    missing tool.** Directly attempted `GET /repos/.../branches/main/protection`
+    against the GitHub API using this session's own token: **403 "Resource
+    not accessible by integration."** Checked why: `GET /repos/.../spinrvm`
+    on the same token returns `"permissions": {"admin": false, "maintain":
+    false, "push": true, "triage": true, "pull": true}` — this session's
+    GitHub access is explicitly scoped to `push` (read/write code, PRs,
+    issues), **not** `admin`, and branch-protection read/write requires
+    `admin` on GitHub's own permission model. This isn't a gap in the MCP
+    tool surface that a different tool would close — it's the credential's
+    actual grant, and per this repo's own least-privilege access policy
+    (project-scoped access per tool, no blanket elevation — see the user's
+    standing access-scoping preference), the right fix is a human with
+    existing repo-admin rights doing the one-time UI check, not elevating
+    this session's token to `admin`. Action (2) above stands unchanged;
+    this only replaces "no tool available" with the precise, verified
+    reason why, and confirms elevating access here isn't the recommended
+    path even though it may be technically possible for the org owner to
+    grant.
 - **Files:** none changed by this finding — process gap, not code. Relevant
   policy source: `CLAUDE.md` § "Pre-merge release gates", rule 9.
 - **What was NOT verified:** the actual branch-protection configuration

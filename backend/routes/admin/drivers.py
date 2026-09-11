@@ -3500,7 +3500,7 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
         raise HTTPException(
             status_code=502,
             detail="Failed to write synced transfers to the database. Try again.",
-        )
+        ) from None
 
     # 2. Sync connected-account bank payouts + balance transactions. Wrapped
     # so a failure here still audits the transfers already committed in
@@ -3530,7 +3530,7 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
                 f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger "
                 "sync failed. Re-run the refresh — it is safe to repeat."
             ),
-        )
+        ) from None
 
     if ledger_result.errors:
         logger.error(
@@ -3726,7 +3726,7 @@ async def admin_refresh_all_driver_stripe_payouts(
             raise HTTPException(
                 status_code=502,
                 detail="Failed to write synced transfers to the database. Nothing partial was reported — re-run.",
-            )
+            ) from None
 
     try:
         ledger_result = await sync_connect_ledger(stripe_secret, driver_ids=body.driver_ids)
@@ -3745,7 +3745,7 @@ async def admin_refresh_all_driver_stripe_payouts(
                 f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger sync failed. "
                 "Re-run — it is safe to repeat."
             ),
-        )
+        ) from None
 
     await log_admin_action(
         admin,

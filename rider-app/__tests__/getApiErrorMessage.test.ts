@@ -73,6 +73,22 @@ describe('getApiErrorMessage', () => {
     expect(getApiErrorMessage(undefined, FALLBACK)).toBe(FALLBACK);
   });
 
+  // Live-testing report: the driver-app login screen showed "Sign-in
+  // Unavailable — fetch failed: java.net.NoRouteToHostException: Host
+  // unreachable" — a raw Android networking exception, not a server
+  // message — because the caller's `serverMessage || 'Connection Error'`
+  // branching only falls back when this function returns falsy.
+  it('falls back on raw native networking exception text instead of leaking it as a server message', () => {
+    expect(
+      getApiErrorMessage(new Error('fetch failed: java.net.NoRouteToHostException: Host unreachable'), FALLBACK),
+    ).toBe(FALLBACK);
+    expect(getApiErrorMessage(new Error('Network request failed'), FALLBACK)).toBe(FALLBACK);
+    expect(getApiErrorMessage(new Error('java.net.UnknownHostException: Unable to resolve host'), FALLBACK)).toBe(
+      FALLBACK,
+    );
+    expect(getApiErrorMessage({ message: 'Failed to connect to /10.0.0.5:8000' }, FALLBACK)).toBe(FALLBACK);
+  });
+
   it('falls back on JSON-parse SyntaxErrors instead of leaking parser noise', () => {
     // Hermes wording (React Native)
     expect(getApiErrorMessage(new SyntaxError('JSON Parse error: Unexpected token <'), FALLBACK)).toBe(FALLBACK);

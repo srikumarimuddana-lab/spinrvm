@@ -9,6 +9,12 @@
 > below are corrected to match that; the "Active" checklist is left as-is (historical record) rather
 > than guessed at — **use `ACTION_ITEMS.md`'s open `[ ]` items for actual current priorities.**
 
+> **Redirect note (2026-09-11):** this `.planning/` workspace is one of four planning-notes
+> locations found in this repo; confirmed still actively used by its owning tool, so its
+> existing content stays in place. `.claude/plans/` (Claude Code's own native plan-mode
+> directory) is now the canonical home for **new** Claude-authored planning notes going
+> forward — see CLAUDE.md's Claude-Adjacent Directories table.
+
 ## What This Is
 
 Spinr is a Canadian ride-sharing platform built Saskatchewan-first, operating on a 0% driver commission model, currently in live app testing with real users (see `CLAUDE.md`). It connects riders and drivers through native mobile apps backed by a FastAPI monolith, managing real-time dispatch, payments, safety, and fleet operations. The platform has five integrated surfaces: backend API, rider app, driver app, admin dashboard, and a shared TypeScript library.

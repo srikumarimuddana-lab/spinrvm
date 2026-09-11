@@ -4,9 +4,9 @@ import {
   Animated,
   PanResponder,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useToastStore, type ToastVariant } from '../store/toastStore';

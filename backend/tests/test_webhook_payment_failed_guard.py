@@ -144,6 +144,42 @@ class TestRideReadFailureIsNotSilentlyDropped:
         unclaim.assert_awaited_once_with("evt_1")
 
 
+class TestCasWriteFailureIsNotSilentlyDropped:
+    async def test_ride_write_failure_unclaims_and_503s(self):
+        """B42: the event is ALREADY claimed when the CAS write runs. If that
+        write raises and nothing unclaims, Stripe's retry short-circuits as a
+        duplicate and the payment failure is lost FOREVER — the exact failure
+        mode that went unnoticed in production for two months (53 of 55
+        payment_intent.payment_failed events never processed, 2026-07-15
+        through 2026-09-11) because `payment_failure_reason` was written to
+        `rides` with no migration ever having created the column, so this
+        write raised on every real invocation. Migration 414 fixes the
+        schema gap; this test guards the write itself the same way
+        TestRideReadFailureIsNotSilentlyDropped already guards the read a
+        few lines above it in the real handler."""
+        from fastapi import HTTPException
+
+        from backend.routes import webhooks
+
+        unclaim = AsyncMock()
+        with (
+            patch.object(
+                webhooks.db_supabase,
+                "get_ride",
+                AsyncMock(return_value={"id": _RIDE_ID, "payment_status": "pending", "payment_intent_id": None}),
+            ),
+            patch.object(
+                webhooks.db_supabase, "update_one", AsyncMock(side_effect=RuntimeError("column does not exist"))
+            ),
+            patch.object(webhooks, "unclaim_stripe_event", unclaim),
+            patch.object(webhooks, "send_push_notification", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await webhooks._dispatch_stripe_event("evt_1", "payment_intent.payment_failed", {}, _data_object())
+        assert exc.value.status_code == 503
+        unclaim.assert_awaited_once_with("evt_1")
+
+
 class TestMissingRideStillRetries:
     async def test_unknown_ride_unclaims_and_500s_so_stripe_retries(self):
         from fastapi import HTTPException

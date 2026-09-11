@@ -18582,8 +18582,8 @@ mechanical follow-up work, prioritizable independently.
   near-identical interactions independently reimplemented** — **Status:**
   closed 2026-09-10 for the two originally-named call sites (PR #5213,
   `fix/ux4-shared-motion-timing`); two more instances of the identical
-  pattern turned up during this fix's own blast-radius grep and remain
-  open — see Residual below.
+  pattern turned up during this fix's own blast-radius grep and were
+  fixed as a residual follow-up 2026-09-11 — see Residual below.
   - **Issue/gap:** no `TIMING`/`EASING` constants module existed; each
     screen picked its own `Animated.timing` duration (found ranging
     50ms–14000ms across both apps) and easing curve (explicit in a handful
@@ -18624,10 +18624,27 @@ mechanical follow-up work, prioritizable independently.
     a follow-up migrates them onto `shakeHorizontal()` too, rather than
     this closure being read as "all shake duplication in the codebase is
     now fixed."
+  - **Residual resolved 2026-09-11:** both flagged call sites migrated onto
+    `shakeHorizontal(shakeAnim)` (default `[12, 8]` amplitude — both used
+    the exact default values already, no visual change). No new shared
+    logic needed; `shakeHorizontal()` and its own test coverage
+    (`shared/utils/__tests__/motion.test.ts`) were already reviewed and
+    merged as part of this same item. Verified against each screen's
+    existing test suite — `rider-app/__tests__/verifyEmailScreen.test.tsx`
+    (17/17 passing) and `driver-app/__tests__/app/otpScreen.test.tsx`
+    (22/22 passing) — neither asserts exact shake timing/duration, only
+    the observable failure behavior (toast shown, code cleared), so
+    converging on the shared 50ms-step/linear-easing implementation
+    changed nothing either test could see. `npx tsc --noEmit` clean and
+    `npx eslint` 0 errors on both files (pre-existing warnings unrelated
+    to the shake block only). All shake-duplication instances found by
+    this item's own investigation are now fixed — no known residual
+    remains.
   - **Files:** `shared/utils/motion.ts` (new),
     `shared/utils/__tests__/motion.test.ts` (new), `shared/package.json`
     (export entry), `rider-app/app/otp.tsx`,
-    `driver-app/components/dashboard/ActiveRidePanel.tsx`.
+    `driver-app/components/dashboard/ActiveRidePanel.tsx`,
+    `rider-app/app/verify-email.tsx`, `driver-app/app/otp.tsx`.
   - **Acceptance:** met for the two originally-named call sites — both
     now converge on shared `TIMING.shakeStep`/`EASING.shake` via
     `shakeHorizontal()`, and a documented duration/easing convention exists
@@ -18702,8 +18719,9 @@ mechanical follow-up work, prioritizable independently.
     pre-existing and out of scope (fixed-contrast white text/icon on a
     colored surface — the same documented exception UX5 noted — and
     padding/fontSize literals, UX2's territory).
-  - **Not fixed here:** UX2 (shared `SPACING`/`FONT` constants) and UX4
-    (shared shake-animation timing) remain open and untouched by this fix.
+  - **Not fixed here:** UX2 (shared `SPACING`/`FONT` constants) remains
+    open and untouched by this fix. UX4 was open at the time this was
+    written but its residual was separately closed 2026-09-11 — see UX4.
   - **Acceptance:** rider-app toast colors match the current theme tokens
     in both light and dark mode. Met.
 

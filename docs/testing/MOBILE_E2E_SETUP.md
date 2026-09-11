@@ -441,6 +441,52 @@ called "Maestro Cloud Control (MCC)" — that's an unrelated cloud-gaming/VDI
 product, nothing to do with mobile.dev's Maestro. Don't let the name
 confuse a vendor search.
 
+### If nobody on the team has Mac access at all — the cheapest real answer
+
+The comparison above assumes paying a device-farm vendor (Maestro Cloud,
+BrowserStack, etc.) for iOS coverage. If the team has **zero Mac access,
+anywhere**, there's a materially cheaper option that avoids a device-farm
+subscription entirely: **GitHub Actions' own macOS-hosted CI runners.**
+
+- GitHub's hosted `macos-*` runners come with **Xcode and the iOS
+  Simulator pre-installed** — no setup beyond writing the workflow file.
+- A job on one of these runners can do the *entire* loop itself: `npx expo
+  run:ios` (a real native build, compiled right there — no EAS Build cloud
+  cost), boot the iOS Simulator, then run the free Maestro CLI against it
+  — the same pattern already used for Android locally in Part A, just
+  happening inside CI instead of on someone's laptop. No Apple Developer
+  account is needed for this (Simulator-only, same as the free path
+  described above). Maestro's own docs have a guide for exactly this setup
+  ("Maestro GitHub Action for iOS"), and it's a well-established community
+  pattern, not an exotic one.
+- **Cost — and this is the headline number**: macOS runner minutes are
+  billed at roughly **$0.062/minute** on a private repo (GitHub cut this
+  price ~23% on 2026-01-01) and count against your included free-minutes
+  pool 10× faster than Linux minutes, so budget it as real, if modest,
+  spend rather than "free." A 20-30 minute iOS build+test job costs
+  roughly **$1.25–$1.90 per run**; run it a few times a week and that's
+  **roughly $16–$24/month total** — compare that to Maestro Cloud's
+  reported ~$250/device/month or BrowserStack's ~$249/month. For
+  occasional iOS runs (not literally every commit), this is an order of
+  magnitude cheaper than any device-farm subscription, with no new vendor
+  account at all.
+- **Known gotchas** (from community write-ups of this exact setup): the
+  CocoaPods install step is usually the slowest part — cache
+  `Pods`/`~/Library/Caches/CocoaPods` between runs; a freshly-booted
+  Simulator can be slow/flaky on a cold runner, so script an explicit
+  `xcrun simctl boot` with a wait/retry rather than trusting Maestro to
+  boot it for you.
+- **Not worth it yet**: a self-hosted Mac mini (e.g., via MacStadium) only
+  becomes cheaper than GitHub's hosted minutes at roughly **5,000+ CI
+  minutes/month** of usage — nowhere near "a few times a week." Stick with
+  GitHub's hosted macOS runners unless usage grows to near-daily.
+
+*(Confidence note: GitHub's/Expo's/Maestro's own docs sites were
+unreachable from this research tool's network, so the numbers above are
+cross-checked across several independent sources rather than pulled from
+one official page — worth a quick spot-check against GitHub's live Actions
+billing page before treating the dollar figures as final.)*
+
 ### Why Sauce Labs, Firebase Test Lab, and AWS Device Farm are ruled out here
 
 All three would throw away the 12 flow files that already exist and pass
@@ -452,21 +498,23 @@ compliance reason to use AWS specifically).
 
 ### What "best solution going forward" means concretely
 
-1. **Use Maestro Cloud** — it's not a new decision, it's finishing a
-   decision already made and half-built in this repo. Do Part D's two
+1. **Android: use Maestro Cloud** — it's not a new decision, it's finishing
+   a decision already made and half-built in this repo. Do Part D's two
    steps (add the 2 secrets, fire the workflow once) to get Android cloud
    testing live.
-2. **For iOS, don't wait on the Apple Developer account to start.** Get an
-   iOS Simulator build added to the `test` profile and an iOS job added to
-   `maestro-e2e.yml` — free, unblocks real cloud iOS coverage this week.
+2. **iOS, given no Mac access on the team: skip device-farm vendors
+   entirely and use a GitHub Actions macOS runner instead** (the section
+   just above). It reuses the same 12 flow files, needs no Apple Developer
+   account, and runs at roughly **$16-24/month** for occasional use versus
+   ~$250/month for a Maestro Cloud or BrowserStack iOS device. This is a
+   new (2026-09-11) workflow to build — it doesn't exist in this repo yet.
 3. **Decide on the Apple Developer Program account ($99/yr) separately, on
-   its own timeline** — it upgrades Simulator coverage to real-device
-   coverage and unlocks TestFlight distribution, but it's not gating step
-   1 or 2.
-4. **Keep BrowserStack App Automate in your back pocket**, not as a
-   day-one build — it's the most credible fallback if Maestro Cloud's
-   pricing or device coverage doesn't work out at scale, and it costs
-   nothing to know that today since it needs no flow rewrite either.
+   its own timeline** — it's only needed later, for real-device coverage
+   or TestFlight distribution, not for the Simulator-based CI path above.
+4. **Keep Maestro Cloud/BrowserStack in your back pocket for iOS** only if
+   the GitHub Actions runner path turns out to be too flaky or too slow in
+   practice — it costs nothing to know they're an option, since neither
+   needs a flow rewrite either.
 
 ---
 
@@ -482,12 +530,13 @@ one is delayed:
    task turns "tests exist but never run" into "tests run automatically on
    every relevant PR." Do this before investing more in new test flows;
    there's no point writing more tests for a pipe that's currently closed.
-3. **For iOS, don't wait — get cloud coverage this week via Part F's free
-   Simulator-build path**, then decide on the $99/yr Apple Developer
-   account on its own timeline once you want real-device coverage or
-   TestFlight distribution. This is the update from the earlier version of
-   this guide: iOS cloud testing was never actually blocked on owning a
-   Mac, only on one config addition.
+3. **For iOS — given the team has no Mac access — build the GitHub Actions
+   macOS-runner path from Part F**, not a Maestro Cloud/BrowserStack iOS
+   subscription. It reuses the same 12 flows, needs no Apple Developer
+   account, and runs at roughly $16-24/month for occasional use instead of
+   ~$250/month for a device-farm iOS lane. This is the update from the
+   earlier version of this guide: iOS testing was never actually blocked
+   on owning a Mac — it just needed the right CI approach.
 4. **The staging environment (for DAST) is the one genuinely bigger
    project here** — sequence it based on what's next (prioritize it ahead
    of a security review or public launch).

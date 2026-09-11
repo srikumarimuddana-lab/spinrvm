@@ -150,9 +150,16 @@
         "source": "github",
         "repo": "anthropics/claude-plugins-official"
       }
+    },
+    "understand-anything": {
+      "source": {
+        "source": "github",
+        "repo": "Egonex-AI/Understand-Anything"
+      }
     }
   },
   "enabledPlugins": {
-    "feature-dev@claude-plugins-official@3ea32df": true
+    "feature-dev@claude-plugins-official@3ea32df": true,
+    "understand-anything@understand-anything@a8cdbf4": true
   }
 }

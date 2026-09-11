@@ -11,7 +11,7 @@
 | PR / commit link | _pending_ — branch `claude/ride-t9nypb-hardening` |
 | Related issue or gap ID | Live-testing ride `SPR-T9NYPB` (`ec8d772a-…-938c1f47d486`, 2026-09-11 13:51–14:10 UTC). Sentry `CRIMSON-SMOKE-7445-PV / SX / PP / SW / NC / K4 / B / C`. Post-mortem artifact "SPR-T9NYPB Post-Mortem". Fixes 1 + 2 of that plan have their own log: `2026-09-11-driver-crash-loop-ride-t9nypb.md`. |
 
-This log covers the **remaining plan items except the billed-distance guard** (item 6 — deliberately not started, per product). Nine commits, each independently revertable; listed in §6 in commit order.
+This log covers the **remaining plan items except the billed-distance guard** (item 6 — deliberately not started, per product). Commits are referenced by subject, not SHA — the branch was rebased once already and the repo squash-merges. Each is independently revertable while on the branch; listed in §6 in commit order.
 
 ## 1. Issue / gap identified
 
@@ -64,32 +64,36 @@ Drivers: the app should stop dying on screen lock and (with 3a/3b) stop running 
 
 ## 6. Files modified
 
-| Commit | File path | What changed | Why |
+| Commit (subject) | File path | What changed | Why |
 |---|---|---|---|
-| `176ddad43` | `driver-app/lib/androidAuto/carSurface.tsx` | map key on generation only; overlays keyed on leg; camera effect runs on ready/loaded/layout; finite-centre guard; `markMapReady` on `onMapReady` | 3a / 4 / E |
-| `176ddad43` | `driver-app/lib/androidAuto/register.ts` | self-heal remounts only when not attached | 3a |
-| `176ddad43` | `driver-app/lib/androidAuto/carSurfaceGeneration.ts` | `mapReady` flag, `markMapReady`, `isCarSurfaceMapReady` | 3a |
-| `176ddad43` | `driver-app/lib/androidAuto/carMapCamera.ts` | `pan()` ignores non-finite | 4 |
-| `176ddad43` | `driver-app/lib/androidAuto/__tests__/{carSurfaceGeneration,carMapCamera,carRoute}.test.ts` | 6 new tests; source-contract test updated to the new key | — |
-| `197370a86` | `driver-app/components/CarMarker.tsx` | re-base snap hint on route change | 7 |
-| `197370a86` | `driver-app/__tests__/components/CarMarker.test.tsx` | regression test (89.99° → ~0°) | — |
-| `f9e6680d4` | `shared/api/client.ts` | pre-init 401 keeps stored refresh token; breadcrumbs; `hasStoredRefreshToken` | 5a |
-| `f9e6680d4` | `shared/api/__tests__/client.sos.test.ts` | 3 tests | — |
-| `f9e6680d4` | `driver-app/utils/apiClient.ts` | deleted (orphan) | 5a |
-| `efa725a36` | `backend/utils/refresh_tokens.py` | `_reuse_already_handled`, `_capture_reuse_event`, `REUSE_AUDIT_ACTION` | 5b |
-| `efa725a36` | `backend/tests/test_refresh_token_reuse_detection.py` | 4 tests | — |
-| `d1937a4ce` | `shared/services/errorReporting.ts` | tombstone/app-hang flags; `captureMessage` options | 8 |
-| `d1937a4ce` | `driver-app/app/_layout.tsx` | fingerprinted cold-start marker | 8 |
-| `d1937a4ce` | `rider-app/__tests__/errorReporting.test.ts` | 2 tests | — |
-| `62fff57a4` | `driver-app/plugins/withLargeHeap.js`, `driver-app/app.config.ts` | `android:largeHeap` | 3b |
-| `b3593a5b7` | `backend/utils/route_finalizer.py` | projected queue polls (+ a pre-existing 3-line ruff format fix) | 9a |
-| `b3593a5b7` | `backend/tests/test_route_finalizer_loop.py` | projection test | — |
-| `26cb8656d` | `backend/core/lifespan.py` | `loop_start_offset_seconds`; offset in `_restartable` | 9b |
-| `26cb8656d` | `backend/tests/test_lifespan_loop_start_offset.py` | 5 tests | — |
-| `f4c22143c` | `backend/routes/drivers/location.py` | gather driver + ride reads; ownership in Python (+ pre-existing B904 fix) | 9c |
-| `f4c22143c` | `backend/tests/test_location_batch.py` | 2 tests | — |
-| `29fa084ea` | `backend/routes/rides/tracking.py` | 6 s cache | 9d |
-| `29fa084ea` | `backend/tests/test_live_route.py` | 4 tests + cache-clearing fixture | — |
+| `AA one-map` | `driver-app/lib/androidAuto/carSurface.tsx` | map key on generation only; overlays keyed on leg; camera effect runs on ready/loaded/layout; finite-centre guard; `markMapReady` on `onMapReady` | 3a / 4 / E |
+| `AA one-map` | `driver-app/lib/androidAuto/register.ts` | self-heal remounts only when not attached | 3a |
+| `AA one-map` | `driver-app/lib/androidAuto/carSurfaceGeneration.ts` | `mapReady` flag, `markMapReady`, `isCarSurfaceMapReady` | 3a |
+| `AA one-map` | `driver-app/lib/androidAuto/carMapCamera.ts` | `pan()` ignores non-finite | 4 |
+| `AA one-map` | `driver-app/lib/androidAuto/__tests__/{carSurfaceGeneration,carMapCamera,carRoute}.test.ts` | 6 new tests; source-contract test updated to the new key | — |
+| `marker snap hint` | `driver-app/components/CarMarker.tsx` | re-base snap hint on route change | 7 |
+| `marker snap hint` | `driver-app/__tests__/components/CarMarker.test.tsx` | regression test (89.99° → ~0°) | — |
+| `401 backstop` | `shared/api/client.ts` | pre-init 401 keeps stored refresh token; breadcrumbs; `hasStoredRefreshToken` | 5a |
+| `401 backstop` | `shared/api/__tests__/client.sos.test.ts` | 3 tests | — |
+| `401 backstop` | `driver-app/utils/apiClient.ts` | deleted (orphan) | 5a |
+| `cascade once` | `backend/utils/refresh_tokens.py` | `_reuse_already_handled`, `_capture_reuse_event`, `REUSE_AUDIT_ACTION` | 5b |
+| `cascade once` | `backend/tests/test_refresh_token_reuse_detection.py` | 4 tests | — |
+| `observability` | `shared/services/errorReporting.ts` | tombstone/app-hang flags; `captureMessage` options | 8 |
+| `observability` | `driver-app/app/_layout.tsx` | fingerprinted cold-start marker | 8 |
+| `observability` | `rider-app/__tests__/errorReporting.test.ts` | 2 tests | — |
+| `largeHeap` | `driver-app/plugins/withLargeHeap.js`, `driver-app/app.config.ts` | `android:largeHeap` | 3b |
+| `ride_routes projection` | `backend/utils/route_finalizer.py` | projected queue polls (+ a pre-existing 3-line ruff format fix) | 9a |
+| `ride_routes projection` | `backend/tests/test_route_finalizer_loop.py` | projection test | — |
+| `loop de-phase` | `backend/core/lifespan.py` | `loop_start_offset_seconds`; offset in `_restartable` | 9b |
+| `loop de-phase` | `backend/tests/test_lifespan_loop_start_offset.py` | 5 tests | — |
+| `location-batch gather` | `backend/routes/drivers/location.py` | gather driver + ride reads; ownership in Python (+ pre-existing B904 fix) | 9c |
+| `location-batch gather` | `backend/tests/test_location_batch.py` | 2 tests | — |
+| `live-route cache` | `backend/routes/rides/tracking.py` | 6 s cache | 9d |
+| `live-route cache` | `backend/tests/test_live_route.py` | 4 tests + cache-clearing fixture | — |
+| `compose with #5250` | `driver-app/utils/backgroundLocation.ts` | #5250's backgrounded-rejection branch also parks the one-shot foreground replay | 2 (post-rebase) |
+| `audit follow-ups` | `shared/api/client.ts`, `shared/api/__tests__/client.sos.test.ts` | `breadcrumbPath` strips `?query`/`#fragment` before any breadcrumb (raw GPS was reachable via `/drivers/nearby?lat=…`); 2 tests | 5a — security audit BLOCKER |
+| `audit follow-ups` | `backend/utils/refresh_tokens.py` | audit lookup ordered newest-first | 5b — security audit |
+| `audit follow-ups` | `docs/runbooks/auth-tokens.md` | once-per-row rule, WARNING repeat path, `refresh_token_replay_repeat` tag has no alert rule yet | 5b — security audit |
 | — | `docs/change-log/2026-09-11-ride-t9nypb-hardening.md` | this log | — |
 
 ## 7. Before / after (behaviour-changing diffs)
@@ -133,6 +137,8 @@ Every commit is `git-revert-safe` independently — no migrations, no data write
 - `expo config --type introspect` shows `android:largeHeap: 'true'`.
 - Sentry `CRIMSON-SMOKE-7445-PV` status: ignored → unresolved (comment posted).
 - The CarMarker regression test was run against the pre-fix component and **fails there** (bearing 89.99°).
+- `spinr-security-auditor` reviewed the two auth commits: one BLOCKER (raw URL in the new breadcrumbs could carry GPS coordinates — fixed, path-only, tested) and two warnings (audit lookup unordered — fixed; runbook contradiction — documented). Verdicts after fixes: no auth bypass found in either; the reuse dedupe is exact per row and the pre-init branch cannot retain a server-revoked session.
+- Post-rebase onto `main` (which had merged #5250, a reactive filter for the same `PP` rejection): 338 driver-app and 188 backend tests pass; the two fixes compose (gate before the call, #5250's branch as the race fallback, both replay on foreground).
 - **No production build run.** JS-only commits are OTA-eligible; the Android Auto and `largeHeap` commits require an EAS build.
 
 ## 10. What was NOT verified
@@ -144,4 +150,4 @@ Every commit is `git-revert-safe` independently — no migrations, no data write
 - Capacity at 10/20/30 rides remains an extrapolation; `loadtest/` has not been run.
 - `test_loguru_call_conventions.py` fails on this Windows checkout for 171 files it cannot decode as cp1252 — pre-existing, environment-only (CI is UTF-8), none of them touched here.
 - The Google Play Developer Reporting API is still disabled on GCP project `879808882715` (console action; not automatable from here).
-- The security-auditor pass on 5b is requested, not yet done.
+- Whether `spinr_alert=refresh_token_replay_repeat` should page is an open on-call decision; no alert rule exists for it yet (see the runbook).

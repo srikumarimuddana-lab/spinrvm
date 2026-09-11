@@ -18443,13 +18443,13 @@ These are adoption gaps against an *already-decided* intended system, not
 open design questions — the direction itself is settled; closing these is
 mechanical follow-up work, prioritizable independently.
 
-- [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
-  minority of screens in both apps** — **Status:** in progress —
+- [x] **UX1. Plus Jakarta Sans loads but is only actually applied in a
+  minority of screens in both apps** — **Status:** CLOSED 2026-09-11 —
   rider-app round 1 landed 2026-09-10 (15 files), round 2 landed
-  2026-09-11 (8 more files, see below); driver-app full rollout (all 42
-  qualifying files) landed 2026-09-11, merged via PR #5244. Do not mark
-  closed until rider-app's remaining files are done — 10 files
-  outstanding per its own note below.
+  2026-09-11 (8 more files), round 3 landed 2026-09-11 (final 10 files,
+  see below) — rider-app is now fully migrated (33 files). driver-app
+  full rollout (all 42 qualifying files) landed 2026-09-11, merged via
+  PR #5244. Both apps done.
   - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
     (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
     there was no `Text.defaultProps` override or themed `Text` wrapper
@@ -18541,35 +18541,51 @@ mechanical follow-up work, prioritizable independently.
     `app/index.tsx`, `components/CancelReasonSheet.tsx`,
     `components/ScreenHeader.tsx`, `components/toastConfig.tsx`. Merged
     via PR #5244.
-  - **Remaining follow-up scope:** rider-app has 10 more files that still
-    lack `fontFamily` entirely (re-grep before picking the next batch —
-    this list will drift just like the last one did): `app/_layout.tsx`,
-    `app/loyalty.tsx`, `app/referral.tsx`, `app/promotions.tsx`,
-    `app/ai-assistant.tsx`, `app/report-safety.tsx`,
-    `components/CancelReasonSheet.tsx`, `components/FreeCancelTimer.tsx`,
-    `components/SchedulePicker.tsx`, `components/Toast.tsx`. Separately,
+  - **Action taken (rider-app round 3, 2026-09-11 — final):** re-grepped
+    `fontWeight` vs `fontFamily` usage across `rider-app/app` and
+    `rider-app/components` from scratch once more (per this item's own
+    "don't trust the prior count" warning) using a script that correctly
+    handles multi-line `react-native` import blocks (round 2's plain
+    single-line regex would have under-counted here — several of these 10
+    files import `Text` as part of a multi-line destructured import).
+    Found exactly the same 10 files round 2 predicted, zero drift: none
+    had been touched by any other session in the interim. Migrated all 10
+    in 4 commits of ≤3 files each: root/misc (`app/_layout.tsx`,
+    `app/ai-assistant.tsx`, `app/report-safety.tsx`); rewards/promo
+    (`app/loyalty.tsx`, `app/promotions.tsx`, `app/referral.tsx`);
+    ride-cancel/schedule components (`components/CancelReasonSheet.tsx`,
+    `components/FreeCancelTimer.tsx`, `components/SchedulePicker.tsx`);
+    and `components/Toast.tsx` isolated into its own commit as the
+    highest-blast-radius file in this round (~30 consumers). Full Change
+    Impact Log:
+    `docs/change-log/2026-09-11-ux1-rider-app-text-wrapper-rollout-round3.md`.
+    A post-migration fresh sweep found **zero remaining files** matching
+    the criterion — rider-app is fully migrated (15 + 8 + 10 = 33 files).
+  - **Remaining follow-up scope:** none for this item's acceptance bar —
+    both apps are fully migrated. Two related-but-separate gaps remain
+    open as their own future work, not blocking this item's closure: (1)
     6 rider-app files with partial/manual `fontFamily` coverage found in
-    round 2 (listed above) are a real but different gap — hand-written
-    literals instead of the wrapper, not closed by this item's acceptance
-    bar — flagged here for a future, separately-scoped pass rather than
-    folded into this count. `components/VoltraRideActivity.tsx` is out of
-    scope permanently (doesn't use RN's `Text`). driver-app has zero
-    remaining — all 42 qualifying files migrated and merged.
-  - **Files:** rider-app — see "Action taken" bullets above for each
-    round's exact list; `shared/components/Text.tsx` is the wrapper
-    (unchanged since round 1). driver-app — see the "Action taken
-    (driver-app...)" bullet above for the full 42-file list and its
-    change-log doc. Full remaining rider-app per-file breakdown: re-grep
-    `fontFamily` vs `fontWeight`-only usage before starting the next batch
-    (not reproduced here to avoid drift from the source).
+    round 2 (`app/(tabs)/index.tsx`, `app/become-driver.tsx`,
+    `app/driver-arriving.tsx`, `app/ride-details.tsx`, `app/ride-status.tsx`,
+    `app/ride-tracking-webview.tsx`) — hand-written literals instead of the
+    wrapper; (2) the wrapper isn't yet lint-enforced in either app, so a
+    new screen could still ship without adopting it. `components/VoltraRideActivity.tsx`
+    is out of scope permanently (doesn't use RN's `Text`).
+  - **Files:** rider-app — see all three "Action taken" bullets above for
+    each round's exact list (33 files total); `shared/components/Text.tsx`
+    is the wrapper (unchanged since round 1). driver-app — see the
+    "Action taken (driver-app...)" bullet above for the full 42-file list
+    and its change-log doc.
   - **Acceptance:** a defined, enforced mechanism exists such that new
-    screens can't silently ship off-brand-font by omission — met for any
-    new rider-app or driver-app screen that imports `Text` from
-    `@shared/components/Text` instead of `react-native` directly; not yet
-    enforced by lint in either app. driver-app's 42 qualifying files are
-    now fully migrated and merged (PR #5244); rider-app has 10 files still
-    outstanding per its own note above — the item stays open until both
-    are done.
+    screens can't silently ship off-brand-font by omission — met for
+    every rider-app and driver-app screen: both apps' qualifying files
+    (33 rider-app, 42 driver-app) are fully migrated to
+    `@shared/components/Text` and merged (PRs #5214/#5240/round-3 for
+    rider-app, #5244 for driver-app). Not yet enforced by lint in either
+    app — a new screen could still opt out by importing `Text` from
+    `react-native` directly; flagged as the one open follow-up (above),
+    not a blocker to closing this item, since the acceptance bar as
+    written was existing-screen coverage, not lint enforcement.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress

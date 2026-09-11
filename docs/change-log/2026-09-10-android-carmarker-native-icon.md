@@ -141,3 +141,57 @@ Two deliberate narrowings, both commented at the call site:
 - **The prefetch probe itself has never run against a real Fresco pipeline.** The three new tests spy on `Image.prefetch`, so they pin the component's branching, not Android's actual image loading. Whether a 404 resolves `false` versus rejecting on a real device is unverified — both route to `handleImageError`, so the outcome is the same either way, but the path taken is untested.
 - **Double fetch is accepted, not measured.** The probe and the native Marker each fetch the URL. They share Fresco's cache so the second should hit warm, but this was reasoned from `MapMarker.java`, not timed on a device.
 - A pre-existing oddity, deliberately left alone: after the first failure `imageFailed` stays `true` until `imageUri` changes, so the retry that bumps `imageAttempt` re-mounts the `<Image>` against the **bundled** source and never re-attempts the custom URL. Retries therefore only ever exhaust toward the Sentry report. Unchanged on both platforms by this follow-up; out of scope here.
+
+---
+
+## 12. The native-icon approach did NOT fix it — reverted (2026-09-11)
+
+**Shipped via OTA after PR #5219 merged, confirmed running on a physical Android device (two+ cold starts), and the car still disappears after Drive → Profile → Drive.** The §2 root cause was right about the *mechanism* (Expo Tabs detach the native MapView on blur) but the §3 remedy swapped one non-surviving render path for another.
+
+### The evidence that settles it
+
+With the car missing, **the presence ring is still visible, and there is no red default pin.** That is decisive:
+
+- No red pin means `getIcon()` did not fall through to `BitmapDescriptorFactory.defaultMarker` (`MapMarker.java:580-600`), so `iconBitmapDescriptor` was non-null — the marker existed and drew, with an empty bitmap.
+- The ring survived. The ring was a **custom-view Marker with `tracksViewChanges` left on**; the car was a **native `Marker.image`**. Same coordinate, same re-attach, same component — one redrew itself and one did not.
+
+So the working example was inside the component the whole time. Both failures share a single cause: **the car stopped re-rendering itself.** Freezing the snapshot stops it; handing the icon to the map SDK also stops it.
+
+Why the native path is not the synchronous drawable §3 assumed: under `expo-updates`, a `require()`d asset is not an Android drawable — it resolves to a `file://` URI in the update's cache, and `MapMarker.setImage()` routes `file://` through Fresco's Drawee holder (`MapMarker.java:414-426`), the same lifecycle-sensitive path as a remote URL. react-native-maps already has to prop that path up with a reflection call to `onAttachedToWindow` (`:481`). A bundled asset in an OTA build is therefore *not* immune to a detach.
+
+Also worth recording: this could never have been a custom-upload problem. All four rows in `vehicle_types` have `marker_image_url = null` (checked against production), so `imageUri` was never set and the car was always on the bundled-asset path.
+
+### Fix
+
+Revert to **one Marker, car and ring as child views, `tracksViewChanges` permanently true on both platforms** — the configuration the ring demonstrably survives on. The long comment at the `tracksViewChanges` prop now records both failed approaches so the next person does not re-try either.
+
+Consequently removed, because the reason for each is gone:
+- the sibling ring Marker and its `ringMarkerRef` lockstep `animateMarkerToCoordinate`;
+- `androidMarkerImage`;
+- the §11 `Image.prefetch` probe and its `RNImage` import — `<ExpoImage onError>` is reachable on Android again, so the native fallback, retry and one-shot Sentry report work without a stand-in. The probe would now only double-fetch and duplicate the error path.
+
+iOS is unchanged in behaviour and keeps tracking on for its own independent reason: Apple Maps ignores `Marker.rotation`, so heading is a view transform and a frozen snapshot would pin the PNG north.
+
+### Accepted cost
+
+One marker re-snapshots per frame. Accepted deliberately: this renders the driver's own single vehicle, the `ring` prop's docblock already forbids wiring it on a multi-marker screen, and **the ring was already paying exactly this cost unconditionally** under §3 — so the per-frame work is not new, it is now simply one marker instead of two.
+
+### Files modified
+
+| File path | What changed | Why |
+|---|---|---|
+| `driver-app/components/CarMarker.tsx` | single Marker with child views on both platforms; `tracksViewChanges` always true; sibling ring, `ringMarkerRef`, `androidMarkerImage`, prefetch probe and `RNImage` import removed; both docblocks rewritten to record the two failed approaches | Put the car on the only render path observed to survive a MapView re-attach |
+| `driver-app/__tests__/components/CarMarker.test.tsx` | replaced both Android `Marker.image` describe blocks with "Android never freezes the marker snapshot" (5 tests); dropped the 3 prefetch tests | Guard the never-freeze rule and the no-`Marker.image` rule explicitly |
+
+### Verification
+
+- `npx jest __tests__/components/CarMarker.test.tsx --no-coverage` — **26/26 passed**. The new assertions (`tracksViewChanges === true`, `marker.props.image` undefined, a child `ExpoImage` present, exactly one Marker with a ring) all fail against the §3 implementation, so they are real regression guards rather than restatements.
+- `npx jest` over CarMarker, driverDashboardScreen, `__tests__/hooks` and `lib/androidAuto/__tests__` — **21 suites, 346 passed**.
+- `npx tsc --noEmit` — **0 errors** project-wide.
+- `npx eslint components/CarMarker.tsx` — **5 errors, unchanged from the pre-existing baseline**; all `react-hooks/refs`/`immutability` on lines outside this change.
+
+### What is NOT verified
+
+- **This has not been confirmed on the device either.** It is grounded in the ring surviving the exact transition that blanks the car, which is strong evidence but still inference about the native layer — not an observed fix. Ship it to the `preview` channel and reproduce Drive → Profile → Drive before trusting it.
+- **The per-frame re-snapshot cost was not measured.** No frame timing was taken on a real device, on any OEM. If the driver map regresses visibly on a low-end handset, the next step is re-freezing on a *focus-aware* trigger rather than reverting to a native icon.
+- **Two prior theories about this bug have now been wrong in production.** Treat this one as a hypothesis under test until a device says otherwise.

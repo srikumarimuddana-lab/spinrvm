@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
-import { Image as RNImage, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { Image } from 'expo-image';
 import { CarMarker } from '../../components/CarMarker';
@@ -472,7 +472,8 @@ describe('CarMarker — physics-based jump rejection (ingestFix)', () => {
   });
 });
 
-describe('CarMarker — Android ring is a sibling Marker (car stays a native icon)', () => {
+
+describe('CarMarker — Android never freezes the marker snapshot', () => {
   const coord = { latitude: 50.4452, longitude: -104.6189 };
   const originalPlatformOS = Platform.OS;
 
@@ -485,41 +486,73 @@ describe('CarMarker — Android ring is a sibling Marker (car stays a native ico
     Platform.OS = originalPlatformOS;
   });
 
-  function carAndRing(root: { findAllByType: (t: any) => any[] }) {
-    const markers = root.findAllByType(Marker);
-    return {
-      markers,
-      car: markers.find((m) => m.props.image),
-      ringMarker: markers.find((m) => !m.props.image),
-    };
-  }
+  // Regression guard for two production failures, in order:
+  //   1. tracksViewChanges frozen after image load -> Expo Tabs detach the
+  //      native MapView on blur, the marker is re-created against the frozen
+  //      snapshot, ExpoImage never re-fires onLoad, car comes back blank.
+  //   2. native Marker.image instead of a child view -> removed the snapshot but
+  //      moved the car onto Fresco's Drawee path (an expo-updates asset is a
+  //      file:// uri, not a drawable), which also does not survive re-attach.
+  //      Confirmed in live testing: car still vanished, and with no red default
+  //      pin, i.e. the marker drew an empty bitmap.
+  // The presence ring survived both, because it kept tracking on. So: the car is
+  // a child view and tracking is never turned off. Do not "optimise" either.
+  it('renders the car as a child view, not Marker.image, and keeps tracking on', () => {
+    const { UNSAFE_root, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
+    const marker = UNSAFE_root.findByType(Marker);
 
-  it('adds a tracking ring Marker when the ring appears, without dropping Marker.image on the car', () => {
-    const { UNSAFE_root, rerender, unmount } = render(<CarMarker coordinate={coord} ring={null} />);
-    expect(UNSAFE_root.findByType(Marker).props.image).toBeTruthy();
-    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(false);
-
-    rerender(<CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />);
-    const { markers, car, ringMarker } = carAndRing(UNSAFE_root);
-    expect(markers).toHaveLength(2);
-    expect(car.props.image).toBeTruthy();
-    expect(car!.props.tracksViewChanges).toBe(false);
-    expect(ringMarker!.props.tracksViewChanges).toBe(true);
-
+    expect(marker.props.tracksViewChanges).toBe(true);
+    // A truthy `image` would put the car back on the Drawee icon path.
+    expect(marker.props.image).toBeUndefined();
+    expect(UNSAFE_root.findByType(Image)).toBeTruthy();
+    // Heading still rides the native prop on Android (Google Maps honours it).
+    expect(marker.props.rotation).toBeDefined();
     unmount();
   });
 
-  it('removes the ring Marker when going offline and keeps the native car icon', () => {
-    const { UNSAFE_root, rerender, unmount } = render(
-      <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />,
+  it('still tracks after onLoad and every settle window has elapsed', () => {
+    const { UNSAFE_root, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
+    act(() => {
+      UNSAFE_root.findByType(Image).props.onLoad();
+    });
+    act(() => {
+      jest.advanceTimersByTime(6000);
+    });
+    expect(UNSAFE_root.findByType(Marker).props.tracksViewChanges).toBe(true);
+    unmount();
+  });
+
+  it('keeps ring and car on ONE marker — a sibling ring can drift or outlive the car', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: true }} />,
     );
-    expect(carAndRing(UNSAFE_root).markers).toHaveLength(2);
+    expect(UNSAFE_root.findAllByType(Marker)).toHaveLength(1);
+    expect(UNSAFE_root.findByType(Image)).toBeTruthy();
+    unmount();
+  });
 
-    rerender(<CarMarker coordinate={coord} ring={null} />);
-    const marker = UNSAFE_root.findByType(Marker);
-    expect(marker.props.image).toBeTruthy();
-    expect(marker.props.tracksViewChanges).toBe(false);
+  it('routes a custom marker_image_url through the child Image, not Marker.image', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} imageUri="https://cdn.example.com/car.png" />,
+    );
+    expect(UNSAFE_root.findByType(Marker).props.image).toBeUndefined();
+    expect(UNSAFE_root.findByType(Image).props.source).toEqual({
+      uri: 'https://cdn.example.com/car.png',
+    });
+    unmount();
+  });
 
+  // onError is reachable on Android again now that the car is a child view —
+  // which is why the Image.prefetch probe that stood in for it was removed.
+  it('falls back to the bundled car when a custom marker_image_url fails to load', () => {
+    const { UNSAFE_root, unmount } = render(
+      <CarMarker coordinate={coord} imageUri="https://cdn.example.com/dead.png" />,
+    );
+    act(() => {
+      UNSAFE_root.findByType(Image).props.onError();
+    });
+    // Bundled variants are require()'d modules, never { uri }.
+    expect(UNSAFE_root.findByType(Image).props.source?.uri).toBeUndefined();
     unmount();
   });
 });
@@ -578,98 +611,3 @@ describe('CarMarker — Android does not use the iOS rotate wrapper', () => {
   });
 });
 
-describe('CarMarker — Android native map icon (not a custom-view snapshot)', () => {
-  const coord = { latitude: 50.4452, longitude: -104.6189 };
-  const originalPlatformOS = Platform.OS;
-
-  beforeEach(() => {
-    jest.useFakeTimers();
-    Platform.OS = 'android';
-  });
-  afterEach(() => {
-    jest.useRealTimers();
-    Platform.OS = originalPlatformOS;
-  });
-
-  it('passes a bitmap to Marker.image and does not mount an ExpoImage child', () => {
-    const { UNSAFE_root, unmount } = render(<CarMarker coordinate={coord} heading={90} />);
-    const marker = UNSAFE_root.findByType(Marker);
-    expect(marker.props.image).toBeTruthy();
-    expect(marker.props.tracksViewChanges).toBe(false);
-    expect(marker.props.rotation).toBeDefined();
-    expect(() => UNSAFE_root.findByType(Image)).toThrow();
-    unmount();
-  });
-
-  // Marker.image is resolved inside the native map SDK and has no JS error
-  // callback, and the <ExpoImage onError> fallback lives in the iOS-only
-  // branch — so without an explicit probe a dead marker_image_url left the
-  // driver with no car and reported nothing. These two pin the probe.
-  it('falls back to the bundled car when a custom marker_image_url fails to load', async () => {
-    const prefetch = jest.spyOn(RNImage, 'prefetch').mockResolvedValue(false as never);
-    const { UNSAFE_root, unmount } = render(
-      <CarMarker coordinate={coord} imageUri="https://cdn.example.com/dead.png" />,
-    );
-
-    expect(prefetch).toHaveBeenCalledWith('https://cdn.example.com/dead.png');
-    // Flush the prefetch promise so handleImageError's setState lands.
-    await act(async () => { await Promise.resolve(); });
-
-    const image = UNSAFE_root.findByType(Marker).props.image;
-    // Bundled variants are require()'d modules, never { uri }.
-    expect(image?.uri).toBeUndefined();
-    expect(image).toBeTruthy();
-    prefetch.mockRestore();
-    unmount();
-  });
-
-  it('keeps a custom marker_image_url that loads successfully', async () => {
-    const prefetch = jest.spyOn(RNImage, 'prefetch').mockResolvedValue(true as never);
-    const { UNSAFE_root, unmount } = render(
-      <CarMarker coordinate={coord} imageUri="https://cdn.example.com/live.png" />,
-    );
-    await act(async () => { await Promise.resolve(); });
-
-    expect(UNSAFE_root.findByType(Marker).props.image).toEqual({
-      uri: 'https://cdn.example.com/live.png',
-    });
-    prefetch.mockRestore();
-    unmount();
-  });
-
-  it('does not probe a non-http source — a local uri would false-negative', () => {
-    const prefetch = jest.spyOn(RNImage, 'prefetch');
-    const { unmount } = render(
-      <CarMarker coordinate={coord} imageUri="file:///data/user/0/car.png" />,
-    );
-    expect(prefetch).not.toHaveBeenCalled();
-    prefetch.mockRestore();
-    unmount();
-  });
-
-  it('keeps the car on Marker.image when a presence ring is shown (ring is a sibling Marker)', () => {
-    const { UNSAFE_root, unmount } = render(
-      <CarMarker coordinate={coord} ring={{ color: '#10B981', pulsing: false }} />,
-    );
-    const markers = UNSAFE_root.findAllByType(Marker);
-    expect(markers).toHaveLength(2);
-    const car = markers.find((m: { props: { image?: unknown } }) => m.props.image);
-    const ringMarker = markers.find((m: { props: { image?: unknown } }) => !m.props.image);
-    expect(car).toBeTruthy();
-    expect(car!.props.tracksViewChanges).toBe(false);
-    expect(ringMarker).toBeTruthy();
-    expect(ringMarker!.props.tracksViewChanges).toBe(true);
-    expect(() => UNSAFE_root.findByType(Image)).toThrow();
-    unmount();
-  });
-
-  it('uses a remote uri on Marker.image for an admin-uploaded custom marker', () => {
-    const { UNSAFE_root, unmount } = render(
-      <CarMarker coordinate={coord} imageUri="https://cdn.example/marker.png" />,
-    );
-    expect(UNSAFE_root.findByType(Marker).props.image).toEqual({
-      uri: 'https://cdn.example/marker.png',
-    });
-    unmount();
-  });
-});

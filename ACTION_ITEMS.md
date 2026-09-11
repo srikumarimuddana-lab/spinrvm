@@ -1125,6 +1125,61 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       population is now identifiable on the admin dashboard going forward
       without a one-off manual query; it does **not** by itself resolve
       the purge decision above.
+    - **2026-09-11 — the purge decision: made, scoped, and built (not yet
+      fired).** Presented the finding plainly with a recommendation via
+      `AskUserQuestion` rather than deciding unilaterally. Product-owner
+      decision, in two parts:
+      1. **Scope: SIN only, for now.** `date_of_birth` (146 profiles),
+         `driver_vehicle_history` (241 profiles), and dormant riders'
+         `saved_addresses` (153 profiles) are explicitly **not** purged by
+         this pass — each remains its own separate, undecided item.
+      2. **Grace period: 180 days past Spinr's 2026-03-30 launch** (cutoff
+         **2026-09-26**), not "dormant since import" — a driver who
+         imported cleanly but simply hasn't taken a first ride yet isn't
+         the same as one who never will, and purging prematurely would
+         force a real future driver to resupply a document they already
+         gave once. Chosen deliberately over 90/120 days (both of which
+         were already-elapsed and would have made all 97 candidates
+         eligible immediately) precisely so today's 97 candidates get one
+         more purge-eligibility window past what "already dormant" alone
+         would justify.
+      - **Built, not yet run:** `backend/migrations/413_purge_driver_pii_secret_fn.sql`
+        adds a `purge_driver_pii_secret(secret_id)` RPC — deleting the
+        actual `vault.secrets` ciphertext, not just nulling the column
+        reference (migration 289's own top comment already warned that
+        nulling `drivers.sin` alone orphans the vault row without deleting
+        it — "a PIPEDA problem, not a clean [purge]"). New
+        `backend/services/dormant_driver_sin_purge_service.py`
+        (plan/apply, population = drivers already flagged
+        `pre_launch_test = true`, never re-derived) and
+        `backend/scripts/purge_dormant_driver_sin.py` (thin CLI,
+        dry-run-default, mirrors `backfill_legacy_driver_sin_dob.py`'s own
+        shape). **The grace period is a hard code-level gate in
+        `apply_sin_purge`, not just a documented convention** — running
+        the script with `--apply` before 2026-09-26 refuses and exits
+        non-zero rather than purging early, regardless of intent. 13 new
+        unit tests, `spinr-migration-reviewer` run on the new migration.
+        Full detail: `docs/change-log/2026-09-11-a34-dormant-driver-sin-purge-tool.md`.
+      - **Not yet run against production** — by design, the tool cannot
+        act until 2026-09-26. A human needs to actually invoke
+        `python backend/scripts/purge_dormant_driver_sin.py --apply` on or
+        after that date (it is not wired into any background loop or
+        admin-dashboard button — a destructive PII purge stays a
+        deliberate, manually-triggered action, not a one-click UI affordance
+        or an automatic cron).
+      - **The other three fields from the same 2026-09-10 finding
+        (`date_of_birth` — 146 profiles, `driver_vehicle_history` — 241
+        profiles, dormant riders' `saved_addresses` — 153 profiles):
+        explicitly decided to wait, not silently dropped.** Asked via
+        `AskUserQuestion` on 2026-09-11 whether to build purge tools for any
+        of the three now — product-owner answer: **none for now**, deliberately
+        paced so the SIN tool actually runs (2026-09-26+) and is observed
+        working correctly before building three more tools on the same
+        pattern. If/when any of these is picked back up, the product owner
+        has already indicated a preference to reuse the same 180-day
+        post-launch grace period and the same `pre_launch_test = true`
+        dormant-population definition, for consistency with the SIN tool —
+        not a fresh rule per field.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as

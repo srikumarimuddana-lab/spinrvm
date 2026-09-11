@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import {
-    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
+    View, TouchableOpacity, StyleSheet, ActivityIndicator,
     BackHandler, Animated, Easing, Dimensions, Platform, Vibration
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';

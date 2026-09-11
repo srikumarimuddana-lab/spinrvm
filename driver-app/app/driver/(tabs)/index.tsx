@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
+import { View, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
+import { Text } from '@shared/components/Text';
 import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';

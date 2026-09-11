@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { AccessibilityInfo, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, StyleSheet, View } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { Ionicons } from '@expo/vector-icons';
 import type { ToastConfigParams } from 'react-native-toast-message';
 import { useTheme } from '@shared/theme/ThemeContext';

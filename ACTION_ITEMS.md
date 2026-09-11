@@ -18466,26 +18466,54 @@ mechanical follow-up work, prioritizable independently.
     enforced by lint, and driver-app has no equivalent yet.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
-  exist but are used in only 1–4 files per app** — **Status:** open,
-  identified 2026-09-10.
+  exist but are used in only 1–4 files per app** — **Status:** in progress
+  (driver-app partial rollout landed 2026-09-10), identified 2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
     h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
     `shared/components/{Button,Card,Input}.tsx` and directly imported in
-    only 4 rider-app screens and 1 driver-app screen. Everywhere else,
-    `padding`/`margin`/`fontSize` are ad-hoc numeric literals — thousands of
-    occurrences across both apps, loosely but not strictly clustered near
-    the scale's own values.
+    only 4 rider-app screens and 1 driver-app screen (`profile.tsx`, which
+    predates this round). Everywhere else, `padding`/`margin`/`fontSize`
+    are ad-hoc numeric literals — thousands of occurrences across both
+    apps, loosely but not strictly clustered near the scale's own values.
   - **Why it matters:** no enforced spacing/type rhythm means visual
     inconsistency compounds silently as new screens are added, each picking
     its own numbers.
-  - **Action:** decide whether to push broader adoption of the existing
-    `SPACING`/`FONT` constants (sweep existing screens) or accept ad-hoc
-    literals as the status quo and only require the constants for new code
-    — a scope decision, not included in this item.
-  - **Files:** none yet.
+  - **Action:** user direction confirmed 2026-09-10: sweep existing screens
+    to adopt `SPACING`/`FONT`, not just enforce it for new code
+    (`driver-app/eslint.config.js` already has a `warn`-level
+    `no-restricted-syntax` rule for this — see its own comment there).
+    driver-app round 1 (this pass) converted a first, high-traffic batch:
+    only padding/margin/fontSize literals that are an **exact** match for a
+    SPACING/FONT value were swapped; a literal with no exact match (e.g.
+    `paddingVertical: 12`, `fontSize: 18`) was deliberately left as-is
+    rather than forced onto the nearest constant, per this item's own
+    guidance. All swaps found were exact matches — no near-exact literal
+    was rounded onto a constant, so none of this round's diffs change a
+    rendered pixel value.
+  - **Files (driver-app, round 1 of N — 9 files, 3 commits):**
+    - Main dashboard: `app/driver/(tabs)/index.tsx`,
+      `components/dashboard/DriverTopBar.tsx`,
+      `components/dashboard/DriverIdlePanel.tsx`
+    - Ride/earnings: `app/driver/ride-detail.tsx`,
+      `components/dashboard/TripCompletedPanel.tsx`,
+      `app/driver/payout-history.tsx`
+    - Auth entry + settings: `app/login.tsx`, `app/otp.tsx`,
+      `app/driver/settings.tsx`
+  - **Explicitly NOT touched this round** (excluded — concurrent parallel
+    work by other agents on unrelated items, to avoid merge conflicts):
+    `components/panels/RideOfferPanel.tsx`, `components/AlertDialog.tsx`,
+    `components/activity/ActivityView.tsx`, `app/documents.tsx`,
+    `app/driver/payout.tsx`, `components/dashboard/ActiveRidePanel.tsx`.
+  - **Follow-up scope (not done yet):** the rest of driver-app (~50 more
+    files still carrying ad-hoc literals per a repo grep, including the 6
+    excluded above once their concurrent work lands) and all of
+    rider-app (a separate agent's parallel round under a related item, not
+    tracked by this bullet).
   - **Acceptance:** new screens have a clear, documented expectation on
-    which to use.
+    which to use (met — the `warn`-level lint rule exists) **and** existing
+    screens are actually migrated (partially met — round 1 above; not yet
+    complete for either app).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started

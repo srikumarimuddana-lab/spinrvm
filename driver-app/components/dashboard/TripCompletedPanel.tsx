@@ -10,6 +10,7 @@ import { ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useLanguageStore } from '../../store/languageStore';
 import { onRideRated } from '@shared/utils/appRating';
 import { showAlert } from '../AlertDialog';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const n = (v: number | string | null | undefined): number => {
   if (v == null) return 0;
@@ -362,7 +363,7 @@ function createStyles(colors: ThemeColors) {
       borderTopLeftRadius: 22,
       borderTopRightRadius: 22,
       maxHeight: '92%',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingTop: 10,
     },
     sheetHandle: {
@@ -375,12 +376,12 @@ function createStyles(colors: ThemeColors) {
     },
     sheetContent: {
       gap: 12,
-      paddingBottom: 16,
+      paddingBottom: SPACING.md,
     },
     successHeader: {
       alignItems: 'center',
       gap: 4,
-      paddingTop: 4,
+      paddingTop: SPACING.xs,
     },
     successIconCircle: {
       width: 52,
@@ -389,7 +390,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.successBg,
       justifyContent: 'center',
       alignItems: 'center',
-      marginBottom: 4,
+      marginBottom: SPACING.xs,
     },
     completedTitle: {
       fontSize: 19,
@@ -430,7 +431,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 12,
       paddingVertical: 6,
       borderRadius: 999,
-      marginTop: 8,
+      marginTop: SPACING.sm,
     },
     keepBadgeText: {
       fontSize: 12,
@@ -454,12 +455,12 @@ function createStyles(colors: ThemeColors) {
     },
     sectionTitle: {
       color: colors.text,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '800',
     },
     sectionValue: {
       color: colors.text,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '800',
       fontVariant: ['tabular-nums'],
     },
@@ -494,7 +495,7 @@ function createStyles(colors: ThemeColors) {
     },
     fareEarningsValue: {
       color: colors.success,
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '800',
       fontVariant: ['tabular-nums'],
     },
@@ -517,7 +518,7 @@ function createStyles(colors: ThemeColors) {
     },
     tripStatValue: {
       color: colors.text,
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '700',
       fontVariant: ['tabular-nums'],
     },
@@ -568,7 +569,7 @@ function createStyles(colors: ThemeColors) {
     },
     ratingLabel: {
       color: colors.text,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
       marginBottom: 12,
       textAlign: 'center',
@@ -610,7 +611,7 @@ function createStyles(colors: ThemeColors) {
     },
     secondaryBtnText: {
       color: colors.primary,
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontWeight: '700',
     },
     doneBtn: {
@@ -620,12 +621,12 @@ function createStyles(colors: ThemeColors) {
       marginTop: 2,
     },
     actionGradient: {
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       alignItems: 'center',
       justifyContent: 'center',
     },
     actionBtnText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '700',
       color: '#fff',
     },

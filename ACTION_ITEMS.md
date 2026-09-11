@@ -18461,31 +18461,67 @@ mechanical follow-up work, prioritizable independently.
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use.
 
-- [ ] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
-  — **Status:** open, identified 2026-09-10.
-  - **Issue/gap:** the shared `Button` primitive (8 consumers in rider-app)
-    was extracted from driver-app's own `RideOfferPanel` accept/decline
-    buttons but was never adopted back into driver-app itself
-    (`docs/change-log/2026-09-04-shared-button-card-input-primitives.md`
-    already noted zero driver-app consumers; still true as of 2026-09-10).
-    Every driver-app button is an independently hand-styled
-    `TouchableOpacity`, and several genuinely different treatments coexist
-    for functionally similar actions (see `RideOfferPanel`, `AlertDialog`,
-    `ActivityView`'s retry pills, and per-screen one-offs in
-    `documents.tsx`/`payout.tsx`).
-  - **Why it matters:** button treatment drifts screen-by-screen with no
-    shared source of truth in the app that most needs fast, confident
-    glanceability.
-  - **Action:** evaluate whether `shared/components/Button.tsx` (as-is, or
-    extended with a driver-app-appropriate variant/size) can absorb
-    driver-app's existing button treatments, starting with the
-    highest-traffic ones (`RideOfferPanel` accept/decline,
-    `DriverIdlePanel`'s GO/STOP toggle is likely too bespoke to fold in —
-    see `spinr-rider-driver-design-system` skill's driver-app section on
-    why that one's real-time motion is treated as intentional, not drift).
-  - **Files:** none yet.
+- [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
+  — **Status:** closed 2026-09-10, same session that filed it — real call
+  sites migrated where Button's API (or a small, justified extension of
+  it) actually fit; the rest documented as bespoke rather than forced.
+  - **Issue/gap:** the shared `Button` primitive (6 real consumers in
+    rider-app, not the "8" this entry originally said — recounted during
+    this fix) was extracted from driver-app's own `RideOfferPanel`
+    accept/decline buttons but was never adopted back into driver-app
+    itself. Every driver-app button was an independently hand-styled
+    `TouchableOpacity`.
+  - **Fix:** migrated the real call sites onto `Button`:
+    - `RideOfferPanel.tsx` — Decline only (`variant="secondary" size="lg"`,
+      a visual no-op: the extraction source's local iOS-HIG colors already
+      matched the theme tokens Button uses). Accept stays bespoke — its
+      `LinearGradient` fill + two-part "Accept / $X.XX" label was never
+      what `size="lg"` extracted, only the shape (54px/14px radius/
+      spinner-swap/disabled-dim) was.
+    - `AlertDialog.tsx` — default/destructive buttons
+      (`variant="primary"`/`"danger" size="md"`). Cancel stays bespoke:
+      its solid `colors.border` fill + full-contrast `colors.text` label
+      isn't any Button variant, and this dialog backs every `showAlert()`
+      call in the app.
+    - `ActivityView.tsx` — the "Try Again" retry pill
+      (`variant="primary" size="md" icon="refresh"`; radius moves 25px→
+      12px, matching the same radius-consolidation Button already did for
+      its rider-app consumers). "Load more rides" (bordered/outline) is
+      NOT migrated — no variant reproduces an outline look and it's the
+      only call site wanting one.
+    - `documents.tsx` — "Re-upload Document"
+      (`variant="primary" size="sm" icon="cloud-upload-outline"` — an
+      exact style match, visually a no-op). The small square "UPLOAD"
+      icon-over-label tile is NOT migrated (not a horizontal-label CTA).
+    - `payout.tsx` — the SIN-form and GST-form Cancel+Save pairs
+      (`variant="secondary"`/`"primary" size="sm"`; Button's `loading`
+      prop replaces the manual spinner-vs-label ternary). One deliberate
+      visual delta: Cancel gains secondary's 1px border, which it didn't
+      have before — an intentional convergence, not an oversight. The
+      settings-list-row patterns (setup checklist, Email T4A/CSV rows)
+      are NOT migrated (icon+2-line-text+trailing-icon rows, not CTAs).
+    - `shared/components/Button.tsx` gained one small, justified
+      extension: an optional `icon` prop (Ionicons glyph name, rendered
+      before the label), added because two real call sites in this
+      migration (`ActivityView`'s retry pill, `documents.tsx`'s re-upload
+      button) both needed a leading icon and neither could express it
+      through the existing API. Purely additive — every existing rider-app
+      consumer omits it and is unaffected; see
+      `docs/change-log/2026-09-10-ux3-driver-app-button-adoption.md` for
+      the full Change Impact Log.
+    - Explicitly NOT touched (per this item's own original guidance):
+      `DriverIdlePanel`'s GO/STOP toggle (bespoke real-time-motion UI) and
+      all of `ActiveRidePanel.tsx` (a different in-flight change).
+  - **Files:** `shared/components/Button.tsx`,
+    `shared/components/__tests__/Button.test.tsx`,
+    `driver-app/components/panels/RideOfferPanel.tsx`,
+    `driver-app/components/AlertDialog.tsx`,
+    `driver-app/components/activity/ActivityView.tsx`,
+    `driver-app/app/documents.tsx`, `driver-app/app/driver/payout.tsx`.
   - **Acceptance:** driver-app's common confirm/retry/action buttons route
-    through one shared component, or a documented decision explains why not.
+    through the shared component where a clean fit exists; every skipped
+    button has a documented reason in its own file (code comment) and
+    above, rather than a forced abstraction.
 
 - [ ] **UX4. No shared transition timing/easing system in either app —
   near-identical interactions independently reimplemented** — **Status:**

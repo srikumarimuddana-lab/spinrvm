@@ -40,6 +40,16 @@ describe('initErrorReporting', () => {
     expect(options.initialScope.tags.surface).toBe('rider-app');
   });
 
+  it('turns on the Android process-death coverage that is off by default', () => {
+    initErrorReporting({ dsn: DSN, surface: 'driver-app' });
+    const options = (Sentry.init as jest.Mock).mock.calls[0][0];
+    expect(options.enableTombstone).toBe(true);
+    expect(options.enableHistoricalTombstoneReporting).toBe(true);
+    expect(options.enableNdkAppHangTracking).toBe(true);
+    // Never trade coverage for PII.
+    expect(options.sendDefaultPii).toBe(false);
+  });
+
   it('drops console breadcrumbs (they carry GPS coords from debug logs)', () => {
     initErrorReporting({ dsn: DSN, surface: 'rider-app' });
     const options = (Sentry.init as jest.Mock).mock.calls[0][0];
@@ -86,6 +96,18 @@ describe('facade routing once Sentry is active', () => {
   it('captureMessage maps log → info', () => {
     captureMessage('cold start', 'log');
     expect(Sentry.captureMessage).toHaveBeenCalledWith('cold start', 'info');
+  });
+
+  it('captureMessage passes a fingerprint and tags through as a capture context', () => {
+    captureMessage('driver-app cold start', 'log', {
+      fingerprint: ['driver-app', 'lifecycle', 'cold-start'],
+      tags: { event_kind: 'lifecycle' },
+    });
+    expect(Sentry.captureMessage).toHaveBeenCalledWith('driver-app cold start', {
+      level: 'info',
+      fingerprint: ['driver-app', 'lifecycle', 'cold-start'],
+      tags: { event_kind: 'lifecycle' },
+    });
   });
 
   it('setUser sends id only; empty id clears the user', () => {

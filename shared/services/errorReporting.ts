@@ -50,6 +50,21 @@ export function initErrorReporting(config: ErrorReportingConfig): void {
       attachViewHierarchy: false,
       tracesSampleRate: 0.2,
       initialScope: { tags: { surface: config.surface } },
+      // Android process-death coverage. On the 2026-09-11 driver test ride
+      // the app cold-started seven times in 18 minutes and only two of those
+      // deaths left a Sentry record. NDK and the JVM ANR watchdog are already
+      // on by default in this SDK; these two are not:
+      //  - enableTombstone: Android 12+ ApplicationExitInfo native-crash
+      //    reports (thread detail for SIGSEGV-class deaths the in-process
+      //    handler can miss), plus the history from before this launch.
+      //  - enableNdkAppHangTracking: heartbeat-based main-thread hang
+      //    detection independent of the JVM watchdog — the stall behind
+      //    Android Auto's "Spinr Driver isn't responding" left nothing.
+      // Both are no-ops on iOS and off-Android. No PII: stack frames and
+      // thread names only.
+      enableTombstone: true,
+      enableHistoricalTombstoneReporting: true,
+      enableNdkAppHangTracking: true,
       // Console breadcrumbs routinely carry GPS coordinates and ride
       // payloads from debug logging — drop the whole category.
       //
@@ -149,11 +164,32 @@ export function captureException(error: Error, context?: Record<string, unknown>
  */
 export function captureMessage(
   message: string,
-  level: 'log' | 'warning' | 'error' = 'log'
+  level: 'log' | 'warning' | 'error' = 'log',
+  options?: {
+    /**
+     * Stable grouping key. Sentry groups messages by their capture-site
+     * stack, which for a lifecycle marker fired from an async effect is an
+     * anonymous frame — so identical markers landed under an issue titled
+     * "anonymous" / "captureMessage" and looked like an error. A fingerprint
+     * makes them one deterministically named issue.
+     */
+    fingerprint?: string[];
+    /** Indexed tags for the event (values must never carry PII). */
+    tags?: Record<string, string>;
+  }
 ): void {
   try {
     if (_sentry) {
-      _sentry.captureMessage(message, level === 'log' ? 'info' : level);
+      const sentryLevel = level === 'log' ? 'info' : level;
+      if (options?.fingerprint || options?.tags) {
+        _sentry.captureMessage(message, {
+          level: sentryLevel,
+          ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
+          ...(options.tags ? { tags: options.tags } : {}),
+        });
+      } else {
+        _sentry.captureMessage(message, sentryLevel);
+      }
     } else {
       crashlytics()?.log(message);
     }

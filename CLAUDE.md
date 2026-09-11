@@ -100,7 +100,9 @@ Do not rely on "commit, observe, roll back if broken" for anything touching a li
 Sprint-scoped and domain-deep context is loaded on demand, not baked into this file. Reference these when the task enters the relevant area:
 
 - `@ACTION_ITEMS.md` — prioritized production-readiness backlog: pick open `[ ]` items from here; full context in `docs/PRODUCTION_READINESS.md`
+- `@docs/PRD.md` — canonical product requirements (consolidated 2026-09-07 from `.planning/REQUIREMENTS.md` and `docs/framework/02-product-requirements.md`, both superseded); load before implementing a feature to check what's actually in scope
 - `@.claude/context/sprint-current.md` — active sprint goal, in-flight tickets, blockers
+- `@docs/design/rider-driver-app-design-system.md` — rider-app/driver-app design system: the shared `shared/theme/` token source both apps pull from, with no per-app overrides; load before any rider-app/driver-app visual/UI work (admin-dashboard has its own, see `spinr-admin-design-system` skill)
 - `@.claude/context/domain-dispatch.md` — dispatch algorithm, driver matching, offer timeout
 - `@.claude/context/domain-payments.md` — fare calc, surge, Stripe flows, corporate billing
 - `@.claude/context/domain-corporate.md` — corporate account/membership/policy lifecycle, cascade-effect checklist, flag conventions
@@ -550,9 +552,10 @@ rather than leave it looking like an oversight.
 | `.codex/` | Active | OpenAI Codex CLI config (`agents/`, `hooks/`, `hooks.json`) |
 | `.agents/` | Active, undocumented | `docs/`, `roles/`, `standards/`, `workflows/` — role/standards definitions for another AI tool, distinct from both `.claude/agents/` (Claude Code subagents) and top-level `agents/` (the Python framework below). Not deeply inventoried; if you rely on it, verify it still matches what it claims first. |
 | `agents/` | Active, non-production | Separate Python SDK for multi-agent dev automation (`orchestrator.py`, `roles/`, `runs/`) — has its own `agents/CLAUDE.md`. Explicitly **not** part of the production runtime; conventions live in that file, not here. |
-| `.planning/` | Active, undocumented | `PROJECT.md`, `ROADMAP.md`, `STATE.md`, `HANDOFF.json`, `sketches/`, `graphs/` — planning/handoff notes, apparently from a different AI coding tool's own workspace. One of four separate "planning notes" locations in this repo (also `.claude/plans/`, `docs/superpowers/plans/`, root `plans/`) — none has been designated canonical. |
-| `docs/superpowers/` | Active, undocumented | `plans/`, `specs/` — origin and ownership unclear; flagged during the 2026-09-07 Claude config audit, not yet reconciled. |
-| `plans/` (root) | Active, undocumented | A fourth planning-notes location alongside the three above. |
+| `.claude/plans/` | Active, canonical for new plans (2026-09-11) | Claude Code's own native plan-mode directory. Designated the canonical home for **new** planning notes — the three rows below stay in place (confirmed still read/written by their respective tools) but are no longer where new plans should go; each carries a redirect note. |
+| `.planning/` | Active, still in use by another tool | `PROJECT.md`, `ROADMAP.md`, `STATE.md`, `HANDOFF.json`, `sketches/`, `graphs/` — planning/handoff notes from a different AI coding tool's (GSD-style) own workspace. Confirmed 2026-09-11 still actively used — content stays untouched; `PROJECT.md` carries a redirect note pointing new Claude-authored plans to `.claude/plans/` instead. |
+| `docs/superpowers/` | Active, still in use by another tool | `plans/`, `specs/` — confirmed 2026-09-11 still actively used by its owning tool; content stays untouched. `docs/superpowers/README.md` carries a redirect note pointing new Claude-authored plans to `.claude/plans/` instead. |
+| `plans/` (root) | Active, still in use by another tool | Confirmed 2026-09-11 still actively used; content stays untouched. `plans/README.md` carries a redirect note pointing new Claude-authored plans to `.claude/plans/` instead. |
 | `frontend/` | **Deprecated** | Carries its own `frontend/DEPRECATED.md`. Not one of the five surfaces in this file's Project Overview (`backend/`, `rider-app/`, `driver-app/`, `admin-dashboard/`, `shared/`) — do not add to or "fix" code here; it's dead, not just undocumented. |
 | `audit-framework/` | Active | Shared audit scripts for all AI assistants |
 | `memory/` | Archived | Originally for agent memory; contained only `.gitkeep`. Deleted 2026-05-05 in commit `223ec89b0` (PR #451). |

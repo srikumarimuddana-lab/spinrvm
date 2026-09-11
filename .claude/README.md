@@ -102,6 +102,7 @@ All hooks exit 0. None block Claude's tool calls — they advise and auto-format
 
 | Situation | Reach for |
 |---|---|
+| Fresh, unscoped feature idea — not yet in `ACTION_ITEMS.md`, files unknown | `/spinr-feature` — mandatory clarifying-questions gate + conditional exploration, then hands off into `/spinr-swarm`'s §2–§7 |
 | About to commit money-touching code | `/fare-audit` |
 | Fix/gap-closure touching rides, dispatch, payments, auth, corporate, or safety | `/impact-log` — scaffolds the mandatory Change Impact & Risk Log before `/pr` |
 | Just added a SQL migration | `/migration-check` |

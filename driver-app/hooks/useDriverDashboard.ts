@@ -884,6 +884,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
               // → persist_ride_breadcrumbs(persist_idle=True); every other fix
               // stays an ephemeral live marker.
               durable: persistIdle,
+              // The fix's own time. Right after a relaunch this path can fire
+              // before the active ride has hydrated; the backend then attaches
+              // the point to the ride it knows about, and without a capture
+              // time it used to stamp the receive time (ADR 016 invariant I5 —
+              // such points are now rejected server-side; with the time they
+              // are ordered correctly instead).
+              captured_at: new Date(loc.timestamp).toISOString(),
               lat: loc.coords.latitude,
               lng: loc.coords.longitude,
               speed: loc.coords.speed ?? null,
@@ -1312,10 +1319,22 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           }
           // Now that auth is confirmed, send the cached location so the
           // backend has a fresh position immediately after reconnect.
+          //
+          // Live marker ONLY (durable:false). This is the CACHED last fix,
+          // which can be minutes old; it must never enter the ride's trail.
+          // Without the flag the backend defaulted to durable and, carrying
+          // no capture time, stamped it with the receive time — on the
+          // 2026-09-11 test ride every one of seven relaunches re-planted a
+          // 25–200 s-old position at "now", the plotted path ran backwards at
+          // each one, and the daily report gained ~2 km (ADR 016). The
+          // capture time is sent as well so even a durable reader knows how
+          // old it is.
           const loc = locationRef.current;
           if (loc && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
               type: 'driver_location',
+              durable: false,
+              captured_at: new Date(loc.timestamp).toISOString(),
               lat: loc.coords.latitude,
               lng: loc.coords.longitude,
               speed: loc.coords.speed ?? null,

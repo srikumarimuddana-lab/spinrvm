@@ -27,6 +27,24 @@ a pointer/rationale log, not a narrative.
 
 ## Entries
 
+- **2026-09-11 — A28, "total rides" definitions: intentionally different,
+  document only, no behavior change.** The audit (Phase 3 cross-surface
+  finding #10) originally framed this as a simple 2-way split ("admin:
+  all-status lifetime; rider-app: completed-only, period-scoped"). Re-
+  grounding against current code found it's actually a 3-way split: admin's
+  per-rider count (`routes/admin/users.py:254`) is all-status/lifetime;
+  rider-app's own profile hero stat (`routes/auth.py:1643`'s `GET /me`,
+  feeds `account.tsx`) is completed-only/lifetime; rider-app's activity-tab
+  stat (`routes/rides/queries.py:268`'s `GET /rides/stats`, feeds
+  `activity.tsx`) is completed-only/period-scoped. Asked the user for a
+  decision with 4 concrete options (document only / align rider-app's own
+  two numbers / full 3-way reconciliation / no action) — they chose
+  **document only**. One-line clarifying comments were added at all 3 call
+  sites; no behavior changed. If a future session is tempted to "fix" one
+  of these numbers to match another, this was already asked and answered —
+  re-ask only if the user raises it again or a real user complaint ties
+  back to the mismatch. See `ACTION_ITEMS.md` A28 for full history.
+
 - **2026-09-11 — N14, rider email verification: no gating, ever, beyond the
   pre-existing corporate/join-domain check.** The verify-email flow
   (backend + rider-app UI) has been fully built and shipped since

@@ -1638,6 +1638,11 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         current_user["profile_complete"] = True
 
     # Rider stats: completed ride count for the profile hero card.
+    # ACTION_ITEMS.md A28: deliberately COMPLETED-only and LIFETIME (no period
+    # filter) — distinct from rides/queries.py's GET /rides/stats (also
+    # completed-only, but period-scoped) and admin/users.py's all-status
+    # lifetime count. Confirmed intentional 2026-09-11 — see
+    # .claude/context/memory.md.
     try:
         ride_count = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed"})
         current_user["total_rides"] = ride_count

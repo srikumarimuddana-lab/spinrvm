@@ -3986,14 +3986,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `/earnings`), or is the current split deliberate (balance = withdrawable
     ride money only, earnings = full income picture)?
 - **Admin "total rides" vs rider-app "total rides" use different
-  definitions, unreconciled** (Phase 3 cross-surface finding #10): admin
-  counts all-status lifetime rides; rider-app counts completed-only,
-  period-scoped.
-  - [ ] **Status:** open, low priority — the audit itself frames this as
-    "by design," similar to the T4A-vs-earnings date-bucket difference
-    (finding #8) which is already documented in code as intentional. Likely
-    resolution is a one-line code comment on each definition rather than a
-    behavior change, once product confirms both are meant to differ.
+  definitions** (Phase 3 cross-surface finding #10) — **CLOSED 2026-09-11,
+  documentation-only.** Re-verified against current code (the original
+  finding undercounted it — it's actually a 3-way split, not 2-way):
+  admin (`routes/admin/users.py:254`) is all-status, lifetime; rider-app's
+  `GET /me` hero stat (`routes/auth.py:1643`, feeds `account.tsx`) is
+  completed-only, lifetime; rider-app's `GET /rides/stats`
+  (`routes/rides/queries.py:268`, feeds `activity.tsx`) is completed-only,
+  period-scoped (`period=all` happens to equal the `GET /me` number; other
+  periods don't). Asked the user for a decision — they chose **document
+  only, no behavior change**, matching the audit's own suggested low-risk
+  default and the T4A-vs-earnings precedent (finding #8). One-line comments
+  added at all 3 sites. See `.claude/context/memory.md` for the full
+  decision record.
 - **P2-B — no Change Impact Log exists for the driver or rider bulk-import
   paths themselves** (only booking-import and Stripe-mapping migration have
   runbooks/change-logs, despite both writing directly to `auth`/`users`/

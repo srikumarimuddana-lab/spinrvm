@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
+  View, StyleSheet, TouchableOpacity, ScrollView, TextInput,
   ActivityIndicator, KeyboardAvoidingView, Dimensions, LayoutAnimation,
   Platform, UIManager,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons, FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';

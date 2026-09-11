@@ -2,7 +2,6 @@ import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
-  Text,
   Image,
   StyleSheet,
   TouchableOpacity,
@@ -13,6 +12,7 @@ import {
   ActivityIndicator,
   BackHandler,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';

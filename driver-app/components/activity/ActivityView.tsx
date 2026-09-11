@@ -24,6 +24,13 @@ import { SPACING, FONT } from '@shared/utils/responsive';
 // inventing new shared/theme tokens for two decorative icon accents; both
 // read fine against either surface color, unlike a background fill would.
 const BONUS_PURPLE = '#8B5CF6';
+// Product decision 2026-09-11 (live testing): drivers see only Total Trips
+// and Avg per Trip for now. The other six stat cards (Total KM Driven, the
+// per-day averages, online time, Avg Distance/Trip) are hidden — not removed —
+// so the derived values below keep computing and re-enabling them is flipping
+// this one flag.
+const SHOW_AVERAGE_STAT_CARDS = false;
+
 const AVG_TRIP_BLUE = '#38BDF8';
 
 const toMoney = (s: string | number | null | undefined): string => {
@@ -520,51 +527,61 @@ export default function ActivityView() {
                 <Text style={styles.statLabel}>Total Trips</Text>
               </View>
             </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.dangerBg }]}>
-                <MaterialCommunityIcons name="calendar-today" size={18} color={colors.danger} />
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: colors.dangerBg }]}>
+                  <MaterialCommunityIcons name="calendar-today" size={18} color={colors.danger} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{avgTripsPerDay.toFixed(1)}</Text>
+                  <Text style={styles.statLabel}>Avg Trips/Day</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statValue}>{avgTripsPerDay.toFixed(1)}</Text>
-                <Text style={styles.statLabel}>Avg Trips/Day</Text>
+            )}
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
+                  <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{totalDistanceKm.toFixed(1)}</Text>
+                  <Text style={styles.statLabel}>Total KM Driven</Text>
+                </View>
               </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
-                <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
+            )}
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
+                  <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{avgDistancePerDay.toFixed(1)} km</Text>
+                  <Text style={styles.statLabel}>Avg KM/Day</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statValue}>{totalDistanceKm.toFixed(1)}</Text>
-                <Text style={styles.statLabel}>Total KM Driven</Text>
-              </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.warningBg }]}>
-                <MaterialCommunityIcons name="road-variant" size={18} color={colors.warning} />
-              </View>
-              <View>
-                <Text style={styles.statValue}>{avgDistancePerDay.toFixed(1)} km</Text>
-                <Text style={styles.statLabel}>Avg KM/Day</Text>
-              </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
-                <Ionicons name="time" size={18} color={colors.success} />
-              </View>
-              <View>
-                <Text style={styles.statValue}>{formatDurationMinutes(totalDurationMinutes)}</Text>
-                <Text style={styles.statLabel}>Total Online Time</Text>
-              </View>
-            </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
-                <Ionicons name="time-outline" size={18} color={colors.success} />
-              </View>
-              <View>
-                <Text style={styles.statValue}>{formatDurationMinutes(avgOnlineMinutesPerDay)}</Text>
-                <Text style={styles.statLabel}>Avg Online Time/Day</Text>
-              </View>
-            </View>
+            )}
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <>
+                <View style={styles.statCard}>
+                  <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
+                    <Ionicons name="time" size={18} color={colors.success} />
+                  </View>
+                  <View>
+                    <Text style={styles.statValue}>{formatDurationMinutes(totalDurationMinutes)}</Text>
+                    <Text style={styles.statLabel}>Total Online Time</Text>
+                  </View>
+                </View>
+                <View style={styles.statCard}>
+                  <View style={[styles.iconWrap, { backgroundColor: colors.successBg }]}>
+                    <Ionicons name="time-outline" size={18} color={colors.success} />
+                  </View>
+                  <View>
+                    <Text style={styles.statValue}>{formatDurationMinutes(avgOnlineMinutesPerDay)}</Text>
+                    <Text style={styles.statLabel}>Avg Online Time/Day</Text>
+                  </View>
+                </View>
+              </>
+            )}
             <View style={styles.statCard}>
               <View style={[styles.iconWrap, { backgroundColor: colors.infoBg }]}>
                 <Ionicons name="trending-up" size={18} color={AVG_TRIP_BLUE} />
@@ -574,15 +591,17 @@ export default function ActivityView() {
                 <Text style={styles.statLabel}>Avg per Trip</Text>
               </View>
             </View>
-            <View style={styles.statCard}>
-              <View style={[styles.iconWrap, { backgroundColor: `${BONUS_PURPLE}1A` }]}>
-                <MaterialCommunityIcons name="map-marker-distance" size={18} color={BONUS_PURPLE} />
+            {SHOW_AVERAGE_STAT_CARDS && (
+              <View style={styles.statCard}>
+                <View style={[styles.iconWrap, { backgroundColor: `${BONUS_PURPLE}1A` }]}>
+                  <MaterialCommunityIcons name="map-marker-distance" size={18} color={BONUS_PURPLE} />
+                </View>
+                <View>
+                  <Text style={styles.statValue}>{avgDistancePerTrip.toFixed(1)} km</Text>
+                  <Text style={styles.statLabel}>Avg Distance/Trip</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statValue}>{avgDistancePerTrip.toFixed(1)} km</Text>
-                <Text style={styles.statLabel}>Avg Distance/Trip</Text>
-              </View>
-            </View>
+            )}
           </View>
         </>
       )}

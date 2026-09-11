@@ -21265,7 +21265,23 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
-- [ ] **Status (2026-08-31): partial progress, not closed.** Built the
+- [ ] **Status (2026-09-11): more progress, still not closed.** Since
+  2026-08-31, other sessions independently added `saved_addresses`
+  (migration 378, `test_saved_addresses_rls.py`) and the transactional
+  outbox (migration 399, `test_transactional_outbox.py`) — neither reflected
+  in this entry until now. This session added DB-role-level coverage for
+  every table named in the "Remaining scope" list below:
+  `lost_and_found`/`lost_and_found_messages` (migrations 69/69a/115),
+  `referral_payouts` (171), `auto_payout_batches` (314), `complaints` (68),
+  and the `refresh_tokens`/`stripe_events`/`schema_migrations` deny-all
+  policies (26) — 55 new tests, all run against a real local Postgres 16
+  (`116 passed, 0 failed` for the full `tests/rls/` suite, up from 61).
+  Two real, previously-undiscovered bugs surfaced writing these tests —
+  see "Bugs found and fixed" / "Bug found, not fixed" below. Still not
+  closed: the vast majority of the ~127–207 policy-statement estimate is
+  outside this table set (this item has never attempted a full inventory
+  of which tables remain uncovered — that would be its own investigation).
+- **Status (2026-08-31): partial progress, not closed.** Built the
   foundation infrastructure this repo had zero of — a real-Postgres,
   role-switching test fixture — plus DB-role-level coverage for **11
   distinct policies across 5 tables** (`users`, `drivers`, `rides`,
@@ -21300,24 +21316,66 @@ how much they de-risk a public launch._
   those policies as a real numbered migration so `run_migrations.py`
   becomes the source of truth, or add a periodic check that diffs live
   `pg_policies` against this file.
-- **Remaining scope (not done here):** the other ~116–196 policies
-  (depending on denominator) across ~130+ migration files. Highest-value
-  next candidates by policy count, per this session's survey:
-  `lost_and_found`/`lost_and_found_messages` (4 policies each),
-  `referral_payouts` (4), `auto_payout_batches` (4), `complaints` (2),
-  and the `refresh_tokens`/`stripe_events`/`schema_migrations` deny-all
-  policies (migration 26). CI is not wired to run `tests/rls/` yet — no
-  Postgres service container configured for it, so these tests currently
-  only run when a developer points `TEST_DATABASE_URL` at a real Postgres
-  locally.
-- **Files:** `backend/tests/rls/conftest.py`, `test_core_tables_rls.py`,
-  `test_money_and_safety_rls.py` (new); `backend/pytest.ini` (`rls` marker
-  registered); `CLAUDE.md` (Testing Conventions — new RLS tier entry).
+- **Remaining scope (not done here):** the 2026-08-31 list immediately
+  above (`lost_and_found`/`lost_and_found_messages`, `referral_payouts`,
+  `auto_payout_batches`, `complaints`, and migration 26's deny-all
+  policies) is now **done as of 2026-09-11** — see the new status entry
+  and files below. What's genuinely still remaining is everything else in
+  the ~127–207 policy estimate outside the now-covered table set; no
+  session has yet enumerated that residual list. CI is still not wired to
+  run `tests/rls/` — no Postgres service container configured for it, so
+  these tests currently only run when a developer points
+  `TEST_DATABASE_URL` at a real Postgres locally.
+- **Bugs found and fixed (2026-09-11):** writing `test_lost_and_found_rls.py`
+  surfaced a real RLS logic bug in migration 115's `lfm_select`/
+  `lfm_insert` policies: their `EXISTS` subquery reads `lost_and_found`,
+  which is itself RLS-protected (SELECT policy: reporter only), so a
+  *driver* on a case could never satisfy either policy — the subquery's own
+  scan of `lost_and_found` was filtered to zero rows by `lost_and_found`'s
+  policy before the `OR auth.uid() = lf.driver_id` branch ever got a
+  chance to match. Confirmed via a failing test against a real Postgres,
+  not assumed. Fixed in migration 412 with a `SECURITY DEFINER` helper
+  function (`is_party_to_lost_and_found_case`) that performs the
+  reporter/driver membership check without being subject to
+  `lost_and_found`'s own RLS. See migration 412's own header comment for
+  the full writeup and rollback plan.
+- **Bug found, not fixed (needs production DB access):** migration 68
+  (`complaints`) and migration 69 (`lost_and_found`) both declare their
+  `ride_id`/`reporter_id`/(`reported_id`/`resolved_by` for complaints)
+  columns as `UUID REFERENCES rides(id)`/`REFERENCES users(id)`, but the
+  current `backend/supabase_schema.sql` declares `rides.id`/`users.id` as
+  `TEXT` — applying either migration verbatim against that schema raises
+  `psycopg2.errors.DatatypeMismatch` (confirmed in this session's test
+  harness). No later migration corrects either table, and no session has
+  had production DB access to check `information_schema.columns` for
+  these tables' actual live column types. Since both tables are actively
+  used by production code (`complaints` via `routes/admin/support.py` and
+  `services/zoho_desk_integration.py`; `lost_and_found` via its own
+  routes), migration 68/69 must have succeeded at some point — meaning
+  either these FK constraints don't exist in production today (silently
+  dropped or never created when `users`/`rides` moved to `TEXT` ids,
+  if that's what happened), or `supabase_schema.sql`'s current `TEXT`
+  declaration doesn't match live reality. This harness works around it
+  locally (see `conftest.py`'s `pg_conn` fixture, the `_complaints_sql`/
+  `_laf_sql` regex patches) without touching either merged migration —
+  the drift itself is unresolved and needs a human with production access
+  to check the real column types before anyone decides what (if anything)
+  to correct.
+- **Files:** `backend/tests/rls/conftest.py` (extended);
+  `test_core_tables_rls.py`, `test_money_and_safety_rls.py` (2026-08-31);
+  `test_saved_addresses_rls.py`, `test_transactional_outbox.py` (added by
+  other sessions since, undocumented here until now);
+  `test_lost_and_found_rls.py`, `test_referral_and_payout_rls.py`,
+  `test_complaints_and_deny_all_rls.py` (new, 2026-09-11);
+  `backend/migrations/412_lost_and_found_messages_rls_driver_visibility_fix.sql`
+  (new); `backend/pytest.ini` (`rls` marker registered); `CLAUDE.md`
+  (Testing Conventions — RLS tier entry).
 - **Change log:** `docs/change-log/2026-08-31-rls-role-level-test-coverage.md`
-  — full detail, including the exact coverage-fraction accounting and the
-  "what was NOT verified" list (production drift risk above; CI wiring;
-  full-suite co-collection with the mocked test stack not run end-to-end
-  in this sandbox).
+  (original) and `docs/change-log/2026-09-11-rls-coverage-round-2.md` (this
+  session) — full detail, including the exact coverage-fraction accounting
+  and the "what was NOT verified" list (production drift risk above; CI
+  wiring; full-suite co-collection with the mocked test stack not run
+  end-to-end in this sandbox).
 - **Acceptance:** ranked blocker #29 stays open until either (a) CI runs
   `tests/rls/` against a real Postgres on every PR, or (b) a materially
   larger fraction of the 207/127 policies has DB-role-level coverage —

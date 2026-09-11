@@ -3986,14 +3986,19 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `/earnings`), or is the current split deliberate (balance = withdrawable
     ride money only, earnings = full income picture)?
 - **Admin "total rides" vs rider-app "total rides" use different
-  definitions, unreconciled** (Phase 3 cross-surface finding #10): admin
-  counts all-status lifetime rides; rider-app counts completed-only,
-  period-scoped.
-  - [ ] **Status:** open, low priority — the audit itself frames this as
-    "by design," similar to the T4A-vs-earnings date-bucket difference
-    (finding #8) which is already documented in code as intentional. Likely
-    resolution is a one-line code comment on each definition rather than a
-    behavior change, once product confirms both are meant to differ.
+  definitions** (Phase 3 cross-surface finding #10) — **CLOSED 2026-09-11,
+  documentation-only.** Re-verified against current code (the original
+  finding undercounted it — it's actually a 3-way split, not 2-way):
+  admin (`routes/admin/users.py:254`) is all-status, lifetime; rider-app's
+  `GET /me` hero stat (`routes/auth.py:1643`, feeds `account.tsx`) is
+  completed-only, lifetime; rider-app's `GET /rides/stats`
+  (`routes/rides/queries.py:268`, feeds `activity.tsx`) is completed-only,
+  period-scoped (`period=all` happens to equal the `GET /me` number; other
+  periods don't). Asked the user for a decision — they chose **document
+  only, no behavior change**, matching the audit's own suggested low-risk
+  default and the T4A-vs-earnings precedent (finding #8). One-line comments
+  added at all 3 sites. See `.claude/context/memory.md` for the full
+  decision record.
 - **P2-B — no Change Impact Log exists for the driver or rider bulk-import
   paths themselves** (only booking-import and Stripe-mapping migration have
   runbooks/change-logs, despite both writing directly to `auth`/`users`/
@@ -13107,7 +13112,10 @@ record of what was assumed vs. what was actually true</summary>
   verified against a real EAS build (no EAS/Expo credentials in this
   session) — verified via EAS's own documented defaults, YAML/JSON
   parsing, and a dedicated CI/CD reviewer pass instead.
-- [ ] **Status (superseded by the above):** open. Found 2026-09-02 while reviewing `ci.yml`'s
+- [ ] ~~**Status (superseded by the above):** open.~~ (dead text — the fix
+  above already closed this; kept for the record, not a live status, same
+  convention as this doc's other "superseded by the above" entries) Found
+  2026-09-02 while reviewing `ci.yml`'s
   `mobile-build` job (rider+driver-app native builds gated on `[build]` in
   a `main`-branch commit message, per PR #4871). A related gap in the same
   job (driver-app missing entirely despite `needs: [rider-app-test,
@@ -17536,8 +17544,8 @@ Remaining, roughly in order of user impact:
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
   `utils/rider_emails.py` and go through the policy layer, so the
   `lifecycle_emails_enabled` kill switch covers them.
-- [ ] **N14. Rider email addresses are never verified (R5)** — **partially
-  done.** The verification flow itself now exists and is tested:
+- [x] **N14. Rider email addresses are never verified (R5)** — **CLOSED
+  2026-09-11.** The verification flow itself now exists and is tested:
   `POST /users/verify-email/request` + `POST /users/verify-email/confirm`
   (`routes/users.py`) reuse the corporate portal's exact OTP mechanics
   (`routes/auth.py:744`'s `_check_otp_lockout`/`_record_otp_failure`/
@@ -17596,12 +17604,14 @@ Remaining, roughly in order of user impact:
   schemas/users/auth sweep, 123 across the admin-users-adjacent files — all
   clean, 0 failed. See
   `docs/change-log/2026-08-11-n14-auth-me-email-verified-field.md`.
-  (b) **whether/how to gate anything on `email_verified` remains an open
-  product decision**, not resolved here — nothing was changed to require
-  verification before booking, payouts, or any other flow, and CLAUDE.md's
-  pre-merge gates (feature-flag anything user-visible; no silent behavior
-  change) mean that decision needs explicit product sign-off before any
-  gating ships, not a unilateral backend call.
+  (b) **Decided 2026-09-11: no new gates.** Asked the user directly
+  (candidates offered: gate referral/promo payouts on verified email; add a
+  non-blocking UI nudge only; or leave as-is) — chose to close this with no
+  further gating. Verified email stays purely opt-in/informational for
+  riders everywhere except the pre-existing corporate/join-domain check
+  below, which is unaffected. No code changed by this decision; this entry
+  records the decision so it isn't re-litigated. See
+  `.claude/context/memory.md`.
   **Discovered existing consumer (not introduced by this change):**
   `routes/corporate_rider.py`'s `POST /corporate/join-domain` already 403s
   with `ERR_EMAIL_UNVERIFIED` when `email_verified` is falsy (added in
@@ -18256,8 +18266,19 @@ guardrail-notes, threat-flagged turns excluded from the FAQ cache. Remaining:_
   the heatmap cells. Driver-app already consumes it: `driver-app/app/driver/
   (tabs)/index.tsx` renders a `react-native-maps` `Heatmap` component fed from
   this endpoint. No code change needed; correcting the stale item.
-- [ ] **D5. In-app VoIP calls** — Twilio Proxy PSTN masking already covers the need;
-  VoIP is a cost/quality upgrade.
+- [ ] **D5. In-app VoIP / rider↔driver calling** — **premise corrected
+  2026-09-11**: no calling feature exists today (chat-only, by deliberate
+  2026-06 privacy decision — `backend/routes/rides/chat.py:64`, pinned by
+  `test_call_endpoint_removed` in `backend/tests/test_coverage_rides.py`).
+  The old text claiming "Twilio Proxy PSTN masking already covers the need"
+  was stale/wrong — there is no masking fallback in place;
+  `docs/API_REFERENCE.md` incorrectly documented the removed `GET
+  /rides/{ride_id}/call` endpoint as live and has been corrected in the
+  same change. Still genuinely unscoped: no Action/Files/Acceptance
+  criteria. Building any calling feature (VoIP or reintroducing masked
+  PSTN) would mean explicitly revisiting the 2026-06 privacy decision, not
+  just a scope pass — needs product input before it's build-ready. See
+  `.claude/context/memory.md` for the full decision record.
 - [x] **D8. No rate limiting on SIN-touching admin endpoints** — done: added
   4 new `default_limiter.limit(...)` entries in `utils/rate_limiter.py` —
   `admin_sin_reveal_limit` (10/hour) on `POST /admin/drivers/{id}/reveal-sin`,
@@ -24644,6 +24665,13 @@ how much they de-risk a public launch._
     escalation gate calls for a pause on. User chose to ship it now, untested on device; see
     "What was NOT verified" in the change-log entry for the exact boundary of what was and wasn't
     confirmed before it merged.
+  - **2026-09-11, this session — superseded my own more conservative finding.** I had
+    independently found the same Android-manifest-priority asymmetry and, not knowing whether
+    `setNotificationHandler` was also live on iOS, stopped short of any code change and re-scoped
+    #6 as blocked on iOS device access. The fix above (from a parallel session, merged into
+    `main` moments later) is more complete: it doesn't touch/remove the handler at all — it adds
+    the missing RNFirebase-side tap routing alongside it, which resolves the real gap without
+    needing the iOS confirmation my more conservative read was waiting on. Deferring to it.
 - **Correction (same day, before the client-side fix shipped):** the client-side finding below
   originally read as "every notification type except ride offers is silently dropped, foreground
   and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
@@ -24752,14 +24780,29 @@ how much they de-risk a public launch._
   etc.) has very likely been active and working correctly in both apps' real builds all along —
   including on EAS builds and any prior local/CI build, none of which run in this stub
   environment. There is no evidence of an active customer-facing regression. The only real,
-  much smaller remaining item: `rider-app/patches/react-native+0.86.2.patch` has a stale
-  filename (installed version is 0.86.3) and should be renamed/regenerated to silence the
-  cosmetic warning — a cleanup, not a crash fix. No urgency; do it opportunistically.
+  much smaller remaining item at the time (2026-09-10): `rider-app/patches/react-native+0.86.2.patch`
+  had a stale filename (installed version is 0.86.3) and needed renaming to silence the cosmetic
+  warning — a cleanup, not a crash fix.
   **Lesson for future sessions:** this cloud sandbox's `node_modules` for `react-native` cannot
   be trusted to diagnose patch-package or native-module issues — verify findings like this one
   against a real environment before writing them up as active bugs, per this repo's own
   verification discipline (`CLAUDE.md`: "never let a tool's own output stand in for
   verification").
+  **2026-09-11 — fully closed, sibling patch had the same stale-filename issue and was missed
+  by the same-day fix.** The `react-native+0.86.2.patch → +0.86.3.patch` rename above didn't
+  catch its sibling, `rider-app/patches/@react-native+gradle-plugin+0.86.2.patch` — same class
+  of issue (installed `@react-native/gradle-plugin` is `0.86.3` per `rider-app/yarn.lock`, patch
+  filename still said `0.86.2`). Confirmed safe to rename with **zero content change** — its
+  content is byte-identical (`diff` exit 0) to `driver-app/patches/@react-native+gradle-plugin+0.86.3.patch`,
+  which the 2026-09-10 correction above already confirmed applies cleanly on the user's real
+  machine. No sandbox `node_modules` install needed for this one: unlike regenerating a patch's
+  *diff content* (which does need a real RN install per the handoff doc), a pure filename rename
+  of already-proven-identical content is safe to verify from source-controlled files alone.
+  Renamed; updated the 2 exact-filename citations in `docs/android-build-strategy.md` that would
+  otherwise have gone stale from this rename. That doc's own title/"Last verified" line and other
+  in-body "RN 0.86.2" references are separately stale (predate the 0.86.2→0.86.3 bump entirely) —
+  out of scope for this fix, noted here rather than silently left for a future session to
+  rediscover.
 
 - [ ] ~~**Status:** OPEN — handoff doc written (`docs/audit/2026-09-10-react-native-patch-regeneration-handoff.md`).
   No code changed; regeneration requires a real `node_modules/react-native` install (local

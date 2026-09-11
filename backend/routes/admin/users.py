@@ -251,6 +251,12 @@ async def admin_get_user_details(user_id: str, admin: dict = Depends(get_admin_u
     safe_user = {k: v for k, v in user.items() if k != "profile_image"}
     return {
         **safe_user,
+        # ACTION_ITEMS.md A28: deliberately ALL-STATUS lifetime count (no
+        # status filter) — admin needs visibility into cancelled/no-show
+        # rides too, not just completed ones. Intentionally different from
+        # rider-app's own two "total rides" numbers (auth.py's GET /me and
+        # rides/queries.py's GET /rides/stats), which are completed-only.
+        # Confirmed intentional 2026-09-11 — see .claude/context/memory.md.
         "total_rides": await db_supabase.count_documents("rides", {"rider_id": user_id}),
         "recent_rides": rides,
         "cards": cards,

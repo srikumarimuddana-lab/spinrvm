@@ -147,68 +147,85 @@ export default function NotificationsScreen() {
     };
 
     return (
-        <View style={styles.container}>
-            {/* Header */}
-            <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
-                <View style={styles.headerRow}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <Ionicons name="arrow-back" size={22} color={colors.text} />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>{t('notifications.title')}</Text>
-                    {unreadCount > 0 ? (
-                        <TouchableOpacity onPress={markAllRead} style={styles.markAllBtn}>
-                            <Text style={styles.markAllText}>{t('notifications.markAllRead')}</Text>
+        // FlatList IS the screen's root, with the header as its
+        // ListHeaderComponent (stickied via stickyHeaderIndices), rather than
+        // a separate View+FlatList sibling pair. The previous sibling layout
+        // (a fixed-height View above a `flex: 1` FlatList) reproduced, live,
+        // on at least one real Android device: the header rendered but the
+        // FlatList area stayed at zero height — pull-to-refresh didn't even
+        // register a touch — despite `style={{ flex: 1 }}` and
+        // `contentContainerStyle={{ flexGrow: 1 }}` already being set (see
+        // this file's own prior "FlatList zero-height on Android" fix, which
+        // was never confirmed against a real device and evidently didn't
+        // hold universally). Every other FlatList screen in this app that
+        // renders correctly on that same device (Activity, and others) uses
+        // this ListHeaderComponent shape instead of a sibling header — this
+        // change adopts that proven-working pattern rather than patching the
+        // sibling layout further.
+        <FlatList
+            style={styles.container}
+            data={notifications}
+            renderItem={renderNotification}
+            keyExtractor={(item) => item.id}
+            ListHeaderComponent={
+                <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
+                    <View style={styles.headerRow}>
+                        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                            <Ionicons name="arrow-back" size={22} color={colors.text} />
                         </TouchableOpacity>
-                    ) : (
-                        <View style={{ width: 80 }} />
-                    )}
-                </View>
-                {unreadCount > 0 && (
-                    <Text style={styles.unreadCountText}>{unreadCount} {unreadCount !== 1 ? t('notifications.unreadCountPlural').replace('{{count}}', '') : t('notifications.unreadCount').replace('{{count}}', '')}</Text>
-                )}
-            </LinearGradient>
-
-            <FlatList
-                style={{ flex: 1 }}
-                data={notifications}
-                renderItem={renderNotification}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
-                showsVerticalScrollIndicator={false}
-                initialNumToRender={10}
-                maxToRenderPerBatch={10}
-                windowSize={5}
-                refreshControl={
-                    <SafeRefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
-                }
-                ListEmptyComponent={
-                    // An empty list is NOT automatically "all caught up" — a failed
-                    // fetch also yields zero rows. Rendering the same cheerful empty
-                    // state for both is what made a 401'd inbox look like an inbox
-                    // with nothing in it, while the bell badge still read "6 unread".
-                    isPending ? (
-                        <View style={styles.emptyState}>
-                            <ActivityIndicator size="large" color={colors.primary} />
-                        </View>
-                    ) : isError ? (
-                        <View style={styles.emptyState}>
-                            <Ionicons name="cloud-offline-outline" size={56} color={colors.danger} />
-                            <Text style={styles.emptyTitle}>{t('notifications.loadFailed')}</Text>
-                            <Text style={styles.emptySub}>{t('notifications.loadFailedBody')}</Text>
-                            <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
-                                <Text style={styles.retryText}>{t('notifications.retry')}</Text>
+                        <Text style={styles.headerTitle}>{t('notifications.title')}</Text>
+                        {unreadCount > 0 ? (
+                            <TouchableOpacity onPress={markAllRead} style={styles.markAllBtn}>
+                                <Text style={styles.markAllText}>{t('notifications.markAllRead')}</Text>
                             </TouchableOpacity>
-                        </View>
-                    ) : (
-                        <View style={styles.emptyState}>
-                            <Ionicons name="notifications-off-outline" size={56} color={colors.surfaceLight} />
-                            <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
-                            <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
-                        </View>
-                    )
-                }
-            />
-        </View>
+                        ) : (
+                            <View style={{ width: 80 }} />
+                        )}
+                    </View>
+                    {unreadCount > 0 && (
+                        <Text style={styles.unreadCountText}>{unreadCount} {unreadCount !== 1 ? t('notifications.unreadCountPlural').replace('{{count}}', '') : t('notifications.unreadCount').replace('{{count}}', '')}</Text>
+                    )}
+                </LinearGradient>
+            }
+            // Keeps the back button / "Mark All Read" reachable while
+            // scrolling through a long inbox, instead of it scrolling away
+            // with the rest of the ListHeaderComponent content.
+            stickyHeaderIndices={[0]}
+            contentContainerStyle={{ flexGrow: 1, paddingBottom: insets.bottom + 40 }}
+            showsVerticalScrollIndicator={false}
+            initialNumToRender={10}
+            maxToRenderPerBatch={10}
+            windowSize={5}
+            refreshControl={
+                <SafeRefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
+            }
+            ListEmptyComponent={
+                // An empty list is NOT automatically "all caught up" — a failed
+                // fetch also yields zero rows. Rendering the same cheerful empty
+                // state for both is what made a 401'd inbox look like an inbox
+                // with nothing in it, while the bell badge still read "6 unread".
+                isPending ? (
+                    <View style={styles.emptyState}>
+                        <ActivityIndicator size="large" color={colors.primary} />
+                    </View>
+                ) : isError ? (
+                    <View style={styles.emptyState}>
+                        <Ionicons name="cloud-offline-outline" size={56} color={colors.danger} />
+                        <Text style={styles.emptyTitle}>{t('notifications.loadFailed')}</Text>
+                        <Text style={styles.emptySub}>{t('notifications.loadFailedBody')}</Text>
+                        <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+                            <Text style={styles.retryText}>{t('notifications.retry')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    <View style={styles.emptyState}>
+                        <Ionicons name="notifications-off-outline" size={56} color={colors.surfaceLight} />
+                        <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
+                        <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
+                    </View>
+                )
+            }
+        />
     );
 }
 
@@ -248,6 +265,12 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.surface,
             borderRadius: 16,
             padding: 14,
+            // Was horizontal inset from the FlatList's own contentContainerStyle
+            // before the header moved into ListHeaderComponent; kept here now
+            // that contentContainerStyle no longer applies it (it would also
+            // wrap the header, double-padding it against styles.header's own
+            // paddingHorizontal).
+            marginHorizontal: 16,
             marginBottom: SPACING.sm,
             borderWidth: 1,
             borderColor: colors.border,
@@ -280,7 +303,11 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.primary,
             marginTop: SPACING.sm,
         },
-        emptyState: { alignItems: 'center', paddingVertical: 60, gap: 8 },
+        // paddingHorizontal was previously inherited from the FlatList's
+        // contentContainerStyle; that no longer wraps this (see notifCard's
+        // own comment), so it's applied directly here to keep the same
+        // side-inset on the error/empty-state text and retry button.
+        emptyState: { alignItems: 'center', paddingVertical: 60, paddingHorizontal: 16, gap: 8 },
         emptyTitle: { color: colors.textDim, fontSize: 18, fontWeight: '600' },
         emptySub: { color: colors.textSecondary, fontSize: FONT.bodySm, textAlign: 'center' },
         retryBtn: {

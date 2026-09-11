@@ -1,4 +1,6 @@
 import asyncio
+import random
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -12,6 +14,38 @@ except ImportError:  # pragma: no cover - import style varies by entrypoint
     from ..db_supabase import run_sync  # type: ignore
 
 from supabase_client import supabase
+
+# Upper bound on the random first-tick delay any loop gets (see
+# loop_start_offset_seconds). 30 s is enough to spread 41 loops into a
+# non-colliding boot window while keeping the slowest first tick well under
+# every loop's own cadence.
+LOOP_START_OFFSET_MAX_SECONDS = 30.0
+
+_CADENCE_RE = re.compile(r"\((\d+)\s*(s|sec|min|h)\)")
+
+
+def loop_start_offset_seconds(name: str, rng: random.Random | None = None) -> float:
+    """Random first-tick delay for a background loop, from its registry name.
+
+    Loop names carry their cadence — ``"route_finalizer (15s)"``,
+    ``"surge_engine (2min)"``, ``"retention_purge (24h)"`` — so the offset is
+    bounded by the loop's own interval and never by more than
+    ``LOOP_START_OFFSET_MAX_SECONDS``. A name whose cadence cannot be parsed
+    (``"reconciliation (daily 02:00 UTC)"``) gets the plain cap: those loops
+    compute their own wall-clock schedule and a few seconds' start delay is
+    irrelevant to them. Pure so it is unit-testable; the only randomness is
+    the injected ``rng``.
+    """
+    match = _CADENCE_RE.search(name or "")
+    cap = LOOP_START_OFFSET_MAX_SECONDS
+    if match:
+        value = int(match.group(1))
+        unit = match.group(2)
+        interval_s = value * {"s": 1, "sec": 1, "min": 60, "h": 3600}[unit]
+        cap = min(cap, float(interval_s))
+    if cap <= 0:
+        return 0.0
+    return (rng or random).uniform(0, cap)
 
 
 # Global database reference accessible via app state
@@ -243,6 +277,20 @@ async def lifespan(app: FastAPI):
 
     async def _restartable(name: str, coro_factory):
         """Wrap a background loop so an uncaught crash auto-restarts after 5s."""
+        # De-phase the fleet of loops. Every loop body ticks first and sleeps
+        # after, so without this all 41 fire in the same second at boot (and on
+        # every deploy), and loops sharing an interval stay phase-locked for
+        # the life of the process — the two 15 s loops, the 60 s pair, the
+        # 5 min group. On the 2026-09-11 test ride Supabase's slowest requests
+        # were exactly those aligned polls queueing on each other (3–9 s for
+        # queries whose SQL took single-digit ms, including a primary-key
+        # lookup on `settings`). A one-off random start offset, bounded by the
+        # loop's own cadence, spreads the boot burst and leaves each loop on
+        # its own phase thereafter. Replay-safety is untouched: nothing about
+        # WHAT a tick does changes, only when its first tick lands.
+        offset = loop_start_offset_seconds(name)
+        if offset > 0:
+            await asyncio.sleep(offset)
         while True:
             try:
                 await coro_factory()

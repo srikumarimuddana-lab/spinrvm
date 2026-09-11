@@ -4032,14 +4032,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
   `/earnings` and driver statements include; `/earnings`-family endpoints
   trust the stored `driver_earnings` column directly. Undocumented as
   intentional or accidental.
-  - [ ] **Status:** open — needs a product decision, not a blind code
-    change. Reconciling the two compositions either way is a money-visible
-    behavior change on a live-tested surface (driver balance/payout
-    figures) and CLAUDE.md requires escalation when blast radius/intent is
-    unclear on a surface like this. Flag to product/finance: should
-    `payable_balance` include bonuses/cancellation fees (making it match
-    `/earnings`), or is the current split deliberate (balance = withdrawable
-    ride money only, earnings = full income picture)?
+  - [x] **Status:** CLOSED — stale checkbox, corrected 2026-09-11. This was
+    already decided and shipped the same day it was filed:
+    `docs/change-log/2026-08-12-balance-earnings-composition-parity.md`
+    records the user's 2026-08-12 decision (`payable_balance` should
+    include everything `/earnings` does), a `spinr-money-auditor` review,
+    and 367 passing tests. `backend/routes/drivers/earnings.py`'s
+    `get_driver_balance` already sums `total_incentives`/`total_cancel_fees`
+    into `total_earnings`/`payable_balance`, matching `/earnings`'
+    composition exactly. This checkbox was simply never flipped after the
+    fix merged — re-verified directly against current code before closing,
+    not assumed from the change-log alone.
 - **Admin "total rides" vs rider-app "total rides" use different
   definitions** (Phase 3 cross-surface finding #10) — **CLOSED 2026-09-11,
   documentation-only.** Re-verified against current code (the original
@@ -5710,6 +5713,17 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
     `accessibility@spinr.ca` contact) — this new disclosure sentence should
     land at that document's next reviewed/re-published version, not as a
     standalone unreviewed edit to the already-live text.
+    - **2026-09-11: disclosure language drafted.** Added to
+      `docs/legal/privacy-policy.md` Section 6 (plus pre-publication note 6
+      tying every factual claim — `super_admin`-only access, the required
+      `reason` field, no third-party recipient — back to the code that
+      verifies it), with `docs/legal/legal-text-publication-checklist.md`
+      and the request package's Status table updated to match. A
+      `spinr-legal-readiness-reviewer` pass confirmed all three factual
+      claims against the actual code. **Still open:** this is a draft-only
+      addition to the repo source file — the already-live production policy
+      text does not yet carry this sentence, per the "next reviewed/
+      re-published version, not a standalone edit" rule above.
   - **A41's tied-in legacy-migration consent-sufficiency question remains
     separately open** — the 2026-09-07 entry above grouped it with R-G for
     reviewer convenience (same blocker: no named reviewer), but it is a

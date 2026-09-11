@@ -18462,7 +18462,8 @@ mechanical follow-up work, prioritizable independently.
     which to use.
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
-  — **Status:** closed 2026-09-10, same session that filed it — real call
+  — **Status:** closed 2026-09-11, same session that filed it (started
+  2026-09-10) — real call
   sites migrated where Button's API (or a small, justified extension of
   it) actually fit; the rest documented as bespoke rather than forced.
   - **Issue/gap:** the shared `Button` primitive (6 real consumers in
@@ -18507,7 +18508,7 @@ mechanical follow-up work, prioritizable independently.
       button) both needed a leading icon and neither could express it
       through the existing API. Purely additive — every existing rider-app
       consumer omits it and is unaffected; see
-      `docs/change-log/2026-09-10-ux3-driver-app-button-adoption.md` for
+      `docs/change-log/2026-09-11-ux3-driver-app-button-adoption.md` for
       the full Change Impact Log.
     - Explicitly NOT touched (per this item's own original guidance):
       `DriverIdlePanel`'s GO/STOP toggle (bespoke real-time-motion UI) and

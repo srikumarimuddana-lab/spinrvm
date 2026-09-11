@@ -323,7 +323,14 @@ async def _reuse_already_handled(row: dict) -> bool:
                 details = json.loads(details)
             except ValueError:
                 continue
-        if isinstance(details, dict) and details.get("replayed_row_id") == row_id:
+        # Only a FULLY successful cascade counts. Steps 2 and 3 are each
+        # best-effort; if either failed (a Supabase blip during revoke-all)
+        # the audit row still lands, but the response is incomplete — an
+        # attacker's rotated-forward token could still be live — and the next
+        # replay must run the cascade again. Rows written before this flag
+        # existed have no `cascade_ok` and are treated as not handled, which
+        # errs toward one extra cascade, never toward a suppressed one.
+        if isinstance(details, dict) and details.get("replayed_row_id") == row_id and details.get("cascade_ok") is True:
             return True
     return False
 
@@ -361,8 +368,12 @@ def _capture_reuse_event(row: dict, *, repeated: bool) -> None:
             },
         )
     except Exception as e:
-        # Sentry not configured / import failed / network — the logger line
-        # at the call site already carries the signal via the loguru→Sentry bridge.
+        # Sentry not configured / import failed / network. For a FIRST
+        # detection the call site's logger.error still reaches Sentry through
+        # the loguru bridge (ERROR level). A repeat is logged at WARNING, which
+        # the bridge does not forward — so if this capture fails, a repeat
+        # replay is in the logs and the audit trail but not alerted. Accepted:
+        # the cascade for that row has already run, and the credential is dead.
         logger.debug(f"refresh-token-reuse Sentry capture skipped: {e}")
 
 
@@ -396,6 +407,8 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
 
     # Step 2: token_version bump. Pick the right table by audience.
     new_version: Optional[int] = None
+    bump_ok = False
+    revoke_ok = False
     target_table: Optional[str] = None
     try:
         if audience in _USERS_TABLE_AUDIENCES:
@@ -419,6 +432,9 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 {"id": user_id},
                 {"$set": bump},
             )
+        # A bump that is not applicable (admin-001's env-var creds, an
+        # unknown audience) is complete by design, not a failure.
+        bump_ok = True
     except Exception as e:
         logger.error(f"reuse-cascade: token_version bump failed (table={target_table} user={user_id}): {e}")
 
@@ -426,6 +442,7 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
     revoked_count = 0
     try:
         revoked_count = await revoke_all_for_user(user_id) if user_id else 0
+        revoke_ok = True
     except Exception as e:
         logger.error(f"reuse-cascade: revoke_all_for_user failed (user={user_id}): {e}")
 
@@ -469,6 +486,9 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
             "replaced_by": row.get("replaced_by"),
             "cascade_token_version": new_version,
             "cascade_refresh_revoked": revoked_count,
+            # Read back by _reuse_already_handled: a repeat replay of this row
+            # skips the cascade only when both destructive steps succeeded.
+            "cascade_ok": bump_ok and revoke_ok,
             "detected_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.insert_one(

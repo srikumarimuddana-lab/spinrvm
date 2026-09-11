@@ -14,6 +14,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
 
+try:
+    from utils.loop_start_offset import loop_start_offset_seconds
+except ImportError:  # pragma: no cover - import style varies by entrypoint
+    from .utils.loop_start_offset import loop_start_offset_seconds  # type: ignore
+
 _log = logger.bind(domain="admin", surface="backend")
 
 try:
@@ -55,6 +60,10 @@ def _metrics_token() -> str:
 
 
 async def _restartable(name: str, factory: Callable[[], Awaitable[None]]) -> None:
+    # Same de-phasing as core/lifespan.py's runner — see utils/loop_start_offset.py.
+    offset = loop_start_offset_seconds(name)
+    if offset > 0:
+        await asyncio.sleep(offset)
     while True:
         try:
             await factory()

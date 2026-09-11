@@ -1,6 +1,4 @@
 import asyncio
-import random
-import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,37 +13,10 @@ except ImportError:  # pragma: no cover - import style varies by entrypoint
 
 from supabase_client import supabase
 
-# Upper bound on the random first-tick delay any loop gets (see
-# loop_start_offset_seconds). 30 s is enough to spread 41 loops into a
-# non-colliding boot window while keeping the slowest first tick well under
-# every loop's own cadence.
-LOOP_START_OFFSET_MAX_SECONDS = 30.0
-
-_CADENCE_RE = re.compile(r"\((\d+)\s*(s|sec|min|h)\)")
-
-
-def loop_start_offset_seconds(name: str, rng: random.Random | None = None) -> float:
-    """Random first-tick delay for a background loop, from its registry name.
-
-    Loop names carry their cadence — ``"route_finalizer (15s)"``,
-    ``"surge_engine (2min)"``, ``"retention_purge (24h)"`` — so the offset is
-    bounded by the loop's own interval and never by more than
-    ``LOOP_START_OFFSET_MAX_SECONDS``. A name whose cadence cannot be parsed
-    (``"reconciliation (daily 02:00 UTC)"``) gets the plain cap: those loops
-    compute their own wall-clock schedule and a few seconds' start delay is
-    irrelevant to them. Pure so it is unit-testable; the only randomness is
-    the injected ``rng``.
-    """
-    match = _CADENCE_RE.search(name or "")
-    cap = LOOP_START_OFFSET_MAX_SECONDS
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2)
-        interval_s = value * {"s": 1, "sec": 1, "min": 60, "h": 3600}[unit]
-        cap = min(cap, float(interval_s))
-    if cap <= 0:
-        return 0.0
-    return (rng or random).uniform(0, cap)
+try:
+    from utils.loop_start_offset import loop_start_offset_seconds
+except ImportError:  # pragma: no cover - import style varies by entrypoint
+    from ..utils.loop_start_offset import loop_start_offset_seconds  # type: ignore
 
 
 # Global database reference accessible via app state

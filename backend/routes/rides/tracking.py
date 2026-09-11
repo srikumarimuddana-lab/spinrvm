@@ -4,6 +4,7 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import hashlib
 import json
 
 from . import _deps
@@ -27,14 +28,20 @@ router = APIRouter()
 # wait) or the two pollers landing within the same window share one
 # computation, while a moving car naturally misses and recomputes. Only
 # non-empty results are cached, so a failed provider call is retried on the
-# next poll rather than pinned for the TTL. Ephemeral (Redis, seconds), never
-# logged — the key carries a coarse position, not the trail.
+# next poll rather than pinned for the TTL. Ephemeral (Redis, seconds). The
+# position bucket is HASHED into the key, not written in clear: redis_get /
+# redis_set log the key at ERROR when Redis is unavailable, and ERROR logs
+# reach Sentry through the logging bridge — a Redis outage would otherwise
+# ship a near-raw driver position for every poll of every active ride
+# (CLAUDE.md PIPEDA: geohashed area at most, never raw coordinates).
 LIVE_ROUTE_CACHE_TTL_SECONDS = 6
 LIVE_ROUTE_CACHE_PREFIX = "live_route:"
 
 
 def live_route_cache_key(ride_id: str, destination: str, o_lat: float, o_lng: float) -> str:
-    return f"{LIVE_ROUTE_CACHE_PREFIX}{ride_id}:{destination}:{round(float(o_lat), 4)}:{round(float(o_lng), 4)}"
+    bucket = f"{round(float(o_lat), 4)}:{round(float(o_lng), 4)}"
+    digest = hashlib.sha256(bucket.encode("utf-8")).hexdigest()[:16]
+    return f"{LIVE_ROUTE_CACHE_PREFIX}{ride_id}:{destination}:{digest}"
 
 
 @router.get("/{ride_id}/live-route")

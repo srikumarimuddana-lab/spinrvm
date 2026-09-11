@@ -15,7 +15,7 @@ import random
 
 import pytest
 
-from core.lifespan import LOOP_START_OFFSET_MAX_SECONDS, loop_start_offset_seconds
+from utils.loop_start_offset import LOOP_START_OFFSET_MAX_SECONDS, loop_start_offset_seconds
 
 
 @pytest.mark.parametrize(
@@ -29,6 +29,9 @@ from core.lifespan import LOOP_START_OFFSET_MAX_SECONDS, loop_start_offset_secon
         ("payment_retry (5min)", 300),
         ("corporate_low_balance (1h)", 3600),
         ("retention_purge (24h)", 86400),
+        ("orphaned_hold_reconciler (15m)", 900),
+        ("auto_payout (1h, Sundays)", 3600),
+        ("offer_expiry_reaper (10s)", 10),
     ],
 )
 def test_offset_is_bounded_by_the_loops_own_cadence_and_the_global_cap(name, interval_s):

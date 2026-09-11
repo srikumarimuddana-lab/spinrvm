@@ -13112,7 +13112,10 @@ record of what was assumed vs. what was actually true</summary>
   verified against a real EAS build (no EAS/Expo credentials in this
   session) — verified via EAS's own documented defaults, YAML/JSON
   parsing, and a dedicated CI/CD reviewer pass instead.
-- [ ] **Status (superseded by the above):** open. Found 2026-09-02 while reviewing `ci.yml`'s
+- [ ] ~~**Status (superseded by the above):** open.~~ (dead text — the fix
+  above already closed this; kept for the record, not a live status, same
+  convention as this doc's other "superseded by the above" entries) Found
+  2026-09-02 while reviewing `ci.yml`'s
   `mobile-build` job (rider+driver-app native builds gated on `[build]` in
   a `main`-branch commit message, per PR #4871). A related gap in the same
   job (driver-app missing entirely despite `needs: [rider-app-test,
@@ -13179,8 +13182,12 @@ record of what was assumed vs. what was actually true</summary>
     current/intended behavior before the conditional logic ships.
 
 ### C100. `driver-app/__tests__/components/CarMarker.test.tsx` — 7 tests broken by a prior `expo-image` migration the test was never updated for
-- [ ] **Status:** open, found 2026-09-10 while investigating an unrelated
-  CI failure on PR #5200 (a driver-app toast-color fix).
+- [x] **Status:** CLOSED 2026-09-11 — already fixed, stale checkbox.
+  `CarMarker.test.tsx` already imports `Image` from `expo-image` (not
+  `'react-native'`) and `npx jest __tests__/components/CarMarker.test.tsx`
+  passes **25/25** on current `main`. The fix described below was applied
+  at some point without this checkbox being flipped; re-verified directly
+  rather than trusting the stale status.
 - **Issue/gap:** `CarMarker.tsx:3` imports `Image as ExpoImage` from
   `expo-image` and renders `<ExpoImage>` (line ~963) as the car icon — but
   the test file (`CarMarker.test.tsx:3`) still imports `Image` from
@@ -18521,8 +18528,9 @@ mechanical follow-up work, prioritizable independently.
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
   (driver-app round 1 merged 2026-09-10; round 2 — 4 parallel batches, 39
-  more files — opened 2026-09-11, pending review/merge), identified
-  2026-09-10.
+  more files, PRs #5225/#5226/#5227/#5228 — all merged 2026-09-11), still
+  open overall: driver-app has a follow-up batch remaining (see below) and
+  rider-app hasn't started, identified 2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
     h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
@@ -18611,9 +18619,9 @@ mechanical follow-up work, prioritizable independently.
     under a related item, not tracked here).
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use (met — the `warn`-level lint rule exists) **and** existing
-    screens are actually migrated (partially met — round 1 merged; round 2
-    open across 4 PRs pending review/merge; not yet complete for either
-    app).
+    screens are actually migrated (partially met — driver-app rounds 1+2
+    merged, ~12 files + `_layout.tsx`'s inline styling still outstanding;
+    rider-app not yet started; not yet complete for either app).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started
@@ -24453,7 +24461,8 @@ how much they de-risk a public launch._
   delivery-outcome metric (recommendation #3) have all shipped as follow-up PRs — see below. Ops
   check (confirm the Firebase credential on Fly/Railway, #1) and the iOS background-mode
   confirmation (#5) remain open — both need access this session doesn't have. #6 (remove/wire the
-  dead `expo-notifications` handler) is small cleanup, not yet done, not blocked on anything.
+  dead `expo-notifications` handler) is **not** the small unblocked cleanup it looked like —
+  see the 2026-09-11 correction below before anyone touches this.
 - **Correction (same day, before the client-side fix shipped):** the client-side finding below
   originally read as "every notification type except ride offers is silently dropped, foreground
   and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
@@ -24536,6 +24545,18 @@ how much they de-risk a public launch._
   data-only type has a background display path" today; (5) confirm the iOS background-mode gap
   against a real build; (6) either wire `expo-notifications`' handler into the real path or
   remove the now-misleading dead code.
+  **2026-09-11 correction — #6 is NOT a safe unblocked cleanup, re-scoped:** the "dead code"
+  evidence above (finding #8, the `AndroidManifest.xml` priority comparison) is Android-only —
+  a platform mechanism (manifest `<service>` intent-filter priority) with no iOS equivalent.
+  Checked `_layout.tsx:219-243` directly: `Notifications.setNotificationHandler(...)` has **no
+  `Platform.OS` guard** — it registers on iOS too (only gated by `canUseNotifications`, which
+  excludes Expo Go/web, not either native platform). Nothing in the audit establishes this
+  handler is *also* dead on iOS — that was an unverified assumption, not a checked fact — and
+  deleting it risks silently breaking iOS foreground notification presentation (banner/sound/
+  badge for every non-suppressed type) for a driver-facing feature C97 exists to *fix*, not
+  regress. #6 is now blocked on the same thing as #5/#10: an iOS device/simulator to confirm
+  whether `expo-notifications` still controls iOS foreground presentation before any code is
+  removed. Do not delete this handler without that confirmation.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 
@@ -24707,7 +24728,14 @@ how much they de-risk a public launch._
 
 ### C100. `driver-app-test` is red on `main`'s own tip — `CarMarker.test.tsx`'s image-decode-retry suite, confirmed unrelated to the commits that happened to be `main`'s HEAD when it failed
 
-- [ ] **Status:** OPEN — confirmed base-branch-red, not caused by this
+- [x] **Status:** CLOSED 2026-09-11 — same underlying issue as the other
+  C100 entry above (this repo has two entries under the same ID; both
+  refer to the identical `CarMarker.test.tsx` lookup bug). Re-verified
+  directly: `npx jest __tests__/components/CarMarker.test.tsx` passes
+  **25/25** on current `main`; the test already imports `Image` from
+  `expo-image`, not RN core. `driver-app-test` is no longer red on this
+  suite — closing both entries together rather than leaving one open.
+- [ ] **Status (superseded by the above):** OPEN — confirmed base-branch-red, not caused by this
   session's own PR (#5203, AI17/F4 — touches only backend, `shared/types/ai.ts`,
   `rider-app/components/FareQuoteCard.tsx`, and
   `admin-dashboard/src/app/dashboard/ai-console/page.tsx`, none of which

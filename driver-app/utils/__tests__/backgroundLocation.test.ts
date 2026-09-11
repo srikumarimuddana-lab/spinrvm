@@ -91,6 +91,7 @@ import {
   startBackgroundLocation,
   updateBackgroundLocationCadence,
   recoverTripLocation,
+  reassertDispatchTask,
   setBackgroundTripActive,
   handleBackgroundLocationTask,
   startGeofenceRecovery,
@@ -108,6 +109,7 @@ import { resetLocationIntegrity } from '../locationIntegrity';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
+import { recordNonFatal } from '../crashlytics';
 
 const mockedOutbox = mockOutbox as jest.Mocked<typeof mockOutbox>;
 const mockStartUpdates = Location.startLocationUpdatesAsync as jest.Mock;
@@ -388,6 +390,41 @@ describe('updateBackgroundLocationCadence', () => {
   it('TRIP_CADENCE samples denser than IDLE_CADENCE', () => {
     expect(TRIP_CADENCE.timeInterval!).toBeLessThan(IDLE_CADENCE.timeInterval!);
     expect(TRIP_CADENCE.distanceInterval!).toBeLessThan(IDLE_CADENCE.distanceInterval!);
+  });
+});
+
+describe('reassertDispatchTask — Sentry noise suppression (Sentry issue 7726298683)', () => {
+  beforeEach(() => {
+    mockStartUpdates.mockClear();
+    mockHasStartedLocationUpdates.mockReset();
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    mockBgPermission = 'granted';
+    (recordNonFatal as jest.Mock).mockClear();
+  });
+
+  it('does not report Android refusing to restart the FGS while backgrounded', async () => {
+    // The exact production shape: expo-modules-core wraps the native reject
+    // reason as `.cause` under a generic "...has been rejected." outer message.
+    const rejection = new Error("Call to function 'ExpoLocation.startLocationUpdatesAsync' has been rejected.");
+    (rejection as any).cause = new Error(
+      "Couldn't start the foreground service. Foreground service cannot be started when the application is in the background",
+    );
+    mockStartUpdates.mockRejectedValueOnce(rejection);
+
+    await reassertDispatchTask();
+
+    expect(recordNonFatal).not.toHaveBeenCalled();
+  });
+
+  it('still reports an unrelated re-assert failure', async () => {
+    mockStartUpdates.mockRejectedValueOnce(new Error('some other native failure'));
+
+    await reassertDispatchTask();
+
+    expect(recordNonFatal).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ location: 'reassert_failed' }),
+    );
   });
 });
 

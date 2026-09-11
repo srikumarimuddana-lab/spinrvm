@@ -1,0 +1,51 @@
+-- Migration 414: add rides.payment_failure_reason (missing column, B42)
+--
+-- Purpose
+-- -------
+-- ACTION_ITEMS.md B42: routes/webhooks.py's payment_intent.payment_failed
+-- handler has written `{"$set": {..., "payment_failure_reason": failure_message}}`
+-- to the `rides` table since this code path was introduced, but no migration
+-- ever created the column. Every real invocation of this write therefore
+-- raised a Postgres "column does not exist" error, uncaught (unlike the CAS
+-- read a few lines above it, which already has a try/except + unclaim
+-- pattern from the N1 director review). The event stayed permanently claimed
+-- in `stripe_events` with `processed_at` NULL, and the ride's own
+-- `payment_status` never actually flipped to "failed" — Stripe's automatic
+-- retry saw the event as already-claimed and silently deduped it, so the
+-- failure was lost with no error surfaced anywhere a human would see it.
+--
+-- Confirmed via a live, read-only query against this exact production
+-- project (soavhtdhefowwvforzwb) 2026-09-11: 53 of 55 payment_intent.
+-- payment_failed events ever received are still unprocessed, spanning
+-- 2026-07-15 through today. `payment_failure_reason` is referenced exactly
+-- once in the whole codebase (webhooks.py) and was never migrated — this is
+-- an isolated oversight, not a deliberate design choice to omit the column.
+--
+-- This migration adds the missing column so the existing, already-written
+-- code path works as originally intended. The companion code fix (same PR)
+-- wraps the write in the same try/except + unclaim pattern the read already
+-- uses, so a future unrelated write failure degrades to "Stripe retries"
+-- instead of "permanently silently lost" regardless of this specific bug.
+--
+-- Safety
+-- ------
+-- Purely additive: one nullable TEXT column on an existing table. No default
+-- expression, no backfill in this migration (the historical backfill for the
+-- 44 already-affected rides is a separate, reviewed data-remediation step
+-- run directly against production alongside this PR — see
+-- docs/change-log/2026-09-11-b42-payment-failed-webhook-remediation.md).
+-- No index needed — this is a display/support field, not a query predicate
+-- anywhere in the codebase. Zero risk to in-flight traffic: existing reads
+-- of `rides` are unaffected by a new nullable column, and no code reads this
+-- column yet (it's write-only until a support/admin view is built to show
+-- it — out of this migration's scope).
+--
+-- Rollback
+-- --------
+-- ALTER TABLE rides DROP COLUMN IF EXISTS payment_failure_reason;
+-- Safe at any time — nothing else in the codebase reads this column.
+
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS payment_failure_reason TEXT;
+
+COMMENT ON COLUMN rides.payment_failure_reason IS
+  'Human-readable reason the last payment_intent.payment_failed webhook gave for this ride (Stripe last_payment_error.message). Set by routes/webhooks.py. Null if no payment has failed for this ride, or if it failed before migration 414 added this column (see B42).';

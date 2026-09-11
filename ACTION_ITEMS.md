@@ -1125,6 +1125,61 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       population is now identifiable on the admin dashboard going forward
       without a one-off manual query; it does **not** by itself resolve
       the purge decision above.
+    - **2026-09-11 — the purge decision: made, scoped, and built (not yet
+      fired).** Presented the finding plainly with a recommendation via
+      `AskUserQuestion` rather than deciding unilaterally. Product-owner
+      decision, in two parts:
+      1. **Scope: SIN only, for now.** `date_of_birth` (146 profiles),
+         `driver_vehicle_history` (241 profiles), and dormant riders'
+         `saved_addresses` (153 profiles) are explicitly **not** purged by
+         this pass — each remains its own separate, undecided item.
+      2. **Grace period: 180 days past Spinr's 2026-03-30 launch** (cutoff
+         **2026-09-26**), not "dormant since import" — a driver who
+         imported cleanly but simply hasn't taken a first ride yet isn't
+         the same as one who never will, and purging prematurely would
+         force a real future driver to resupply a document they already
+         gave once. Chosen deliberately over 90/120 days (both of which
+         were already-elapsed and would have made all 97 candidates
+         eligible immediately) precisely so today's 97 candidates get one
+         more purge-eligibility window past what "already dormant" alone
+         would justify.
+      - **Built, not yet run:** `backend/migrations/413_purge_driver_pii_secret_fn.sql`
+        adds a `purge_driver_pii_secret(secret_id)` RPC — deleting the
+        actual `vault.secrets` ciphertext, not just nulling the column
+        reference (migration 289's own top comment already warned that
+        nulling `drivers.sin` alone orphans the vault row without deleting
+        it — "a PIPEDA problem, not a clean [purge]"). New
+        `backend/services/dormant_driver_sin_purge_service.py`
+        (plan/apply, population = drivers already flagged
+        `pre_launch_test = true`, never re-derived) and
+        `backend/scripts/purge_dormant_driver_sin.py` (thin CLI,
+        dry-run-default, mirrors `backfill_legacy_driver_sin_dob.py`'s own
+        shape). **The grace period is a hard code-level gate in
+        `apply_sin_purge`, not just a documented convention** — running
+        the script with `--apply` before 2026-09-26 refuses and exits
+        non-zero rather than purging early, regardless of intent. 13 new
+        unit tests, `spinr-migration-reviewer` run on the new migration.
+        Full detail: `docs/change-log/2026-09-11-a34-dormant-driver-sin-purge-tool.md`.
+      - **Not yet run against production** — by design, the tool cannot
+        act until 2026-09-26. A human needs to actually invoke
+        `python backend/scripts/purge_dormant_driver_sin.py --apply` on or
+        after that date (it is not wired into any background loop or
+        admin-dashboard button — a destructive PII purge stays a
+        deliberate, manually-triggered action, not a one-click UI affordance
+        or an automatic cron).
+      - **The other three fields from the same 2026-09-10 finding
+        (`date_of_birth` — 146 profiles, `driver_vehicle_history` — 241
+        profiles, dormant riders' `saved_addresses` — 153 profiles):
+        explicitly decided to wait, not silently dropped.** Asked via
+        `AskUserQuestion` on 2026-09-11 whether to build purge tools for any
+        of the three now — product-owner answer: **none for now**, deliberately
+        paced so the SIN tool actually runs (2026-09-26+) and is observed
+        working correctly before building three more tools on the same
+        pattern. If/when any of these is picked back up, the product owner
+        has already indicated a preference to reuse the same 180-day
+        post-launch grace period and the same `pre_launch_test = true`
+        dormant-population definition, for consistency with the SIN tool —
+        not a fresh rule per field.
 - **Files:** `docs/audit/2026-08-15-dual-run-cutover/` (4 phase reports),
   `docs/runbooks/full-app-audit.md` (repeatable master audit prompt — supersedes
   ad-hoc scratch prompts for future runs), PR #3946 (merged, dry-run-only as
@@ -17508,6 +17563,33 @@ Remaining, roughly in order of user impact:
     rollback, this becomes a same-shape removal to N8's
     `utils/receipt_email.py` deletion. See
     `docs/change-log/2026-08-31-n11c-legacy-receipt-shell-investigation.md`.
+  - **Re-checked 2026-09-11 (read-only, `email_send_log` on
+    `soavhtdhefowwvforzwb`) — still not ready, and the gap widened, not
+    narrowed:**
+    - **Receipt**: now qualifies on its own — 15 `sent` (0 `failed`) since
+      the flag went live, spanning 2026-08-18 through **today**
+      (2026-09-11), 24 continuous days with zero rollback. This alone would
+      clear the "several weeks, clean" bar.
+    - **Spinr Pass invoice**: **zero rows of any status** since the flag
+      went live 2026-08-18 — not "still short of the bar," literally no
+      branded-path activity at all in the 24 days since the last check
+      found the same zero. The last invoice email of any kind (branded or
+      legacy) was a failure on 2026-07-29, three weeks *before* the flag
+      existed. There is still no evidence the branded invoice path has ever
+      fired in production.
+    - **Still do not delete.** Deleting the invoice's `_LEGACY_*` fallback
+      now would remove the only invoice-email path with any confirmed
+      history, in favor of one that has never been observed to work.
+    - **New finding, not previously flagged**: 24 days of zero
+      `subscription_invoice` activity of any kind is itself worth checking
+      — either genuinely no billing events required an invoice email in
+      that window (plausible if Spinr Pass subscriptions are still low
+      volume), or the invoice-send path (branded or legacy) is silently not
+      firing at all. Recommend a human/future session check
+      `subscriptions`/billing-cycle activity for the same window against
+      whether an invoice email *should* have fired — this item's own scope
+      is the deletion decision, not diagnosing a possibly-separate send-path
+      bug, so not investigated further here.
 - [x] **N12. No visual/snapshot regression tooling for email** — **partially
   closed (2026-08-12).** The "nothing pins the whole rendered document" half
   is fixed: new `backend/tests/_html_snapshot.py` (golden-file diffing
@@ -18443,13 +18525,13 @@ These are adoption gaps against an *already-decided* intended system, not
 open design questions — the direction itself is settled; closing these is
 mechanical follow-up work, prioritizable independently.
 
-- [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
-  minority of screens in both apps** — **Status:** in progress —
+- [x] **UX1. Plus Jakarta Sans loads but is only actually applied in a
+  minority of screens in both apps** — **Status:** CLOSED 2026-09-11 —
   rider-app round 1 landed 2026-09-10 (15 files), round 2 landed
-  2026-09-11 (8 more files, see below); driver-app full rollout (all 42
-  qualifying files) landed 2026-09-11, merged via PR #5244. Do not mark
-  closed until rider-app's remaining files are done — 10 files
-  outstanding per its own note below.
+  2026-09-11 (8 more files), round 3 landed 2026-09-11 (final 10 files,
+  see below) — rider-app is now fully migrated (33 files). driver-app
+  full rollout (all 42 qualifying files) landed 2026-09-11, merged via
+  PR #5244. Both apps done.
   - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
     (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
     there was no `Text.defaultProps` override or themed `Text` wrapper
@@ -18541,35 +18623,51 @@ mechanical follow-up work, prioritizable independently.
     `app/index.tsx`, `components/CancelReasonSheet.tsx`,
     `components/ScreenHeader.tsx`, `components/toastConfig.tsx`. Merged
     via PR #5244.
-  - **Remaining follow-up scope:** rider-app has 10 more files that still
-    lack `fontFamily` entirely (re-grep before picking the next batch —
-    this list will drift just like the last one did): `app/_layout.tsx`,
-    `app/loyalty.tsx`, `app/referral.tsx`, `app/promotions.tsx`,
-    `app/ai-assistant.tsx`, `app/report-safety.tsx`,
-    `components/CancelReasonSheet.tsx`, `components/FreeCancelTimer.tsx`,
-    `components/SchedulePicker.tsx`, `components/Toast.tsx`. Separately,
+  - **Action taken (rider-app round 3, 2026-09-11 — final):** re-grepped
+    `fontWeight` vs `fontFamily` usage across `rider-app/app` and
+    `rider-app/components` from scratch once more (per this item's own
+    "don't trust the prior count" warning) using a script that correctly
+    handles multi-line `react-native` import blocks (round 2's plain
+    single-line regex would have under-counted here — several of these 10
+    files import `Text` as part of a multi-line destructured import).
+    Found exactly the same 10 files round 2 predicted, zero drift: none
+    had been touched by any other session in the interim. Migrated all 10
+    in 4 commits of ≤3 files each: root/misc (`app/_layout.tsx`,
+    `app/ai-assistant.tsx`, `app/report-safety.tsx`); rewards/promo
+    (`app/loyalty.tsx`, `app/promotions.tsx`, `app/referral.tsx`);
+    ride-cancel/schedule components (`components/CancelReasonSheet.tsx`,
+    `components/FreeCancelTimer.tsx`, `components/SchedulePicker.tsx`);
+    and `components/Toast.tsx` isolated into its own commit as the
+    highest-blast-radius file in this round (~30 consumers). Full Change
+    Impact Log:
+    `docs/change-log/2026-09-11-ux1-rider-app-text-wrapper-rollout-round3.md`.
+    A post-migration fresh sweep found **zero remaining files** matching
+    the criterion — rider-app is fully migrated (15 + 8 + 10 = 33 files).
+  - **Remaining follow-up scope:** none for this item's acceptance bar —
+    both apps are fully migrated. Two related-but-separate gaps remain
+    open as their own future work, not blocking this item's closure: (1)
     6 rider-app files with partial/manual `fontFamily` coverage found in
-    round 2 (listed above) are a real but different gap — hand-written
-    literals instead of the wrapper, not closed by this item's acceptance
-    bar — flagged here for a future, separately-scoped pass rather than
-    folded into this count. `components/VoltraRideActivity.tsx` is out of
-    scope permanently (doesn't use RN's `Text`). driver-app has zero
-    remaining — all 42 qualifying files migrated and merged.
-  - **Files:** rider-app — see "Action taken" bullets above for each
-    round's exact list; `shared/components/Text.tsx` is the wrapper
-    (unchanged since round 1). driver-app — see the "Action taken
-    (driver-app...)" bullet above for the full 42-file list and its
-    change-log doc. Full remaining rider-app per-file breakdown: re-grep
-    `fontFamily` vs `fontWeight`-only usage before starting the next batch
-    (not reproduced here to avoid drift from the source).
+    round 2 (`app/(tabs)/index.tsx`, `app/become-driver.tsx`,
+    `app/driver-arriving.tsx`, `app/ride-details.tsx`, `app/ride-status.tsx`,
+    `app/ride-tracking-webview.tsx`) — hand-written literals instead of the
+    wrapper; (2) the wrapper isn't yet lint-enforced in either app, so a
+    new screen could still ship without adopting it. `components/VoltraRideActivity.tsx`
+    is out of scope permanently (doesn't use RN's `Text`).
+  - **Files:** rider-app — see all three "Action taken" bullets above for
+    each round's exact list (33 files total); `shared/components/Text.tsx`
+    is the wrapper (unchanged since round 1). driver-app — see the
+    "Action taken (driver-app...)" bullet above for the full 42-file list
+    and its change-log doc.
   - **Acceptance:** a defined, enforced mechanism exists such that new
-    screens can't silently ship off-brand-font by omission — met for any
-    new rider-app or driver-app screen that imports `Text` from
-    `@shared/components/Text` instead of `react-native` directly; not yet
-    enforced by lint in either app. driver-app's 42 qualifying files are
-    now fully migrated and merged (PR #5244); rider-app has 10 files still
-    outstanding per its own note above — the item stays open until both
-    are done.
+    screens can't silently ship off-brand-font by omission — met for
+    every rider-app and driver-app screen: both apps' qualifying files
+    (33 rider-app, 42 driver-app) are fully migrated to
+    `@shared/components/Text` and merged (PRs #5214/#5240/round-3 for
+    rider-app, #5244 for driver-app). Not yet enforced by lint in either
+    app — a new screen could still opt out by importing `Text` from
+    `react-native` directly; flagged as the one open follow-up (above),
+    not a blocker to closing this item, since the acceptance bar as
+    written was existing-screen coverage, not lint enforcement.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
@@ -21539,10 +21637,19 @@ how much they de-risk a public launch._
   is **No-Go** — the P0–P2 query-optimization work (≈80% shipped, see the plan's
   §3) may already meet the < 2 s offer→accept and < 300 ms fare-estimate SLAs at
   500 drivers, and gate G3 exists to find out.
-- **Action (Phase 0, in order):** T2 retro `spinr-dispatch-reviewer` pass on
-  `backend/routes/rides/matching.py:821-886` (self-disclosed as never run in
-  `docs/change-log/2026-08-27-p2-dispatch-loop-optimization.md`) → T3 additive
-  per-phase timing metrics in `repositories/_base.py` `run_sync` and the dispatch
+- **Action (Phase 0, in order):** ~~T2 retro `spinr-dispatch-reviewer` pass on
+  `backend/routes/rides/matching.py:821-886`~~ **T2 done — correcting a stale
+  pointer found 2026-09-11.** The line above (and the "self-disclosed as never
+  run" note in `docs/change-log/2026-08-27-p2-dispatch-loop-optimization.md`)
+  was never updated after the fact: T2 actually ran 2026-09-02, produced
+  `docs/audit/2026-09-02-t2-dispatch-reviewer-retro.md`, and its findings are
+  the direct source of C54 and C55 below (both closed) — see either closed
+  item's own "Found during C50's T2 retro" note, which is what surfaced this
+  correction. A 2026-09-11 session nearly re-dispatched this exact retro as
+  fresh work off this stale line; verify the change-log/audit-doc trail
+  before trusting an "Action" list's ordering, same lesson this file's own
+  history keeps teaching. Next actionable step is **T3**: additive per-phase
+  timing metrics in `repositories/_base.py` `run_sync` and the dispatch
   attempt → T4 staging (E1 — three human actions) → T5 run
   `loadtest/locustfile.py` at 600 users against staging and record the numbers
   → T6 confirm pooler mode/port/pool-size/IPv4 reachability on the real project
@@ -23126,11 +23233,54 @@ how much they de-risk a public launch._
     `main`'s row, and even a bare boolean wouldn't reveal which checks are
     required or whether admins are exempt).
 
-### B42. `payment_failed` Stripe webhook events were silently dropped for ~36 minutes during #5048's live window — no data remediation done yet; **the affected-row query could not be run this session — see blocker below**
+### B42. `payment_failed` Stripe webhook events were silently dropped — CLOSED 2026-09-11 (fixed, remediated; scope was much larger than the original 36-minute framing)
 
 > **P0-severity, filed here only by chronology** — see the note at the top of
 > the `## P0` section above.
 
+- [x] **Status:** CLOSED 2026-09-11. The Supabase-access blocker below
+  resolved itself between 2026-09-07 and today (this session's connector
+  now reaches `soavhtdhefowwvforzwb`/`spinrmobileapp`, confirmed
+  production — see `.claude/context/connector-scoping.md`'s 2026-09-08
+  entry) but nobody had gone back to re-run the query until this session
+  did. **The real scope was far bigger than the original title's "~36
+  minutes":** live query found **53 of the 55 `payment_intent.
+  payment_failed` events this project has ever received (2026-07-15
+  through 2026-09-11 — i.e. still actively happening today, not a
+  one-off historical window) were permanently stuck unprocessed.**
+  **Root cause:** `routes/webhooks.py`'s CAS write for this handler sets
+  `rides.payment_failure_reason` — a column no migration had ever
+  created. Every real invocation raised, uncaught (the write, unlike the
+  sibling CAS *read* a few lines above, had no try/except/unclaim guard),
+  permanently losing the event to Stripe's dedup-on-retry. **Fix:**
+  migration 414 adds the missing column; `webhooks.py`'s write is now
+  wrapped in the same try/except + unclaim + 503 pattern the read
+  already uses (structural fix — covers this bug's class, not just this
+  instance); regression test added. **Data remediation** (applied
+  directly to production ahead of the PR, same session): triaged all 53
+  by the linked ride's current state — 44 still `pending`/no PI (the
+  ride had already been correctly auto-cancelled by the booking flow;
+  only the payment-status *label* was missing) updated to `failed` with
+  the real failure reason, using the exact same CAS predicate the live
+  code uses; 5 already `paid` via a later successful retry left
+  untouched (matches the code's own "already settled, ignore stale
+  failure" branch — the same race N1's CAS logic exists to prevent); 4
+  orphaned (no matching ride, different/earlier failure pattern, flagged
+  as a small separate open question, not re-investigated here) marked
+  processed with no ride to update. `stripe_events.processed_at` is now
+  set on all 53. Full detail, exact queries, and row-level accounting:
+  `docs/change-log/2026-09-11-b42-payment-failed-webhook-remediation.md`.
+  **Related, independently fixed the same day:** PR #5250 fixed a
+  *different* bug in the *charge-creation* layer
+  (`utils/stripe_charge.py`) that was the actual reason 49 of these 53
+  payments failed at Stripe's end in the first place (an account not
+  enrolled in Stripe's incremental-authorization feature). That fix
+  stops the failures from happening; this fix is why the resulting
+  failure *webhooks*, once sent, were never recorded — two distinct bugs
+  in two distinct code paths, both needed fixing, neither one fixes the
+  other.
+- **Original investigation (2026-09-07, kept for the record — the
+  Supabase-access blocker it describes has since resolved, see above):**
 - [ ] **Status:** open, blocked on data access — found 2026-09-07 while
   reviewing PR #5050's own body, which disclosed the defect and fixed the
   code path but did not include a production data remediation step.

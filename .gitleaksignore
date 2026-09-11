@@ -93,3 +93,15 @@ dd01616036dc3bf8cdb346b9a2fe9a39b17a43c8:agents/runs/sos-rideless-path/decisions
 # same literal) under the introducing commit.
 72ad7aa35add3b5d7e8b211f3c47d83c565415ab:backend/tests/test_error_response_sanitisation.py:generic-api-key:492
 72ad7aa35add3b5d7e8b211f3c47d83c565415ab:backend/tests/test_error_response_sanitisation.py:generic-api-key:500
+
+# PR #5250: a Change Impact Log "before/after" code snippet quoted
+# authorize_ride()'s real Stripe retry call verbatim, including the
+# `api_key=secret,` keyword argument -- `secret` there is a Python parameter
+# name bound to a value read from app_settings at runtime (see
+# _resolve_stripe_secret in backend/utils/stripe_charge.py), never a literal
+# credential in either the doc or the source it quotes. Tripped the
+# generic-api-key rule on the git-history scan. Fixed forward (the snippet
+# no longer spells out that keyword argument), but the introducing commit
+# still exists in history, so the history scan (G5a) needs this fingerprint
+# ignored.
+9cc1febdd1755b64f80a13209fa38314e2758019:docs/change-log/2026-09-11-stripe-preauth-incremental-auth-ineligible-fallback.md:generic-api-key:67

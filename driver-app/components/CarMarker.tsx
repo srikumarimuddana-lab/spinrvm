@@ -485,16 +485,58 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             return;
         }
         lastAcceptedRawFixRef.current = { ...rawCoord, timestampMs: ts };
-        if (shouldResetBuffer(bufferRef.current, rawCoord, SNAP_DISTANCE_M)) {
+        // shouldResetBuffer only ever compares a new fix against an EXISTING
+        // last fix (it bails out with `if (!last) return false`), so the
+        // very first fix into a freshly-mounted/empty buffer can never
+        // trigger it — no matter how far the real position has moved since
+        // this component last rendered. That gap bites index.tsx's own
+        // mapKey remount-on-going-online (added to fix the marker never
+        // reappearing after offline→online, see that file's comment): the
+        // remount reseeds this component with a STALE mount coordinate and
+        // an empty buffer, so the first real GPS fix that then arrives —
+        // which can be a real few-hundred-metre jump if the driver moved
+        // while offline — gets treated as an ordinary ~500 ms tween target
+        // instead of a reset anchor, animating one fast straight-line glide
+        // across whatever lies between (buildings included) — live-testing
+        // report 2026-09-11: "icon moved through the building using
+        // shortest path" right after coming back online, following the
+        // separately-reported delay waiting for that first fix (GPS
+        // time-to-first-fix after being paused). Treating an empty buffer
+        // the same as a distance-triggered reset closes this: the first fix
+        // after any remount always snaps instead of gliding.
+        const isFirstFix = bufferRef.current.length === 0;
+        if (isFirstFix || shouldResetBuffer(bufferRef.current, rawCoord, SNAP_DISTANCE_M)) {
             bufferRef.current.length = 0;
             // Stale estimate would otherwise drag the newly-reset position
             // back toward wherever the car used to be — re-seed at the raw
             // (unsmoothed) fix instead.
             smoothingStateRef.current = null;
             hasMovementBearingRef.current = false;
+            // Reset on BOTH platforms — the ticker's next tick measures
+            // "moved" distance from this, so leaving it stale (as before,
+            // iOS-only) would still glide iOS from wherever it last was.
+            prevTargetRef.current = rawCoord;
             if (Platform.OS === 'android') {
                 setAndroidCoord(rawCoord);
-                prevTargetRef.current = rawCoord;
+            } else {
+                // iOS had no equivalent instant-seed here at all before this
+                // fix — animatedRegion.setValue() sets the underlying
+                // Animated.Values directly with no animation, so the very
+                // next tick's `.timing()` call starts FROM this raw fix
+                // instead of gliding in from wherever the marker's stale
+                // mount position was. Guarded the same way the Android
+                // animateMarkerToCoordinate call below falls back for a
+                // missing native method — if a future/older react-native-
+                // maps build ever lacks setValue, skip the seed rather than
+                // throw; the ticker still renders correctly, just glides.
+                if (typeof (animatedRegion as any).setValue === 'function') {
+                    animatedRegion.setValue({
+                        latitude: rawCoord.latitude,
+                        longitude: rawCoord.longitude,
+                        latitudeDelta: 0,
+                        longitudeDelta: 0,
+                    });
+                }
             }
         }
         smoothingStateRef.current = smoothFix(smoothingStateRef.current, { ...rawCoord, timestampMs: ts });

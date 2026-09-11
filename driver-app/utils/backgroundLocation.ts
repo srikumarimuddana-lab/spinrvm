@@ -476,6 +476,38 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
 }
 
 /**
+ * Whether `e` is Android 12+ refusing to (re-)promote a foreground service
+ * because the app process itself is currently backgrounded — the fixed OS
+ * string is "Foreground service cannot be started when the application is in
+ * the background". Walks `.cause` (expo-modules-core wraps the native reject
+ * reason there) since the outer error is just "...has been rejected."
+ *
+ * Expected, not a bug: this fires from the self-heal tick below with no
+ * foreground activity and no other OS exemption (geofence exit, notification
+ * tap) in play. It always has another chance to recover — the next self-heal
+ * tick (~60s), a geofence exit, a WS/FCM location_health nudge, or the driver
+ * reopening the app — so it must not be reported as a Sentry non-fatal, which
+ * would otherwise fire ~once/min for every driver who backgrounds the app for
+ * a while (same "degraded-but-recovered → no Sentry" rule as the durable
+ * upload retry in handleBackgroundLocationTask below, CLAUDE.md observability
+ * conventions).
+ */
+function _isBackgroundedForegroundServiceRejection(e: unknown): boolean {
+  const parts: string[] = [];
+  let cur: unknown = e;
+  for (let i = 0; i < 3 && cur; i += 1) {
+    if (cur instanceof Error) {
+      parts.push(cur.message);
+      cur = (cur as { cause?: unknown }).cause;
+    } else {
+      parts.push(String(cur));
+      break;
+    }
+  }
+  return /application is in the background/i.test(parts.join(' '));
+}
+
+/**
  * Re-assert the dispatch task's options in place — re-promoting the shared
  * Android location service if something (an Android Auto task stop, an OS
  * hiccup) demoted it. Never STARTS the task (that is go-online's job) and
@@ -498,6 +530,10 @@ export async function reassertDispatchTaskUnlocked(): Promise<void> {
     await _applyTaskOptions(tripActive ? TRIP_CADENCE : IDLE_CADENCE);
     console.log('[BgLocation] Dispatch task re-asserted');
   } catch (e) {
+    if (_isBackgroundedForegroundServiceRejection(e)) {
+      console.warn('[BgLocation] Re-assert deferred — foreground service restart blocked while backgrounded');
+      return;
+    }
     recordNonFatal(e, { domain: 'drivers', surface: 'driver-app', location: 'reassert_failed' });
   }
 }

@@ -142,3 +142,126 @@ class TestCapabilityReadBack:
         # The hold still stands; only the capability degrades.
         assert outcome.status == "authorized"
         assert outcome.incremental_authorization_supported is False
+
+
+class _FakeErrObj:
+    message = (
+        "This account is not eligible for the requested card features. "
+        "See https://stripe.com/docs/payments/flexible-payments for more details."
+    )
+
+
+class _FakeAccountIneligibleError(Exception):
+    def __init__(self):
+        super().__init__(_FakeErrObj.message)
+        self.error = _FakeErrObj()
+
+
+class _FakeOtherStripeError(Exception):
+    pass
+
+
+class _NeverMatches(Exception):
+    """Patched in for _StripeCardError so a fake StripeError never mismatches
+    into the card-decline branch, regardless of whether the real `stripe`
+    package is installed in this environment."""
+
+
+@pytest.mark.asyncio
+class TestAccountIneligibleForIncrementalAuth:
+    """Covers the production incident (Sentry issue 7726298620): this Stripe
+    account isn't enrolled for incremental/extended authorizations, so Stripe
+    rejects the WHOLE PaymentIntent.create call with a 400 invalid_request_error
+    instead of just reporting the capability unavailable on the charge. Without
+    a fallback, every booking authorization on this account failed outright —
+    silently dropping the pre-auth hold (dead-card-before-dispatch protection)
+    for every ride, not just this one.
+    """
+
+    async def test_retries_without_incremental_auth_and_still_places_the_hold(self):
+        from backend.utils import stripe_charge
+
+        mock_stripe = MagicMock()
+        good_intent = _intent()
+        mock_stripe.PaymentIntent.create.side_effect = [
+            _FakeAccountIneligibleError(),
+            good_intent,
+        ]
+
+        with (
+            _patch_settings(),
+            patch.object(stripe_charge, "stripe", mock_stripe),
+            patch.object(stripe_charge, "_StripeCardError", _NeverMatches),
+            patch.object(stripe_charge, "_StripeBaseError", Exception),
+        ):
+            outcome = await stripe_charge.authorize_ride(
+                ride={"id": "ride_1"},
+                rider_id="rider_1",
+                amount=Decimal("25.00"),
+                payment_method_id="pm_1",
+                stripe_customer_id="cus_1",
+            )
+
+        assert outcome.status == "authorized"
+        assert mock_stripe.PaymentIntent.create.call_count == 2
+
+        first_kwargs = mock_stripe.PaymentIntent.create.call_args_list[0].kwargs
+        second_kwargs = mock_stripe.PaymentIntent.create.call_args_list[1].kwargs
+        assert first_kwargs["payment_method_options"]["card"]["request_incremental_authorization"] == "if_available"
+        assert "request_incremental_authorization" not in second_kwargs["payment_method_options"]["card"]
+        # A fresh idempotency key — the retry's params differ from the first
+        # attempt, so reusing the original key would raise a Stripe idempotency
+        # mismatch error instead of retrying.
+        assert second_kwargs["idempotency_key"] != first_kwargs["idempotency_key"]
+
+    async def test_unrelated_stripe_error_does_not_retry(self):
+        """A different invalid_request_error (or any other StripeError) must
+        surface as `failed` as before — only this specific account-eligibility
+        message triggers the fallback retry."""
+        from backend.utils import stripe_charge
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.create.side_effect = _FakeOtherStripeError("something else went wrong")
+
+        with (
+            _patch_settings(),
+            patch.object(stripe_charge, "stripe", mock_stripe),
+            patch.object(stripe_charge, "_StripeCardError", _NeverMatches),
+            patch.object(stripe_charge, "_StripeBaseError", Exception),
+        ):
+            outcome = await stripe_charge.authorize_ride(
+                ride={"id": "ride_1"},
+                rider_id="rider_1",
+                amount=Decimal("25.00"),
+                payment_method_id="pm_1",
+                stripe_customer_id="cus_1",
+            )
+
+        assert outcome.status == "failed"
+        assert mock_stripe.PaymentIntent.create.call_count == 1
+
+    async def test_retry_also_failing_returns_failed(self):
+        from backend.utils import stripe_charge
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.create.side_effect = [
+            _FakeAccountIneligibleError(),
+            _FakeOtherStripeError("still broken"),
+        ]
+
+        with (
+            _patch_settings(),
+            patch.object(stripe_charge, "stripe", mock_stripe),
+            patch.object(stripe_charge, "_StripeCardError", _NeverMatches),
+            patch.object(stripe_charge, "_StripeBaseError", Exception),
+        ):
+            outcome = await stripe_charge.authorize_ride(
+                ride={"id": "ride_1"},
+                rider_id="rider_1",
+                amount=Decimal("25.00"),
+                payment_method_id="pm_1",
+                stripe_customer_id="cus_1",
+            )
+
+        assert outcome.status == "failed"
+        assert mock_stripe.PaymentIntent.create.call_count == 2

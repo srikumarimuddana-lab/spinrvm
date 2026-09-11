@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { ScreenHeader } from '../../components/ScreenHeader';
 
 interface LostFoundCase {
@@ -194,23 +195,23 @@ export default function DriverLostAndFoundScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },
-    emptyTitle: { fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACING.xl, gap: 12 },
+    emptyTitle: { fontSize: FONT.bodyLg, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     emptyHint: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
     // Fetch-error retry button — same shape as ActivityView.tsx's errorState.
     retryBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
-      marginTop: 8,
+      marginTop: SPACING.sm,
       backgroundColor: colors.primary,
-      paddingHorizontal: 24,
+      paddingHorizontal: SPACING.lg,
       paddingVertical: 12,
       borderRadius: 25,
       minHeight: 44,
     },
-    retryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-    list: { padding: 16, gap: 12 },
+    retryBtnText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '600' },
+    list: { padding: SPACING.md, gap: 12 },
     card: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -242,12 +243,12 @@ function createStyles(colors: ThemeColors) {
     cardRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     description: {
       flex: 1,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
-    statusPill: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2 },
-    statusText: { fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold' },
-    meta: { fontSize: 13, color: colors.textDim },
+    statusPill: { borderRadius: 8, paddingHorizontal: SPACING.sm, paddingVertical: 2 },
+    statusText: { fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold' },
+    meta: { fontSize: FONT.bodySm, color: colors.textDim },
   });
 }

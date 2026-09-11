@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
+import { View, StyleSheet, Platform, Linking, TouchableOpacity, ActivityIndicator, AppState, Modal, Dimensions } from 'react-native';
+import { Text } from '@shared/components/Text';
 import MapView, { Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { RouteLine } from '@shared/components/RouteLine';
+import { useFocusEffect } from 'expo-router';
 import { RoutePins } from '@shared/components/RoutePins';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore, type OffRouteConfirmation } from '../../../store/driverStore';
@@ -43,6 +45,7 @@ import {
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, MIN_DISPLAYED_SPEED_MPS } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -272,6 +275,37 @@ function DriverDashboard() {
   // above doesn't cover this transition since rideState stays 'idle' the
   // whole time a driver goes offline and back online.
   const [mapKey, setMapKey] = useState(0);
+  // Remount the car marker every time the Drive tab regains focus.
+  //
+  // Expo Tabs keep this screen mounted on blur but detach the native MapView;
+  // on return the map is re-attached and react-native-maps re-adds the marker
+  // from its existing (frozen) custom-view snapshot — which comes back blank,
+  // so the car AND its presence ring vanish after Drive → Profile → Drive.
+  // Three attempts to make that snapshot survive re-attach (freeze after load,
+  // native Marker.image, never-freeze) all failed in live testing.
+  //
+  // What was observed to bring the car back: going offline → online, which
+  // bumps mapKey above and remounts the whole MapView. A remount creates a
+  // fresh marker whose snapshot is taken from a freshly mounted view. This
+  // applies the same remount to the marker alone on every refocus — cheaper
+  // than remounting the map (no tile reload, no camera reset). The first focus
+  // is the mount itself and is skipped so startup does not mount twice.
+  const [markerFocusKey, setMarkerFocusKey] = useState(0);
+  const driveFocusCountRef = useRef(0);
+  useFocusEffect(
+    useCallback(() => {
+      if (driveFocusCountRef.current++ > 0) setMarkerFocusKey((k) => k + 1);
+    }, []),
+  );
+  // Which MapView instance (by mapKey) has fired onMapReady. `mapPadding` is
+  // withheld until then — see the prop's comment for the crash this prevents.
+  // Keyed on mapKey rather than a plain boolean reset in an effect, so that a
+  // remount reads as not-ready in the SAME render the new key appears in: an
+  // effect-based reset would let the fresh MapView mount with the stale
+  // `true`, then flip the prop to undefined one frame later — and that flip is
+  // itself a padding update landing inside the exact window this guards.
+  const [mapReadyKey, setMapReadyKey] = useState(-1);
+  const mapReady = mapReadyKey === mapKey;
   const prevRideStateRef = useRef(rideState);
   const prevIsOnlineRef = useRef(isOnline);
   useEffect(() => {
@@ -1002,8 +1036,29 @@ function DriverDashboard() {
         // ActiveRidePanel's bigger sheet during navigating_to_pickup/
         // trip_in_progress, tracked via activeSheetExpanded). Every other
         // ride state keeps its existing route-overview framing unpadded.
+        //
+        // WITHHELD UNTIL onMapReady — this is a crash guard, not a nicety.
+        // react-native-maps' MapView.applyBaseMapPadding (Android) guards only
+        // against a zero layout size, NOT against a null GoogleMap — eight other
+        // setters in the same file check `map == null`; this one does not. So a
+        // padding UPDATE that lands after the view is laid out but before
+        // onMapReady (~100-500 ms on every mount and every mapKey remount)
+        // calls GoogleMap.setPadding on null: an unhandled NPE on the main
+        // thread inside a Fabric mount, which blanks the whole React surface —
+        // the "white screen when I reopen the app" report. It is reachable
+        // precisely because this prop is derived from rideState: opening the
+        // app on a pending offer flips rideState to 'ride_offered' via
+        // consumePendingOffer during the very window the map is initialising.
+        // Sentry CRIMSON-SMOKE-7445-SF (driver 2.0.0+25, handled: no).
+        // Passing undefined here means no update is sent until the map exists;
+        // the initial-creation path is separately safe because the view is not
+        // yet laid out then and the native side defers. Visually invisible: the
+        // map has not drawn a tile yet at the point this withholds.
+        onMapReady={() => setMapReadyKey(mapKey)}
         mapPadding={
-          rideState === 'idle'
+          !mapReady
+            ? undefined
+            : rideState === 'idle'
             ? {
                 top: 0, right: 0, left: 0,
                 bottom:
@@ -1062,6 +1117,7 @@ function DriverDashboard() {
         {/* Driver car marker */}
         {location?.coords && (
           <CarMarker
+            key={markerFocusKey}
             coordinate={{
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,
@@ -1603,7 +1659,7 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.border,
       paddingHorizontal: 14,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.15,
@@ -1634,7 +1690,7 @@ function createStyles(colors: ThemeColors) {
       right: 0,
       backgroundColor: 'rgba(239,68,68,0.92)',
       paddingVertical: 6,
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       zIndex: 200,
       alignItems: 'center',
     },
@@ -1645,24 +1701,24 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackTitle: {
       color: colors.text,
-      marginTop: 16,
+      marginTop: SPACING.md,
       fontSize: 17,
       fontWeight: '700',
       textAlign: 'center',
     },
     locationFallbackBody: {
       color: colors.textDim,
-      marginTop: 8,
+      marginTop: SPACING.sm,
       fontSize: 14,
       lineHeight: 20,
       textAlign: 'center',
     },
     locationFallbackBtn: {
-      marginTop: 16,
+      marginTop: SPACING.md,
       backgroundColor: colors.primary,
       borderRadius: 12,
       paddingVertical: 12,
-      paddingHorizontal: 32,
+      paddingHorizontal: SPACING.xl,
     },
     locationFallbackBtnSecondary: {
       backgroundColor: 'transparent',
@@ -1671,7 +1727,7 @@ function createStyles(colors: ThemeColors) {
     },
     locationFallbackBtnText: {
       color: '#fff',
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
     },
     locationFallbackBtnTextSecondary: {
@@ -1726,7 +1782,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: `${colors.success}0F`,
     },
     countdownText: {
-      fontSize: 22,
+      fontSize: FONT.h3,
       fontWeight: '800',
       color: colors.primary,
     },
@@ -1750,7 +1806,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'flex-end',
     },
     fareLabel: {
-      fontSize: 11,
+      fontSize: FONT.label,
       color: colors.textDim,
       fontWeight: '500',
     },
@@ -1772,7 +1828,7 @@ function createStyles(colors: ThemeColors) {
     routeIconColumn: {
       alignItems: 'center',
       width: 20,
-      paddingTop: 4,
+      paddingTop: SPACING.xs,
     },
     routeDot: {
       width: 10,
@@ -1783,7 +1839,7 @@ function createStyles(colors: ThemeColors) {
       width: 2,
       flex: 1,
       backgroundColor: colors.border,
-      marginVertical: 4,
+      marginVertical: SPACING.xs,
     },
     routeDetails: {
       flex: 1,
@@ -1807,7 +1863,7 @@ function createStyles(colors: ThemeColors) {
     routeDivider: {
       height: 1,
       backgroundColor: colors.border,
-      marginVertical: 8,
+      marginVertical: SPACING.sm,
     },
     // Trip info badges
     tripInfoRow: {
@@ -1815,7 +1871,7 @@ function createStyles(colors: ThemeColors) {
       flexWrap: 'wrap',
       gap: 8,
       paddingHorizontal: 20,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     tripInfoBadge: {
       flexDirection: 'row',
@@ -1846,13 +1902,13 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.dangerBg,
       borderRadius: 16,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 8,
       borderWidth: 1,
       borderColor: '#FECACA',
     },
     declineText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
       color: '#FF4757',
     },
@@ -1863,7 +1919,7 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       backgroundColor: colors.primary,
       borderRadius: 16,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
       gap: 8,
       shadowColor: colors.primary,
       shadowOffset: { width: 0, height: 4 },
@@ -1872,7 +1928,7 @@ function createStyles(colors: ThemeColors) {
       elevation: 6,
     },
     acceptText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontWeight: '700',
       color: '#fff',
     },

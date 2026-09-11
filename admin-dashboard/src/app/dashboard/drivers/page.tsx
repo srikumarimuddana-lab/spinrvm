@@ -94,6 +94,11 @@ export default function DriversPage() {
     // query param (services/pre_launch_flag_service.py); "all" sends no
     // filter (default — matches every prior page load, no silent change).
     const [preLaunchFilter, setPreLaunchFilter] = useState<"all" | "hide" | "only">("all");
+    // Dormancy filter -- "hide"/"dormant"/"long_dormant" map to the
+    // dormant=false / dormant=true / dormant=true&dormancy_tier=long_dormant
+    // query params (services/driver_dormancy_service.py); "all" sends no
+    // filter (default — matches every prior page load, no silent change).
+    const [dormancyFilter, setDormancyFilter] = useState<"all" | "hide" | "dormant" | "long_dormant">("all");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
@@ -244,6 +249,12 @@ export default function DriversPage() {
         else if (legacyFilter === "not_imported") opts.legacy_import = false;
         if (preLaunchFilter === "only") opts.pre_launch = true;
         else if (preLaunchFilter === "hide") opts.pre_launch = false;
+        if (dormancyFilter === "hide") opts.dormant = false;
+        else if (dormancyFilter === "dormant") opts.dormant = true;
+        else if (dormancyFilter === "long_dormant") {
+            opts.dormant = true;
+            opts.dormancy_tier = "long_dormant";
+        }
         // Returns the rendered page so a caller that just mutated a driver can
         // re-sync the open detail sheet from the refreshed server rows.
         return getDrivers(opts)
@@ -257,7 +268,7 @@ export default function DriversPage() {
             })
             .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } return [] as any[]; })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
-    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, sortKey, sortDir]);
+    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, dormancyFilter, sortKey, sortDir]);
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { loadDrivers(); }, [loadDrivers]);
@@ -269,7 +280,7 @@ export default function DriversPage() {
     // Reset to first page whenever anything that changes the result set or its
     // ordering changes — otherwise a new search/sort could land you on a page
     // that no longer exists.
-    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, sortKey, sortDir]);
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, legacyFilter, preLaunchFilter, dormancyFilter, sortKey, sortDir]);
     // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
     // unioned from BOTH pricing stores because admins can configure
     // vehicles for an area either way:
@@ -846,6 +857,8 @@ export default function DriversPage() {
                 setLegacyFilter={setLegacyFilter}
                 preLaunchFilter={preLaunchFilter}
                 setPreLaunchFilter={setPreLaunchFilter}
+                dormancyFilter={dormancyFilter}
+                setDormancyFilter={setDormancyFilter}
                 startDate={startDate}
                 setStartDate={setStartDate}
                 endDate={endDate}

@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
+  View, StyleSheet, TouchableOpacity, ScrollView, TextInput,
   ActivityIndicator, KeyboardAvoidingView, Dimensions, LayoutAnimation,
   Platform, UIManager,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons, FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -17,6 +18,7 @@ import { getManageCardsFormError } from '../utils/manageCardsSchema';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface Card {
   id: string;
@@ -555,7 +557,7 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.background },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12,
+      paddingHorizontal: SPACING.md, paddingVertical: 12,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
@@ -564,12 +566,12 @@ function createStyles(colors: ThemeColors) {
     list: { padding: 20, paddingBottom: 40 },
 
     // List header
-    listHeader: { marginBottom: 8 },
+    listHeader: { marginBottom: SPACING.sm },
     listHeaderTitle: { fontSize: 22, fontWeight: '800', color: colors.text, letterSpacing: -0.3 },
-    listHeaderSub: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+    listHeaderSub: { fontSize: FONT.bodySm, color: colors.textDim, marginTop: 2 },
 
     // Card stack (Apple-Wallet-style overlap)
-    stack: { marginBottom: 16 },
+    stack: { marginBottom: SPACING.md },
     // Layer 1: positioning only (marginTop / zIndex applied inline).
     stackItem: {},
     // Layer 2: drop shadow so each card lifts off the one below — the main cue
@@ -629,7 +631,7 @@ function createStyles(colors: ThemeColors) {
     faceTopRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     defaultPill: {
       flexDirection: 'row', alignItems: 'center', gap: 4,
-      backgroundColor: colors.gold, borderRadius: 20, paddingHorizontal: 8, paddingVertical: 3,
+      backgroundColor: colors.gold, borderRadius: 20, paddingHorizontal: SPACING.sm, paddingVertical: 3,
     },
     defaultPillText: { fontSize: 9, fontWeight: '800', color: '#1A1A1A', letterSpacing: 0.6 },
 
@@ -660,14 +662,14 @@ function createStyles(colors: ThemeColors) {
     faceBottomLeft: { flex: 1, marginRight: 10 },
     faceExpiry: { marginRight: 12 },
     faceMetaLabel: { fontSize: 8, fontWeight: '700', color: 'rgba(255,255,255,0.6)', letterSpacing: 0.8 },
-    faceMetaValue: { fontSize: 13, fontWeight: '700', color: '#FFFFFF', marginTop: 2, letterSpacing: 0.5 },
+    faceMetaValue: { fontSize: FONT.bodySm, fontWeight: '700', color: '#FFFFFF', marginTop: 2, letterSpacing: 0.5 },
 
     // Action strip under each card
     actionStrip: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
       paddingHorizontal: 6, paddingTop: 12,
     },
-    actionBrand: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5 },
+    actionBrand: { flex: 1, fontSize: FONT.bodySm, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5 },
     actionButtons: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     setDefaultBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 4,
@@ -677,10 +679,10 @@ function createStyles(colors: ThemeColors) {
     setDefaultText: { fontSize: 12, fontWeight: '700', color: colors.primary },
     payWithBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 5,
-      paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
+      paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm, borderRadius: 20,
       backgroundColor: colors.primary,
     },
-    payWithText: { fontSize: 13, fontWeight: '800', color: '#FFF' },
+    payWithText: { fontSize: FONT.bodySm, fontWeight: '800', color: '#FFF' },
     deleteBtn: {
       width: 34, height: 34, borderRadius: 17,
       justifyContent: 'center', alignItems: 'center',
@@ -692,7 +694,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 20, paddingVertical: 12,
       backgroundColor: colors.dangerBg,
     },
-    payBannerText: { fontSize: 13, fontWeight: '600', color: colors.text },
+    payBannerText: { fontSize: FONT.bodySm, fontWeight: '600', color: colors.text },
 
     // Empty state
     emptyState: { alignItems: 'center', paddingVertical: 24 },
@@ -700,26 +702,26 @@ function createStyles(colors: ThemeColors) {
       width: '78%', aspectRatio: 1.586, borderRadius: 20,
       borderWidth: 2, borderColor: colors.border, borderStyle: 'dashed',
       backgroundColor: colors.surfaceLight,
-      padding: 20, justifyContent: 'center', marginBottom: 24,
+      padding: 20, justifyContent: 'center', marginBottom: SPACING.lg,
     },
     ghostChip: {
       width: 44, height: 34, borderRadius: 7, backgroundColor: colors.border, marginBottom: 18,
     },
     ghostLine: { height: 12, borderRadius: 6, backgroundColor: colors.border },
     ghostPlus: { position: 'absolute', right: 18, bottom: 16 },
-    emptyTitle: { fontSize: 20, fontWeight: '800', color: colors.text, marginTop: 4 },
+    emptyTitle: { fontSize: 20, fontWeight: '800', color: colors.text, marginTop: SPACING.xs },
     emptySubtext: {
-      fontSize: 14, color: colors.textDim, marginTop: 8,
-      textAlign: 'center', lineHeight: 20, paddingHorizontal: 24,
+      fontSize: 14, color: colors.textDim, marginTop: SPACING.sm,
+      textAlign: 'center', lineHeight: 20, paddingHorizontal: SPACING.lg,
     },
 
     // Add Card button (rich list-item style)
     addCardBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 14,
-      paddingVertical: 16, paddingHorizontal: 16, borderRadius: 16,
+      paddingVertical: SPACING.md, paddingHorizontal: SPACING.md, borderRadius: 16,
       borderWidth: 1.5, borderColor: colors.primary, borderStyle: 'dashed',
       backgroundColor: colors.dangerBg,
-      marginTop: 4,
+      marginTop: SPACING.xs,
     },
     addCardIconWrap: {
       width: 40, height: 40, borderRadius: 20,
@@ -731,26 +733,26 @@ function createStyles(colors: ThemeColors) {
 
     // Add Form
     addForm: {
-      backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 20, marginTop: 4,
+      backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 20, marginTop: SPACING.xs,
       borderWidth: 1, borderColor: colors.border,
     },
-    addFormHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
+    addFormHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: SPACING.md },
     addFormTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
     inputLabel: { fontSize: 12, fontWeight: '600', color: colors.textDim, marginBottom: 6, marginTop: 12 },
     input: {
-      backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
-      fontSize: 16, fontWeight: '500', color: colors.text,
+      backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: SPACING.md, paddingVertical: 14,
+      fontSize: FONT.bodyLg, fontWeight: '500', color: colors.text,
       borderWidth: 1, borderColor: colors.border,
     },
     cardField: {
       height: 52,
-      marginBottom: 4,
+      marginBottom: SPACING.xs,
     },
     cardFieldLoading: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border,
     },
-    cardFieldLoadingText: { fontSize: 13, color: colors.textDim },
+    cardFieldLoadingText: { fontSize: FONT.bodySm, color: colors.textDim },
     formButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
     cancelFormBtn: {
       flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12,
@@ -764,9 +766,9 @@ function createStyles(colors: ThemeColors) {
     saveCardText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
     securityNote: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-      marginTop: 16,
+      marginTop: SPACING.md,
     },
-    securityText: { fontSize: 11, color: colors.textDim },
+    securityText: { fontSize: FONT.label, color: colors.textDim },
     acceptedRow: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14,
       marginTop: 14, opacity: 0.7,

@@ -17,7 +17,7 @@ import MapView, { Circle, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { useRideStore } from '../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { useResponsive } from '@shared/utils/responsive';
+import { useResponsive, SPACING } from '@shared/utils/responsive';
 import api from '@shared/api/client';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -377,7 +377,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       alignSelf: 'center',
       backgroundColor: colors.surface,
       paddingHorizontal: 18,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       borderRadius: 20,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 2 },
@@ -461,7 +461,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       gap: 6,
       backgroundColor: '#FFFBEB',
       borderRadius: 10,
-      paddingVertical: 8,
+      paddingVertical: SPACING.sm,
       paddingHorizontal: 12,
       marginBottom: 10,
       borderWidth: 1,
@@ -510,7 +510,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       paddingHorizontal: 12,
       borderRadius: 12,
       backgroundColor: colors.surfaceLight,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     chooserRowText: { flex: 1, fontSize: sf(15), fontFamily: 'PlusJakartaSans_500Medium', color: colors.text },
     noteInput: {

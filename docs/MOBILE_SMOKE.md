@@ -6,6 +6,10 @@ an automated Maestro flow where available (noted in brackets).
 > **Automation status**: `.maestro/` flows cover the ✅ items. 🔲 items require
 > manual verification on device until a Maestro flow is added.
 
+> **New to this setup?** `docs/testing/MOBILE_E2E_SETUP.md` walks through
+> configuring Android Studio + Maestro on your own laptop from scratch, in
+> plain language, plus current CI/DAST status.
+
 ---
 
 ## Prerequisites

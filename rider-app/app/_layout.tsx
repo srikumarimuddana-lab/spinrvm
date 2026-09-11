@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { AppState, View, Text, Platform } from 'react-native';
+import { AppState, View, Platform } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StripeProvider } from '@stripe/stripe-react-native';

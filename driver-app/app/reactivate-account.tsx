@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -8,6 +9,7 @@ import { useAuthStore, type User } from '@shared/store/authStore';
 import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 /**
  * Self-serve reactivation any time before the 7-year deletion retention
@@ -139,8 +141,8 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 28,
     },
     title: { fontSize: 24, fontWeight: '800', color: colors.text, textAlign: 'center', marginBottom: 12 },
-    body: { fontSize: 15, color: colors.textDim, textAlign: 'center', lineHeight: 22, marginBottom: 12 },
-    note: { fontSize: 12, color: colors.textDim, textAlign: 'center', lineHeight: 18, marginBottom: 32 },
+    body: { fontSize: FONT.bodyMd, color: colors.textDim, textAlign: 'center', lineHeight: 22, marginBottom: 12 },
+    note: { fontSize: 12, color: colors.textDim, textAlign: 'center', lineHeight: 18, marginBottom: SPACING.xl },
     primaryBtn: {
       width: '100%',
       backgroundColor: colors.primary,
@@ -151,8 +153,8 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 14,
     },
     btnDisabled: { opacity: 0.6 },
-    primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+    primaryBtnText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '700' },
     secondaryBtn: { height: 48, justifyContent: 'center', alignItems: 'center' },
-    secondaryBtnText: { color: colors.textDim, fontSize: 15, fontWeight: '600' },
+    secondaryBtnText: { color: colors.textDim, fontSize: FONT.bodyMd, fontWeight: '600' },
   });
 }

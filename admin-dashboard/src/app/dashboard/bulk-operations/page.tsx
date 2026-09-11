@@ -27,6 +27,7 @@ import {
     CreditCard,
     Users,
     ArrowRight,
+    Moon,
 } from "lucide-react";
 import {
     adminDiscoverStripeDriverAccounts,
@@ -56,6 +57,7 @@ import { LegacyWalletImport } from "./_components/LegacyWalletImport";
 import { LegacyTaxIdImport } from "./_components/LegacyTaxIdImport";
 import { LegacyIdCrosswalkBackfill } from "./_components/LegacyIdCrosswalkBackfill";
 import { PreLaunchDataFlag } from "./_components/PreLaunchDataFlag";
+import { DriverDormancyFlag } from "./_components/DriverDormancyFlag";
 import { DataQualityScan } from "./_components/DataQualityScan";
 import { DriverRepairPass } from "./_components/DriverRepairPass";
 import { MigrationChecklist } from "./_components/MigrationChecklist";
@@ -952,6 +954,19 @@ export default function BulkOperationsPage() {
                 <DriverRepairPass />
 
                 <LegacyIdCrosswalkBackfill />
+            </PhaseSection>
+
+            <PhaseSection
+                phase={7}
+                title="Ongoing data hygiene"
+                overview="Unlike the migration phases above, this isn't a one-time cleanup step -- driver dormancy accrues continuously for any driver, legacy-imported or not. Safe to re-run periodically going forward."
+            >
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <Moon className="h-4 w-4" />
+                    Driver Dormancy Flagging — flag driver profiles idle past a threshold so admin
+                    views and KPIs can filter them out of active-driver reporting
+                </div>
+                <DriverDormancyFlag />
             </PhaseSection>
         </div>
     );

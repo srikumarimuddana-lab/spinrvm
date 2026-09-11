@@ -12,7 +12,8 @@
  * who opens this screen during an incident should not have to navigate away.
  */
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, Linking } from 'react-native';
+import { View, StyleSheet, ScrollView, Pressable, Linking } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +23,7 @@ import { useSafetyPanelConfig } from '@shared/hooks/useSafetyPanelConfig';
 import { useEmergencyContacts } from '@shared/hooks/useEmergencyContacts';
 import { getSOSLocation } from '@shared/utils/sosLocation';
 import { useLogRocketPrivacyScreen } from '@shared/hooks/useLogRocketPrivacyScreen';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Hoisted out of SafetyHubScreen (react-hooks/static-components) — was
 // redeclared on every render, resetting any implicit state each time.
@@ -191,11 +193,11 @@ const createStyles = (colors: ThemeColors) =>
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
     },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
-    body: { paddingHorizontal: 16, paddingBottom: 32 },
+    body: { paddingHorizontal: SPACING.md, paddingBottom: SPACING.xl },
     sectionLabel: {
       fontSize: 12,
       fontWeight: '700',
@@ -203,7 +205,7 @@ const createStyles = (colors: ThemeColors) =>
       textTransform: 'uppercase',
       color: colors.textDim,
       marginTop: 20,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     card: {
       backgroundColor: colors.surface,
@@ -215,8 +217,8 @@ const createStyles = (colors: ThemeColors) =>
     divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginLeft: 50 },
     row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 14 },
     rowText: { flex: 1, minWidth: 0 },
-    rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+    rowTitle: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.text },
     rowSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
-    hint: { fontSize: 12, color: colors.textDim, marginTop: 8, lineHeight: 17 },
-    footnote: { fontSize: 11, color: colors.textDim, marginTop: 24, textAlign: 'center', lineHeight: 15 },
+    hint: { fontSize: 12, color: colors.textDim, marginTop: SPACING.sm, lineHeight: 17 },
+    footnote: { fontSize: FONT.label, color: colors.textDim, marginTop: SPACING.lg, textAlign: 'center', lineHeight: 15 },
   });

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   ScrollView,
   Animated,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -20,6 +20,8 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { tKey } from '../i18n';
 import { useAnimatedValue } from '../hooks/useAnimatedValue';
+import { shakeHorizontal } from '@shared/utils/motion';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const CODE_LENGTH_MIN = 4;
 const CODE_LENGTH_MAX = 6;
@@ -95,13 +97,7 @@ export default function VerifyEmailScreen() {
   }, [countdown]);
 
   const triggerShake = () => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
-    ]).start();
+    shakeHorizontal(shakeAnim);
   };
 
   const handleCodeChange = (text: string) => {
@@ -369,12 +365,12 @@ export default function VerifyEmailScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
-    scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
+    scrollContent: { flexGrow: 1, paddingHorizontal: SPACING.lg },
     centerArea: { flexGrow: 1 },
     backBtn: {
       width: 44, height: 44, borderRadius: 14,
       backgroundColor: colors.surfaceLight,
-      justifyContent: 'center', alignItems: 'center', marginBottom: 24,
+      justifyContent: 'center', alignItems: 'center', marginBottom: SPACING.lg,
     },
     illustrationContainer: { alignItems: 'center', marginBottom: 28 },
     illustrationCircle: {
@@ -389,12 +385,12 @@ function createStyles(colors: ThemeColors) {
     },
     titleSection: { alignItems: 'center', marginBottom: 36 },
     title: {
-      fontSize: 26, fontWeight: '800', color: colors.text,
+      fontSize: FONT.h2, fontWeight: '800', color: colors.text,
       letterSpacing: -0.5, marginBottom: 10,
     },
-    subtitle: { fontSize: 15, color: colors.textDim, lineHeight: 22, textAlign: 'center' },
-    emailDisplay: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 4, textAlign: 'center' },
-    codeContainer: { marginBottom: 16 },
+    subtitle: { fontSize: FONT.bodyMd, color: colors.textDim, lineHeight: 22, textAlign: 'center' },
+    emailDisplay: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: SPACING.xs, textAlign: 'center' },
+    codeContainer: { marginBottom: SPACING.md },
     hiddenInput: { position: 'absolute', opacity: 0, width: 1, height: 1 },
     codeBoxes: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
     codeBox: {
@@ -407,19 +403,19 @@ function createStyles(colors: ThemeColors) {
     codeBoxFilled: { borderColor: colors.primary, backgroundColor: `${colors.primary}08` },
     codeDigit: { fontSize: 24, fontWeight: '800', color: colors.textDim },
     codeDigitFilled: { color: colors.text },
-    expiryNote: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginBottom: 24 },
+    expiryNote: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginBottom: SPACING.lg },
     verifyBtn: {
       backgroundColor: colors.primary, borderRadius: 16, height: 58,
       justifyContent: 'center', alignItems: 'center',
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
     verifyBtnInactive: { backgroundColor: colors.border },
     verifyBtnLoading: { backgroundColor: colors.primaryDark },
-    verifyBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+    verifyBtnText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '700' },
     verifyBtnTextInactive: { color: colors.textDim },
     resendSection: { alignItems: 'center', gap: 16 },
-    resendBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
-    resendText: { fontSize: 15, fontWeight: '600', color: colors.primary },
+    resendBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: SPACING.sm },
+    resendText: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.primary },
     resendCountdown: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     countdownText: { fontSize: 14, color: colors.textDim },
     countdownNumber: { fontWeight: '700', color: colors.text },

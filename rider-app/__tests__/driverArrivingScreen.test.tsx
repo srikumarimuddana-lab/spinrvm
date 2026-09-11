@@ -94,7 +94,13 @@ jest.mock('../components/SafeBottomSheet', () => {
 });
 
 jest.mock('../hooks/useAppResumeKey', () => ({ useAppResumeKey: () => 0 }));
-jest.mock('@shared/utils/responsive', () => ({ useResponsive: () => ({ sf: (n: number) => n }) }));
+// Keep the real SPACING/FONT tokens (jest.requireActual) — app/driver-arriving.tsx
+// now imports them for its createStyles() literal-to-constant conversion
+// (UX2). Only useResponsive is overridden, as before.
+jest.mock('@shared/utils/responsive', () => ({
+  ...jest.requireActual('@shared/utils/responsive'),
+  useResponsive: () => ({ sf: (n: number) => n }),
+}));
 
 jest.mock('../app/_layout', () => ({
   TrackBaseUrlContext: require('react').createContext(null),

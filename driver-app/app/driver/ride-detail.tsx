@@ -19,6 +19,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
@@ -605,7 +606,7 @@ function createStyles(colors: ThemeColors) {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 10,
-            margin: 16,
+            margin: SPACING.md,
             padding: 14,
             backgroundColor: 'rgba(249, 115, 22, 0.08)',
             borderRadius: 14,
@@ -635,13 +636,13 @@ function createStyles(colors: ThemeColors) {
                 flexDirection: 'row', alignItems: 'center', gap: 5,
                 backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7,
             },
-            routeStatusText: { flex: 1, color: ROUTE_STATUS_PILL_ICON_COLOR, fontSize: 11, fontWeight: '600' },
-        content: { padding: 16 },
+            routeStatusText: { flex: 1, color: ROUTE_STATUS_PILL_ICON_COLOR, fontSize: FONT.label, fontWeight: '600' },
+        content: { padding: SPACING.md },
         statusRow: {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: 16,
+            marginBottom: SPACING.md,
         },
         statusBadge: {
             flexDirection: 'row',
@@ -652,25 +653,25 @@ function createStyles(colors: ThemeColors) {
             borderRadius: 14,
         },
         statusDot: { width: 7, height: 7, borderRadius: 4 },
-        statusText: { fontSize: 13, fontWeight: '700' },
+        statusText: { fontSize: FONT.bodySm, fontWeight: '700' },
         dateText: { color: colors.textDim, fontSize: 12 },
         importedBadge: {
             flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
-            backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: 4,
+            backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: SPACING.xs,
             borderRadius: 10, marginBottom: 14,
         },
-        importedBadgeText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+        importedBadgeText: { fontSize: FONT.label, fontWeight: '600', color: colors.textDim },
         card: {
             backgroundColor: colors.surface,
             borderRadius: 18,
-            padding: 16,
+            padding: SPACING.md,
             marginBottom: 14,
             borderWidth: 1,
             borderColor: colors.border,
         },
         cardTitle: {
             color: colors.text,
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '700',
             marginBottom: 14,
         },
@@ -681,7 +682,7 @@ function createStyles(colors: ThemeColors) {
             width: 2,
             height: 30,
             backgroundColor: colors.surfaceLight,
-            marginVertical: 4,
+            marginVertical: SPACING.xs,
         },
         routeTexts: { flex: 1, gap: 18 },
         routeLabel: {
@@ -696,7 +697,7 @@ function createStyles(colors: ThemeColors) {
             flexDirection: 'row',
             backgroundColor: colors.surface,
             borderRadius: 18,
-            padding: 16,
+            padding: SPACING.md,
             marginBottom: 14,
             borderWidth: 1,
             borderColor: colors.border,
@@ -704,20 +705,20 @@ function createStyles(colors: ThemeColors) {
         stat: { flex: 1, alignItems: 'center', gap: 6 },
         statDivider: { width: 1, backgroundColor: colors.surfaceLight },
         statValue: { color: colors.text, fontSize: 18, fontWeight: '800' },
-        statLabel: { color: colors.textDim, fontSize: 11 },
+        statLabel: { color: colors.textDim, fontSize: FONT.label },
         fareRow: {
             flexDirection: 'row',
             justifyContent: 'space-between',
-            marginBottom: 8,
+            marginBottom: SPACING.sm,
         },
         fareLabel: { color: colors.textDim, fontSize: 14 },
         fareValue: { color: colors.text, fontSize: 14, fontWeight: '600' },
         fareDivider: {
             height: 1,
             backgroundColor: colors.surfaceLight,
-            marginVertical: 8,
+            marginVertical: SPACING.sm,
         },
-        earningsLabel: { color: colors.primary, fontSize: 16, fontWeight: '700' },
+        earningsLabel: { color: colors.primary, fontSize: FONT.bodyLg, fontWeight: '700' },
         earningsValue: { color: colors.primary, fontSize: 20, fontWeight: '800' },
         riderRow: {
             flexDirection: 'row',
@@ -747,12 +748,12 @@ function createStyles(colors: ThemeColors) {
         tlRow: { flexDirection: 'row', gap: 12 },
         tlSpine: { alignItems: 'center', width: 14 },
         tlDot: { width: 14, height: 14, borderRadius: 7, marginTop: 3 },
-        tlLine: { width: 2, flex: 1, backgroundColor: colors.border, marginTop: 4 },
+        tlLine: { width: 2, flex: 1, backgroundColor: colors.border, marginTop: SPACING.xs },
         tlContent: { flex: 1 },
         tlLabel: { fontSize: 14, fontWeight: '600', color: colors.text },
         tlSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
-        errorText: { color: colors.textDim, fontSize: 16, marginTop: 12 },
-        backLink: { marginTop: 16, padding: 10 },
-        backLinkText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
+        errorText: { color: colors.textDim, fontSize: FONT.bodyLg, marginTop: 12 },
+        backLink: { marginTop: SPACING.md, padding: 10 },
+        backLinkText: { color: colors.primary, fontSize: FONT.bodyMd, fontWeight: '600' },
     });
 }

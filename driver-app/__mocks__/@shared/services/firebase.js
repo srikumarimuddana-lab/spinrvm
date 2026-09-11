@@ -20,6 +20,8 @@ module.exports = {
   onForegroundMessage: jest.fn(() => jest.fn()),
   setBackgroundMessageHandler: jest.fn(),
   onTokenRefresh: jest.fn(() => jest.fn()),
+  onNotificationOpenedApp: jest.fn(() => jest.fn()),
+  getInitialNotification: jest.fn(() => Promise.resolve(null)),
   logCrashlyticsEvent: jest.fn(),
   setCrashlyticsUser: jest.fn(),
   recordError: jest.fn(),

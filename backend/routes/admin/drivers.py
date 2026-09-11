@@ -15,6 +15,7 @@ try:
     from ...routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt
     from ...routes.users import store_profile_image
     from ...services import lms_service
+    from ...services.driver_dormancy_service import fetch_dormancy_flagged_ids
     from ...services.driver_import_service import (
         dob_source,
         fetch_incomplete_onboarding_driver_ids,
@@ -42,6 +43,7 @@ except ImportError:
     from routes.drivers._shared import _encrypt_driver_pii, _vault_decrypt  # type: ignore
     from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
+    from services.driver_dormancy_service import fetch_dormancy_flagged_ids  # type: ignore
     from services.driver_import_service import (  # type: ignore
         dob_source,
         fetch_incomplete_onboarding_driver_ids,
@@ -487,6 +489,8 @@ async def admin_get_drivers(
     missing_license: bool = False,
     legacy_import: Optional[bool] = None,
     pre_launch: Optional[bool] = None,
+    dormant: Optional[bool] = None,
+    dormancy_tier: Optional[str] = None,
     onboarding_complete: Optional[bool] = None,
     legacy_review: Optional[bool] = None,
     sort_by: Optional[str] = None,
@@ -521,6 +525,15 @@ async def admin_get_drivers(
     drivers (see `services/driver_import_service.is_suspect_legacy_import_row`).
     True = only those, False = hide them, omitted = no filter. A review signal
     for a human, never a gate on anything.
+
+    `dormant` / `dormancy_tier`: filters on the driver-idle flag
+    (`legacy_import_metadata.dormant`/`dormancy_tier`, set by
+    `services/driver_dormancy_service.py` -- see its module docstring for
+    what actually gets flagged, the two tiers, and why). `dormant`: True =
+    flagged (either tier) only, False = hide flagged, omitted = no filter.
+    `dormancy_tier` (`"dormant"` | `"long_dormant"`) further narrows to one
+    tier; ignored unless `dormant=True`. Purely a reporting/review signal --
+    never touches go-online eligibility.
     """
 
     filters = {}
@@ -569,6 +582,15 @@ async def admin_get_drivers(
             include_ids = _restrict_to(flagged_ids)
         else:
             exclude_ids |= flagged_ids
+
+    # Dormancy filter -- see services/driver_dormancy_service.py for what
+    # "flagged" means and the two tiers.
+    if dormant is not None:
+        dormant_ids = fetch_dormancy_flagged_ids(dormancy_tier if dormant else None)
+        if dormant:
+            include_ids = _restrict_to(dormant_ids)
+        else:
+            exclude_ids |= dormant_ids
 
     # Abandoned-legacy-onboarding filter. True = real driver profiles only
     # (the admin default), False = only the imported shells, omitted = no
@@ -3478,7 +3500,7 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
         raise HTTPException(
             status_code=502,
             detail="Failed to write synced transfers to the database. Try again.",
-        )
+        ) from None
 
     # 2. Sync connected-account bank payouts + balance transactions. Wrapped
     # so a failure here still audits the transfers already committed in
@@ -3508,7 +3530,7 @@ async def admin_refresh_driver_stripe_payouts(driver_id: str, admin: dict = Depe
                 f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger "
                 "sync failed. Re-run the refresh — it is safe to repeat."
             ),
-        )
+        ) from None
 
     if ledger_result.errors:
         logger.error(
@@ -3704,7 +3726,7 @@ async def admin_refresh_all_driver_stripe_payouts(
             raise HTTPException(
                 status_code=502,
                 detail="Failed to write synced transfers to the database. Nothing partial was reported — re-run.",
-            )
+            ) from None
 
     try:
         ledger_result = await sync_connect_ledger(stripe_secret, driver_ids=body.driver_ids)
@@ -3723,7 +3745,7 @@ async def admin_refresh_all_driver_stripe_payouts(
                 f"Transfers synced ({transfers_inserted} new), but the bank-payout/ledger sync failed. "
                 "Re-run — it is safe to repeat."
             ),
-        )
+        ) from None
 
     await log_admin_action(
         admin,

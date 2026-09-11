@@ -1238,6 +1238,20 @@ def _is_expo_token(token: str) -> bool:
     return token.startswith("ExponentPushToken[") or token.startswith("ExpoPushToken[")
 
 
+def _record_push_outcome(outcome: str) -> None:
+    """C97 recommendation #3: a real delivery-outcome metric, since none
+    existed before (dispatch's own `spinr_dispatch_offer_sent_total` is
+    incremented at offer-*claim* time, not at push-send outcome — see
+    ACTION_ITEMS.md C97). Low-cardinality outcome label only, no PII, no
+    token/user-id — matches this module's other metrics' cheap-label rule.
+    """
+    try:
+        from .utils import metrics
+    except ImportError:  # pragma: no cover
+        from utils import metrics  # type: ignore
+    metrics.inc("spinr_push_send_total", {"outcome": outcome})
+
+
 async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str] | None = None) -> bool:
     """Send a push notification via Expo's push API (for Expo-managed tokens)."""
     import httpx
@@ -1262,15 +1276,19 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
             status = data_block.get("status")
             if status == "ok":
                 logger.info(f"Expo push sent OK to {token[:35]}...")
+                _record_push_outcome("success")
                 return True
             error_code = data_block.get("details", {}).get("error", "")
             if error_code == "DeviceNotRegistered":
                 logger.warning(f"Expo token unregistered (DeviceNotRegistered): {token[:35]}...")
+                _record_push_outcome("stale_token")
             else:
                 logger.error(f"Expo push non-ok response: {result}")
+                _record_push_outcome("failed")
             return False
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to send Expo push notification: {e}")
+        _record_push_outcome("failed")
         return False
 
 
@@ -1327,6 +1345,7 @@ async def _deliver_push_now(
         from firebase_admin import messaging
     except ImportError:
         logger.error("firebase_admin not available for push notifications — FCM delivery will fail")
+        _record_push_outcome("sdk_unavailable")
         return False
 
     is_dispatch = (data or {}).get("type") == "new_ride_assignment"
@@ -1405,11 +1424,13 @@ async def _deliver_push_now(
         )
         response = await asyncio.to_thread(messaging.send, message)
         logger.info(f"Push notification sent to {user_id}: {response} (dispatch={is_dispatch})")
+        _record_push_outcome("success")
         return True
     except firebase_exceptions.NotFoundError:
         # Token is stale (app uninstalled / token rotated). Purge it so the
         # next login registers a fresh token and delivery resumes.
         logger.warning(f"Stale FCM token for user {user_id} (target_app={target_app}) — purging")
+        _record_push_outcome("stale_token")
         try:
             purge: dict = {"fcm_token": None}
             if target_app == "rider":
@@ -1425,6 +1446,7 @@ async def _deliver_push_now(
         return False
     except Exception as e:
         logger.opt(exception=True).error(f"Failed to send push notification to user {user_id}: {e}")
+        _record_push_outcome("failed")
         return False
 
 

@@ -411,12 +411,13 @@ export const adminCommitWalletImport = (files: WalletImportFiles, opts?: WalletI
 /* ── Pre-Launch Legacy Data Flagging (no files) ───── */
 // Super-admin-only (backend/routes/admin/pre_launch_flag.py). Unlike every
 // other tool on this page, this one has no CSV to upload — it operates
-// entirely on already-migrated production data (drivers/rides), flagging
-// dormant pre-launch driver profiles and pre-launch rides so admin views/
-// KPIs can filter them out. Additive only: sets
+// entirely on already-migrated production data (drivers/rides/users),
+// flagging dormant pre-launch driver/rider profiles and pre-launch rides so
+// admin views/KPIs can filter them out. Additive only: sets
 // legacy_import_metadata.pre_launch_test = true. Never deletes anything.
 export interface PreLaunchFlagCounts {
     driver_candidates: number;
+    rider_candidates: number;
     ride_candidates: number;
 }
 export interface PreLaunchFlagReport {
@@ -427,8 +428,10 @@ export interface PreLaunchFlagReport {
 export interface PreLaunchFlagCommitResult extends PreLaunchFlagReport {
     committed: boolean;
     drivers_flagged?: number;
+    riders_flagged?: number;
     rides_flagged?: number;
     driver_conflicts?: number;
+    rider_conflicts?: number;
     ride_conflicts?: number;
 }
 export interface PreLaunchFlagOptions {
@@ -457,6 +460,58 @@ export const adminCommitPreLaunchFlag = (opts?: PreLaunchFlagOptions) =>
     request<PreLaunchFlagCommitResult>("/api/admin/legacy/pre-launch-flag/commit", {
         method: "POST",
         body: preLaunchFlagFormData(opts),
+    });
+
+/* ── Driver Dormancy Flagging (no files) ───── */
+// Super-admin-only (backend/routes/admin/driver_dormancy.py). Same shape
+// as Pre-Launch Legacy Data Flagging above — no CSV, operates entirely on
+// already-migrated production data (drivers). Flags a driver as dormant
+// (90+ days idle) or long_dormant (365+ days idle, past Spinr's own
+// annual document-renewal cycle) via
+// legacy_import_metadata.dormant/dormancy_tier/dormancy_flag. Additive
+// only. Never touches go-online eligibility, never suspends/deactivates.
+export interface DriverDormancyCounts {
+    dormant_candidates: number;
+    long_dormant_candidates: number;
+    never_activated: number;
+    went_dark: number;
+}
+export interface DriverDormancyReport {
+    batch: string;
+    counts: DriverDormancyCounts;
+    can_commit: boolean;
+}
+export interface DriverDormancyCommitResult extends DriverDormancyReport {
+    committed: boolean;
+    drivers_flagged?: number;
+    conflicts?: number;
+}
+export interface DriverDormancyOptions {
+    batch?: string;
+}
+
+function driverDormancyFormData(opts?: DriverDormancyOptions): FormData {
+    const fd = new FormData();
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: build the plan and return counts. No writes. */
+export const adminPreviewDriverDormancy = (opts?: DriverDormancyOptions) =>
+    request<DriverDormancyReport>("/api/admin/drivers/dormancy/preview", {
+        method: "POST",
+        body: driverDormancyFormData(opts),
+    });
+
+/**
+ * Re-plans fresh server-side and, if there's anything to flag, applies it.
+ * Safe to re-send: an already-flagged row is skipped, never re-flagged or
+ * double-written.
+ */
+export const adminCommitDriverDormancy = (opts?: DriverDormancyOptions) =>
+    request<DriverDormancyCommitResult>("/api/admin/drivers/dormancy/commit", {
+        method: "POST",
+        body: driverDormancyFormData(opts),
     });
 
 /* ── Migration Data Quality Scan (Step 17) ───── */

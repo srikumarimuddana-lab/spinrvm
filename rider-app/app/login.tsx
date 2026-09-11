@@ -1,7 +1,6 @@
 import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   ScrollView,
   Image,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -18,6 +18,7 @@ import { showToast } from '../store/toastStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 // Written by otp.tsx on every successful authentication (new or returning).
 // Exported so otp.tsx's write uses one literal rather than its own copy.
@@ -291,28 +292,28 @@ function createStyles(colors: ThemeColors) {
     // flexGrow (not flex) so the ScrollView fills the screen but grows past it
     // to stay scrollable when content exceeds the viewport on small screens.
     scrollContent: { flexGrow: 1 },
-    topStrip: { backgroundColor: colors.surface, paddingHorizontal: 24, paddingBottom: 8 },
+    topStrip: { backgroundColor: colors.surface, paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm },
     brandRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 12, gap: 10 },
     // 384:156 native ratio → 96:39 keeps the wordmark crisp.
     brandLogo: { width: 96, height: 39 },
     brandLogoDark: { tintColor: '#fff' },
     riderBadge: {
       backgroundColor: `${colors.primary}14`,
-      paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8,
+      paddingHorizontal: 10, paddingVertical: SPACING.xs, borderRadius: 8,
     },
     riderBadgeText: { fontSize: 12, fontWeight: '700', color: colors.primary },
-    content: { flexGrow: 1, paddingHorizontal: 24, justifyContent: 'center' },
+    content: { flexGrow: 1, paddingHorizontal: SPACING.lg, justifyContent: 'center' },
     welcomeSection: { marginBottom: 36 },
-    greeting: { fontSize: 16, color: colors.textDim, marginBottom: 8, fontWeight: '500' },
+    greeting: { fontSize: FONT.bodyLg, color: colors.textDim, marginBottom: SPACING.sm, fontWeight: '500' },
     title: {
       fontSize: 28, fontWeight: '800', color: colors.text,
-      letterSpacing: -0.5, marginBottom: 8,
+      letterSpacing: -0.5, marginBottom: SPACING.sm,
     },
-    subtitle: { fontSize: 15, color: colors.textDim, lineHeight: 22 },
-    inputSection: { marginBottom: 24 },
+    subtitle: { fontSize: FONT.bodyMd, color: colors.textDim, lineHeight: 22 },
+    inputSection: { marginBottom: SPACING.lg },
     inputLabel: {
-      fontSize: 11, fontWeight: '700', color: colors.textDim,
-      letterSpacing: 1, marginBottom: 8,
+      fontSize: FONT.label, fontWeight: '700', color: colors.textDim,
+      letterSpacing: 1, marginBottom: SPACING.sm,
     },
     inputContainer: {
       flexDirection: 'row', alignItems: 'center',
@@ -326,7 +327,7 @@ function createStyles(colors: ThemeColors) {
     },
     flagContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 6 },
     flagEmoji: { fontSize: 20 },
-    countryCode: { fontSize: 16, fontWeight: '600', color: colors.text },
+    countryCode: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text },
     inputDivider: { width: 1, height: 28, backgroundColor: colors.border },
     input: {
       flex: 1, paddingHorizontal: 14, fontSize: 18,
@@ -335,9 +336,9 @@ function createStyles(colors: ThemeColors) {
     checkIcon: { paddingRight: 14 },
     devHintContainer: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
-      marginTop: 10, paddingHorizontal: 4,
+      marginTop: 10, paddingHorizontal: SPACING.xs,
     },
-    devHint: { fontSize: 13, color: colors.primary, fontWeight: '500' },
+    devHint: { fontSize: FONT.bodySm, color: colors.primary, fontWeight: '500' },
     button: {
       backgroundColor: colors.primary, borderRadius: 16, height: 58,
       justifyContent: 'center', alignItems: 'center',
@@ -347,11 +348,11 @@ function createStyles(colors: ThemeColors) {
     buttonInactive: { backgroundColor: colors.border, shadowOpacity: 0, elevation: 0 },
     buttonLoading: { backgroundColor: colors.primaryDark },
     buttonContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+    buttonText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '700' },
     buttonTextInactive: { color: colors.textDim },
     footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     footerText: { fontSize: 12, color: colors.textDim, flex: 1 },
-    terms: { paddingHorizontal: 24, alignItems: 'center' },
+    terms: { paddingHorizontal: SPACING.lg, alignItems: 'center' },
     termsText: { fontSize: 12, color: '#B0B0B0', lineHeight: 18, paddingTop: 3 },
     termsLink: { color: colors.primary, fontWeight: '600' },
   });

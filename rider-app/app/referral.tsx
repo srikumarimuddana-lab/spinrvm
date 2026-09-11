@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
     ActivityIndicator,
     Share,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -17,6 +17,7 @@ import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface ReferralInfo {
     referral_code: string;
@@ -227,40 +228,40 @@ function createStyles(colors: ThemeColors) {
         container: { flex: 1, backgroundColor: colors.background },
         header: {
             flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-            paddingBottom: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: colors.border,
+            paddingBottom: 14, paddingHorizontal: SPACING.md, borderBottomWidth: 1, borderBottomColor: colors.border,
         },
         backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' },
         headerTitle: { fontSize: 18, fontWeight: '600', color: colors.text },
         loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
         errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
-        errorTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 16, textAlign: 'center' },
-        errorSub: { fontSize: 14, color: colors.textDim, marginTop: 8, textAlign: 'center', lineHeight: 20 },
+        errorTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: SPACING.md, textAlign: 'center' },
+        errorSub: { fontSize: 14, color: colors.textDim, marginTop: SPACING.sm, textAlign: 'center', lineHeight: 20 },
         retryBtn: {
             flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 24,
-            backgroundColor: colors.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25,
+            backgroundColor: colors.primary, paddingHorizontal: SPACING.lg, paddingVertical: 12, borderRadius: 25,
         },
-        retryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-        content: { flex: 1, paddingHorizontal: 16 },
-        hero: { borderRadius: 16, padding: 24, marginTop: 16, alignItems: 'center' },
-        heroTitle: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 8 },
+        retryBtnText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '600' },
+        content: { flex: 1, paddingHorizontal: SPACING.md },
+        hero: { borderRadius: 16, padding: SPACING.lg, marginTop: SPACING.md, alignItems: 'center' },
+        heroTitle: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: SPACING.sm },
         heroSubtitle: { fontSize: 14, color: 'rgba(255,255,255,0.9)', textAlign: 'center', marginBottom: 20 },
-        codeBox: { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, padding: 16, alignItems: 'center', width: '100%', marginBottom: 16 },
-        codeLabel: { fontSize: 12, color: 'rgba(255,255,255,0.8)', marginBottom: 4 },
-        code: { fontSize: 26, fontWeight: '700', color: '#fff', letterSpacing: 2, marginBottom: 8 },
-        copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.3)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
+        codeBox: { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, padding: SPACING.md, alignItems: 'center', width: '100%', marginBottom: SPACING.md },
+        codeLabel: { fontSize: 12, color: 'rgba(255,255,255,0.8)', marginBottom: SPACING.xs },
+        code: { fontSize: FONT.h2, fontWeight: '700', color: '#fff', letterSpacing: 2, marginBottom: SPACING.sm },
+        copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.3)', paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm, borderRadius: 20 },
         copyBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-        shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25 },
-        shareBtnText: { color: colors.primary, fontSize: 16, fontWeight: '600' },
-        statsRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
-        statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 12, padding: 16, alignItems: 'center' },
+        shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', paddingHorizontal: SPACING.lg, paddingVertical: 12, borderRadius: 25 },
+        shareBtnText: { color: colors.primary, fontSize: FONT.bodyLg, fontWeight: '600' },
+        statsRow: { flexDirection: 'row', gap: 12, marginTop: SPACING.md },
+        statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 12, padding: SPACING.md, alignItems: 'center' },
         statValue: { fontSize: 22, fontWeight: '700', color: colors.primary },
-        statLabel: { fontSize: 12, color: colors.textDim, marginTop: 4 },
-        sectionTitle: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 24, marginBottom: 12 },
-        termsCard: { backgroundColor: colors.surface, borderRadius: 12, padding: 16 },
-        termsText: { fontSize: 13, lineHeight: 20, color: colors.textDim },
+        statLabel: { fontSize: 12, color: colors.textDim, marginTop: SPACING.xs },
+        sectionTitle: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: SPACING.lg, marginBottom: 12 },
+        termsCard: { backgroundColor: colors.surface, borderRadius: 12, padding: SPACING.md },
+        termsText: { fontSize: FONT.bodySm, lineHeight: 20, color: colors.textDim },
         empty: { backgroundColor: colors.surface, borderRadius: 12, padding: 32, alignItems: 'center' },
-        emptyText: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 12 },
-        emptySub: { fontSize: 14, color: colors.textDim, marginTop: 4 },
+        emptyText: { fontSize: FONT.bodyLg, fontWeight: '600', color: colors.text, marginTop: 12 },
+        emptySub: { fontSize: 14, color: colors.textDim, marginTop: SPACING.xs },
         list: { backgroundColor: colors.surface, borderRadius: 12, overflow: 'hidden' },
         item: { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: colors.border },
         avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' },
@@ -270,7 +271,7 @@ function createStyles(colors: ThemeColors) {
         itemEarned: { fontSize: 12, color: colors.success, fontWeight: '700', marginTop: 2 },
         bar: { height: 5, borderRadius: 3, backgroundColor: colors.border, overflow: 'hidden', marginTop: 6, maxWidth: 180 },
         barFill: { height: '100%', borderRadius: 3, backgroundColor: colors.primary },
-        badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+        badge: { paddingHorizontal: 10, paddingVertical: SPACING.xs, borderRadius: 12 },
         badgeEarned: { backgroundColor: 'rgba(16,185,129,0.12)' },
         badgePending: { backgroundColor: 'rgba(245,158,11,0.12)' },
         badgeText: { fontSize: 12, fontWeight: '600' },

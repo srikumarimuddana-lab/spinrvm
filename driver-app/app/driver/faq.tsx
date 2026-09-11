@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     ScrollView,
@@ -11,6 +10,7 @@ import {
     Platform,
     UIManager,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -18,6 +18,7 @@ import * as Location from 'expo-location';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { ScreenHeader } from '../../components/ScreenHeader';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -274,11 +275,11 @@ function createStyles(colors: ThemeColors) {
             marginTop: 12,
             height: 44,
         },
-        searchIcon: { marginRight: 8 },
+        searchIcon: { marginRight: SPACING.sm },
         searchInput: {
             flex: 1,
             color: '#fff',
-            fontSize: 15,
+            fontSize: FONT.bodyMd,
             paddingVertical: 0,
         },
 
@@ -295,17 +296,17 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: `${colors.primary}15`,
             justifyContent: 'center',
             alignItems: 'center',
-            marginRight: 8,
+            marginRight: SPACING.sm,
         },
         categoryTitle: {
             flex: 1,
             color: colors.text,
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '700',
         },
         categoryCount: {
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             fontWeight: '600',
         },
 
@@ -319,12 +320,12 @@ function createStyles(colors: ThemeColors) {
         itemDivider: {
             height: 1,
             backgroundColor: colors.border,
-            marginHorizontal: 16,
+            marginHorizontal: SPACING.md,
         },
         questionRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 16,
+            paddingHorizontal: SPACING.md,
             paddingVertical: 14,
             gap: 12,
         },
@@ -336,8 +337,8 @@ function createStyles(colors: ThemeColors) {
             lineHeight: 20,
         },
         answerBox: {
-            paddingHorizontal: 16,
-            paddingBottom: 16,
+            paddingHorizontal: SPACING.md,
+            paddingBottom: SPACING.md,
         },
         answerText: {
             color: colors.textDim,
@@ -353,7 +354,7 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
             fontSize: 18,
             fontWeight: '600',
-            marginTop: 16,
+            marginTop: SPACING.md,
         },
         emptySub: {
             color: colors.textDim,
@@ -367,22 +368,22 @@ function createStyles(colors: ThemeColors) {
             borderRadius: 16,
             padding: 20,
             alignItems: 'center',
-            marginTop: 8,
-            marginBottom: 16,
+            marginTop: SPACING.sm,
+            marginBottom: SPACING.md,
             borderWidth: 1,
             borderColor: colors.border,
         },
         stillNeedHelpTitle: {
             color: colors.text,
-            fontSize: 16,
+            fontSize: FONT.bodyLg,
             fontWeight: '700',
             marginBottom: 6,
         },
         stillNeedHelpSub: {
             color: colors.textDim,
-            fontSize: 13,
+            fontSize: FONT.bodySm,
             textAlign: 'center',
-            marginBottom: 16,
+            marginBottom: SPACING.md,
             lineHeight: 18,
         },
         chatBotBtn: {

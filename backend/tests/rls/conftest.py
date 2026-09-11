@@ -69,6 +69,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -196,6 +197,12 @@ CREATE TABLE faqs (id text primary key);
 CREATE TABLE vehicle_types (id text primary key);
 CREATE TABLE fare_configs (id text primary key);
 CREATE TABLE service_areas (id text primary key);
+-- Minimal stubs so migrations 25 (refresh_tokens) and 314
+-- (auto_payout_batches) can ALTER these tables verbatim -- neither
+-- table's own schema is under this harness's test scope, only the
+-- side-effect ADD COLUMN statements those migrations carry.
+CREATE TABLE admin_staff (id text primary key);
+CREATE TABLE payouts (id text primary key);
 -- Minimal stub matching the 6 columns migration 399's outbox_redrive() RPC
 -- writes (id/action/entity_type/entity_id/actor_id/details) -- the real
 -- audit_logs table (migration 06, actor_id added migration 57) isn't part
@@ -302,6 +309,97 @@ def pg_conn(pg_test_dbname):
     cur.execute("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON financial_events FROM authenticated")
     cur.execute("GRANT SELECT ON financial_events TO authenticated")
 
+    # --- stripe_events / schema_migrations / refresh_tokens + the migration
+    # 26 deny-all policies on those three: migrations 22, 24, 25, 26,
+    # verbatim, in order. 25's token_version ALTERs target users (already
+    # created above) and admin_staff (stubbed above). 26 also flips
+    # ENABLE ROW LEVEL SECURITY on six unrelated tables via `ALTER TABLE IF
+    # EXISTS`, which is a no-op here since none of those six are part of
+    # this harness's scope -- safe to apply unmodified. ---
+    for fname in (
+        "22_stripe_events.sql",
+        "24_schema_migrations.sql",
+        "25_refresh_tokens_and_token_version.sql",
+        "26_rls_coverage_gap.sql",
+    ):
+        cur.execute((migrations_dir / fname).read_text())
+
+    # --- complaints: migration 68, with a harness-only patch (NOT a change
+    # to the migration file itself). Migration 68 declares ride_id/
+    # reporter_id/reported_id/resolved_by as UUID REFERENCES rides(id)/
+    # users(id), but backend/supabase_schema.sql's *current* users.id/
+    # rides.id are TEXT -- applying the file verbatim raises
+    # psycopg2.errors.DatatypeMismatch ("cannot be implemented ... uuid and
+    # text") on the very first FK. No later migration corrects this (grepped
+    # every migration touching `complaints` -- 128/192/367 only add columns
+    # elsewhere). This is real, previously-undocumented drift, not a
+    # harness bug -- flagged as a new ACTION_ITEMS.md finding for a human
+    # session with production access to resolve (check
+    # information_schema.columns for complaints' actual live FK types; this
+    # sandbox has none). Swapping UUID->text here only lets the *policies*
+    # (which already compare via auth.uid()::text, unaffected by the
+    # underlying column type) be exercised; it does not silently fix or
+    # hide the drift, which stays flagged in the backlog regardless of what
+    # this test harness does to work around it.
+    _complaints_sql = (migrations_dir / "68_complaints_table.sql").read_text()
+    _complaints_sql = re.sub(
+        r"\b(ride_id|reporter_id|reported_id|resolved_by)(\s+)UUID\b",
+        r"\1\2text",
+        _complaints_sql,
+    )
+    cur.execute(_complaints_sql)
+
+    # --- lost_and_found: migrations 69 (original create) then 69a (repair --
+    # on a fresh DB with no legacy table, 69a's own CREATE TABLE IF NOT
+    # EXISTS is a no-op and its rename/not-null DO blocks are guarded no-ops
+    # too; only its ADD COLUMN/policy-recreate statements actually apply),
+    # in that order -- same "apply the schema's evolution in migration
+    # order" approach already used for financial_events above.
+    #
+    # Migration 69 has the *same* UUID-vs-TEXT drift as complaints (68,
+    # patched above): id/ride_id/reporter_id are declared UUID REFERENCES
+    # rides(id)/users(id), which are TEXT in the current schema. 69a's own
+    # CREATE TABLE IF NOT EXISTS (a no-op here, since 69 already created the
+    # table) uses TEXT for the same columns, confirming this repo's own
+    # later migration already expected TEXT -- 69 was just never corrected.
+    # Same harness-only patch as complaints, same reason: found here for a
+    # second table, broadening the ACTION_ITEMS.md finding rather than
+    # treating it as complaints-specific. ---
+    _laf_sql = (migrations_dir / "69_lost_and_found_table.sql").read_text()
+    _laf_sql = re.sub(r"\b(id|ride_id|reporter_id)(\s+)UUID\b", r"\1\2text", _laf_sql)
+    cur.execute(_laf_sql)
+    cur.execute((migrations_dir / "69a_lost_and_found_repair_schema.sql").read_text())
+
+    # --- lost_and_found_messages (+ lost_and_found.reporter_type/status
+    # extension): migration 115, verbatim. ---
+    cur.execute((migrations_dir / "115_lost_and_found_chat.sql").read_text())
+
+    # --- fix migration 115's lfm_select/lfm_insert driver-visibility bug
+    # (found writing this harness's own lost_and_found_messages tests):
+    # migration 412, verbatim. ---
+    cur.execute((migrations_dir / "412_lost_and_found_messages_rls_driver_visibility_fix.sql").read_text())
+
+    # --- referral_payouts: migration 171, verbatim. ---
+    cur.execute((migrations_dir / "171_referral_payouts.sql").read_text())
+
+    # --- auto_payout_batches (+ service_areas.instant_payout_enabled /
+    # payouts.auto_retry_count side-effect ALTERs, against the stubs
+    # above): migration 314, verbatim. ---
+    cur.execute((migrations_dir / "314_auto_payout_and_instant_kill_switch.sql").read_text())
+
+    # New tables created by the migrations above also need the same
+    # baseline grant as the earlier batches (grants don't retroactively
+    # apply to tables that didn't exist yet).
+    cur.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role"
+    )
+    # Re-apply 290's revoke again: this blanket grant runs after the first
+    # re-application above too, so it would silently re-open the same hole
+    # a second time without this repeated.
+    cur.execute("REVOKE ALL ON financial_events FROM anon")
+    cur.execute("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON financial_events FROM authenticated")
+    cur.execute("GRANT SELECT ON financial_events TO authenticated")
+
     # --- outbox_messages / settings.outbox_receipts_enabled / outbox_* RPCs:
     # migration 399, verbatim. Applied last (after the blanket ALL-TABLES
     # grant above) so its own `REVOKE ALL ... FROM anon, authenticated` has
@@ -340,6 +438,13 @@ def pg_cur(pg_conn):
         "saved_addresses",
         "outbox_messages",
         "audit_logs",
+        "complaints",
+        "lost_and_found",
+        "lost_and_found_messages",
+        "referral_payouts",
+        "auto_payout_batches",
+        "refresh_tokens",
+        "stripe_events",
     ):
         cur.execute(f"TRUNCATE TABLE {table} CASCADE")
     # settings isn't truncated (it's a single always-present config row, not

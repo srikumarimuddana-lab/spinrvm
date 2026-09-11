@@ -18,7 +18,10 @@ Tests run automatically in CI on every push to `main`.
 
 Maestro flow files live in `.maestro/`. They require a running simulator.
 
-See `.maestro/README.md` for setup and run instructions.
+See `.maestro/README.md` for setup and run instructions, or
+`docs/testing/MOBILE_E2E_SETUP.md` for a full step-by-step walkthrough
+(Android Studio + Maestro install, iOS caveats, current CI status, and
+DAST) aimed at someone setting up a laptop for this for the first time.
 
 ### App IDs
 

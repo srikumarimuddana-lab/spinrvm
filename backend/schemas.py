@@ -567,6 +567,12 @@ class AppSettings(BaseModel):
     # pre-existing, already-live streaming behaviour; False forces the
     # whole turn to release as one scrubbed chunk at the end.
     ai_stream_incremental_enabled: bool = True
+    # AI17/F4: when True, get_fare_quote() shows a priced-but-unbookable
+    # option (available: false) for a vehicle type with no drivers online,
+    # matching rider-app/app/ride-options.tsx's existing display. New
+    # behaviour, so it ships dark — default False, unlike the kill-switch
+    # above. See migration 410.
+    ai_fare_quote_show_unavailable_enabled: bool = False
     ai_embedding_provider: str = ""  # "" | openai | gemini
     ai_embedding_model: str = ""  # blank → provider default
     ai_faq_semantic_min_score: float = 0.30  # cosine floor to count as a match

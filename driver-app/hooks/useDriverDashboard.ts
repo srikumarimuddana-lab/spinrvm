@@ -163,7 +163,7 @@ interface UseDriverDashboardReturn {
 // Lazy-load Notifee helpers; mirrors the gating in _layout.tsx so the
 // dashboard still mounts in Expo Go / web (where the native module is absent).
 let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
-let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean; muted?: boolean }) => Promise<void>) | null = null;
+let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean; muted?: boolean; reclaim?: boolean }) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
     // Guarded native-module require — notifeeService.ts statically imports
@@ -186,9 +186,18 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
 // _layout.tsx covers the fully-killed case; Notifee dedupes by notification id,
 // so calling this too never yields a duplicate.
 // Dismissal is handled by the rideState effect inside the hook.
-function _surfaceOfferNotification(data: any, forceSilent = false): void {
+// Returns a promise so callers can AWAIT the handover before ringing — see the
+// ordering comment in consumePendingOffer. It never rejects (the display call's
+// own .catch below absorbs everything), so awaiting it can only delay, never
+// throw: a failed handover must never be the reason the driver gets no tone.
+//
+// `reclaim` is the reverse handover (app → background, OS takes the ring back).
+// It is NOT the same as `!forceSilent`: a plain loud post is a first delivery,
+// whereas reclaim cancels the silent card first and suppresses the full-screen
+// intent. See displayRideOfferNotification's docblock.
+function _surfaceOfferNotification(data: any, forceSilent = false, reclaim = false): Promise<void> {
   const display = _displayRideOfferNotification;
-  if (!display) return;
+  if (!display) return Promise.resolve();
   const _num = (v: unknown): number | undefined => {
     if (v === null || v === undefined || v === '' || v === 'None') return undefined;
     const n = typeof v === 'number' ? v : parseFloat(String(v));
@@ -211,7 +220,7 @@ function _surfaceOfferNotification(data: any, forceSilent = false): void {
   // Settings → Sound & Haptics → Sound Effects: suppress the channel/APNs
   // sound (audio only — the card and full-screen wake still fire).
   const muted = !useAlertPrefsStore.getState().soundEffects;
-  display({
+  const posted = display({
     ride_id: data.ride_id,
     booking_id: data.booking_id || data.ride_id,
     pickup_address: data.pickup_address,
@@ -226,7 +235,21 @@ function _surfaceOfferNotification(data: any, forceSilent = false): void {
     countdown_seconds: _num(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
     offer_card_url: data.offer_card_url || undefined,
-  }, { silent, muted }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
+  }, { silent, muted, reclaim }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
+
+  // First delivery: nothing more to do. rideState is legitimately still 'idle'
+  // here — the WS/FCM handlers surface the card before setIncomingRide — so the
+  // liveness check below would wrongly dismiss it.
+  if (!forceSilent && !reclaim) return posted;
+
+  // Handover: re-check the offer is still live after the native round-trip.
+  // Accept/decline/expiry during that window has already run the
+  // `rideState !== 'ride_offered'` dismiss effect, so posting afterwards would
+  // resurrect a card for a dead offer, complete with stale action buttons.
+  return posted.then(() => {
+    if (useDriverStore.getState().rideState === 'ride_offered') return;
+    return _dismissRideOfferNotification?.().catch(() => undefined);
+  });
 }
 const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 
@@ -944,7 +967,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         // Backgrounded-but-alive: the in-app panel is hidden, so surface the
         // heads-up Notifee card here — the WS offer is the first, most reliable
         // trigger. No-op when foreground; deduped against the FCM path by id.
-        _surfaceOfferNotification(data);
+        // Deliberately not awaited: this is a first delivery, not a handover —
+        // the driver must hear something the instant the offer lands, and the
+        // AppState effect below takes the ring off this post the moment they
+        // actually look at the phone.
+        void _surfaceOfferNotification(data);
         router.replace('/driver/' as any);
         setIncomingRide({
           ride_id: data.ride_id,
@@ -1686,6 +1713,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Android Auto car session needs the identical behaviour on a car-only launch
   // where this hook never mounts. The buzz stays here: it is the phone's way of
   // announcing an offer, and the head unit raises its own alert instead.
+  // Which source currently owns the audible offer alert, per ride. Shared by
+  // consumePendingOffer and the AppState re-election effect below so the two
+  // can't re-run the same handover against each other (each handover cancels
+  // and re-posts the card, so a redundant one is a visible blink).
+  const audioOwnerRef = useRef<{ rideId: string; owner: 'app' | 'os' } | null>(null);
+
   const consumePendingOffer = useCallback(async () => {
     // consumePendingRideOffer() resolves true only when a still-live offer was
     // actually surfaced into the store (see pendingRideOffer.ts) — never for an
@@ -1714,12 +1747,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       },
     });
     if (surfaced) {
-      offerSound.play();
       const offer = useDriverStore.getState().incomingRide;
-      // forceSilent: the in-app tone is authoritative here by construction —
-      // play() fired on the line above. Never let AppState decide, since this
-      // runs at mount too (see _surfaceOfferNotification's own comment).
-      if (offer) _surfaceOfferNotification(offer, true);
+      // Hand the ring over BEFORE ringing, and AWAIT it.
+      //
+      // play() used to fire first. _surfaceOfferNotification cancels the loud
+      // OS notification on its way to the silent re-post, so ringing first left
+      // both sounding for the length of that native round-trip — plus
+      // ensureNotifeeReady's channel setup on a cold start, which is seconds,
+      // not milliseconds. That window is the overlap drivers reported.
+      //
+      // The await cannot cost the tone: _surfaceOfferNotification never
+      // rejects, so the worst case is a slightly delayed single tone rather
+      // than silence. forceSilent because the in-app tone is authoritative
+      // here by construction — never let AppState decide, since this also runs
+      // at mount (see _surfaceOfferNotification's own comment).
+      if (offer) {
+        await _surfaceOfferNotification(offer, true);
+        audioOwnerRef.current = { rideId: offer.ride_id, owner: 'app' };
+      }
+      offerSound.play();
       // Same as the WS/FCM handlers: bring the offer panel to the front. The
       // dashboard tab can still be mounted while a sibling tab is focused, so
       // without this the driver hears the tone with no offer UI to act on.
@@ -1747,6 +1793,74 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // mount/foreground-resume effect fires — that's still driven entirely
     // by `user` and the AppState listener, both unchanged.
   }, [user, consumePendingOffer, hydrateDriverRideState, fetchActiveRide]);
+
+  // ─── Single audio authority while an offer is live ───────────────
+  // Exactly one source may be audible at a time, and which one that is changes
+  // with app state, so ownership is RE-ELECTED on every transition rather than
+  // decided once when the offer arrives:
+  //   foreground → the in-app MP3 loop owns the ring. expo-audio auto-resumes
+  //                the player on the foreground transition
+  //                (AudioModule.kt OnActivityEntersForeground), so it becomes
+  //                audible whether we ask it to or not — the OS notification
+  //                must go silent, which means CANCELLED, not updated.
+  //   background → the OS notification owns it. expo-audio pauses every player
+  //                on the background transition, so without reclaiming the ring
+  //                the driver would hear nothing at all for the rest of the
+  //                offer window.
+  //
+  // Keyed on "an offer is live", NOT on "we just hydrated one from storage".
+  // That distinction is the bug: consumePendingOffer owns the only other
+  // handover, but consumePendingRideOffer() resolves false whenever rideState
+  // is no longer 'idle' (services/pendingRideOffer.ts) — which is exactly what
+  // has happened when the WS handler claimed the offer while the app was
+  // backgrounded-but-alive. So on the single most common path the handover was
+  // unreachable: the loud insistent notification kept looping next to the
+  // in-app tone with no code able to stop it until the offer expired.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      const { rideState: rs, incomingRide: offer } = useDriverStore.getState();
+      if (rs !== 'ride_offered' || !offer?.ride_id) {
+        audioOwnerRef.current = null;
+        return;
+      }
+      // Only 'active' and 'background' are real ownership transitions. iOS also
+      // emits 'inactive' for transient interruptions — pulling the notification
+      // shade down, a call banner, Control Centre — and RN can report 'unknown'
+      // early on both platforms. Treating those as a background handover would
+      // stop the tone and re-ring the notification every time the driver pulls
+      // the shade down to look at the very offer they are deciding on.
+      if (next !== 'active' && next !== 'background') return;
+      const owner: 'app' | 'os' = next === 'active' ? 'app' : 'os';
+      const prev = audioOwnerRef.current;
+      // Idempotent. iOS emits inactive→active around every interruption (and
+      // both platforms can repeat a state), and re-running a handover cancels
+      // and re-posts the card — a visible blink for no behavioural gain.
+      if (prev && prev.rideId === offer.ride_id && prev.owner === owner) return;
+      audioOwnerRef.current = { rideId: offer.ride_id, owner };
+
+      if (owner === 'app') {
+        // Silence the OS ring first, then ring in-app — same ordering reason as
+        // consumePendingOffer. .finally, not .then: the tone starts even if the
+        // handover failed, so a broken cancel degrades to a double ring rather
+        // than to silence.
+        void _surfaceOfferNotification(offer, true).finally(() => offerSound.play());
+      } else {
+        offerSound.stop();
+        // Android only. iOS has no insistent loop to reclaim, and the backend
+        // has already delivered a visible APNs alert for this offer — posting a
+        // local card here would duplicate that card AND chime a second time.
+        // (Phase 2 of the alert-ownership plan platform-gates
+        // _surfaceOfferNotification outright; this is the narrow guard until
+        // then.) iOS backgrounded therefore keeps the remote alert as its single
+        // source, which is what it already was before this effect existed.
+        if (Platform.OS === 'android') {
+          void _surfaceOfferNotification(offer, false, true);
+        }
+      }
+    });
+    return () => sub.remove();
+    // offerSound is permanently stable (see useRideOfferSound's useMemo note).
+  }, [offerSound]);
 
   // ─── Hydrate the online flag from the authoritative profile (once) ──
   // isOnline is seeded at mount from driverData, which is frequently null on a
@@ -1833,7 +1947,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             Vibration.vibrate([0, 500, 200, 500]);
           }
           offerSound.play();
-          _surfaceOfferNotification(data);
+          // First delivery, not a handover — see the WS handler's note above.
+          void _surfaceOfferNotification(data);
           router.replace('/driver/' as any);
         }
         // FCM values are all strings. Parse JSON for arrays/objects.

@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
-import { TouchableOpacity, Text, FlatList } from 'react-native';
+import { TouchableOpacity, Text, FlatList, StyleSheet } from 'react-native';
 
 import LoyaltyScreen from '../app/loyalty';
 
@@ -227,7 +227,7 @@ describe('LoyaltyScreen', () => {
     const tierPointsValue = r.root.findAllByType(Text).find((t) => {
       try { return JSON.stringify(t.props.children) === '"750"'; } catch { return false; }
     })!;
-    expect(tierPointsValue.props.style).toEqual(expect.arrayContaining([expect.objectContaining({ color: '#CD7F32' })]));
+    expect(StyleSheet.flatten(tierPointsValue.props.style).color).toBe('#CD7F32');
   });
 
   it('renders the "promo" and "expire" history icon types, and falls back to the generic icon for an unrecognised type', async () => {

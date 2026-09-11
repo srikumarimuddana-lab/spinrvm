@@ -265,6 +265,12 @@ async def get_rider_stats(
     # start value, and a bare sum() defaults to int 0 — which then blows up in
     # _round()'s Decimal.quantize() when a rider has no completed rides.
     total_distance = sum((_d(r.get("distance_km") or 0) for r in rides), _d(0))
+    # ACTION_ITEMS.md A28: completed-only (see `filters` above) AND
+    # period-scoped (today/week/month/all, per the `period` query param) —
+    # distinct from auth.py's GET /me (completed-only but always lifetime)
+    # and admin/users.py's all-status lifetime count. period=all happens to
+    # equal GET /me's number; the other periods don't. Confirmed intentional
+    # 2026-09-11 — see .claude/context/memory.md.
     total_rides = len(rides)
     total_saved = sum((_d(r.get("discount_amount") or 0) for r in rides), _d(0))
     # CO2 saving vs. driving solo: 0.12 kg per km (rideshare vs. personal vehicle)

@@ -31,6 +31,7 @@ import { RiderSOS } from '../../components/RiderSOS';
 import { RidelessSosEnabledContext } from '../_layout';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import {
   checkNotificationPermission,
   requestNotificationPermission,
@@ -806,13 +807,13 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     greetingText: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.textDim,
       letterSpacing: 1,
     },
     temperatureText: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.textSecondary,
       letterSpacing: 0.5,
@@ -858,7 +859,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.textDim,
-      marginTop: 8,
+      marginTop: SPACING.sm,
     },
     mapControlsWrap: {
       position: 'absolute',
@@ -876,7 +877,7 @@ function createStyles(colors: ThemeColors) {
       shadowOpacity: 0.15,
       shadowRadius: 6,
       elevation: 4,
-      padding: 4,
+      padding: SPACING.xs,
     },
     mapControlButton: {
       width: 44,
@@ -887,7 +888,7 @@ function createStyles(colors: ThemeColors) {
     divider: {
       height: 1,
       backgroundColor: colors.border,
-      marginHorizontal: 4,
+      marginHorizontal: SPACING.xs,
     },
     locationButton: {
       width: 48,
@@ -940,10 +941,10 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceLight,
       borderRadius: 28,
       paddingHorizontal: 20,
-      paddingVertical: 16,
+      paddingVertical: SPACING.md,
     },
     searchPlaceholder: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.textDim,
       marginLeft: 12,
@@ -993,10 +994,10 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: '#FFF0F0',
       justifyContent: 'center',
       alignItems: 'center',
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     quickActionText: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
     },
@@ -1005,7 +1006,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       backgroundColor: '#FFF8F0',
       borderRadius: 16,
-      padding: 16,
+      padding: SPACING.md,
     },
     promoIconContainer: {
       width: 40,
@@ -1034,7 +1035,7 @@ function createStyles(colors: ThemeColors) {
     promoDots: {
       flexDirection: 'row',
       gap: 5,
-      marginTop: 8,
+      marginTop: SPACING.sm,
     },
     promoDot: {
       width: 6,
@@ -1047,7 +1048,7 @@ function createStyles(colors: ThemeColors) {
       width: 14,
     },
     promoClose: {
-      padding: 4,
+      padding: SPACING.xs,
     },
     sidePanel: {
       width: 340,
@@ -1064,9 +1065,9 @@ function createStyles(colors: ThemeColors) {
       flexShrink: 0 as const,
     },
     notifBanner: {
-      marginHorizontal: 16,
-      marginTop: 8,
-      marginBottom: 4,
+      marginHorizontal: SPACING.md,
+      marginTop: SPACING.sm,
+      marginBottom: SPACING.xs,
       padding: 12,
       borderRadius: 12,
       backgroundColor: colors.surface,
@@ -1083,7 +1084,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       flex: 1,
-      marginRight: 8,
+      marginRight: SPACING.sm,
     },
     notifBannerIconBg: {
       width: 36,
@@ -1125,7 +1126,7 @@ function createStyles(colors: ThemeColors) {
       fontFamily: 'PlusJakartaSans_600SemiBold',
     },
     notifDismissBtn: {
-      padding: 4,
+      padding: SPACING.xs,
     },
   });
 }

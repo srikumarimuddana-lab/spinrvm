@@ -25,6 +25,7 @@ import CancelReasonSheet from '../components/CancelReasonSheet';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 export default function RideStatusScreen() {
   const router = useRouter();
@@ -687,7 +688,7 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
+      paddingHorizontal: SPACING.md,
       paddingVertical: 12,
       backgroundColor: colors.surface,
       borderBottomWidth: 1,
@@ -714,7 +715,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
-      marginTop: 8,
+      marginTop: SPACING.sm,
     },
     bottomSheet: {
       backgroundColor: colors.surface,
@@ -741,10 +742,10 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 20,
     },
     statusTitle: {
-      fontSize: 22,
+      fontSize: FONT.h3,
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
-      marginBottom: 8,
+      marginBottom: SPACING.sm,
     },
     statusSubtitle: {
       fontSize: 14,
@@ -752,14 +753,14 @@ function createStyles(colors: ThemeColors) {
       color: colors.textDim,
     },
     searchTimer: {
-      fontSize: 22,
+      fontSize: FONT.h3,
       fontWeight: '700',
       color: colors.textDim,
       marginTop: 12,
       letterSpacing: 1,
     },
     cancelSearchBtn: {
-      marginTop: 16,
+      marginTop: SPACING.md,
       paddingHorizontal: 24,
       paddingVertical: 10,
       borderRadius: 20,
@@ -785,18 +786,18 @@ function createStyles(colors: ThemeColors) {
       color: colors.textDim,
     },
     driverContainer: {
-      paddingTop: 8,
+      paddingTop: SPACING.sm,
     },
     driverCard: {
       backgroundColor: colors.surfaceLight,
       borderRadius: 16,
-      padding: 16,
-      marginBottom: 16,
+      padding: SPACING.md,
+      marginBottom: SPACING.md,
     },
     driverHeader: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     driverAvatar: {
       width: 56,
@@ -836,7 +837,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
-      marginLeft: 8,
+      marginLeft: SPACING.sm,
     },
     vehicleCard: {
       flexDirection: 'row',
@@ -848,7 +849,7 @@ function createStyles(colors: ThemeColors) {
     },
     vehicleInfo: {},
     vehicleMake: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
@@ -863,8 +864,8 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       backgroundColor: '#FFF5F5',
       borderRadius: 12,
-      padding: 16,
-      marginBottom: 16,
+      padding: SPACING.md,
+      marginBottom: SPACING.md,
     },
     statusIcon: {
       width: 48,
@@ -877,7 +878,7 @@ function createStyles(colors: ThemeColors) {
     },
     statusTextContainer: {},
     statusLabel: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
@@ -927,7 +928,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: 'rgba(255,255,255,0.8)',
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     otpBox: {
       flexDirection: 'row',
@@ -964,17 +965,17 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     completeButtonText: {
-      fontSize: 16,
+      fontSize: FONT.bodyLg,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: '#FFFFFF',
     },
     cancelButton: {
-      marginTop: 16,
+      marginTop: SPACING.md,
       padding: 14,
       alignItems: 'center',
     },
     cancelButtonText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.primary,
     },
@@ -983,7 +984,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
       flexWrap: 'wrap',
       gap: 8,
-      marginTop: 16,
+      marginTop: SPACING.md,
       padding: 12,
       backgroundColor: '#FEF3C7',
       borderRadius: 12,
@@ -991,7 +992,7 @@ function createStyles(colors: ThemeColors) {
       borderColor: colors.warning,
     },
     devLabel: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '700',
       color: '#92400E',
       marginRight: 4,
@@ -1052,9 +1053,9 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 4,
     },
     notesSheetSubtitle: {
-      fontSize: 13,
+      fontSize: FONT.bodySm,
       color: colors.textDim,
-      marginBottom: 16,
+      marginBottom: SPACING.md,
     },
     notesSheetInput: {
       minHeight: 90,
@@ -1063,14 +1064,14 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceLight,
       paddingHorizontal: 14,
       paddingVertical: 12,
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       color: colors.text,
       textAlignVertical: 'top',
     },
     notesSheetActions: {
       flexDirection: 'row',
       gap: 12,
-      marginTop: 16,
+      marginTop: SPACING.md,
     },
     notesSheetButton: {
       flex: 1,
@@ -1082,7 +1083,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceLight,
     },
     notesSheetButtonCancelText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '600',
       color: colors.text,
     },
@@ -1090,7 +1091,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.primary,
     },
     notesSheetButtonSaveText: {
-      fontSize: 15,
+      fontSize: FONT.bodyMd,
       fontWeight: '700',
       color: '#FFF',
     },

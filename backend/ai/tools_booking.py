@@ -1212,14 +1212,24 @@ async def get_fare_quote(
         logger.error("ai get_fare_quote promo lookup failed", exc_info=True)
         promo_note = "promo lookup failed — quote shown without promo savings"
 
+    # AI17/F4: ships dark (default False, migration 410). When True, an
+    # unavailable vehicle type still gets a priced quote object
+    # (available: false) instead of being omitted, matching
+    # rider-app/app/ride-options.tsx's existing display. False keeps the
+    # loop below byte-identical to pre-F4 behaviour.
+    settings = await get_app_settings()
+    show_unavailable = bool(settings.get("ai_fare_quote_show_unavailable_enabled"))
+
     quotes = []
     unavailable = []
     for e in estimates:
         vt = e.get("vehicle_type") or {}
-        if not e.get("available"):
+        is_available = bool(e.get("available"))
+        if not is_available:
             if vt.get("name"):
                 unavailable.append(vt["name"])
-            continue
+            if not show_unavailable:
+                continue
         total = _money(e.get("grand_total", 0))
         promo = _best_promo_for(promos, _ride_portion(e), total)
         quote = {
@@ -1237,10 +1247,20 @@ async def get_fare_quote(
             # floats) so breakdown questions are answerable pre-booking.
             "breakdown": e.get("fare_breakdown") or [],
         }
+        if show_unavailable:
+            # Only added when the flag is on, so a flag-off quote object
+            # stays byte-identical to pre-F4 behaviour.
+            quote["available"] = is_available
         if promo:
             quote["promo_code"] = promo["code"]
             quote["promo_savings"] = promo["savings"]
         quotes.append(quote)
+
+    # Recommendation/booking must only ever come from a bookable option, even
+    # when show_unavailable has put priced-but-unavailable entries in
+    # `quotes` — this is what keeps an unavailable option from ever becoming
+    # the thing the "book it" typed shortcut or the recommended pin targets.
+    available_quotes = [q for q in quotes if q.get("available", True)]
 
     shared = {
         "distance_km": estimates[0].get("distance_km"),
@@ -1263,12 +1283,23 @@ async def get_fare_quote(
     if dropoff_address:
         shared["dropoff_address"] = dropoff_address
 
-    if not quotes:
-        no_drivers = {
-            **shared,
-            "quotes": [],
-            "no_drivers": True,
-            "note": (
+    if not available_quotes:
+        if quotes:
+            # show_unavailable is True and every priced option is
+            # unavailable — share the prices, but make bookability explicit.
+            note = (
+                "No drivers are available near this pickup right now for any vehicle "
+                "type. The quotes below are priced for reference but NONE are "
+                "currently bookable — tell the rider plainly, share prices if asked, "
+                "suggest trying again in a few minutes, and offer to re-check now. "
+                "Never call propose_ride_booking from this result. If they agree "
+                '("yes", "try again"), call get_fare_quote again with this result\'s '
+                "pickup_lat/pickup_lng/dropoff_lat/dropoff_lng and addresses — do not "
+                "re-resolve them; they will also be replayed to you on your next turn "
+                f"as a {FARE_CHECK_BLOCK_HEADER} block."
+            )
+        else:
+            note = (
                 "No drivers are available near this pickup right now — tell the rider "
                 "plainly, suggest trying again in a few minutes, and offer to re-check "
                 "now. Never tell the rider you have no active quote to work from. If "
@@ -1276,7 +1307,15 @@ async def get_fare_quote(
                 "result's pickup_lat/pickup_lng/dropoff_lat/dropoff_lng and addresses — "
                 "do not re-resolve them; they will also be replayed to you on your next "
                 f"turn as a {FARE_CHECK_BLOCK_HEADER} block."
-            ),
+            )
+        no_drivers = {
+            **shared,
+            # Empty unless show_unavailable put priced entries here — the pin
+            # below (no vehicle_type_id/total) is what actually keeps this
+            # unbookable, not the presence/absence of prices in this dict.
+            "quotes": quotes,
+            "no_drivers": True,
+            "note": note,
         }
         if pickup_note:
             no_drivers["pickup_note"] = pickup_note
@@ -1301,7 +1340,7 @@ async def get_fare_quote(
         )
         return no_drivers
 
-    recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))
+    recommended = min(available_quotes, key=lambda q: Decimal(q["final_total"]))
     # Pin the priced trip for this conversation. Tool results never survive
     # into the next turn, so a rider who TYPES "book it" (instead of tapping
     # the card, whose message carries [lat,lng]) leaves the model with no
@@ -1348,6 +1387,15 @@ async def get_fare_quote(
     }
     if unavailable:
         result["unavailable_vehicle_types"] = unavailable
+        if show_unavailable:
+            # Some entries in `quotes` are priced-but-unbookable (available:
+            # false) — spell out the rule so the model never offers to book
+            # one, matching ride-options.tsx's disabled-card behaviour.
+            result["note"] += (
+                " Some shown options have no drivers nearby right now (available: "
+                "false in their quote) — you may share their price if asked, but "
+                "never offer to book one; only options without that flag are bookable."
+            )
     if promo_note:
         result["promo_note"] = promo_note
     if pickup_note:

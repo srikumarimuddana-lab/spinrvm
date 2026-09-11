@@ -30,7 +30,7 @@ jest.mock('@notifee/react-native', () => ({
   },
   AndroidCategory: { CALL: 'call' },
   AndroidColor: { GREEN: 'green' },
-  AndroidImportance: { HIGH: 4 },
+  AndroidImportance: { HIGH: 4, DEFAULT: 3 },
   AndroidVisibility: { PUBLIC: 1 },
   EventType: { ACTION_PRESS: 2, PRESS: 1 },
 }));
@@ -76,9 +76,10 @@ describe('notifeeService', () => {
         expect.objectContaining({ id: 'ride-offers-v3' }),
       );
       expect(mockCreateChannel).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'ride-offers-fg-v1' }),
+        expect.objectContaining({ id: 'ride-offers-fg-v2' }),
       );
       expect(mockDeleteChannel).toHaveBeenCalledWith('ride-offers-v2');
+      expect(mockDeleteChannel).toHaveBeenCalledWith('ride-offers-fg-v1');
       expect(mockRequestPermission).toHaveBeenCalledWith();
       expect(mockSetNotificationCategories).not.toHaveBeenCalled();
     });
@@ -126,9 +127,118 @@ describe('notifeeService', () => {
       await displayRideOfferNotification(BASE_OFFER, { silent: true });
 
       const req = mockDisplayNotification.mock.calls[0][0];
-      expect(req.android.channelId).toBe('ride-offers-fg-v1');
+      expect(req.android.channelId).toBe('ride-offers-fg-v2');
       expect(req.android.fullScreenAction).toBeUndefined();
       expect(req.android.sound).toBeUndefined();
+    });
+
+    // The overlapping-ringtone regression. loopSound sets FLAG_INSISTENT, which
+    // Notifee documents as repeating until the notification is CANCELLED — an
+    // update to the silent channel is not a cancel, so the handover has to
+    // cancel explicitly, and it has to do so BEFORE the re-post or the OS ring
+    // and the in-app tone overlap for the length of the round-trip.
+    it('cancels the loud notification BEFORE re-posting it silent (handover, not update)', async () => {
+      const order: string[] = [];
+      mockCancelNotification.mockImplementationOnce(async () => { order.push('cancel'); });
+      mockDisplayNotification.mockImplementationOnce(async () => { order.push('display'); });
+
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER, { silent: true });
+
+      expect(order).toEqual(['cancel', 'display']);
+      expect(mockCancelNotification).toHaveBeenCalledWith('ride-offer-current');
+    });
+
+    it('does NOT cancel for a first loud delivery — that would drop the offer card', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER);
+      expect(mockCancelNotification).not.toHaveBeenCalled();
+    });
+
+    // A muted driver opted out of noise, not out of seeing offers: there is no
+    // ring to hand over, so cancelling would only make their card blink.
+    it('does NOT cancel when merely muted (not silent)', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER, { muted: true });
+      expect(mockCancelNotification).not.toHaveBeenCalled();
+    });
+
+    it('still posts when the cancel rejects — a broken handover must not cost the card', async () => {
+      mockCancelNotification.mockRejectedValueOnce(new Error('nothing to cancel'));
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER, { silent: true });
+      expect(mockDisplayNotification).toHaveBeenCalledTimes(1);
+    });
+
+    // reclaim = app went to background mid-offer. expo-audio pauses the in-app
+    // player on that transition, so the OS has to take the ring back or the
+    // driver hears nothing for the rest of the window.
+    it('reclaim posts LOUD with no full-screen intent, after cancelling', async () => {
+      const order: string[] = [];
+      mockCancelNotification.mockImplementationOnce(async () => { order.push('cancel'); });
+      mockDisplayNotification.mockImplementationOnce(async () => { order.push('display'); });
+
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      await displayRideOfferNotification(BASE_OFFER, { reclaim: true });
+
+      expect(order).toEqual(['cancel', 'display']);
+      const req = mockDisplayNotification.mock.calls[0][0];
+      expect(req.android.channelId).toBe('ride-offers-v3');
+      expect(req.android.loopSound).toBe(true);
+      expect(req.android.fullScreenAction).toBeUndefined();
+    });
+
+    // A handover re-posts the same id mid-offer. Recomputing a RELATIVE timeout
+    // would hand the card a fresh countdown on every handover, so it could
+    // outlive the backend's offer and keep showing stale Accept/Decline.
+    it('does not extend the dismiss deadline across a handover re-post', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      const offer = { ...BASE_OFFER, countdown_seconds: 15 };
+
+      await displayRideOfferNotification(offer);
+      expect(mockDisplayNotification.mock.calls[0][0].android.timeoutAfter).toBe(15_000);
+
+      jest.advanceTimersByTime(10_000);
+      await displayRideOfferNotification(offer, { silent: true });
+
+      const reposted = mockDisplayNotification.mock.calls[1][0].android.timeoutAfter;
+      expect(reposted).toBeLessThanOrEqual(5_000);
+    });
+
+    // ...but the pinned deadline must NOT outlive the offer. push_retry.py
+    // re-sends a dispatch push for the same ride_id, and an already-elapsed
+    // deadline would resolve a timeout of 0 and dismiss the retry before it
+    // rendered — the driver would never see the re-offer.
+    it('clears the pinned deadline on auto-dismiss so a same-ride re-offer still renders', async () => {
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+      const offer = { ...BASE_OFFER, countdown_seconds: 15 };
+
+      await displayRideOfferNotification(offer);
+      // Fire the auto-dismiss timer, which is what ends a real ignored offer.
+      jest.advanceTimersByTime(15_001);
+      mockDisplayNotification.mockClear();
+
+      await displayRideOfferNotification(offer);
+
+      expect(mockDisplayNotification).toHaveBeenCalledTimes(1);
+      expect(mockDisplayNotification.mock.calls[0][0].android.timeoutAfter).toBe(15_000);
+    });
+
+    // The handover cancels before it posts, so an abort between the two is the
+    // one way this code can produce SILENCE rather than noise — and for a
+    // `reclaim` the in-app tone is already stopped, so the post is the driver's
+    // only remaining alert. Channels persist on the device, so posting anyway is
+    // strictly better than giving up.
+    it('still posts when channel setup fails — the cancel already happened', async () => {
+      mockCreateChannel.mockRejectedValueOnce(new Error('native channel failure'));
+      const { displayRideOfferNotification } = require('../../services/notifeeService');
+
+      await expect(
+        displayRideOfferNotification(BASE_OFFER, { reclaim: true }),
+      ).resolves.toBeUndefined();
+
+      expect(mockCancelNotification).toHaveBeenCalledWith('ride-offer-current');
+      expect(mockDisplayNotification).toHaveBeenCalledTimes(1);
     });
 
     it('mutes sound but keeps the full-screen wake when muted (not silent)', async () => {
@@ -136,7 +246,7 @@ describe('notifeeService', () => {
       await displayRideOfferNotification(BASE_OFFER, { muted: true });
 
       const req = mockDisplayNotification.mock.calls[0][0];
-      expect(req.android.channelId).toBe('ride-offers-fg-v1');
+      expect(req.android.channelId).toBe('ride-offers-fg-v2');
       expect(req.android.fullScreenAction).toBeDefined();
       expect(req.android.sound).toBeUndefined();
     });

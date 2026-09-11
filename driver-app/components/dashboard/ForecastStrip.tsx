@@ -1,9 +1,11 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useTheme } from '@shared/theme/ThemeContext';
 import { useLanguageStore } from '../../store/languageStore';
 import type { ThemeColors } from '@shared/theme/index';
 import type { ForecastEntry } from '../../hooks/useDemandHeatmap';
+import { FONT } from '@shared/utils/responsive';
 
 interface ForecastStripProps {
   forecast: ForecastEntry[];
@@ -81,7 +83,7 @@ const createStyles = (colors: ThemeColors) =>
       marginBottom: 6,
     },
     title: {
-      fontSize: 11,
+      fontSize: FONT.label,
       fontWeight: '600',
       color: colors.textDim,
     },

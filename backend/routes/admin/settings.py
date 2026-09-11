@@ -350,6 +350,10 @@ class SettingsUpdateRequest(BaseModel):
     # only, not a privacy toggle — see schemas.py's field comment /
     # migration 409 for the full privacy-vs-UX distinction.
     ai_stream_incremental_enabled: Optional[bool] = None
+    # AI17/F4: gates get_fare_quote() showing a priced-but-unbookable option
+    # for a vehicle type with no drivers online — see schemas.py's field
+    # comment / migration 410 for the full rationale.
+    ai_fare_quote_show_unavailable_enabled: Optional[bool] = None
     # Allow "" (the unconfigured default the frontend sends back on every save)
     # in addition to a real provider — otherwise an unrelated settings save 422s.
     ai_embedding_provider: Optional[str] = Field(default=None, pattern="^(openai|gemini|)$")

@@ -49,6 +49,7 @@ try:
     from ..utils.email_layout import header_html as _layout_header_html
     from ..utils.email_provider import EmailDeliveryResult, EmailDeliveryStatus, send_transactional_email_result
     from .datetime_utils import parse_iso_utc
+    from .receipt_distance import fare_basis_distance_km
 except ImportError:
     from repositories.ride_repo import create_route_snapshot_signed_url  # type: ignore
     from utils.company_details import CompanyDetails, load_company_details  # type: ignore
@@ -61,6 +62,7 @@ except ImportError:
         EmailDeliveryStatus,
         send_transactional_email_result,
     )
+    from utils.receipt_distance import fare_basis_distance_km  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +134,9 @@ def _build_fare_rows(
     distance_fare = _d(ride.get("distance_fare", 0))
     time_fare = _d(ride.get("time_fare", 0))
     booking_fee = _d(ride.get("booking_fee", 0))
-    distance_km = _d(ride.get("distance_km", 0))
+    # The fare line is labelled with the distance it was PRICED on (planned
+    # under fare-lock), never the GPS-measured figure — see receipt_distance.py.
+    distance_km = _d(fare_basis_distance_km(ride) or 0)
     duration_min = ride.get("duration_minutes", 0) or 0
     surge = _d(ride.get("surge_multiplier", 1.0) or 1.0)
 

@@ -157,6 +157,74 @@ async def test_no_active_ride_can_persist_idle_for_live_ws_ping():
     assert cap["docs"][0]["tracking_phase"] == "online_idle"
 
 
+# ADR 016 invariant I5 — a durable point with NO capture time cannot be placed
+# on a ride's trail. Ride SPR-T9NYPB (2026-09-11): 13 such rows, each an exact
+# copy of a fix 25–203 s older (the app re-sends its cached last fix on every
+# WebSocket reconnect), were stamped with the receive time and made the plotted
+# path run backwards. Rejected and counted; idle points keep the old behaviour.
+
+
+@pytest.mark.asyncio
+async def test_active_ride_point_without_capture_time_is_rejected_and_counted():
+    cap = {}
+    metrics = []
+
+    def _inc(name, labels=None, by=1):
+        metrics.append((name, labels, by))
+
+    g, i = _patches([_ride()], cap)
+    with g, i, patch("backend.utils.metrics.inc", _inc):
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [
+                _pt(50.45, -104.62, "2026-06-01T23:06:17Z"),
+                {"lat": 50.4085, "lng": -104.6582},  # reconnect echo: no capture time at all
+                {"lat": 50.4086, "lng": -104.6583, "timestamp": "not-a-time"},  # unparseable
+                _pt(50.43, -104.64, "2026-06-01T23:07:17Z"),
+            ],
+        )
+
+    assert n == 2
+    docs = cap["docs"]
+    assert [round(d["lat"], 2) for d in docs] == [50.45, 50.43]
+    # Never re-stamped with the receive time.
+    assert all(d["timestamp"] != d["received_at"] for d in docs)
+    assert ("spinr_drivers_trail_point_rejected_total", {"reason": "no_capture_time"}, 2) in metrics
+
+
+@pytest.mark.asyncio
+async def test_idle_ping_without_capture_time_still_persists_with_receive_time():
+    """Not trail: an online-idle point has no ride to be placed on."""
+    cap = {}
+
+    async def _get_rows(table, query, **kw):
+        return []
+
+    async def _insert_many(table, docs):
+        cap["docs"] = docs
+        return docs
+
+    with (
+        patch("backend.utils.breadcrumbs.db_supabase.get_rows", _get_rows),
+        patch("backend.utils.breadcrumbs.db_supabase.insert_many", _insert_many),
+    ):
+        n = await persist_ride_breadcrumbs("drv_1", [{"lat": 50.45, "lng": -104.62}], persist_idle=True)
+
+    assert n == 1
+    assert cap["docs"][0]["ride_id"] is None
+    assert cap["docs"][0]["timestamp"] == cap["docs"][0]["received_at"]
+
+
+@pytest.mark.asyncio
+async def test_all_points_rejected_inserts_nothing():
+    cap = {}
+    g, i = _patches([_ride()], cap)
+    with g, i:
+        n = await persist_ride_breadcrumbs("drv_1", [{"lat": 50.45, "lng": -104.62}])
+    assert n == 0
+    assert "docs" not in cap
+
+
 @pytest.mark.asyncio
 async def test_phase_attributed_per_point_across_transition():
     """A batch spanning pickup→trip bills navigation points as navigation, not trip."""

@@ -94,6 +94,10 @@ Drivers: the app should stop dying on screen lock and (with 3a/3b) stop running 
 | `audit follow-ups` | `shared/api/client.ts`, `shared/api/__tests__/client.sos.test.ts` | `breadcrumbPath` strips `?query`/`#fragment` before any breadcrumb (raw GPS was reachable via `/drivers/nearby?lat=…`); 2 tests | 5a — security audit BLOCKER |
 | `audit follow-ups` | `backend/utils/refresh_tokens.py` | audit lookup ordered newest-first | 5b — security audit |
 | `audit follow-ups` | `docs/runbooks/auth-tokens.md` | once-per-row rule, WARNING repeat path, `refresh_token_replay_repeat` tag has no alert rule yet | 5b — security audit |
+| `ADR 016 phase 0` | `backend/utils/breadcrumbs.py`, `backend/tests/test_breadcrumb_persistence.py` | a durable point with no capture time is rejected (never re-stamped with receive time) while the driver has an active ride; metric + WARNING; 3 tests | distance: 13 echo rows on this ride |
+| `ADR 016 phase 0` | `backend/utils/receipt_distance.py` (new), `backend/utils/email_receipt.py`, `backend/utils/receipt_pdf.py`, `backend/tests/test_receipt_distance_label.py` | email/PDF receipts label the fare line with the distance it was priced on (planned under fare-lock, read from the ride's snapshot); amounts untouched; 8 tests | distance: "12.2 km" beside a 6.9 km quote |
+| `ADR 016 phase 0` | `driver-app/hooks/useDriverDashboard.ts`, `driver-app/__tests__/hooks/useDriverDashboard.wsSenders.contract.test.ts` | reconnect echo sends `durable:false` + `captured_at`; idle breadcrumb sends `captured_at`; source-contract test | distance: the reconnect echo is the writer of the 13 rows |
+| — | `docs/adr/016-measured-distance-single-source-of-truth.md`, `docs/adr/README.md` | decision record for the four-distances problem; phases 1–5 and four product sign-offs | — |
 | — | `docs/change-log/2026-09-11-ride-t9nypb-hardening.md` | this log | — |
 
 ## 7. Before / after (behaviour-changing diffs)
@@ -139,6 +143,7 @@ Every commit is `git-revert-safe` independently — no migrations, no data write
 - The CarMarker regression test was run against the pre-fix component and **fails there** (bearing 89.99°).
 - `spinr-security-auditor` reviewed the two auth commits: one BLOCKER (raw URL in the new breadcrumbs could carry GPS coordinates — fixed, path-only, tested) and two warnings (audit lookup unordered — fixed; runbook contradiction — documented). Verdicts after fixes: no auth bypass found in either; the reuse dedupe is exact per row and the pre-init branch cannot retain a server-revoked session.
 - Post-rebase onto `main` (which had merged #5250, a reactive filter for the same `PP` rejection): 338 driver-app and 188 backend tests pass; the two fixes compose (gate before the call, #5250's branch as the race fallback, both replay on foreground).
+- ADR 016 Phase 0: backend breadcrumb/WS/location suites **98 passed**; receipt suites **96 passed**; driver-app contract test 4 passed. The user manually re-applied migration 348 in production during this work: verified the v2 signature is live, `EXECUTE` remains revoked for `anon`/`authenticated`/`public` (migration 354's lockdown intact), and the driver's daily row for 2026-09-11 now reads trip 8.99 km / 21 min (was 10.99 km / 0m).
 - **No production build run.** JS-only commits are OTA-eligible; the Android Auto and `largeHeap` commits require an EAS build.
 
 ## 10. What was NOT verified
@@ -151,3 +156,4 @@ Every commit is `git-revert-safe` independently — no migrations, no data write
 - `test_loguru_call_conventions.py` fails on this Windows checkout for 171 files it cannot decode as cp1252 — pre-existing, environment-only (CI is UTF-8), none of them touched here.
 - The Google Play Developer Reporting API is still disabled on GCP project `879808882715` (console action; not automatable from here).
 - Whether `spinr_alert=refresh_token_replay_repeat` should page is an open on-call decision; no alert rule exists for it yet (see the runbook).
+- ADR 016 Phases 1–5 (trail classification, canonical read function, `measured_distance_basis`, daily report from settled rides, reconciliation) are **not** in this branch; the inline OSRM promotion demotion waits on product sign-off #1 (fare-lock permanence). The `schema_migrations`-says-applied / live-says-v1 discrepancy for 348 is logged for the migration-runner owner.

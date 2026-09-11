@@ -21573,10 +21573,20 @@ how much they de-risk a public launch._
   policies) is now **done as of 2026-09-11** — see the new status entry
   and files below. What's genuinely still remaining is everything else in
   the ~127–207 policy estimate outside the now-covered table set; no
-  session has yet enumerated that residual list. CI is still not wired to
-  run `tests/rls/` — no Postgres service container configured for it, so
-  these tests currently only run when a developer points
-  `TEST_DATABASE_URL` at a real Postgres locally.
+  session has yet enumerated that residual list.
+- **Correction (2026-09-11, later same day):** this entry's earlier
+  2026-09-11 status bullet claimed "CI is still not wired to run
+  `tests/rls/`" — that was stale and wrong at the time it was written, not
+  just later invalidated. `ci.yml`'s `backend-test` job has run
+  `tests/rls/` against a real `postgres:15` service container on every
+  backend-touching PR since commit `81d7c42` (2026-09-08 — 3 days
+  *before* this session's own C49 work). Confirmed directly from PR #5247's
+  actual CI job logs: all 116 tests (including every new one added in this
+  session's round) ran and passed in that job. The false claim was written
+  without first checking `ci.yml` — a reminder that "not wired into CI"
+  needs the same primary-source verification this file expects of any
+  other status claim, not an assumption carried forward from the
+  2026-08-31 entry.
 - **Bugs found and fixed (2026-09-11):** writing `test_lost_and_found_rls.py`
   surfaced a real RLS logic bug in migration 115's `lfm_select`/
   `lfm_insert` policies: their `EXISTS` subquery reads `lost_and_found`,
@@ -21627,11 +21637,17 @@ how much they de-risk a public launch._
   and the "what was NOT verified" list (production drift risk above; CI
   wiring; full-suite co-collection with the mocked test stack not run
   end-to-end in this sandbox).
-- **Acceptance:** ranked blocker #29 stays open until either (a) CI runs
+- **Acceptance:** originally stated as open until either (a) CI runs
   `tests/rls/` against a real Postgres on every PR, or (b) a materially
-  larger fraction of the 207/127 policies has DB-role-level coverage —
-  whichever the team decides is the actual bar. Do not mark #29 closed
-  off this item alone.
+  larger fraction of the 207/127 policies has DB-role-level coverage.
+  **(a) is now confirmed met** (since 2026-09-08, per the correction
+  above) — `ci.yml` runs the suite on every backend-touching PR. That
+  still leaves (b): only ~29 distinct policies across ~10 tables have
+  DB-role-level coverage against a ~127–207 estimate. Whether "CI runs it"
+  alone is enough to close ranked blocker #29, or whether the team wants
+  (b)'s coverage fraction materially higher first, is a call for whoever
+  owns that audit finding — not decided by this entry. Do not mark #29
+  closed off this item alone without that decision.
 
 ### C50. PostgREST → direct pool (Supavisor) for the dispatch claim path — gated; Phase 0 evidence work open
 - [ ] **Status:** open — plan at `docs/audit/2026-09-02-pgbouncer-direct-pool-migration-plan.md`

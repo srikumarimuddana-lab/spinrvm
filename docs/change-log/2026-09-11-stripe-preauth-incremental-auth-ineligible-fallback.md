@@ -62,11 +62,9 @@ except _StripeBaseError as e:
     )
     fallback_params = {**params, "payment_method_options": {"card": {}}}
     try:
-        intent = await asyncio.to_thread(
-            lambda: stripe.PaymentIntent.create(
-                **fallback_params, api_key=secret, idempotency_key=f"{idempotency_key}-basic",
-            )
-        )
+        # Same call shape as the first attempt (secret + a fresh idempotency
+        # key) — see authorize_ride() for the exact wiring.
+        intent = await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**fallback_params, ...))
     except _StripeCardError as e2:
         ...  # same decline mapping as the first attempt
     except _StripeBaseError as e2:

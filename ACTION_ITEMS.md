@@ -18467,7 +18467,9 @@ mechanical follow-up work, prioritizable independently.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
-  (driver-app partial rollout landed 2026-09-10), identified 2026-09-10.
+  (driver-app round 1 merged 2026-09-10; round 2 — 4 parallel batches, 39
+  more files — opened 2026-09-11, pending review/merge), identified
+  2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
     h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
@@ -18491,7 +18493,8 @@ mechanical follow-up work, prioritizable independently.
     guidance. All swaps found were exact matches — no near-exact literal
     was rounded onto a constant, so none of this round's diffs change a
     rendered pixel value.
-  - **Files (driver-app, round 1 of N — 9 files, 3 commits):**
+  - **Files (driver-app, round 1 — merged 2026-09-10, PR #5218, 9 files,
+    3 commits):**
     - Main dashboard: `app/driver/(tabs)/index.tsx`,
       `components/dashboard/DriverTopBar.tsx`,
       `components/dashboard/DriverIdlePanel.tsx`
@@ -18500,20 +18503,64 @@ mechanical follow-up work, prioritizable independently.
       `app/driver/payout-history.tsx`
     - Auth entry + settings: `app/login.tsx`, `app/otp.tsx`,
       `app/driver/settings.tsx`
-  - **Explicitly NOT touched this round** (excluded — concurrent parallel
-    work by other agents on unrelated items, to avoid merge conflicts):
-    `components/panels/RideOfferPanel.tsx`, `components/AlertDialog.tsx`,
-    `components/activity/ActivityView.tsx`, `app/documents.tsx`,
-    `app/driver/payout.tsx`, `components/dashboard/ActiveRidePanel.tsx`.
-  - **Follow-up scope (not done yet):** the rest of driver-app (~50 more
-    files still carrying ad-hoc literals per a repo grep, including the 6
-    excluded above once their concurrent work lands) and all of
-    rider-app (a separate agent's parallel round under a related item, not
-    tracked by this bullet).
+  - **Files (driver-app, round 2 — 4 parallel batches, PRs #5225/#5228/
+    #5226/#5227, opened 2026-09-11, open/pending review — 39 files total,
+    ~16 commits):**
+    - Batch 1 (PR #5225, onboarding/legal, 9 files): `app/appeal.tsx`,
+      `app/become-driver.tsx`, `app/crc-consent.tsx`,
+      `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
+      `app/profile-setup.tsx`, `app/reactivate-account.tsx`,
+      `app/vehicle-info.tsx`
+    - Batch 2 (PR #5228, money/tax, 9 files): `app/documents.tsx`,
+      `app/driver/payout.tsx`, `app/driver/stripe-onboarding.tsx`,
+      `app/driver/subscription.tsx`, `app/driver/tax-documents.tsx`,
+      `app/subscription/cancel.tsx`, `app/subscription/success.tsx`,
+      `app/driver/quests.tsx`, `app/driver/referral.tsx` — money-adjacent
+      screens (payout/subscription/tax), but only style literals touched;
+      no Decimal/fare/payout-calculation code read or written.
+    - Batch 3 (PR #5226, support/safety/comms, 11 files):
+      `app/driver/addresses.tsx`, `app/driver/chat.tsx`,
+      `app/driver/emergency-contacts.tsx`, `app/driver/faq.tsx`,
+      `app/driver/lost-and-found-chat.tsx`, `app/driver/lost-and-found.tsx`,
+      `app/driver/notifications.tsx`, `app/report-safety.tsx`,
+      `app/driver/destination-mode.tsx`, `app/index.tsx`,
+      `components/CancelReasonSheet.tsx` — `report-safety.tsx`/
+      `emergency-contacts.tsx` are safety-adjacent; styling only, no SOS/
+      contact logic touched.
+    - Batch 4 (PR #5227, dashboard components + shared UI, 10 of the 11
+      assigned files — `app/driver/(tabs)/_layout.tsx` skipped, its
+      padding/fontSize values live only in an inline `screenOptions={{...}}`
+      JSX prop object with no `StyleSheet.create()`/`createStyles()` block,
+      out of scope by this item's own rule):
+      `app/driver/(tabs)/activity.tsx`, `components/AlertDialog.tsx`,
+      `components/ScreenHeader.tsx`, `components/activity/ActivityView.tsx`,
+      `components/dashboard/ActiveRidePanel.tsx`,
+      `components/dashboard/DemandLegend.tsx`,
+      `components/dashboard/ForecastStrip.tsx`,
+      `components/dashboard/HotspotChips.tsx`,
+      `components/panels/RideOfferPanel.tsx`, `components/toastConfig.tsx`
+  - **Round 1's "explicitly not touched" list is now covered:** the 6 files
+    round 1 excluded to avoid clashing with concurrent parallel work
+    (`RideOfferPanel.tsx`, `AlertDialog.tsx`, `ActivityView.tsx`,
+    `documents.tsx`, `payout.tsx`, `ActiveRidePanel.tsx`) are all included in
+    round 2 above (`documents.tsx`/`payout.tsx` in batch 2; the other 4 in
+    batch 4) — the concurrent work that motivated the original exclusion
+    (UX3's Button-adoption migration, UX4's shake-animation migration, and
+    unrelated ride-offer-audio/car-marker fixes) had already merged by the
+    time round 2 started, so round 2 layers on top of it cleanly without
+    touching any of that other work.
+  - **Follow-up scope (not done yet):** driver-app has roughly a dozen more
+    files still carrying ad-hoc literals per a repo grep, plus
+    `app/driver/(tabs)/_layout.tsx`'s inline `screenOptions` styling (a
+    different fix — moving inline JSX-prop literals to constants, not
+    covered by this item's "StyleSheet blocks only" scope as written); all
+    of rider-app is untouched by this bullet (a separate parallel round
+    under a related item, not tracked here).
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use (met — the `warn`-level lint rule exists) **and** existing
-    screens are actually migrated (partially met — round 1 above; not yet
-    complete for either app).
+    screens are actually migrated (partially met — round 1 merged; round 2
+    open across 4 PRs pending review/merge; not yet complete for either
+    app).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started

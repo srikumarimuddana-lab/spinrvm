@@ -63,6 +63,36 @@ def test_stale_processing_claims_return_to_pending(monkeypatch):
     assert update.await_args.args[2]["processing_status"] == "pending"
 
 
+def test_queue_polls_project_claim_keys_not_geometry(monkeypatch):
+    """The 15 s tick polls must never `select *` on ride_routes: the table
+    carries the full GPS trace and OSRM polyline per ride as jsonb, and on
+    the 2026-09-11 test ride these two polls were the slowest requests
+    Supabase served (up to 9.2 s) while the SQL itself was single-digit ms."""
+    calls = []
+
+    async def get_rows(table, filters, **kwargs):
+        calls.append((table, filters, kwargs))
+        return []
+
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", AsyncMock())
+
+    assert _run(route_finalizer.claim_next_pending_route()) is None
+    assert _run(route_finalizer.recover_stale_route_claims()) == 0
+
+    assert len(calls) == 2
+    for _table, _filters, kwargs in calls:
+        cols = kwargs.get("columns", "*")
+        assert cols != "*", "queue poll must project its columns"
+        for heavy in ("phase_polylines", "road_polyline", "phase_distances", "phase_durations"):
+            assert heavy not in cols
+    claim_cols = calls[0][2]["columns"].split(",")
+    recover_cols = calls[1][2]["columns"].split(",")
+    # Everything the two loops actually read.
+    assert {"ride_id", "next_retry_at"} <= set(claim_cols)
+    assert {"ride_id", "processing_claimed_at"} <= set(recover_cols)
+
+
 def test_future_retry_is_not_claimed(monkeypatch):
     route = {
         "ride_id": "ride_1",

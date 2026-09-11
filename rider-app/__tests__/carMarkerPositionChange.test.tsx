@@ -16,7 +16,7 @@
 import React from 'react';
 import { render, act } from '@testing-library/react-native';
 import { Animated, Platform } from 'react-native';
-import { Marker } from 'react-native-maps';
+import { Marker, AnimatedRegion } from 'react-native-maps';
 import { Image } from 'expo-image';
 import { CarMarker } from '@shared/components/CarMarker';
 import { playbackPosition } from '@shared/utils/markerPlayback';
@@ -39,6 +39,11 @@ jest.mock('react-native-maps', () => {
     timing(_config: any) {
       return { start: (cb?: () => void) => cb?.() };
     }
+    // Real react-native-maps' AnimatedRegion.setValue() sets the underlying
+    // Animated.Values immediately, no animation — CarMarker's ingestFix
+    // calls this on iOS to seed the marker at the first fix after a remount
+    // instead of gliding to it (see that file's comment).
+    setValue(_region: any) {}
   }
   return { __esModule: true, Marker, AnimatedRegion };
 });
@@ -341,5 +346,83 @@ describe('CarMarker — Android mount starts the car icon visible, not faded in'
     expect(animatedWrapper.props.style.opacity.__getValue()).toBe(0);
     expect(animatedWrapper.props.style.transform[0].scale.__getValue()).toBe(0);
     unmount();
+  });
+});
+
+/**
+ * Ported from driver-app's own copy of this component (2026-09-11 fix,
+ * live-testing report "icon moved through the building using the shortest
+ * path"): shouldResetBuffer only ever compares a new fix against an
+ * EXISTING last buffered fix, so the very first fix into a freshly-mounted/
+ * empty buffer could never trigger the instant-snap path, no matter how far
+ * the real position had moved. rider-app remounts this component on every
+ * ride-phase screen transition the same way driver-app's mapKey remount did
+ * (ride-options -> driver-arriving -> driver-arrived -> ride-in-progress),
+ * so the identical race applies here.
+ */
+describe('CarMarker — first fix after a remount snaps instead of gliding (2026-09-11, "moved through the building")', () => {
+  const staleMountCoord = { latitude: 50.4452, longitude: -104.6189 };
+  // ~800m away — comfortably past SNAP_DISTANCE_M, representative of a
+  // screen-transition remount after the assigned driver has moved.
+  const realFirstFix = { latitude: staleMountCoord.latitude + 0.0072, longitude: staleMountCoord.longitude };
+  const BASE = 1_700_000_000_000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(BASE);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('Android: seeds androidCoord at the raw fix synchronously, before any ticker animation', () => {
+    const originalPlatformOS = Platform.OS;
+    Platform.OS = 'android';
+    try {
+      const { UNSAFE_getByType, rerender, unmount } = render(
+        <CarMarker coordinate={staleMountCoord} fixTimestampMs={BASE} />,
+      );
+      expect(UNSAFE_getByType(Marker).props.coordinate).toEqual(staleMountCoord);
+
+      jest.setSystemTime(BASE + 25_000); // driver moved during the screen transition
+      rerender(<CarMarker coordinate={realFirstFix} fixTimestampMs={BASE + 25_000} />);
+
+      // No jest.advanceTimersByTime here — this must be true immediately
+      // after the prop-change effect runs, not after a playback tick.
+      expect(UNSAFE_getByType(Marker).props.coordinate).toEqual(realFirstFix);
+
+      unmount();
+    } finally {
+      Platform.OS = originalPlatformOS;
+    }
+  });
+
+  it('iOS: seeds the AnimatedRegion at the raw fix synchronously via setValue', () => {
+    const originalPlatformOS = Platform.OS;
+    Platform.OS = 'ios';
+    const setValueSpy = jest.spyOn(AnimatedRegion.prototype, 'setValue');
+    try {
+      const { rerender, unmount } = render(
+        <CarMarker coordinate={staleMountCoord} fixTimestampMs={BASE} />,
+      );
+      // The mount-time ingest also seeds setValue once, harmlessly, at the
+      // mount coordinate itself (bufferRef is empty then too) — this test
+      // is about what happens on the NEXT fix, not the absence of the first.
+
+      jest.setSystemTime(BASE + 25_000);
+      rerender(<CarMarker coordinate={realFirstFix} fixTimestampMs={BASE + 25_000} />);
+
+      expect(setValueSpy).toHaveBeenLastCalledWith({
+        latitude: realFirstFix.latitude,
+        longitude: realFirstFix.longitude,
+        latitudeDelta: 0,
+        longitudeDelta: 0,
+      });
+
+      unmount();
+    } finally {
+      setValueSpy.mockRestore();
+      Platform.OS = originalPlatformOS;
+    }
   });
 });

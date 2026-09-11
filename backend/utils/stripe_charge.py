@@ -510,6 +510,19 @@ def _reads_incremental_support(intent: Any) -> bool:
         return False
 
 
+def _is_incremental_auth_ineligible(e: Any) -> bool:
+    """True when Stripe rejected a PaymentIntent create because this ACCOUNT
+    isn't enrolled for incremental/extended authorizations — a fixed-text
+    ``invalid_request_error`` with no stable ``code`` to match on, distinct
+    from the normal per-card "unavailable" outcome (_reads_incremental_support
+    reads that off a *successful* charge). Matched on message text since
+    that's all Stripe gives us here.
+    """
+    err = getattr(e, "error", None)
+    msg = str(getattr(err, "message", None) or e)
+    return "not eligible for the requested card features" in msg.lower()
+
+
 async def authorize_ride(
     *,
     ride: Dict[str, Any],
@@ -621,8 +634,49 @@ async def authorize_ride(
             error_message=str(getattr(err, "message", None) or e),
         )
     except _StripeBaseError as e:
-        logger.error("Stripe error authorizing ride=%s rider=%s: %s", ride_id, rider_id, e)
-        return ChargeOutcome(status="failed", error_message=str(e))
+        if not _is_incremental_auth_ineligible(e):
+            logger.error("Stripe error authorizing ride=%s rider=%s: %s", ride_id, rider_id, e)
+            return ChargeOutcome(status="failed", error_message=str(e))
+        # The ACCOUNT (not this card) isn't enrolled for incremental/extended
+        # authorizations, so Stripe rejects the whole request instead of
+        # reporting per-card "unavailable" on the resulting charge (the case
+        # _reads_incremental_support already handles). Retry once without
+        # requesting it so the hold itself — the dead-card-before-dispatch
+        # protection this function exists for — still goes through; the only
+        # loss is the one-Stripe-fee tip-merge optimization documented above.
+        logger.warning(
+            "[preauth] account not eligible for incremental authorization; retrying hold without it for ride=%s",
+            ride_id,
+        )
+        fallback_params = {**params, "payment_method_options": {"card": {}}}
+        try:
+            intent = await asyncio.to_thread(
+                lambda: stripe.PaymentIntent.create(
+                    **fallback_params,
+                    api_key=secret,
+                    idempotency_key=f"{idempotency_key}-basic",
+                )
+            )
+        except _StripeCardError as e2:
+            err = getattr(e2, "error", None)
+            decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+            logger.info("Auth declined for ride=%s rider=%s code=%s", ride_id, rider_id, decline_code)
+            return ChargeOutcome(
+                status="declined",
+                decline_code=decline_code,
+                error_message=str(getattr(err, "message", None) or e2),
+            )
+        except _StripeBaseError as e2:
+            logger.error(
+                "Stripe error authorizing ride=%s rider=%s (retry without incremental auth): %s",
+                ride_id,
+                rider_id,
+                e2,
+            )
+            return ChargeOutcome(status="failed", error_message=str(e2))
+        except Exception as e2:  # pragma: no cover — defence-in-depth
+            logger.exception("Unexpected error authorizing ride=%s (retry): %s", ride_id, e2)
+            return ChargeOutcome(status="failed", error_message=str(e2))
     except Exception as e:  # pragma: no cover — defence-in-depth
         logger.exception("Unexpected error authorizing ride=%s: %s", ride_id, e)
         return ChargeOutcome(status="failed", error_message=str(e))

@@ -87,6 +87,7 @@ from .dispute_pack_download import router as dispute_pack_download_router
 from .documents import router as documents_router
 from .driver_appeals import router as driver_appeals_router
 from .driver_distance import router as driver_distance_router
+from .driver_dormancy import router as driver_dormancy_router
 from .driver_import import router as driver_import_router
 from .driver_statements import router as driver_statements_router
 from .drivers import router as drivers_router
@@ -270,6 +271,12 @@ admin_router.include_router(migration_driver_repair_router, dependencies=[Depend
 # brand-new, previously-empty table. Same require_super_admin boundary as
 # the importers above.
 admin_router.include_router(legacy_id_crosswalk_router, dependencies=[Depends(require_super_admin)])
+# Driver dormancy flagging (2026-09-11) -- additive-only, flags drivers idle
+# past a threshold (never activated, or gone dark since their last
+# went_online_at/went_offline_at toggle) in legacy_import_metadata. Bulk
+# write across the core drivers table, same require_super_admin boundary
+# as the importers above. Never touches go-online eligibility.
+admin_router.include_router(driver_dormancy_router, dependencies=[Depends(require_super_admin)])
 # Migration checklist status panel (2026-08-31) -- read-only, no writes.
 # Same require_super_admin boundary as every other Bulk Operations tool it
 # summarizes, even though it can't itself change any of the tables it reads.

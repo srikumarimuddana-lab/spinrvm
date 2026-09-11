@@ -462,6 +462,13 @@ data_quality_scan_commit_limit = default_limiter.limit("10/hour")
 driver_repair_preview_limit = default_limiter.limit("30/hour")
 driver_repair_commit_limit = default_limiter.limit("10/hour")
 
+# Driver dormancy flagging (2026-09-11) — same small-fixed-dataset,
+# generous-headroom reasoning as pre-launch flagging above (a few hundred
+# driver rows, not thousands); additive-only (legacy_import_metadata),
+# never touches money or dispatch fields.
+driver_dormancy_preview_limit = default_limiter.limit("30/hour")
+driver_dormancy_commit_limit = default_limiter.limit("10/hour")
+
 # Legacy ID crosswalk backfill (migration 328, 2026-09-08) -- same
 # generous-headroom reasoning as the two tools above: a small, bounded
 # driver/rider population, not a hot path.

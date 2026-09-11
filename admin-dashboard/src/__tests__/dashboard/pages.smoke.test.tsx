@@ -144,6 +144,8 @@ vi.mock("lucide-react", () => {
     Timer: Icon,
     // bulk-operations legacy ID crosswalk backfill
     Link2: Icon,
+    // driver dormancy flagging (bulk-operations tool + drivers list filter)
+    Moon: Icon,
   };
 });
 

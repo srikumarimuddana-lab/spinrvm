@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ClickableTableRow } from "@/components/ui/clickable-table-row";
 import { Pagination } from "@/components/ui/pagination";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, Clock, Phone, CalendarRange, AlertTriangle, Image, Loader2, Eye, EyeOff, Ban, Pause, RefreshCw, Upload, Trash2, Tag, UserX, Globe, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, Clock, Phone, CalendarRange, AlertTriangle, Image, Loader2, Eye, EyeOff, Ban, Pause, RefreshCw, Upload, Trash2, Tag, UserX, Globe, ArrowUpDown, ArrowUp, ArrowDown, Moon } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate } from "@/lib/pii";
 import { logPiiReveal } from "@/lib/api";
 import { driverDisplayName } from "./driver-detail-shared";
@@ -60,6 +60,8 @@ export default function DriverListTable({
     setLegacyFilter,
     preLaunchFilter,
     setPreLaunchFilter,
+    dormancyFilter,
+    setDormancyFilter,
     startDate,
     setStartDate,
     endDate,
@@ -107,6 +109,8 @@ export default function DriverListTable({
     setLegacyFilter: (v: "all" | "imported" | "not_imported") => void;
     preLaunchFilter: "all" | "hide" | "only";
     setPreLaunchFilter: (v: "all" | "hide" | "only") => void;
+    dormancyFilter: "all" | "hide" | "dormant" | "long_dormant";
+    setDormancyFilter: (v: "all" | "hide" | "dormant" | "long_dormant") => void;
     startDate: string;
     setStartDate: (v: string) => void;
     endDate: string;
@@ -197,12 +201,24 @@ export default function DriverListTable({
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <Moon className="h-4 w-4 text-muted-foreground" />
+                        <Select value={dormancyFilter} onValueChange={(v) => setDormancyFilter(v as "all" | "hide" | "dormant" | "long_dormant")}>
+                            <SelectTrigger className="h-9 text-xs w-[170px]" aria-label="Filter by dormancy"><SelectValue placeholder="All Drivers" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Drivers</SelectItem>
+                                <SelectItem value="hide">Hide dormant</SelectItem>
+                                <SelectItem value="dormant">Dormant only</SelectItem>
+                                <SelectItem value="long_dormant">Long-dormant only</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <CalendarRange className="h-4 w-4 text-muted-foreground" />
                         <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter from date" />
                         <span className="text-xs text-muted-foreground">to</span>
                         <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
                     </div>
-                    {(serviceAreaId || vehicleTypeFilter || legacyFilter !== "all" || preLaunchFilter !== "all" || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setLegacyFilter("all"); setPreLaunchFilter("all"); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
+                    {(serviceAreaId || vehicleTypeFilter || legacyFilter !== "all" || preLaunchFilter !== "all" || dormancyFilter !== "all" || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setLegacyFilter("all"); setPreLaunchFilter("all"); setDormancyFilter("all"); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
                     {/* Fleet-wide money tools are super_admin server-side —
                         hide them for lower roles instead of surfacing buttons

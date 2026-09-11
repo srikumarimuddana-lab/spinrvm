@@ -1019,21 +1019,45 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                     extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
                 )
             else:
-                updated = await db_supabase.update_one(
-                    "rides",
-                    {
-                        "id": ride_id,
-                        "payment_status": _observed_status,
-                        "payment_intent_id": _observed_pi,
-                    },
-                    {
-                        "$set": {
-                            "payment_status": "failed",
-                            "payment_intent_id": payment_intent_id,
-                            "payment_failure_reason": failure_message,
-                        }
-                    },
-                )
+                try:
+                    updated = await db_supabase.update_one(
+                        "rides",
+                        {
+                            "id": ride_id,
+                            "payment_status": _observed_status,
+                            "payment_intent_id": _observed_pi,
+                        },
+                        {
+                            "$set": {
+                                "payment_status": "failed",
+                                "payment_intent_id": payment_intent_id,
+                                "payment_failure_reason": failure_message,
+                            }
+                        },
+                    )
+                except Exception as _write_err:
+                    # Same reasoning as the read a few lines above (N1 director
+                    # review): the event is ALREADY claimed at this point.
+                    # Letting a write failure propagate un-unclaimed loses the
+                    # failure permanently — Stripe retries, claim_stripe_event
+                    # reports a duplicate, and the webhook returns
+                    # {"received": True, "duplicate": True} without ever
+                    # recording the failure (this is exactly how B42 went
+                    # unnoticed: a schema mismatch on payment_failure_reason
+                    # crashed this write on every real invocation, uncaught,
+                    # for every payment_failed event since this code shipped —
+                    # see migration 414). Unclaim so the retry can actually
+                    # re-process, then surface a 503.
+                    logger.error(
+                        f"Webhook payment_intent.payment_failed: ride {ride_id} CAS update failed — "
+                        f"unclaiming {event_id} so Stripe can retry: {_write_err}",
+                        exc_info=True,
+                        extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                    )
+                    await unclaim_stripe_event(event_id)
+                    raise HTTPException(
+                        status_code=503, detail="Ride payment-status update failed — Stripe will retry"
+                    ) from _write_err
                 if updated is None:
                     # Someone wrote between the read and the CAS — most likely a
                     # concurrent success. Their write is newer, so this failure

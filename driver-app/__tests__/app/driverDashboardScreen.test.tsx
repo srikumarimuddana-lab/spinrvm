@@ -968,6 +968,33 @@ describe('map recenter control', () => {
     });
     expect(mockDashboardState.currentRegionRef.current).toEqual({ latitudeDelta: 0.02, longitudeDelta: 0.03 });
   });
+
+  // Crash guard (Sentry CRIMSON-SMOKE-7445-SF): react-native-maps'
+  // applyBaseMapPadding calls GoogleMap.setPadding with no null check, so a
+  // mapPadding UPDATE between layout and onMapReady is an unhandled NPE that
+  // blanks the whole React surface — the "white screen when I reopen the app
+  // on a pending offer" report. mapPadding is derived from rideState, and
+  // consumePendingOffer flips rideState exactly inside that window. So the prop
+  // must be withheld until the map says it is ready.
+  it('withholds mapPadding until onMapReady, then supplies it', async () => {
+    const r = await renderScreen();
+    const before = r.root.findByType('MapView' as any);
+    expect(before.props.mapPadding).toBeUndefined();
+
+    act(() => {
+      before.props.onMapReady();
+    });
+
+    const after = r.root.findByType('MapView' as any);
+    expect(after.props.mapPadding).toEqual(
+      expect.objectContaining({ top: 0, left: 0, right: 0 }),
+    );
+    // idle state reserves the bottom strip for the HUD — its presence proves
+    // the rideState-derived value came through, not a placeholder. (Its numeric
+    // value is not asserted: the safe-area mock here returns no insets.bottom,
+    // so the pre-existing `+ insets.bottom` formula yields NaN in Jest only.)
+    expect(after.props.mapPadding).toHaveProperty('bottom');
+  });
 });
 
 describe('follow-camera throttle (CAMERA_ANIM_MS coalescing)', () => {

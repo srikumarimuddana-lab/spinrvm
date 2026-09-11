@@ -17529,8 +17529,8 @@ Remaining, roughly in order of user impact:
   (R9), no-show fee (R21), refund (R29) and wallet top-up (R30). All live in
   `utils/rider_emails.py` and go through the policy layer, so the
   `lifecycle_emails_enabled` kill switch covers them.
-- [ ] **N14. Rider email addresses are never verified (R5)** — **partially
-  done.** The verification flow itself now exists and is tested:
+- [x] **N14. Rider email addresses are never verified (R5)** — **CLOSED
+  2026-09-11.** The verification flow itself now exists and is tested:
   `POST /users/verify-email/request` + `POST /users/verify-email/confirm`
   (`routes/users.py`) reuse the corporate portal's exact OTP mechanics
   (`routes/auth.py:744`'s `_check_otp_lockout`/`_record_otp_failure`/
@@ -17589,12 +17589,14 @@ Remaining, roughly in order of user impact:
   schemas/users/auth sweep, 123 across the admin-users-adjacent files — all
   clean, 0 failed. See
   `docs/change-log/2026-08-11-n14-auth-me-email-verified-field.md`.
-  (b) **whether/how to gate anything on `email_verified` remains an open
-  product decision**, not resolved here — nothing was changed to require
-  verification before booking, payouts, or any other flow, and CLAUDE.md's
-  pre-merge gates (feature-flag anything user-visible; no silent behavior
-  change) mean that decision needs explicit product sign-off before any
-  gating ships, not a unilateral backend call.
+  (b) **Decided 2026-09-11: no new gates.** Asked the user directly
+  (candidates offered: gate referral/promo payouts on verified email; add a
+  non-blocking UI nudge only; or leave as-is) — chose to close this with no
+  further gating. Verified email stays purely opt-in/informational for
+  riders everywhere except the pre-existing corporate/join-domain check
+  below, which is unaffected. No code changed by this decision; this entry
+  records the decision so it isn't re-litigated. See
+  `.claude/context/memory.md`.
   **Discovered existing consumer (not introduced by this change):**
   `routes/corporate_rider.py`'s `POST /corporate/join-domain` already 403s
   with `ERR_EMAIL_UNVERIFIED` when `email_verified` is falsy (added in

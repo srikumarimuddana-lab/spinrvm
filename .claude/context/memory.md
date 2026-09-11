@@ -27,6 +27,19 @@ a pointer/rationale log, not a narrative.
 
 ## Entries
 
-_(none yet — this file was created 2026-09-07 as part of a documentation-completeness pass;
-add entries here going forward instead of letting resolved ambiguities evaporate at the end of
-a session)_
+- **2026-09-11 — N14, rider email verification: no gating, ever, beyond the
+  pre-existing corporate/join-domain check.** The verify-email flow
+  (backend + rider-app UI) has been fully built and shipped since
+  2026-08-11; the only thing left open was "should anything require a
+  verified email?" Asked the user directly with three concrete options
+  (gate referral/promo payouts; a non-blocking UI nudge only; or no new
+  gates) — they chose **no new gates**. Verified email stays purely
+  opt-in/informational for riders. The one existing consumer,
+  `routes/corporate_rider.py`'s `POST /corporate/join-domain` (403s
+  `ERR_EMAIL_UNVERIFIED`, migration 252), is unaffected and was not part
+  of this decision — it already worked as originally intended once the
+  verify flow shipped. If a future session is tempted to add a gate
+  (booking, payouts, promo eligibility, etc.) on `email_verified`, this
+  was already asked and answered — re-ask only if the user raises it
+  again or the product context has materially changed. See
+  `ACTION_ITEMS.md` N14 for full history.

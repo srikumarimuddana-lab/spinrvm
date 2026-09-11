@@ -29,6 +29,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile, resolveUploadMimeType } from '@shared/api/upload';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { isPersonalStepValid, getVehicleStepError, isCrcConsentValid } from '../utils/becomeDriverSchema';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
@@ -905,15 +906,15 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
   stepIndicator: { color: colors.textDim, fontSize: 14 },
   scrollContent: { padding: 20, paddingBottom: 50 },
-  sectionTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: colors.text },
-  subtitle: { fontSize: 16, color: colors.textDim, marginBottom: 20, lineHeight: 22 },
+  sectionTitle: { fontSize: FONT.h3, fontWeight: 'bold', marginBottom: 15, color: colors.text },
+  subtitle: { fontSize: FONT.bodyLg, color: colors.textDim, marginBottom: 20, lineHeight: 22 },
 
   inputGroup: { marginBottom: 15 },
   label: { fontSize: 14, fontWeight: '600', marginBottom: 5, color: colors.text },
   subLabel: { fontSize: 12, color: colors.textDim, marginBottom: 5 },
   input: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 12,
-    fontSize: 16, color: '#000', fontFamily: 'PlusJakartaSans'
+    fontSize: FONT.bodyLg, color: '#000', fontFamily: 'PlusJakartaSans'
   },
   dateInput: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10,
@@ -941,7 +942,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   typeText: { color: colors.text },
   typeTextSelected: { color: '#fff', fontWeight: 'bold' },
 
-  serviceAreaList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  serviceAreaList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: SPACING.xs },
   serviceAreaChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
@@ -951,7 +952,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     backgroundColor: colors.primary, borderColor: colors.primary,
   },
   serviceAreaChipText: { fontSize: 14, fontWeight: '600', color: colors.text },
-  serviceAreaHint: { fontSize: 11, color: colors.textDim, marginTop: 6, fontStyle: 'italic' },
+  serviceAreaHint: { fontSize: FONT.label, color: colors.textDim, marginTop: 6, fontStyle: 'italic' },
 
   primaryButton: {
     backgroundColor: colors.primary, borderRadius: 30, padding: 18,
@@ -961,19 +962,19 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
   reviewCard: { padding: 20, backgroundColor: colors.surfaceLight, borderRadius: 12 },
-  reviewRow: { fontSize: 16, marginBottom: 10 },
+  reviewRow: { fontSize: FONT.bodyLg, marginBottom: 10 },
 
   consentBox: {
     borderWidth: 1, borderColor: colors.border, borderRadius: 10,
     padding: 12, backgroundColor: colors.surfaceLight, marginTop: 6,
   },
-  consentText: { fontSize: 13, lineHeight: 19, color: colors.text },
-  consentCheckboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 12, marginBottom: 4 },
-  consentCheckboxLabel: { flex: 1, fontSize: 13, lineHeight: 19, color: colors.text },
+  consentText: { fontSize: FONT.bodySm, lineHeight: 19, color: colors.text },
+  consentCheckboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 12, marginBottom: SPACING.xs },
+  consentCheckboxLabel: { flex: 1, fontSize: FONT.bodySm, lineHeight: 19, color: colors.text },
 
   secondaryButton: {
     backgroundColor: 'transparent', borderRadius: 30, padding: 15,
     alignItems: 'center', marginTop: 10
   },
-  secondaryButtonText: { color: colors.textDim, fontSize: 16, fontWeight: '600' }
+  secondaryButtonText: { color: colors.textDim, fontSize: FONT.bodyLg, fontWeight: '600' }
 }); }

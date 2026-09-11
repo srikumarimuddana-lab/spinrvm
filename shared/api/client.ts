@@ -551,6 +551,31 @@ const ENGINE_ERROR_MESSAGE = new RegExp(
   'i',
 );
 
+// Raw native-networking exception text. `fetchWithTimeout` above rethrows
+// the platform's own error untouched, and on Android that `.message` can be
+// the underlying OkHttp/java.net exception's text (e.g. "fetch failed:
+// java.net.NoRouteToHostException: Host unreachable" when a build resolves
+// to an unreachable dev-machine IP — see shared/config/spinr.config.ts's
+// hostUri auto-detect). That string is a diagnostic for an engineer, not a
+// sentence for a driver/rider — a live-testing report showed it verbatim
+// under the toast title "Sign-in Unavailable", implying a server-side
+// problem rather than "this device can't reach the network at all". Also
+// covers the RN fetch polyfill's own generic wording ("Network request
+// failed") and common POSIX resolver/connect errors surfaced by other
+// native layers.
+const NATIVE_NETWORK_ERROR_MESSAGE = new RegExp(
+  [
+    '^fetch failed',
+    '^Network request failed',
+    '\\bjava\\.net\\.\\w*Exception\\b',
+    '\\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH)\\b',
+    '^Failed to connect to',
+    '^The network connection was lost',
+    '^The Internet connection appears to be offline',
+  ].join('|'),
+  'i',
+);
+
 /**
  * True when `err` is an engine-generated crash rather than a message meant for
  * a human. Such an error must never become toast copy — it is a bug report,
@@ -616,7 +641,13 @@ export function getApiErrorMessage(
     !/^Network Error$/i.test(raw) &&
     !/^timeout of /i.test(raw) &&
     !/^JSON Parse error/i.test(raw) &&
-    !/^Unexpected token/i.test(raw)
+    !/^Unexpected token/i.test(raw) &&
+    // Raw native networking exception text (see NATIVE_NETWORK_ERROR_MESSAGE)
+    // is a "this device has no route to the server" fact, not a reason a
+    // human can act on — the caller's own connectivity-specific fallback
+    // (e.g. "Unable to reach server. Please check your connection.") is the
+    // honest message here.
+    !NATIVE_NETWORK_ERROR_MESSAGE.test(raw)
   ) {
     return clampToastMessage(raw);
   }

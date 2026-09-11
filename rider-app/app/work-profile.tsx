@@ -16,8 +16,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useWorkProfileStore } from '../store/workProfileStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { SPACING, FONT } from '@shared/utils/responsive';
+import { showToast } from '../store/toastStore';
 
 interface WorkRide {
   id: string;
@@ -28,6 +29,69 @@ interface WorkRide {
   allowance_debit_amount: number | null;
   master_fallback_amount: number | null;
   source_type: string | null;
+}
+
+interface RiderStatementLineItem {
+  ride_id?: string;
+  created_at?: string;
+  source_type?: string | null;
+  allowance_debit_amount?: string | number | null;
+  master_fallback_amount?: string | number | null;
+}
+
+interface RiderStatement {
+  month?: string;
+  line_items?: RiderStatementLineItem[];
+  summary?: {
+    ride_count?: number;
+    total?: string;
+  };
+}
+
+// Branded HTML summary of the rider's OWN monthly work-ride statement
+// (GET /rider/work-profile/:companyId/statement/:month, scoped server-side
+// to this rider's own membership), rendered to PDF via expo-print — same
+// approach ride-details.tsx's buildReceiptHtml uses for the ride receipt.
+// Money values are the Decimal-quantized strings the backend already
+// returns (e.g. "12.50"); never re-parsed as floats here.
+export function buildStatementHtml(companyName: string, month: string, statement: RiderStatement): string {
+  const summary = statement?.summary || {};
+  const items = statement?.line_items || [];
+  const rows = items
+    .map(
+      li => `
+    <tr>
+      <td style="padding:6px 4px;border-bottom:1px solid #eee;">${(li.created_at || '').slice(0, 10)}</td>
+      <td style="padding:6px 4px;border-bottom:1px solid #eee;">${li.source_type || '-'}</td>
+      <td style="padding:6px 4px;border-bottom:1px solid #eee;text-align:right;">$${li.allowance_debit_amount ?? '0.00'}</td>
+      <td style="padding:6px 4px;border-bottom:1px solid #eee;text-align:right;">$${li.master_fallback_amount ?? '0.00'}</td>
+    </tr>`
+    )
+    .join('');
+  const rideCount = summary.ride_count ?? 0;
+
+  return `
+    <html>
+      <body style="font-family:-apple-system,Helvetica,Arial,sans-serif;padding:24px;color:#111;">
+        <h2 style="margin-bottom:4px;">Spinr Work Statement</h2>
+        <p style="color:#555;margin-top:0;">${companyName} — ${month}</p>
+        <p style="font-size:20px;font-weight:700;margin:16px 0 4px;">$${summary.total ?? '0.00'}</p>
+        <p style="color:#555;margin-top:0;">${rideCount} work ride${rideCount === 1 ? '' : 's'} this period</p>
+        <table style="width:100%;border-collapse:collapse;margin-top:16px;font-size:13px;">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:6px 4px;border-bottom:2px solid #ccc;">Date</th>
+              <th style="text-align:left;padding:6px 4px;border-bottom:2px solid #ccc;">Source</th>
+              <th style="text-align:right;padding:6px 4px;border-bottom:2px solid #ccc;">Allowance</th>
+              <th style="text-align:right;padding:6px 4px;border-bottom:2px solid #ccc;">Master</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="4" style="padding:12px 4px;color:#888;">No work rides in this period.</td></tr>'}</tbody>
+        </table>
+        <p style="color:#888;font-size:11px;margin-top:24px;">Keep this statement for your own expense records.</p>
+      </body>
+    </html>
+  `;
 }
 
 export default function WorkProfileScreen() {
@@ -51,6 +115,7 @@ export default function WorkProfileScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [rides, setRides] = useState<WorkRide[]>([]);
   const [ridesLoading, setRidesLoading] = useState(false);
+  const [statementBusy, setStatementBusy] = useState(false);
 
   const activeProfile = profiles.find(p => p.company.id === activeCompanyId);
 
@@ -126,6 +191,34 @@ export default function WorkProfileScreen() {
     setRefreshing(true);
     await loadAll();
     setRefreshing(false);
+  };
+
+  // Rider's own monthly work-ride statement, for their own expense
+  // reporting — GET /rider/work-profile/:companyId/statement/:month scopes
+  // strictly to this rider's own membership server-side (never
+  // company-wide). Renders the returned JSON client-side via expo-print,
+  // same "native modules via dynamic import" degrade-gracefully pattern
+  // ride-details.tsx already uses for its own PDF download action.
+  const handleDownloadStatement = async () => {
+    if (!activeCompanyId || statementBusy) return;
+    setStatementBusy(true);
+    try {
+      const month = new Date().toISOString().slice(0, 7); // current month, YYYY-MM
+      const res = await api.get<RiderStatement>(`/rider/work-profile/${activeCompanyId}/statement/${month}`);
+      const Print = await import('expo-print');
+      const Sharing = await import('expo-sharing');
+      const html = buildStatementHtml(activeProfile?.company.name ?? 'Work Profile', month, res.data);
+      const { uri } = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Spinr work statement' });
+      } else {
+        showToast('Saved', 'Statement PDF generated.', 'success');
+      }
+    } catch (e: any) {
+      showToast('Statement Unavailable', getApiErrorMessage(e, 'Could not generate your statement. Please try again.'), 'warning');
+    } finally {
+      setStatementBusy(false);
+    }
   };
 
   const formatDate = (iso: string) => {
@@ -332,6 +425,26 @@ export default function WorkProfileScreen() {
               <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
               <Text style={styles.requestBtnText}>Request More Funds</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+          )}
+
+          {/* Download this month's statement, for the rider's own expense
+              reporting — mirrors the Request More Funds row's style. */}
+          {activeCompanyId && (
+            <TouchableOpacity
+              style={styles.requestBtn}
+              onPress={handleDownloadStatement}
+              disabled={statementBusy}
+            >
+              <Ionicons name="document-text-outline" size={20} color={colors.primary} />
+              <Text style={styles.requestBtnText}>
+                {statementBusy ? 'Preparing statement…' : 'Download This Month’s Statement'}
+              </Text>
+              {statementBusy ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+              )}
             </TouchableOpacity>
           )}
         </View>

@@ -561,6 +561,182 @@ def test_my_requests_returns_list_scoped_to_membership(test_client, rider_overri
     list_mock.assert_awaited_once_with("c1", statuses=None, member_id="m1")
 
 
+# ── Own monthly statement (personal expense reporting) ──────────────────
+#
+# The important test here is the authorization boundary: a rider must
+# never see another rider's line items or totals, even when the DB layer
+# (mocked here) "contains" other riders' rows in the same company. There is
+# no member_id request parameter for this endpoint — it is always derived
+# server-side from the authenticated user's own membership via
+# _ensure_member — so these tests simulate the mocked DB behaving like a
+# real member_id-filtered query would, and assert the response reflects
+# only the caller's own rows.
+
+
+def _rider_scoped_payment_sources_db(rows_by_member: dict):
+    """Fake list_company_ride_payment_sources that actually respects
+    member_id, the way the real PostgREST-backed repo function does."""
+
+    async def _fn(*, company_id, member_id=None, from_iso=None, to_iso=None, limit=1000, offset=0):
+        assert member_id is not None, "rider statement query must always scope by member_id"
+        return rows_by_member.get(member_id, [])[offset : offset + limit]
+
+    return _fn
+
+
+def test_statement_scopes_strictly_to_own_member_id(test_client, rider_override):
+    """The critical security test: another rider's (much larger) spend in
+    the same company and month must never appear in this rider's own
+    statement or be summed into its totals."""
+    rows_by_member = {
+        "m1": [
+            {
+                "ride_id": "r1",
+                "member_id": "m1",
+                "company_id": "c1",
+                "allowance_debit_amount": "10.00",
+                "master_fallback_amount": "0.00",
+                "tip_amount": "0.00",
+                "created_at": "2026-07-05T12:00:00-06:00",
+            }
+        ],
+        "m2": [
+            {
+                "ride_id": "r2",
+                "member_id": "m2",
+                "company_id": "c1",
+                "allowance_debit_amount": "999.00",
+                "master_fallback_amount": "0.00",
+                "tip_amount": "0.00",
+                "created_at": "2026-07-06T12:00:00-06:00",
+            }
+        ],
+    }
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch(
+            "routes.corporate_rider.list_company_ride_payment_sources",
+            AsyncMock(side_effect=_rider_scoped_payment_sources_db(rows_by_member)),
+        ),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/statement/2026-07")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    ride_ids = [li["ride_id"] for li in body["line_items"]]
+    assert ride_ids == ["r1"]
+    assert "r2" not in ride_ids
+    # m2's 999.00 must never be summed into m1's own total.
+    assert body["summary"]["total"] == "10.00"
+    assert body["summary"]["ride_count"] == 1
+
+
+def test_statement_403_when_not_a_member(test_client, rider_override):
+    """A rider cannot request a statement for a company they don't belong
+    to — mirrors the existing /balance and /rides authorization boundary."""
+    with patch(
+        "routes.corporate_rider.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"id": "m1", "company_id": "other-co", "role": "member"}]),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/statement/2026-07")
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "not a company member"
+
+
+def test_statement_empty_month_returns_zeroed_summary(test_client, rider_override):
+    """No rides in the requested month/date range: a clean empty statement,
+    not an error."""
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch(
+            "routes.corporate_rider.list_company_ride_payment_sources",
+            AsyncMock(side_effect=_rider_scoped_payment_sources_db({})),
+        ),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/statement/2026-07")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["line_items"] == []
+    assert body["summary"]["ride_count"] == 0
+    assert body["summary"]["total"] == "0.00"
+
+
+def test_statement_rejects_malformed_month(test_client, rider_override):
+    with patch(
+        "routes.corporate_rider.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/statement/not-a-month")
+    assert resp.status_code == 422
+
+
+def test_statement_pdf_downloads_own_statement_only(test_client, rider_override):
+    """PDF variant: same rider-scoped query, reuses the shared PDF renderer,
+    and never touches wallet/allowance state (no apply_grant / wallet calls
+    are patched in or asserted here — only read + render)."""
+    rows_by_member = {
+        "m1": [
+            {
+                "ride_id": "r1",
+                "member_id": "m1",
+                "company_id": "c1",
+                "allowance_debit_amount": "10.00",
+                "master_fallback_amount": "0.00",
+                "tip_amount": "0.00",
+                "created_at": "2026-07-05T12:00:00-06:00",
+            }
+        ],
+        "m2": [
+            {
+                "ride_id": "r2",
+                "member_id": "m2",
+                "company_id": "c1",
+                "allowance_debit_amount": "999.00",
+                "master_fallback_amount": "0.00",
+                "tip_amount": "0.00",
+                "created_at": "2026-07-06T12:00:00-06:00",
+            }
+        ],
+    }
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "member"}]),
+        ),
+        patch(
+            "routes.corporate_rider.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "name": "Acme"}),
+        ),
+        patch(
+            "routes.corporate_rider.list_company_ride_payment_sources",
+            AsyncMock(side_effect=_rider_scoped_payment_sources_db(rows_by_member)),
+        ),
+        patch("routes.corporate_rider.log_user_action", AsyncMock()) as m_audit,
+    ):
+        resp = test_client.get("/rider/work-profile/c1/statement/2026-07/pdf")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.content.startswith(b"%PDF")
+    assert resp.headers["content-type"] == "application/pdf"
+    assert "spinr-work-statement-" in resp.headers["content-disposition"]
+    m_audit.assert_awaited_once()
+
+
+def test_statement_pdf_403_when_not_a_member(test_client, rider_override):
+    with patch(
+        "routes.corporate_rider.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"id": "m1", "company_id": "other-co", "role": "member"}]),
+    ):
+        resp = test_client.get("/rider/work-profile/c1/statement/2026-07/pdf")
+    assert resp.status_code == 403
+
+
 def test_work_profile_exposes_company_status(test_client, rider_override):
     # M2.4: the portal gates non-active companies onto /verification — that
     # gate is driven by company.status in this response.

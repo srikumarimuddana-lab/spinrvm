@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  View, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';

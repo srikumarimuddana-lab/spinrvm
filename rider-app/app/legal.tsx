@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
     View,
-    Text,
     StyleSheet,
     ScrollView,
     TouchableOpacity,
     ActivityIndicator,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';

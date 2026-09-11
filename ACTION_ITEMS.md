@@ -13182,12 +13182,15 @@ record of what was assumed vs. what was actually true</summary>
     current/intended behavior before the conditional logic ships.
 
 ### C100. `driver-app/__tests__/components/CarMarker.test.tsx` — 7 tests broken by a prior `expo-image` migration the test was never updated for
-- [x] **Status:** CLOSED 2026-09-11 — already fixed, stale checkbox.
-  `CarMarker.test.tsx` already imports `Image` from `expo-image` (not
-  `'react-native'`) and `npx jest __tests__/components/CarMarker.test.tsx`
-  passes **25/25** on current `main`. The fix described below was applied
-  at some point without this checkbox being flipped; re-verified directly
-  rather than trusting the stale status.
+- [x] **Status:** CLOSED 2026-09-11 — already fixed by commit `611acfc`
+  ("fix(driver-app): test file queries react-native Image, component
+  renders ExpoImage", PR #5209), merged before this entry's checkbox was
+  ever flipped. Re-verified directly: `npx jest
+  __tests__/components/CarMarker.test.tsx` → 25/25 passing on current
+  `main`. See also the duplicate filing of this same bug below (also
+  closed now) — two different sessions found it independently on
+  2026-09-10, neither aware of the other or of the fix that landed the
+  same day.
 - **Issue/gap:** `CarMarker.tsx:3` imports `Image as ExpoImage` from
   `expo-image` and renders `<ExpoImage>` (line ~963) as the car icon — but
   the test file (`CarMarker.test.tsx:3`) still imports `Image` from
@@ -18527,10 +18530,11 @@ mechanical follow-up work, prioritizable independently.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
-  (driver-app rounds 1-2 merged 2026-09-11, 48 files total; round 3 —
-  a small cleanup of exact-match literals rounds 1-2 missed inside
-  already-touched files, PR #5232 — opened 2026-09-11), identified
-  2026-09-10.
+  (driver-app: round 1 merged 2026-09-10, round 2 merged 2026-09-11 across
+  4 PRs (48 files total), round 3 cleanup PR #5232 merged 2026-09-11 —
+  driver-app's exact-match `StyleSheet`-block scope is now complete;
+  rider-app: 5 parallel batches, PRs #5238/#5239/#5241/#5242/#5243, all
+  merged 2026-09-11), identified 2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
     h2:26, h3:22, bodyLg:16, bodyMd:15, bodySm:13, label:11}`), consumed by
@@ -18599,6 +18603,20 @@ mechanical follow-up work, prioritizable independently.
       `components/dashboard/ForecastStrip.tsx`,
       `components/dashboard/HotspotChips.tsx`,
       `components/panels/RideOfferPanel.tsx`, `components/toastConfig.tsx`
+  - **Files (driver-app, round 3 — cleanup, PR #5232, open 2026-09-11, 5
+    files, 8 literals, 2 commits):** a fresh grep after round 2 found these
+    genuine exact-match misses (sibling properties in the same style object
+    that round 1/2 converted but left one property un-converted):
+    `app/login.tsx` (`inputSection.marginBottom: 24 → SPACING.lg`),
+    `app/driver/ride-detail.tsx` (`tlLine.marginTop: 4 → SPACING.xs`),
+    `app/driver/settings.tsx` (`deleteOverlay.padding` and
+    `deleteModal.padding`, both `24 → SPACING.lg`),
+    `app/report-safety.tsx` (`header.paddingVertical: 16 → SPACING.md`),
+    `components/dashboard/ActiveRidePanel.tsx` (`dot.marginTop` and
+    `destSquare.marginTop`, both `4 → SPACING.xs`, plus
+    `routeLineContainer.paddingLeft: 4 → SPACING.xs` — a partial-miss fix,
+    `marginVertical` on the same line had already been converted in round
+    2, `paddingLeft` had not).
   - **Round 1's "explicitly not touched" list is now covered:** the 6 files
     round 1 excluded to avoid clashing with concurrent parallel work
     (`RideOfferPanel.tsx`, `AlertDialog.tsx`, `ActivityView.tsx`,
@@ -18609,38 +18627,98 @@ mechanical follow-up work, prioritizable independently.
     unrelated ride-offer-audio/car-marker fixes) had already merged by the
     time round 2 started, so round 2 layers on top of it cleanly without
     touching any of that other work.
-  - **Files (driver-app, round 3 — cleanup, PR #5232, opened 2026-09-11,
-    5 files, 1 commit):** a fresh repo-wide grep after rounds 1-2 merged
-    found **no untouched driver-app files left** for this sweep — every
-    match traced back to a file rounds 1-2 already edited. What remained
-    were 8 individual exact-match literals those rounds missed inside
-    `StyleSheet.create()`/`createStyles()` blocks they'd already converted
-    (e.g. one property on a line converted, a sibling property on the same
-    line not): `app/login.tsx`, `app/driver/ride-detail.tsx`,
-    `app/driver/settings.tsx`, `app/report-safety.tsx`,
-    `components/dashboard/ActiveRidePanel.tsx`. This closes out driver-app's
-    exact-match `StyleSheet`-block sweep — round 3 is not expected to have
-    a round 4 behind it under this same methodology.
-  - **Corrected finding (2026-09-11):** the "~50 more files" / "roughly a
-    dozen more files" follow-up estimates in earlier revisions of this
-    bullet were never rechecked against a clean grep after each round
-    actually merged — they were carried-forward guesses, not measurements.
-    The real, verified remaining scope for driver-app is not "more files"
-    but a genuinely different, bigger scope decision: whether to also
-    convert inline `style={{...}}` JSX-prop literals (out of scope for
-    every round so far, on the explicit rule that only static
-    `StyleSheet.create()`/`createStyles()` blocks are touched) — these
-    exist in ~15 files repo-wide, including
-    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling. That
-    decision has not been made; nothing has been converted under it.
-  - **Follow-up scope (not done yet):** the inline-JSX-prop scope decision
-    above, if taken; all of rider-app (a separate parallel round under a
-    related item, not tracked by this bullet, and not yet started).
+  - **Files (rider-app, 5 parallel batches — PRs #5238/#5239/#5241/#5242/
+    #5243, all merged 2026-09-11 — 51 files total, 12
+    commits, plus 3 supporting jest-mock fixes):** rider-app had never been
+    touched by this item before this round (only 4 screens already imported
+    `SPACING`/`FONT`, matching the original issue text). Same methodology as
+    driver-app: exact-match-only substitution inside `StyleSheet.create()`/
+    `createStyles()` blocks, no rounding, inline JSX `style={{...}}` props
+    out of scope.
+    - Batch 1 (PR #5238, onboarding/legal, 10 files): `app/login.tsx`,
+      `app/otp.tsx`, `app/verify-email.tsx`,
+      `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
+      `app/profile-setup.tsx`, `app/reactivate-account.tsx`,
+      `app/become-driver.tsx` (`FONT`-only import — no `SPACING` exact
+      match existed in this file), `app/accessibility.tsx`. Fully verified,
+      CI green (all 64 check runs completed, none failed).
+    - Batch 2 (PR #5239, money/wallet/loyalty, 11 files):
+      `app/wallet.tsx`, `app/manage-cards.tsx`, `app/payment-confirm.tsx`
+      (padding/margin only — its `fontSize` values are wrapped in a
+      dynamic `sf()` scaler, not bare literals, so out of scope),
+      `app/loyalty.tsx`, `app/promotions.tsx`, `app/referral.tsx`,
+      `app/work-allowance-request.tsx`, `app/work-profile.tsx`,
+      `components/FareQuoteCard.tsx`, `components/BookingProposalCard.tsx`
+      (both grepped — sole real consumer is `app/ai-assistant.tsx`, a
+      sibling batch's file, untouched here), `app/privacy-settings.tsx`
+      (its `SettingRow` subcomponent uses inline JSX `style={[{...}]}`,
+      correctly left untouched). Plus `__tests__/paymentConfirmScreen.test.tsx`
+      (jest mock of `@shared/utils/responsive` switched from a full
+      replacement to `jest.requireActual(...)` spread, since the mock was
+      stripping out the newly-imported `SPACING`). This batch's PR body
+      initially shipped as a placeholder and 2 exact-match literals
+      (`manage-cards.tsx`'s `addCardBtn.paddingVertical`,
+      `referral.tsx`'s `sectionTitle.marginTop`) were missed on the first
+      pass — both caught on independent re-verification and fixed before
+      merge-readiness.
+    - Batch 3 (PR #5241, ride lifecycle/tracking, 12 files):
+      `app/confirm-pickup.tsx`, `app/driver-arrived.tsx`,
+      `app/driver-arriving.tsx`, `app/ride-completed.tsx`,
+      `app/ride-details.tsx`, `app/ride-in-progress.tsx`,
+      `app/ride-options.tsx`, `app/ride-status.tsx`,
+      `app/ride-tracking-webview.tsx`, `app/chat-driver.tsx`,
+      `app/search-destination.tsx`, `app/pick-on-map.tsx` — same `sf()`
+      exclusion as batch 2 applies to `confirm-pickup.tsx`/
+      `driver-arriving.tsx`/`ride-options.tsx`'s dynamically-scaled
+      `fontSize` values. Plus `__tests__/confirmPickupScreen.test.tsx` and
+      `__tests__/driverArrivingScreen.test.tsx` (same `jest.requireActual`
+      mock fix as batch 2, for the same reason). This batch's PR body also
+      initially shipped as a placeholder; fixed on re-verification (the
+      code diff itself was clean both times).
+    - Batch 4 (PR #5242, safety/support, 10 files): `app/ai-assistant.tsx`,
+      `app/emergency-contacts.tsx`, `app/lost-and-found.tsx`,
+      `app/lost-and-found-chat.tsx`, `app/notifications.tsx`,
+      `app/report-safety.tsx`, `app/safety-hub.tsx`,
+      `app/saved-places.tsx`, `app/scheduled-rides.tsx`,
+      `app/settings.tsx`. Clean on first verification — real Change Impact
+      Log, all conversions exact matches.
+    - Batch 5 (PR #5243, tabs/root layout + shared components, 8 of 11
+      assigned files — `app/_layout.tsx`, `app/(tabs)/_layout.tsx`, and
+      `components/VoltraRideActivity.tsx` legitimately skipped, none has a
+      `StyleSheet.create()`/`createStyles()` block, inline JSX/Voltra props
+      only, matching driver-app round 2's `_layout.tsx` precedent):
+      `app/(tabs)/account.tsx`, `app/(tabs)/activity.tsx`,
+      `app/(tabs)/index.tsx`, `components/CancelReasonSheet.tsx`,
+      `components/ConfirmSheet.tsx` (14 real consumers, grepped and
+      confirmed — value-identical substitution only, no prop/signature
+      change), `components/FreeCancelTimer.tsx`, `components/SchedulePicker.tsx`,
+      `components/Toast.tsx` (reached app-wide via `showToast()`/
+      `useToastStore`, 80 call sites — same value-identical guarantee).
+      This batch's PR body was accurate on first verification except for 2
+      minor documentation nits (a stale literal-count table for 5 files,
+      and one file wrongly listed as a `ConfirmSheet` consumer when it only
+      mentions the name in a comment) — both corrected directly.
+  - **Follow-up scope (not done yet):** driver-app's exact-match
+    `StyleSheet`-block sweep is now essentially complete — a fresh grep
+    after round 3 found no remaining untouched files in that scope (an
+    earlier version of this entry's "roughly a dozen more files"/"~50 more
+    files" estimate was never rechecked against a fresh grep and turned out
+    to be stale; corrected here). Remaining scope, for either app: (a)
+    inline-JSX-prop-literal conversion — a different, larger fix (moving
+    `style={{...}}` prop literals to constants, not covered by this item's
+    "StyleSheet blocks only" scope as written), still undecided whether to
+    pursue; (b) rider-app has 3 legitimately-skipped files (see batch 5
+    above) with only inline-JSX-prop styling, same category as (a).
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use (met — the `warn`-level lint rule exists) **and** existing
-    screens are actually migrated (met for driver-app's `StyleSheet`-block
-    scope as of round 3; not started for rider-app; inline-JSX-prop styling
-    is a separate, undecided scope for both apps).
+    screens are actually migrated (met for the `StyleSheet`-block scope in
+    both apps — driver-app complete across rounds 1–3, PR #5232 merged;
+    rider-app complete across its 5 batches, PRs #5238/#5239/#5241/#5242/
+    #5243, all merged 2026-09-11. Item stays open pending a decision on the
+    remaining inline-JSX-prop scope — the ~15 files repo-wide with inline
+    `style={{...}}`-only JSX-prop literals, e.g.
+    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling, are
+    the concrete example of the undecided "(a)" scope above).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started
@@ -22886,6 +22964,25 @@ how much they de-risk a public launch._
   decide whether to add `backend-test` (and ideally the whole CI Guard
   Rails summary) to the required list, and whether admin-merge bypass
   should be restricted for rides/payments/auth-surface PRs.
+  - **2026-09-11 — confirmed this is a hard permission boundary, not just a
+    missing tool.** Directly attempted `GET /repos/.../branches/main/protection`
+    against the GitHub API using this session's own token: **403 "Resource
+    not accessible by integration."** Checked why: `GET /repos/.../spinrvm`
+    on the same token returns `"permissions": {"admin": false, "maintain":
+    false, "push": true, "triage": true, "pull": true}` — this session's
+    GitHub access is explicitly scoped to `push` (read/write code, PRs,
+    issues), **not** `admin`, and branch-protection read/write requires
+    `admin` on GitHub's own permission model. This isn't a gap in the MCP
+    tool surface that a different tool would close — it's the credential's
+    actual grant, and per this repo's own least-privilege access policy
+    (project-scoped access per tool, no blanket elevation — see the user's
+    standing access-scoping preference), the right fix is a human with
+    existing repo-admin rights doing the one-time UI check, not elevating
+    this session's token to `admin`. Action (2) above stands unchanged;
+    this only replaces "no tool available" with the precise, verified
+    reason why, and confirms elevating access here isn't the recommended
+    path even though it may be technically possible for the org owner to
+    grant.
 - **Files:** none changed by this finding — process gap, not code. Relevant
   policy source: `CLAUDE.md` § "Pre-merge release gates", rule 9.
 - **What was NOT verified:** the actual branch-protection configuration
@@ -24476,12 +24573,62 @@ how much they de-risk a public launch._
   Backend fix (loud Firebase Admin SDK init failure, recommendation #2), the client fallback-toast
   fix (recommendation #4, see 2026-09-11 correction below — this session's own 2026-09-11
   status line above wrongly listed #4 as still open two days after it had already shipped
-  2026-09-09; caught by re-reading the actual code rather than trusting the prior note), and the
-  delivery-outcome metric (recommendation #3) have all shipped as follow-up PRs — see below. Ops
-  check (confirm the Firebase credential on Fly/Railway, #1) and the iOS background-mode
-  confirmation (#5) remain open — both need access this session doesn't have. #6 (remove/wire the
-  dead `expo-notifications` handler) is **not** the small unblocked cleanup it looked like —
-  see the 2026-09-11 correction below before anyone touches this.
+  2026-09-09; caught by re-reading the actual code rather than trusting the prior note), the
+  delivery-outcome metric (recommendation #3), and the `expo-notifications` dead-code fix
+  (recommendation #6, see 2026-09-11 addendum below — turned out bigger than "cleanup") have all
+  shipped as follow-up PRs — see below. Ops check (confirm the Firebase credential on
+  Fly/Railway, #1) and the iOS background-mode confirmation (#5) remain open — both need access
+  this session doesn't have.
+- **Addendum (2026-09-11) — recommendation #6 turned out to be a real routing gap, not just dead
+  code, and was fixed, untested on a real device (user's explicit choice — see below):**
+  Going deeper on #6 found the original "misleading dead code, cleanup" framing understated it.
+  Confirmed by directly comparing `node_modules/@react-native-firebase/messaging/android/.../
+  AndroidManifest.xml` (no explicit `android:priority`, defaults to 0) against
+  `node_modules/expo-notifications/android/.../AndroidManifest.xml` (`android:priority="-1"`) for
+  the same `com.google.firebase.MESSAGING_EVENT` intent-filter — RNFirebase wins, so
+  expo-notifications never sees an FCM-originated message. Two consequences, not one:
+  - `Notifications.setNotificationHandler` (`_layout.tsx:219-243`) is **not** fully dead as
+    originally framed — it's live for the one notification expo-notifications actually posts
+    itself: the "upload your documents" welcome nudge in
+    `DriverIdlePanel.tsx:175` (`Notifications.scheduleNotificationAsync`, `trigger: null`). Its
+    FCM-push-type suppression list (`new_ride_assignment`/`ride_completed`/etc.) is the part
+    that's dead, since no FCM message ever reaches it.
+  - **The real, previously-unflagged gap:** the tap-routing logic in
+    `addNotificationResponseReceivedListener` and `getInitialNotificationResponseAsync` — written
+    to deep-link `chat_message` → chat screen, `lost_and_found`/`lost_and_found_message` → the
+    lost-and-found chat, `license_backfill_prompt` → profile — can only fire for notifications
+    expo-notifications itself posted. Those three push types are **not** data-only (only
+    `new_ride_assignment`/`live_activity` are, per `backend/features.py`'s `is_data_only` gate),
+    so they carry a real FCM `notification` block that RNFirebase receives and the OS
+    auto-displays. A driver tapping one of those from the lock screen/notification tray while the
+    app is backgrounded or killed almost certainly lands on a generic screen instead of the
+    intended chat/case/profile screen — a real, plausible UX gap, not just stale code. (The
+    `new_ride_assignment` branch in the same listeners is separately redundant-but-harmless: ride
+    offers are data-only and handled entirely by Notifee, confirmed working per the audit's
+    finding #11.) No equivalent RNFirebase-side tap-detection (`onNotificationOpenedApp`/
+    `getInitialNotification`) existed anywhere in the codebase before this fix (confirmed via
+    grep — zero hits).
+  - **Fix shipped:** added `onNotificationOpenedApp`/`getInitialNotification` wrappers to
+    `shared/services/firebase.ts` (RNFirebase v22+ modular API), wired both into
+    `driver-app/app/_layout.tsx`'s `usePushNotificationRouter` alongside the existing
+    expo-notifications listeners, and extracted the shared tap-routing switch into
+    `driver-app/utils/pushNotificationRouting.ts` (dependency-free, unit-tested — 9 new tests)
+    instead of quadruplicating a 4-branch if/else across all four listeners. Corrected the
+    misleading module-level comment on `setNotificationHandler` to describe what it actually
+    governs. Full detail: `docs/change-log/2026-09-11-c97-rec6-fcm-tap-routing.md`.
+  - **Explicitly asked the user how to proceed rather than deciding alone**, since this grew from
+    "low-priority cleanup" into new, live, driver-facing notification-tap-handling code with zero
+    ability to test on a real device in this sandbox — the kind of change CLAUDE.md's own
+    escalation gate calls for a pause on. User chose to ship it now, untested on device; see
+    "What was NOT verified" in the change-log entry for the exact boundary of what was and wasn't
+    confirmed before it merged.
+  - **2026-09-11, this session — superseded my own more conservative finding.** I had
+    independently found the same Android-manifest-priority asymmetry and, not knowing whether
+    `setNotificationHandler` was also live on iOS, stopped short of any code change and re-scoped
+    #6 as blocked on iOS device access. The fix above (from a parallel session, merged into
+    `main` moments later) is more complete: it doesn't touch/remove the handler at all — it adds
+    the missing RNFirebase-side tap routing alongside it, which resolves the real gap without
+    needing the iOS confirmation my more conservative read was waiting on. Deferring to it.
 - **Correction (same day, before the client-side fix shipped):** the client-side finding below
   originally read as "every notification type except ride offers is silently dropped, foreground
   and background alike." Direct reading of `backend/features.py::_deliver_push_now` found that's
@@ -24562,20 +24709,11 @@ how much they de-risk a public launch._
   Notifee-based background handler like `new_ride_assignment` has, it would be silently invisible
   in background/killed state with no guard catching the mismatch — nothing enforces "every
   data-only type has a background display path" today; (5) confirm the iOS background-mode gap
-  against a real build; (6) either wire `expo-notifications`' handler into the real path or
-  remove the now-misleading dead code.
-  **2026-09-11 correction — #6 is NOT a safe unblocked cleanup, re-scoped:** the "dead code"
-  evidence above (finding #8, the `AndroidManifest.xml` priority comparison) is Android-only —
-  a platform mechanism (manifest `<service>` intent-filter priority) with no iOS equivalent.
-  Checked `_layout.tsx:219-243` directly: `Notifications.setNotificationHandler(...)` has **no
-  `Platform.OS` guard** — it registers on iOS too (only gated by `canUseNotifications`, which
-  excludes Expo Go/web, not either native platform). Nothing in the audit establishes this
-  handler is *also* dead on iOS — that was an unverified assumption, not a checked fact — and
-  deleting it risks silently breaking iOS foreground notification presentation (banner/sound/
-  badge for every non-suppressed type) for a driver-facing feature C97 exists to *fix*, not
-  regress. #6 is now blocked on the same thing as #5/#10: an iOS device/simulator to confirm
-  whether `expo-notifications` still controls iOS foreground presentation before any code is
-  removed. Do not delete this handler without that confirmation.
+  against a real build; (6) ~~either wire `expo-notifications`' handler into the real path or
+  remove the now-misleading dead code~~ **DONE 2026-09-11, untested on a real device** — see the
+  2026-09-11 addendum above; wired Firebase's own tap-detection into the router rather than
+  removing the expo-notifications path, since the latter is still genuinely needed for the local
+  welcome-nudge notification.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 
@@ -24747,20 +24885,14 @@ how much they de-risk a public launch._
 
 ### C100. `driver-app-test` is red on `main`'s own tip — `CarMarker.test.tsx`'s image-decode-retry suite, confirmed unrelated to the commits that happened to be `main`'s HEAD when it failed
 
-- [x] **Status:** CLOSED 2026-09-11 — same underlying issue as the other
-  C100 entry above (this repo has two entries under the same ID; both
-  refer to the identical `CarMarker.test.tsx` lookup bug). Re-verified
-  directly: `npx jest __tests__/components/CarMarker.test.tsx` passes
-  **25/25** on current `main`; the test already imports `Image` from
-  `expo-image`, not RN core. `driver-app-test` is no longer red on this
-  suite — closing both entries together rather than leaving one open.
-- [ ] **Status (superseded by the above):** OPEN — confirmed base-branch-red, not caused by this
-  session's own PR (#5203, AI17/F4 — touches only backend, `shared/types/ai.ts`,
-  `rider-app/components/FareQuoteCard.tsx`, and
-  `admin-dashboard/src/app/dashboard/ai-console/page.tsx`, none of which
-  `CarMarker.tsx` or its test import). Found via PR #5203's own
-  `driver-app-test` CI failure, then verified independently against
-  `main`'s own history rather than assumed.
+- [x] **Status:** CLOSED 2026-09-11 — this is a duplicate filing of the
+  other C100 entry above (both share the item ID "C100," filed by two
+  different sessions on 2026-09-10 investigating two different PRs, each
+  unaware of the other). Already fixed by commit `611acfc` (PR #5209).
+  Re-verified directly: `npx jest __tests__/components/CarMarker.test.tsx`
+  → 25/25 passing on current `main`. Left in place rather than deleted,
+  per the append-only spirit of this log — flagging the duplicate-ID
+  collision itself as a backlog-hygiene note for future item numbering.
 - **Failure:** `__tests__/components/CarMarker.test.tsx`, suite
   `CarMarker — car-icon decode failure retries then reports once
   (2026-09-09, "green circle, never a car")` plus one case in

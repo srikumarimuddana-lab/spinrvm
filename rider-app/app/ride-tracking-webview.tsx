@@ -9,6 +9,7 @@ import { WebView } from 'react-native-webview';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { TrackBaseUrlContext } from './_layout';
 
 // Hosts that are allowed to load inside the in-app WebView.
@@ -182,12 +183,12 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surface },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 10,
+      paddingHorizontal: SPACING.md, paddingVertical: 10,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
     backBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
     headerCenter: { flex: 1, alignItems: 'center', gap: 2 },
-    headerTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+    headerTitle: { fontSize: FONT.bodyMd, fontWeight: '700', color: colors.text },
     shareBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
     livePill: {
       flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -196,10 +197,10 @@ function createStyles(colors: ThemeColors) {
     liveDot: {
       width: 7, height: 7, borderRadius: 4, backgroundColor: colors.primary,
     },
-    liveText: { fontSize: 11, fontWeight: '800', color: colors.primary, letterSpacing: 0.5 },
+    liveText: { fontSize: FONT.label, fontWeight: '800', color: colors.primary, letterSpacing: 0.5 },
     urlBar: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
-      paddingHorizontal: 16, paddingVertical: 8,
+      paddingHorizontal: SPACING.md, paddingVertical: SPACING.sm,
       backgroundColor: colors.surfaceLight,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
@@ -208,13 +209,13 @@ function createStyles(colors: ThemeColors) {
     },
     webview: { flex: 1 },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-    loadingText: { marginTop: 16, fontSize: 15, color: colors.textDim, textAlign: 'center' },
-    errorText: { marginTop: 16, fontSize: 15, color: colors.error, textAlign: 'center' },
+    loadingText: { marginTop: SPACING.md, fontSize: FONT.bodyMd, color: colors.textDim, textAlign: 'center' },
+    errorText: { marginTop: SPACING.md, fontSize: FONT.bodyMd, color: colors.error, textAlign: 'center' },
     retryBtn: {
-      marginTop: 16, paddingHorizontal: 24, paddingVertical: 12,
+      marginTop: SPACING.md, paddingHorizontal: 24, paddingVertical: 12,
       backgroundColor: colors.primary, borderRadius: 20,
     },
-    retryText: { fontSize: 15, fontWeight: '600', color: '#FFF' },
+    retryText: { fontSize: FONT.bodyMd, fontWeight: '600', color: '#FFF' },
     footer: {
       paddingHorizontal: 20, paddingVertical: 12,
       borderTopWidth: 1, borderTopColor: colors.border,
@@ -223,6 +224,6 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
       backgroundColor: colors.primary, paddingVertical: 14, borderRadius: 24,
     },
-    footerShareText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+    footerShareText: { fontSize: FONT.bodyLg, fontWeight: '700', color: '#FFF' },
   });
 }

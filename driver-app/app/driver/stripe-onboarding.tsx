@@ -21,7 +21,8 @@
  * (d) surfaces HTTP / network / connect.js errors instead of swallowing them.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';

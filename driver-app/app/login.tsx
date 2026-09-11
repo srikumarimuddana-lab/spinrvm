@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -12,6 +11,7 @@ import {
   ScrollView,
   Image,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -398,7 +398,7 @@ function createStyles(colors: ThemeColors) {
       lineHeight: 22,
     },
     inputSection: {
-      marginBottom: 24,
+      marginBottom: SPACING.lg,
     },
     inputLabel: {
       fontSize: FONT.label,

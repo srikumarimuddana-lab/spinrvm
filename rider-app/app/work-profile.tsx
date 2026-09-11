@@ -17,6 +17,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import api from '@shared/api/client';
+import { SPACING, FONT } from '@shared/utils/responsive';
 
 interface WorkRide {
   id: string;
@@ -389,7 +390,7 @@ function createStyles(colors: ThemeColors) {
     container: { flex: 1, backgroundColor: colors.surfaceLight },
     header: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-      paddingHorizontal: 16, paddingVertical: 12,
+      paddingHorizontal: SPACING.md, paddingVertical: 12,
       backgroundColor: colors.surface,
       borderBottomWidth: 1, borderBottomColor: colors.border,
     },
@@ -399,7 +400,7 @@ function createStyles(colors: ThemeColors) {
     loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
     modeSection: {
-      backgroundColor: colors.surface, marginBottom: 12, padding: 16,
+      backgroundColor: colors.surface, marginBottom: 12, padding: SPACING.md,
     },
     modeToggleRow: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -408,17 +409,17 @@ function createStyles(colors: ThemeColors) {
     modeTitle: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     modeSubtitle: { fontSize: 12, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2 },
 
-    section: { backgroundColor: colors.surface, marginBottom: 12, paddingHorizontal: 16, paddingVertical: 16 },
+    section: { backgroundColor: colors.surface, marginBottom: 12, paddingHorizontal: SPACING.md, paddingVertical: SPACING.md },
     sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
     sectionTitle: {
-      fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
+      fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
       letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 12,
     },
-    seeAll: { fontSize: 13, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.primary },
+    seeAll: { fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.primary },
 
     companyOption: {
       flexDirection: 'row', alignItems: 'center', paddingVertical: 10,
-      paddingHorizontal: 12, borderRadius: 12, marginBottom: 8,
+      paddingHorizontal: 12, borderRadius: 12, marginBottom: SPACING.sm,
       borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surfaceLight,
     },
     companyOptionActive: { borderColor: '#93C5FD', backgroundColor: colors.infoBg },
@@ -432,21 +433,21 @@ function createStyles(colors: ThemeColors) {
     balanceCard: {
       borderRadius: 16, padding: 20, marginBottom: 12,
     },
-    balanceHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+    balanceHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.md },
     balanceCompany: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: 'rgba(255,255,255,0.9)' },
     activeBadge: {
       backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 10,
       paddingHorizontal: 10, paddingVertical: 3,
     },
-    activeBadgeText: { fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#FFF' },
+    activeBadgeText: { fontSize: FONT.label, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#FFF' },
     balanceAmount: {
-      fontSize: 42, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF', marginBottom: 4,
+      fontSize: 42, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF', marginBottom: SPACING.xs,
     },
-    balanceLabel: { fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: 'rgba(255,255,255,0.75)', marginBottom: 14 },
+    balanceLabel: { fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_400Regular', color: 'rgba(255,255,255,0.75)', marginBottom: 14 },
     balanceRow: { flexDirection: 'row', gap: 16 },
-    balanceSub: { fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: 'rgba(255,255,255,0.8)' },
-    balanceNoData: { fontSize: 26, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF', marginVertical: 8 },
-    balanceHint: { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
+    balanceSub: { fontSize: FONT.bodySm, fontFamily: 'PlusJakartaSans_500Medium', color: 'rgba(255,255,255,0.8)' },
+    balanceNoData: { fontSize: FONT.h2, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF', marginVertical: SPACING.sm },
+    balanceHint: { fontSize: FONT.bodySm, color: 'rgba(255,255,255,0.75)' },
     periodRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
     periodText: { fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium', color: 'rgba(255,255,255,0.8)' },
 
@@ -467,7 +468,7 @@ function createStyles(colors: ThemeColors) {
     rideAddress: { fontSize: 14, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     rideDate: { fontSize: 12, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2 },
     rideFare: { fontSize: 15, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-    rideAllowance: { fontSize: 11, fontFamily: 'PlusJakartaSans_400Regular', color: colors.info, marginTop: 2 },
+    rideAllowance: { fontSize: FONT.label, fontFamily: 'PlusJakartaSans_400Regular', color: colors.info, marginTop: 2 },
 
     emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40, paddingTop: 80 },
     emptyIcon: {
@@ -478,6 +479,6 @@ function createStyles(colors: ThemeColors) {
     emptyText: { fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, textAlign: 'center', lineHeight: 22 },
 
     emptyRides: { alignItems: 'center', paddingVertical: 24 },
-    emptyRidesText: { fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 8 },
+    emptyRidesText: { fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: SPACING.sm },
   });
 }

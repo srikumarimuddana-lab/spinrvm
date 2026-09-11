@@ -18418,8 +18418,10 @@ mechanical follow-up work, prioritizable independently.
 - [ ] **UX1. Plus Jakarta Sans loads but is only actually applied in a
   minority of screens in both apps** — **Status:** in progress —
   rider-app round 1 landed 2026-09-10 (15 files), round 2 landed
-  2026-09-11 (8 more files, see below); driver-app not started. Do not
-  mark closed until both are done.
+  2026-09-11 (8 more files, see below); driver-app full rollout (all 42
+  qualifying files) landed 2026-09-11, merged via PR #5244. Do not mark
+  closed until rider-app's remaining files are done — 10 files
+  outstanding per its own note below.
   - **Issue/gap:** both apps load all 4 Plus Jakarta Sans weights at boot
     (`rider-app/app/_layout.tsx:8`, `driver-app/app/_layout.tsx:8`), but
     there was no `Text.defaultProps` override or themed `Text` wrapper
@@ -18474,36 +18476,78 @@ mechanical follow-up work, prioritizable independently.
     `app/policies.tsx` (legal/consent flow); `app/privacy-settings.tsx`,
     `app/accessibility.tsx` (settings). Same import-only change as round 1
     — no other `Text` behavior/props touched.
-  - **Remaining follow-up scope (not done):** 10 more rider-app files still
-    lack `fontFamily` entirely (re-grep before picking the next batch — this
-    list will drift just like the last one did): `app/_layout.tsx`,
+  - **Action taken (driver-app, 2026-09-11):** re-grepped driver-app fresh
+    per this item's own "lists drift" warning rather than trusting the
+    "8 of 61" figure above — found 42 files under `driver-app/app` and
+    `driver-app/components` that import `Text` directly from
+    `react-native`, use it with `fontWeight` set somewhere in a style, and
+    have zero `fontFamily` occurrences anywhere in the file (one additional
+    file, `app/driver/(tabs)/_layout.tsx`, matched the `fontWeight` grep but
+    was excluded — its one `fontWeight` hit is on an expo-router
+    `tabBarLabelStyle` prop, not a `Text` component this wrapper can reach).
+    Migrated all 42 to `shared/components/Text.tsx` (unmodified from
+    rider-app's build — no new logic, no new test needed) in 5 commits of
+    7–9 files each, grouped by screen area the same way UX2/UX3's
+    driver-app rounds already batch: dashboard (9), ride/earnings (8),
+    auth/onboarding (9), settings/support (9), legal/misc (7). Full
+    Change Impact Log:
+    `docs/change-log/2026-09-11-ux1-driver-app-text-wrapper-rollout.md`.
+  - **Files (driver-app, all 42 — see the change-log doc above for the
+    full per-file table):** dashboard —
+    `app/driver/(tabs)/activity.tsx`, `app/driver/(tabs)/index.tsx`,
+    `components/dashboard/{ActiveRidePanel,DemandLegend,DriverIdlePanel,
+    DriverTopBar,ForecastStrip,HotspotChips,TripCompletedPanel}.tsx`;
+    ride/earnings — `components/panels/RideOfferPanel.tsx`,
+    `components/activity/ActivityView.tsx`,
+    `components/charts/EarningsBarChart.tsx`, `app/driver/payout.tsx`,
+    `app/driver/payout-history.tsx`, `app/driver/tax-documents.tsx`,
+    `app/driver/subscription.tsx`, `app/subscription/success.tsx`;
+    auth/onboarding — `app/login.tsx`, `app/otp.tsx`,
+    `app/profile-setup.tsx`, `app/vehicle-info.tsx`,
+    `app/reactivate-account.tsx`, `app/legacy-consent-notice.tsx`,
+    `app/documents.tsx`, `app/crc-consent.tsx`,
+    `app/driver/stripe-onboarding.tsx`; settings/support —
+    `app/driver/{settings,notifications,addresses,chat,destination-mode,
+    faq,referral,quests}.tsx`, `app/appeal.tsx`; legal/misc —
+    `app/legal.tsx`, `app/policies.tsx`, `app/report-safety.tsx`,
+    `app/index.tsx`, `components/CancelReasonSheet.tsx`,
+    `components/ScreenHeader.tsx`, `components/toastConfig.tsx`. Merged
+    via PR #5244.
+  - **Remaining follow-up scope:** rider-app has 10 more files that still
+    lack `fontFamily` entirely (re-grep before picking the next batch —
+    this list will drift just like the last one did): `app/_layout.tsx`,
     `app/loyalty.tsx`, `app/referral.tsx`, `app/promotions.tsx`,
     `app/ai-assistant.tsx`, `app/report-safety.tsx`,
     `components/CancelReasonSheet.tsx`, `components/FreeCancelTimer.tsx`,
     `components/SchedulePicker.tsx`, `components/Toast.tsx`. Separately,
-    the 6 files with partial/manual `fontFamily` coverage found this round
-    (listed above) are a real but different gap — hand-written literals
-    instead of the wrapper, not closed by this item's acceptance bar —
-    flagged here for a future, separately-scoped pass rather than folded
-    into this count. `components/VoltraRideActivity.tsx` is out of scope
-    permanently (doesn't use RN's `Text`). driver-app still hasn't been
-    touched at all (8 of 61 sampled files have `fontFamily`; separate
-    parallel item/session).
-  - **Files:** see "Action taken" bullets above for each round's exact
-    list; `shared/components/Text.tsx` is the wrapper (unchanged since
-    round 1). Full remaining per-file breakdown: re-grep `fontFamily` vs
-    `fontWeight`-only usage before starting the next batch (not reproduced
-    here to avoid drift from the source).
+    6 rider-app files with partial/manual `fontFamily` coverage found in
+    round 2 (listed above) are a real but different gap — hand-written
+    literals instead of the wrapper, not closed by this item's acceptance
+    bar — flagged here for a future, separately-scoped pass rather than
+    folded into this count. `components/VoltraRideActivity.tsx` is out of
+    scope permanently (doesn't use RN's `Text`). driver-app has zero
+    remaining — all 42 qualifying files migrated and merged.
+  - **Files:** rider-app — see "Action taken" bullets above for each
+    round's exact list; `shared/components/Text.tsx` is the wrapper
+    (unchanged since round 1). driver-app — see the "Action taken
+    (driver-app...)" bullet above for the full 42-file list and its
+    change-log doc. Full remaining rider-app per-file breakdown: re-grep
+    `fontFamily` vs `fontWeight`-only usage before starting the next batch
+    (not reproduced here to avoid drift from the source).
   - **Acceptance:** a defined, enforced mechanism exists such that new
     screens can't silently ship off-brand-font by omission — met for any
-    new rider-app screen that imports `Text` from
+    new rider-app or driver-app screen that imports `Text` from
     `@shared/components/Text` instead of `react-native` directly; not yet
-    enforced by lint, and driver-app has no equivalent yet.
+    enforced by lint in either app. driver-app's 42 qualifying files are
+    now fully migrated and merged (PR #5244); rider-app has 10 files still
+    outstanding per its own note above — the item stays open until both
+    are done.
 
 - [ ] **UX2. Shared spacing (`SPACING`) and type-scale (`FONT`) constants
   exist but are used in only 1–4 files per app** — **Status:** in progress
-  (driver-app round 1 merged 2026-09-10; round 2 — 4 parallel batches, 39
-  more files — opened 2026-09-11, pending review/merge), identified
+  (driver-app rounds 1-2 merged 2026-09-11, 48 files total; round 3 —
+  a small cleanup of exact-match literals rounds 1-2 missed inside
+  already-touched files, PR #5232 — opened 2026-09-11), identified
   2026-09-10.
   - **Issue/gap:** `shared/utils/responsive.ts` defines both scales
     (`SPACING = {xs:4, sm:8, md:16, lg:24, xl:32, xxl:48}`, `FONT = {h1:32,
@@ -18539,8 +18583,7 @@ mechanical follow-up work, prioritizable independently.
     - Auth entry + settings: `app/login.tsx`, `app/otp.tsx`,
       `app/driver/settings.tsx`
   - **Files (driver-app, round 2 — 4 parallel batches, PRs #5225/#5228/
-    #5226/#5227, opened 2026-09-11, open/pending review — 39 files total,
-    ~16 commits):**
+    #5226/#5227, merged 2026-09-11 — 39 files total, ~16 commits):**
     - Batch 1 (PR #5225, onboarding/legal, 9 files): `app/appeal.tsx`,
       `app/become-driver.tsx`, `app/crc-consent.tsx`,
       `app/legacy-consent-notice.tsx`, `app/legal.tsx`, `app/policies.tsx`,
@@ -18584,18 +18627,38 @@ mechanical follow-up work, prioritizable independently.
     unrelated ride-offer-audio/car-marker fixes) had already merged by the
     time round 2 started, so round 2 layers on top of it cleanly without
     touching any of that other work.
-  - **Follow-up scope (not done yet):** driver-app has roughly a dozen more
-    files still carrying ad-hoc literals per a repo grep, plus
-    `app/driver/(tabs)/_layout.tsx`'s inline `screenOptions` styling (a
-    different fix — moving inline JSX-prop literals to constants, not
-    covered by this item's "StyleSheet blocks only" scope as written); all
-    of rider-app is untouched by this bullet (a separate parallel round
-    under a related item, not tracked here).
+  - **Files (driver-app, round 3 — cleanup, PR #5232, opened 2026-09-11,
+    5 files, 1 commit):** a fresh repo-wide grep after rounds 1-2 merged
+    found **no untouched driver-app files left** for this sweep — every
+    match traced back to a file rounds 1-2 already edited. What remained
+    were 8 individual exact-match literals those rounds missed inside
+    `StyleSheet.create()`/`createStyles()` blocks they'd already converted
+    (e.g. one property on a line converted, a sibling property on the same
+    line not): `app/login.tsx`, `app/driver/ride-detail.tsx`,
+    `app/driver/settings.tsx`, `app/report-safety.tsx`,
+    `components/dashboard/ActiveRidePanel.tsx`. This closes out driver-app's
+    exact-match `StyleSheet`-block sweep — round 3 is not expected to have
+    a round 4 behind it under this same methodology.
+  - **Corrected finding (2026-09-11):** the "~50 more files" / "roughly a
+    dozen more files" follow-up estimates in earlier revisions of this
+    bullet were never rechecked against a clean grep after each round
+    actually merged — they were carried-forward guesses, not measurements.
+    The real, verified remaining scope for driver-app is not "more files"
+    but a genuinely different, bigger scope decision: whether to also
+    convert inline `style={{...}}` JSX-prop literals (out of scope for
+    every round so far, on the explicit rule that only static
+    `StyleSheet.create()`/`createStyles()` blocks are touched) — these
+    exist in ~15 files repo-wide, including
+    `app/driver/(tabs)/_layout.tsx`'s `screenOptions` tab-bar styling. That
+    decision has not been made; nothing has been converted under it.
+  - **Follow-up scope (not done yet):** the inline-JSX-prop scope decision
+    above, if taken; all of rider-app (a separate parallel round under a
+    related item, not tracked by this bullet, and not yet started).
   - **Acceptance:** new screens have a clear, documented expectation on
     which to use (met — the `warn`-level lint rule exists) **and** existing
-    screens are actually migrated (partially met — round 1 merged; round 2
-    open across 4 PRs pending review/merge; not yet complete for either
-    app).
+    screens are actually migrated (met for driver-app's `StyleSheet`-block
+    scope as of round 3; not started for rider-app; inline-JSX-prop styling
+    is a separate, undecided scope for both apps).
 
 - [x] **UX3. `shared/components/Button.tsx` has zero consumers in driver-app**
   — **Status:** closed 2026-09-11, same session that filed it (started

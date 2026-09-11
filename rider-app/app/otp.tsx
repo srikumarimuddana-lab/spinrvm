@@ -23,6 +23,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAnimatedValue, useAnimatedValues } from '../hooks/useAnimatedValue';
 import { shakeHorizontal } from '@shared/utils/motion';
+import { SPACING, FONT } from '@shared/utils/responsive';
 import { HAS_AUTHENTICATED_BEFORE_KEY } from './login';
 
 const CODE_LENGTH = 4;
@@ -477,7 +478,7 @@ export default function OtpScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
-    scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
+    scrollContent: { flexGrow: 1, paddingHorizontal: SPACING.lg },
     // flexGrow (not flex) so the ScrollView fills the screen but never shrinks
     // below its content. Content is top-anchored (no justifyContent: center)
     // so that when the keyboard is up the overflow stays scrollable and the
@@ -486,7 +487,7 @@ function createStyles(colors: ThemeColors) {
     backBtn: {
       width: 44, height: 44, borderRadius: 14,
       backgroundColor: colors.surfaceLight,
-      justifyContent: 'center', alignItems: 'center', marginBottom: 24,
+      justifyContent: 'center', alignItems: 'center', marginBottom: SPACING.lg,
     },
     illustrationContainer: { alignItems: 'center', marginBottom: 28 },
     illustrationCircle: {
@@ -501,11 +502,11 @@ function createStyles(colors: ThemeColors) {
     },
     titleSection: { alignItems: 'center', marginBottom: 36 },
     title: {
-      fontSize: 26, fontWeight: '800', color: colors.text,
+      fontSize: FONT.h2, fontWeight: '800', color: colors.text,
       letterSpacing: -0.5, marginBottom: 10,
     },
-    subtitle: { fontSize: 15, color: colors.textDim, lineHeight: 22 },
-    phoneDisplay: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 4 },
+    subtitle: { fontSize: FONT.bodyMd, color: colors.textDim, lineHeight: 22 },
+    phoneDisplay: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: SPACING.xs },
     codeContainer: { marginBottom: 28 },
     hiddenInput: { position: 'absolute', opacity: 0, width: 1, height: 1 },
     codeBoxes: { flexDirection: 'row', justifyContent: 'center', gap: 12 },
@@ -535,31 +536,31 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.primary, borderRadius: 16, height: 58,
       justifyContent: 'center', alignItems: 'center',
       shadowColor: colors.primary, shadowOffset: { width: 0, height: 6 },
-      shadowOpacity: 0.25, shadowRadius: 12, elevation: 6, marginBottom: 24,
+      shadowOpacity: 0.25, shadowRadius: 12, elevation: 6, marginBottom: SPACING.lg,
     },
     verifyBtnInactive: { backgroundColor: colors.border, shadowOpacity: 0, elevation: 0 },
     verifyBtnLoading: { backgroundColor: colors.primaryDark },
     verifyBtnContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    verifyBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+    verifyBtnText: { color: '#fff', fontSize: FONT.bodyLg, fontWeight: '700' },
     verifyBtnTextInactive: { color: colors.textDim },
     resendSection: { alignItems: 'center', gap: 16 },
-    resendBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
-    resendText: { fontSize: 15, fontWeight: '600', color: colors.primary },
+    resendBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: SPACING.sm },
+    resendText: { fontSize: FONT.bodyMd, fontWeight: '600', color: colors.primary },
     resendCountdown: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     countdownText: { fontSize: 14, color: colors.textDim },
     countdownNumber: { fontWeight: '700', color: colors.text },
-    changeNumberBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
+    changeNumberBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: SPACING.sm },
     changeNumberText: { fontSize: 14, color: colors.textDim, fontWeight: '500' },
     consentCard: {
       backgroundColor: colors.surfaceLight, borderRadius: 16,
       borderWidth: 1, borderColor: colors.border,
-      padding: 18, marginBottom: 24,
+      padding: 18, marginBottom: SPACING.lg,
     },
-    consentCardTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 6 },
-    consentCardBody: { fontSize: 13, color: colors.textDim, lineHeight: 19, marginBottom: 14 },
+    consentCardTitle: { fontSize: FONT.bodyLg, fontWeight: '700', color: colors.text, marginBottom: 6 },
+    consentCardBody: { fontSize: FONT.bodySm, color: colors.textDim, lineHeight: 19, marginBottom: 14 },
     consentRow: {
       flexDirection: 'row', alignItems: 'flex-start', gap: 10,
-      minHeight: 44, paddingVertical: 4, marginBottom: 14,
+      minHeight: 44, paddingVertical: SPACING.xs, marginBottom: 14,
     },
     consentRowText: { flex: 1, fontSize: 12, color: colors.textDim, lineHeight: 18, paddingTop: 3 },
     termsLink: { color: colors.primary, fontWeight: '600' },

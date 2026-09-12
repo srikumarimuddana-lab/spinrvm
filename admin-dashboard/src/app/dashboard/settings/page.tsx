@@ -907,6 +907,26 @@ export default function SettingsPage() {
                                     available) the location — same data the dashboard surfaces.
                                 </p>
                             </div>
+                            <Separator />
+                            <div className="flex items-center justify-between gap-4 pt-1">
+                                <div>
+                                    <Label htmlFor="route-deviation-alert-enabled">
+                                        Route-deviation safety alert
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Opens a safety incident when a driver on an active trip is
+                                        sustained &gt;500m off the booked route for 60+ seconds.
+                                        Ships dark (off) — verify the paging path in staging before
+                                        enabling in production.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="route-deviation-alert-enabled"
+                                    aria-label="Route-deviation safety alert enabled"
+                                    checked={!!settings.route_deviation_alert_enabled}
+                                    onCheckedChange={(v) => update("route_deviation_alert_enabled", v)}
+                                />
+                            </div>
                         </CardContent>
                     </Card>
 

@@ -183,6 +183,17 @@ export class TripLocationOutbox {
   private readonly randomUUID: () => string;
   private readonly now: () => string;
   private databasePromise: Promise<TripLocationOutboxDatabase> | null = null;
+  // Every database-touching operation runs through this chain, one at a time.
+  // expo-sqlite's withExclusiveTransactionAsync opens a NEW native connection
+  // per call and runs a plain deferred BEGIN, so a second write that overlaps
+  // an in-flight write transaction fails at once with "database is locked" —
+  // SQLite does not consult the busy handler when promoting an already-open
+  // read transaction to a write, and enqueue reads the session row before it
+  // writes. Ride SPR-NUZCQG (2026-09-11, iOS): the foreground watcher, the
+  // background task and the uploader's acknowledge raced each other on this
+  // file and 48 fixes were thrown away as enqueue_failures. Serialising in
+  // process removes the race for every producer sharing this runtime.
+  private operationTail: Promise<void> = Promise.resolve();
   // Wall-clock throttle for the retention prune (not the injectable `now`,
   // which tests pin to fixed ISO strings — a throttle wants real elapsed time).
   private lastPruneAt = 0;
@@ -200,72 +211,74 @@ export class TripLocationOutbox {
   async startSession(rideId: string): Promise<PendingTripLocationSession> {
     if (!rideId) throw new Error('A ride id is required to start trip location recording.');
 
-    const database = await this.getDatabase();
-    let session: PendingTripLocationSession | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
-      session = await this.openOrCreateSession(transaction, rideId);
+    const session = await this.withDatabase(async (database) => {
+      let opened: PendingTripLocationSession | null = null;
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        opened = await this.openOrCreateSession(transaction, rideId);
+      });
+      return opened!;
     });
     // Retention housekeeping rides on ride-start (~once per trip) and on
     // acknowledge; fire-and-forget so it can never delay a session open.
     void this.maybePrune();
-    return session!;
+    return session;
   }
 
   async enqueue(fix: TripLocationFix): Promise<TripLocationPoint> {
     assertFiniteLocationFix(fix);
 
-    const database = await this.getDatabase();
-    let point: TripLocationPoint | null = null;
-    await database.withExclusiveTransactionAsync(async (transaction) => {
-      const session = await this.openOrCreateSession(transaction, fix.ride_id);
-      const sequenceState = await transaction.getFirstAsync<{ next_sequence_number: number }>(
-        'SELECT next_sequence_number FROM trip_location_sessions WHERE session_id = ?',
-        [session.recording_session_id],
-      );
-      if (!sequenceState) throw new Error('The trip location recording session disappeared during allocation.');
+    return this.withDatabase(async (database) => {
+      let point: TripLocationPoint | null = null;
+      await database.withExclusiveTransactionAsync(async (transaction) => {
+        const session = await this.openOrCreateSession(transaction, fix.ride_id);
+        const sequenceState = await transaction.getFirstAsync<{ next_sequence_number: number }>(
+          'SELECT next_sequence_number FROM trip_location_sessions WHERE session_id = ?',
+          [session.recording_session_id],
+        );
+        if (!sequenceState) throw new Error('The trip location recording session disappeared during allocation.');
 
-      const sequenceNumber = sequenceState.next_sequence_number;
-      await transaction.runAsync(
-        'UPDATE trip_location_sessions SET next_sequence_number = ? WHERE session_id = ?',
-        [sequenceNumber + 1, session.recording_session_id],
-      );
+        const sequenceNumber = sequenceState.next_sequence_number;
+        await transaction.runAsync(
+          'UPDATE trip_location_sessions SET next_sequence_number = ? WHERE session_id = ?',
+          [sequenceNumber + 1, session.recording_session_id],
+        );
 
-      point = {
-        ...fix,
-        recording_session_id: session.recording_session_id,
-        sequence_number: sequenceNumber,
-      };
-      await transaction.runAsync(
-        `INSERT INTO trip_location_outbox (
-          ride_id, session_id, sequence_number, captured_at, monotonic_ms,
-          lat, lng, accuracy, speed, heading, altitude, source, mocked,
-          is_completion_fix, enqueued_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          point.ride_id,
-          point.recording_session_id,
-          point.sequence_number,
-          point.captured_at,
-          point.monotonic_ms,
-          point.lat,
-          point.lng,
-          point.accuracy,
-          point.speed,
-          point.heading,
-          point.altitude,
-          point.source,
-          toSqlBoolean(point.mocked),
-          toSqlBoolean(point.is_completion_fix),
-          this.now(),
-        ],
-      );
+        point = {
+          ...fix,
+          recording_session_id: session.recording_session_id,
+          sequence_number: sequenceNumber,
+        };
+        await transaction.runAsync(
+          `INSERT INTO trip_location_outbox (
+            ride_id, session_id, sequence_number, captured_at, monotonic_ms,
+            lat, lng, accuracy, speed, heading, altitude, source, mocked,
+            is_completion_fix, enqueued_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            point.ride_id,
+            point.recording_session_id,
+            point.sequence_number,
+            point.captured_at,
+            point.monotonic_ms,
+            point.lat,
+            point.lng,
+            point.accuracy,
+            point.speed,
+            point.heading,
+            point.altitude,
+            point.source,
+            toSqlBoolean(point.mocked),
+            toSqlBoolean(point.is_completion_fix),
+            this.now(),
+          ],
+        );
+      });
+      return point!;
     });
-    return point!;
   }
 
   async listPendingSessions(): Promise<PendingTripLocationSession[]> {
-    const database = await this.getDatabase();
-    const rows = await database.getAllAsync<PendingTripLocationSession>(
+    const rows = await this.withDatabase((database) => database.getAllAsync<PendingTripLocationSession>(
       `SELECT
         sessions.session_id AS recording_session_id,
         sessions.ride_id,
@@ -277,14 +290,13 @@ export class TripLocationOutbox {
         WHERE outbox.session_id = sessions.session_id
       )
       ORDER BY sessions.opened_at ASC`,
-    );
+    ));
     return rows.map(asPendingSession);
   }
 
   async peek(recordingSessionId: string, limit = MAX_UPLOAD_BATCH_SIZE): Promise<TripLocationPoint[]> {
-    const database = await this.getDatabase();
     const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), MAX_UPLOAD_BATCH_SIZE);
-    const rows = await database.getAllAsync<TripLocationOutboxRow>(
+    const rows = await this.withDatabase((database) => database.getAllAsync<TripLocationOutboxRow>(
       `SELECT
         ride_id,
         session_id AS recording_session_id,
@@ -306,7 +318,7 @@ export class TripLocationOutbox {
       ORDER BY sequence_number ASC
       LIMIT ?`,
       [recordingSessionId, boundedLimit],
-    );
+    ));
     return rows.map(asPoint);
   }
 
@@ -322,8 +334,7 @@ export class TripLocationOutbox {
       throw new Error('Trip location rejection sequence numbers must be non-negative integers.');
     }
 
-    const database = await this.getDatabase();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.withDatabase((database) => database.withExclusiveTransactionAsync(async (transaction) => {
       for (const rejection of rejected) {
         await transaction.runAsync(
           `INSERT INTO trip_location_quarantine (
@@ -345,13 +356,12 @@ export class TripLocationOutbox {
         'DELETE FROM trip_location_outbox WHERE session_id = ? AND sequence_number <= ?',
         [recordingSessionId, acknowledgedThrough],
       );
-    });
+    }));
     void this.maybePrune();
   }
 
   async latestPoint(rideId: string): Promise<TripLocationPoint | null> {
-    const database = await this.getDatabase();
-    const row = await database.getFirstAsync<TripLocationOutboxRow>(
+    const row = await this.withDatabase((database) => database.getFirstAsync<TripLocationOutboxRow>(
       `SELECT
         ride_id,
         session_id AS recording_session_id,
@@ -373,25 +383,23 @@ export class TripLocationOutbox {
       ORDER BY captured_at DESC, sequence_number DESC
       LIMIT 1`,
       [rideId],
-    );
+    ));
     return row ? asPoint(row) : null;
   }
 
   async pendingCount(rideId: string): Promise<number> {
-    const database = await this.getDatabase();
-    const result = await database.getFirstAsync<{ count: number }>(
+    const result = await this.withDatabase((database) => database.getFirstAsync<{ count: number }>(
       'SELECT COUNT(*) AS count FROM trip_location_outbox WHERE ride_id = ?',
       [rideId],
-    );
+    ));
     return result?.count ?? 0;
   }
 
   async closeSession(rideId: string): Promise<void> {
-    const database = await this.getDatabase();
-    await database.runAsync(
+    await this.withDatabase((database) => database.runAsync(
       'UPDATE trip_location_sessions SET closed_at = ? WHERE ride_id = ? AND closed_at IS NULL',
       [this.now(), rideId],
-    );
+    ));
   }
 
   /**
@@ -415,8 +423,7 @@ export class TripLocationOutbox {
    * and leave orphan points behind a deleted session row.
    */
   async purgeAll(): Promise<void> {
-    const database = await this.getDatabase();
-    await database.withExclusiveTransactionAsync(async (transaction) => {
+    await this.withDatabase((database) => database.withExclusiveTransactionAsync(async (transaction) => {
       await transaction.runAsync(
         `INSERT INTO trip_location_quarantine (
           session_id, sequence_number, ride_id, captured_at, monotonic_ms,
@@ -433,7 +440,7 @@ export class TripLocationOutbox {
       );
       await transaction.runAsync('DELETE FROM trip_location_outbox');
       await transaction.runAsync('DELETE FROM trip_location_sessions');
-    });
+    }));
   }
 
   /** Throttled prune — at most once per hour per outbox instance. */
@@ -452,64 +459,37 @@ export class TripLocationOutbox {
    */
   async prune(): Promise<void> {
     try {
-      const database = await this.getDatabase();
-      const nowMs = Date.parse(this.now());
-      const quarantineCutoff = new Date(nowMs - QUARANTINE_TTL_MS).toISOString();
-      const sessionCutoff = new Date(nowMs - CLOSED_SESSION_TTL_MS).toISOString();
-      const quarantinedAt = this.now();
+      await this.withDatabase(async (database) => {
+        const nowMs = Date.parse(this.now());
+        const quarantineCutoff = new Date(nowMs - QUARANTINE_TTL_MS).toISOString();
+        const sessionCutoff = new Date(nowMs - CLOSED_SESSION_TTL_MS).toISOString();
+        const quarantinedAt = this.now();
 
-      const quarantineTotal =
-        (await database.getFirstAsync<{ total: number }>(
-          'SELECT COUNT(*) AS total FROM trip_location_quarantine',
-        ))?.total ?? 0;
-      const quarantineExcess = Math.max(0, quarantineTotal - this.quarantineMaxRows);
-      const outboxTotal =
-        (await database.getFirstAsync<{ total: number }>(
-          'SELECT COUNT(*) AS total FROM trip_location_outbox',
-        ))?.total ?? 0;
-      const outboxExcess = Math.max(0, outboxTotal - this.outboxSoftCapRows);
+        const quarantineTotal =
+          (await database.getFirstAsync<{ total: number }>(
+            'SELECT COUNT(*) AS total FROM trip_location_quarantine',
+          ))?.total ?? 0;
+        const quarantineExcess = Math.max(0, quarantineTotal - this.quarantineMaxRows);
+        const outboxTotal =
+          (await database.getFirstAsync<{ total: number }>(
+            'SELECT COUNT(*) AS total FROM trip_location_outbox',
+          ))?.total ?? 0;
+        const outboxExcess = Math.max(0, outboxTotal - this.outboxSoftCapRows);
 
-      await database.withExclusiveTransactionAsync(async (transaction) => {
-        await transaction.runAsync(
-          'DELETE FROM trip_location_quarantine WHERE quarantined_at < ?',
-          [quarantineCutoff],
-        );
-        if (quarantineExcess > 0) {
+        await database.withExclusiveTransactionAsync(async (transaction) => {
           await transaction.runAsync(
-            `DELETE FROM trip_location_quarantine WHERE rowid IN (
-              SELECT rowid FROM trip_location_quarantine
-              ORDER BY quarantined_at ASC LIMIT ?)`,
-            [quarantineExcess],
+            'DELETE FROM trip_location_quarantine WHERE quarantined_at < ?',
+            [quarantineCutoff],
           );
-        }
-        // Expired closed sessions: preserve their leftover points first.
-        await transaction.runAsync(
-          `INSERT INTO trip_location_quarantine (
-            session_id, sequence_number, ride_id, captured_at, monotonic_ms,
-            lat, lng, accuracy, speed, heading, altitude, source, mocked,
-            is_completion_fix, rejection_reason, quarantined_at
-          )
-          SELECT
-            o.session_id, o.sequence_number, o.ride_id, o.captured_at, o.monotonic_ms,
-            o.lat, o.lng, o.accuracy, o.speed, o.heading, o.altitude, o.source, o.mocked,
-            o.is_completion_fix, 'expired_unflushed', ?
-          FROM trip_location_outbox o
-          JOIN trip_location_sessions s ON s.session_id = o.session_id
-          WHERE s.closed_at IS NOT NULL AND s.closed_at < ?
-          ON CONFLICT(session_id, sequence_number) DO NOTHING`,
-          [quarantinedAt, sessionCutoff],
-        );
-        await transaction.runAsync(
-          `DELETE FROM trip_location_outbox WHERE session_id IN (
-            SELECT session_id FROM trip_location_sessions
-            WHERE closed_at IS NOT NULL AND closed_at < ?)`,
-          [sessionCutoff],
-        );
-        await transaction.runAsync(
-          'DELETE FROM trip_location_sessions WHERE closed_at IS NOT NULL AND closed_at < ?',
-          [sessionCutoff],
-        );
-        if (outboxExcess > 0) {
+          if (quarantineExcess > 0) {
+            await transaction.runAsync(
+              `DELETE FROM trip_location_quarantine WHERE rowid IN (
+                SELECT rowid FROM trip_location_quarantine
+                ORDER BY quarantined_at ASC LIMIT ?)`,
+              [quarantineExcess],
+            );
+          }
+          // Expired closed sessions: preserve their leftover points first.
           await transaction.runAsync(
             `INSERT INTO trip_location_quarantine (
               session_id, sequence_number, ride_id, captured_at, monotonic_ms,
@@ -519,27 +499,71 @@ export class TripLocationOutbox {
             SELECT
               o.session_id, o.sequence_number, o.ride_id, o.captured_at, o.monotonic_ms,
               o.lat, o.lng, o.accuracy, o.speed, o.heading, o.altitude, o.source, o.mocked,
-              o.is_completion_fix, 'evicted_capacity', ?
+              o.is_completion_fix, 'expired_unflushed', ?
             FROM trip_location_outbox o
             JOIN trip_location_sessions s ON s.session_id = o.session_id
-            WHERE s.closed_at IS NOT NULL
-            ORDER BY o.enqueued_at ASC LIMIT ?
+            WHERE s.closed_at IS NOT NULL AND s.closed_at < ?
             ON CONFLICT(session_id, sequence_number) DO NOTHING`,
-            [quarantinedAt, outboxExcess],
+            [quarantinedAt, sessionCutoff],
           );
           await transaction.runAsync(
-            `DELETE FROM trip_location_outbox WHERE rowid IN (
-              SELECT o.rowid FROM trip_location_outbox o
+            `DELETE FROM trip_location_outbox WHERE session_id IN (
+              SELECT session_id FROM trip_location_sessions
+              WHERE closed_at IS NOT NULL AND closed_at < ?)`,
+            [sessionCutoff],
+          );
+          await transaction.runAsync(
+            'DELETE FROM trip_location_sessions WHERE closed_at IS NOT NULL AND closed_at < ?',
+            [sessionCutoff],
+          );
+          if (outboxExcess > 0) {
+            await transaction.runAsync(
+              `INSERT INTO trip_location_quarantine (
+                session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+                lat, lng, accuracy, speed, heading, altitude, source, mocked,
+                is_completion_fix, rejection_reason, quarantined_at
+              )
+              SELECT
+                o.session_id, o.sequence_number, o.ride_id, o.captured_at, o.monotonic_ms,
+                o.lat, o.lng, o.accuracy, o.speed, o.heading, o.altitude, o.source, o.mocked,
+                o.is_completion_fix, 'evicted_capacity', ?
+              FROM trip_location_outbox o
               JOIN trip_location_sessions s ON s.session_id = o.session_id
               WHERE s.closed_at IS NOT NULL
-              ORDER BY o.enqueued_at ASC LIMIT ?)`,
-            [outboxExcess],
-          );
-        }
+              ORDER BY o.enqueued_at ASC LIMIT ?
+              ON CONFLICT(session_id, sequence_number) DO NOTHING`,
+              [quarantinedAt, outboxExcess],
+            );
+            await transaction.runAsync(
+              `DELETE FROM trip_location_outbox WHERE rowid IN (
+                SELECT o.rowid FROM trip_location_outbox o
+                JOIN trip_location_sessions s ON s.session_id = o.session_id
+                WHERE s.closed_at IS NOT NULL
+                ORDER BY o.enqueued_at ASC LIMIT ?)`,
+              [outboxExcess],
+            );
+          }
+        });
       });
     } catch {
       // Housekeeping only — never let retention break capture or ack paths.
     }
+  }
+
+  /**
+   * Run one outbox operation against the open database, after every operation
+   * queued before it has settled (see `operationTail`). A failed operation
+   * never wedges the chain — the next one still runs.
+   */
+  private withDatabase<T>(
+    operation: (database: TripLocationOutboxDatabase) => Promise<T>,
+  ): Promise<T> {
+    const run = this.operationTail.then(async () => operation(await this.getDatabase()));
+    this.operationTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private async getDatabase(): Promise<TripLocationOutboxDatabase> {

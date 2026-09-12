@@ -42,7 +42,7 @@ import {
   publishLiveRoute,
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
-import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, displaySpeedKmh } from '../../../utils/locationDisplayGate';
+import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, displaySpeedKmh, effectiveSpeedMps } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
 import { SPACING, FONT } from '@shared/utils/responsive';
@@ -820,7 +820,10 @@ function DriverDashboard() {
     if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
     if (!c || !mapRef.current) return;
-    const tier = zoomTierForSpeed(c.speed, followZoomTierRef.current);
+    const tier = zoomTierForSpeed(
+      effectiveSpeedMps(c.speed, location?.timestamp, Date.now()),
+      followZoomTierRef.current,
+    );
     followZoomTierRef.current = tier;
     const zoom = FOLLOW_ZOOM_TIERS[tier].zoom;
 

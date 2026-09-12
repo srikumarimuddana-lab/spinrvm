@@ -105,3 +105,35 @@ The codebase already has an OSRM fallback path (`route_distance.py:536`) for whe
 2. **Does "match the giants" mean Uber's bar (they built their own engine) or Lyft's bar (SDK-integrated)?** This proposal assumes Lyft's bar is the realistic target given Spinr's current scale — worth confirming explicitly rather than assuming.
 3. **Voice**: does the app have an existing TTS mechanism to reuse, or does this need a new dependency (e.g. `expo-speech`)? Not verified in this pass — first thing to check when Phase 1 actually starts.
 4. **Should Phase 1 ship behind a feature flag** (this codebase's `app_settings` pattern) so it can be dark-launched to a subset of drivers first? Given the SLA/cost risk in §5, this is very likely yes — flagging it here rather than deciding unilaterally.
+
+---
+
+## 7. Status update (2026-09-12) — decisions made, Phase 1 build starting
+
+Re-verified against the current codebase (backend + frontend, full re-read of the relevant files) before starting implementation. All facts in §2 above still hold; this section adds what changed and what was decided.
+
+### 7.1 Corrections / refinements to §2
+
+- **§2.2's citations were accurate but incomplete.** `route_distance.py:211` and `:536` (OSRM `steps=false`) are confirmed. The **Google Directions** call sites (`route_distance.py`'s `_compute_route_via_google`, `routes/rides/_shared.py`'s `_fetch_directions_route`/`_fetch_directions_polyline`) don't pass a `steps` parameter at all — the classic Directions API has none; they simply never parse `legs[].steps[]` from the response they already receive. Same practical conclusion (no maneuver data reaches the client anywhere today), corrected mechanism.
+- **`/rides/{id}/live-route`** (`backend/routes/rides/tracking.py`) is OSRM-first/Google-Directions-fallback, polled every 6s by phone and Android Auto sharing one poller (`liveRouteShared.ts`'s defer-to-phone pub/sub). It returns a flat `{polyline, eta_seconds, distance_km}` — confirmed no steps field anywhere in this path either.
+- **Directions budget gating is inconsistent today**, worth knowing before adding a new consumer: the live-route path (`_compute_route_via_google`) IS gated against `maps_budget.py`'s $5/day cross-SKU circuit breaker; `_shared.py`'s fare-estimate/booking Directions calls are **not** gated at all. Not this feature's problem to fix, but the new steps-fetching call must not repeat that gap.
+- **The frontend has zero maneuver/segmentation concept**, confirmed by a repo-wide grep (zero hits for "maneuver"/"turn instruction"/"step index" in `driver-app/` or `shared/`). `snapToRoute`'s `segmentIndex` is a raw polyline vertex-pair index with no semantic meaning; `RouteLine`'s `segments` prop is gradient-coloring slice count only, unrelated to turns. `RouteLine.trimTraveled()` (already exists) is the reusable "erase behind the vehicle" mechanism.
+- **Follow-camera zoom is purely speed-tiered** (`FOLLOW_ZOOM_TIERS`, 3 tiers 16–17.5) with **no turn-anticipation input anywhere** — camera heading is CarMarker's own already-computed bearing (current-segment direction only, no lookahead).
+- **`[build]` commit-message trigger**: confirmed in `.github/workflows/ci.yml`'s `mobile-build` job — fires on push to `main` when the commit message contains `[build]`, builds `--profile production` for both apps, iOS + Android. The driver-app Android build under this profile already contains the Android Auto car-app-library code (one APK, one binary) — but this repo also carries a **separate `android-auto` EAS profile** (`driver-app/eas.json`, different Play Console track) that this trigger does **not** build; that one needs a manual `workflow_dispatch` on `eas-native-build.yml`, which this session cannot fire (no Actions-dispatch access, same constraint as this repo's `update-visual-baselines.yml`).
+
+### 7.2 Decisions (answered via `AskUserQuestion`, 2026-09-12)
+
+1. **Steps data source: a dedicated, separately-cached Directions call — not baked into `compute_route()`.** A new call with `steps=true`, made once per ride leg (pickup or dropoff) and cached until that leg's steps are consumed or a real off-route event fires a refetch — fully decoupled from the existing 6s OSRM-first live-route poll. Avoids multiplying Directions call volume by the poll cadence and avoids OSRM's lower-quality generic step text (previously rejected as Option C).
+2. **Phase 1 scope stays turn-list + camera reaction only — no live re-route.** Matches this document's own original phasing (§1, §3). Re-route-on-deviation is deferred to Phase 2, unchanged from the original plan; building it now would mean designing the rate-limit/debounce guard §5 already flagged as missing, which is real scope, not a Phase-1 add-on.
+3. **Ships behind an `app_settings` flag, dark-launched.** Per CLAUDE.md's mandatory release gate for a user-visible, non-trivial change to a live-tested surface.
+
+### 7.3 Phase 1 build plan (small PRs, same fix-by-fix discipline as the preceding map/camera bug-fix sequence on this branch)
+
+| PR | Surface | What |
+|---|---|---|
+| **A** | backend | New endpoint (e.g. `GET /rides/{id}/navigation-steps`): one budget-gated, Redis-cached Directions call with `steps=true` per ride leg; parses `legs[].steps[]` into `{instruction, maneuver, distanceMeters, startLocation, endLocation}[]`. New `app_settings` flag (e.g. `driver_turn_by_turn_enabled`), default off. |
+| **B** | shared/frontend | Pure step-tracking utility (mirrors `vehicleTracking.ts`'s style): given the steps array + current snapped position, derive current step index + distance remaining to that step's end. Unit-tested, no device needed. |
+| **C** | driver-app | Next-turn instruction banner UI + follow-camera "approach zoom" override (additive to `FOLLOW_ZOOM_TIERS`, active only inside a distance-to-turn threshold), gated behind the flag from PR A. |
+| **D** | driver-app | Off-route-triggered refetch wiring — reuses the existing `OFF_ROUTE_M`/`offRouteStreakRef` detection (today: toast-only) to trigger PR A's endpoint's cache invalidation/refetch instead of (or in addition to) the toast. |
+
+All four merge onto the same designated branch used for the preceding bug-fix sequence, sequentially (git's single-branch model), each with its own tests + Change Impact Log — but continuously, without a chat pause between phases, per explicit authorization. The final merge in the sequence carries `[build]` in its commit message to produce one combined native build (both apps, iOS + Android) covering everything merged in this sequence, rather than relying on the per-PR OTA auto-publish alone (`eas-build.yml` still auto-fires its normal OTA publish on every one of these merges regardless — that's existing, unavoidable CI behavior, not something this plan controls).

@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform, Modal } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
 
@@ -23,7 +24,7 @@ export function ForceUpdateOverlay({ visible, minVersion, storeUrl }: ForceUpdat
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={() => {}}>
       <View style={styles.container}>
         <View style={styles.content}>
-          <Text style={styles.icon}>⬆️</Text>
+          <Ionicons name="cloud-download-outline" size={64} color={colors.primary} style={styles.icon} />
           <Text style={styles.title}>Update Required</Text>
           <Text style={styles.message}>
             A new version of Spinr is required to continue.
@@ -56,7 +57,6 @@ function createStyles(colors: ThemeColors) {
       maxWidth: 320,
     },
     icon: {
-      fontSize: 48,
       marginBottom: 16,
     },
     title: {

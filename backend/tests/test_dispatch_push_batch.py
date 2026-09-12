@@ -12,6 +12,7 @@ convention in test_p3_push_notifications.py (the function does a local
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -147,7 +148,10 @@ class TestSuccessAndOutcomes:
 
     async def test_expo_token_recipient_bypasses_send_each(self):
         """send_each is FCM-only -- an Expo-token recipient must go through
-        the existing single-recipient Expo path instead."""
+        the existing single-recipient Expo path instead. The Expo send
+        happens inside a spawned task (_send_expo_with_retry), so this uses
+        the real spawn() (a real asyncio.create_task) and yields once to let
+        it run, rather than mocking spawn to a no-op close()."""
         from backend import features as features_mod
 
         pushes = [_push("drv-1")]
@@ -156,12 +160,48 @@ class TestSuccessAndOutcomes:
         with (
             patch("backend.features.db_supabase.get_rows_batched_in", AsyncMock(return_value=users)),
             patch("backend.features._send_expo_push", AsyncMock(return_value=True)) as expo_mock,
-            patch("backend.utils.background.spawn", side_effect=lambda coro: coro.close()),
         ):
             await features_mod.send_dispatch_offer_pushes_batch(pushes)
+            await asyncio.sleep(0)
 
         expo_mock.assert_called_once()
         assert expo_mock.call_args.args[0] == "ExponentPushToken[abc123]"
+
+    async def test_expo_send_failure_enqueues_retry(self):
+        """The Expo path must honor the same guaranteed-delivery contract as
+        the FCM chunk below it -- a failed/errored Expo send must not just
+        disappear (spinr-dispatch-reviewer finding)."""
+        from backend import features as features_mod
+
+        pushes = [_push("drv-1")]
+        users = [{"id": "drv-1", "fcm_token_driver": "ExponentPushToken[abc123]"}]
+
+        with (
+            patch("backend.features.db_supabase.get_rows_batched_in", AsyncMock(return_value=users)),
+            patch("backend.features._send_expo_push", AsyncMock(return_value=False)),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock()) as retry_mock,
+        ):
+            await features_mod.send_dispatch_offer_pushes_batch(pushes)
+            await asyncio.sleep(0)
+
+        retry_mock.assert_awaited_once()
+        assert retry_mock.await_args.args[0] == "drv-1"
+
+    async def test_expo_send_exception_enqueues_retry(self):
+        from backend import features as features_mod
+
+        pushes = [_push("drv-1")]
+        users = [{"id": "drv-1", "fcm_token_driver": "ExponentPushToken[abc123]"}]
+
+        with (
+            patch("backend.features.db_supabase.get_rows_batched_in", AsyncMock(return_value=users)),
+            patch("backend.features._send_expo_push", AsyncMock(side_effect=RuntimeError("Expo API down"))),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock()) as retry_mock,
+        ):
+            await features_mod.send_dispatch_offer_pushes_batch(pushes)
+            await asyncio.sleep(0)
+
+        retry_mock.assert_awaited_once()
 
 
 class TestFailureHandling:
@@ -249,6 +289,48 @@ class TestFailureHandling:
 
         assert _count("failed") == before + 2
         assert retry_mock.await_count == 2
+
+    async def test_one_recipients_message_build_failure_does_not_abort_the_rest_of_the_chunk(self):
+        """spinr-dispatch-reviewer finding: _build_fcm_message used to be
+        called in a list comprehension outside any try, so one recipient's
+        construction failure would raise out of the whole spawned task,
+        silently dropping delivery AND retry-enqueue for every other driver
+        in the chunk. Must now be isolated per-recipient."""
+        from backend import features as features_mod
+        from backend.utils import metrics
+
+        def _count(outcome: str) -> int:
+            return metrics.snapshot()["counters"].get("spinr_push_send_total", {}).get((("outcome", outcome),), 0)
+
+        pushes = [_push("drv-1"), _push("drv-2")]
+        users = [
+            {"id": "drv-1", "fcm_token_driver": "fcm-1"},
+            {"id": "drv-2", "fcm_token_driver": "fcm-2"},
+        ]
+        mock_firebase, mock_messaging, _ = _mock_fcm(send_each_result=MagicMock(responses=[_send_response(True)]))
+        before_failed = _count("failed")
+        before_success = _count("success")
+
+        with (
+            patch.dict(sys.modules, {"firebase_admin": mock_firebase, "firebase_admin.messaging": mock_messaging}),
+            patch("backend.features.db_supabase.get_rows_batched_in", AsyncMock(return_value=users)),
+            patch(
+                "backend.features._build_fcm_message",
+                side_effect=lambda token, title, body, data, target_app: (
+                    (_ for _ in ()).throw(RuntimeError("bad data")) if token == "fcm-1" else MagicMock()
+                ),
+            ),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock()) as retry_mock,
+        ):
+            await features_mod.send_dispatch_offer_pushes_batch(pushes)
+
+        # drv-1's build failed -> retried, not sent. drv-2's build succeeded
+        # and was still included in the (single-message) send_each call.
+        assert _count("failed") == before_failed + 1
+        assert _count("success") == before_success + 1
+        assert len(mock_messaging.send_each.call_args.args[0]) == 1
+        retry_mock.assert_awaited_once()
+        assert retry_mock.await_args.args[0] == "drv-1"
 
 
 class TestChunking:

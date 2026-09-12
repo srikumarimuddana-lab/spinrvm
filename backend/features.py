@@ -1339,9 +1339,10 @@ def _build_fcm_message(
     from the previously-inline version; every existing single-send caller
     goes through this unchanged.
 
-    Caller must import ``firebase_admin.messaging`` first (this function
-    takes it as an ambient import, matching ``_deliver_push_now``'s own
-    local-import pattern — see that function's docstring for why).
+    Does its own local ``from firebase_admin import messaging`` (below),
+    matching ``_deliver_push_now``'s own local-import pattern — see that
+    function's docstring for why (avoids a hard import-time dependency on
+    ``firebase_admin`` for environments where it isn't configured).
     """
     from firebase_admin import messaging
 
@@ -1569,6 +1570,19 @@ async def send_dispatch_offer_pushes_batch(pushes: List[Dict[str, Any]]) -> None
             await _enqueue_retry(p)
         return
 
+    async def _send_expo_with_retry(push: Dict[str, Any], token: str, data: Dict[str, str]) -> None:
+        # Rare/legacy path -- send_each is FCM-only, so this one recipient goes
+        # through the existing single-send Expo path unbatched. Must still
+        # honor the same guaranteed-delivery contract as the FCM chunk below:
+        # a failed/errored send enqueues a retry, it never just disappears.
+        try:
+            delivered = await _send_expo_push(token, push["title"], push["body"], data)
+        except Exception:
+            logger.opt(exception=True).error(f"[dispatch push batch] Expo send errored for user {push['user_id']}")
+            delivered = False
+        if not delivered:
+            await _enqueue_retry(push)
+
     fcm_recipients: List[Dict[str, Any]] = []
     for p in pushes:
         token = token_by_uid.get(p["user_id"])
@@ -1577,27 +1591,41 @@ async def send_dispatch_offer_pushes_batch(pushes: List[Dict[str, Any]]) -> None
             continue
         stringified = _stringify_push_data(p.get("data"))
         if _is_expo_token(token):
-            # Rare/legacy path -- send_each is FCM-only, so this one recipient
-            # goes through the existing single-send Expo path unbatched.
-            spawn(_send_expo_push(token, p["title"], p["body"], stringified))
+            spawn(_send_expo_with_retry(p, token, stringified))
             continue
         fcm_recipients.append({**p, "token": token, "data": stringified})
 
     for i in range(0, len(fcm_recipients), _FCM_BATCH_SIZE):
         chunk = fcm_recipients[i : i + _FCM_BATCH_SIZE]
-        messages = [_build_fcm_message(r["token"], r["title"], r["body"], r["data"], "driver") for r in chunk]
+        # Build each message individually so one recipient's construction
+        # failure can't take the whole chunk down with it -- this loop used
+        # to be a list comprehension outside any try, so a single raise here
+        # would have escaped the spawned task uncaught, silently dropping
+        # delivery AND retry-enqueue for every other driver in the chunk.
+        built: List[Dict[str, Any]] = []
+        messages = []
+        for r in chunk:
+            try:
+                messages.append(_build_fcm_message(r["token"], r["title"], r["body"], r["data"], "driver"))
+                built.append(r)
+            except Exception:
+                logger.opt(exception=True).error(f"[dispatch push batch] message build failed for user {r['user_id']}")
+                _record_push_outcome("failed")
+                await _enqueue_retry(r)
+        if not messages:
+            continue
         try:
             response = await asyncio.to_thread(messaging.send_each, messages)
         except Exception as e:
             logger.opt(exception=True).error(
                 f"[dispatch push batch] send_each failed for {len(messages)} message(s): {e}"
             )
-            for r in chunk:
+            for r in built:
                 _record_push_outcome("failed")
                 await _enqueue_retry(r)
             continue
 
-        for r, single in zip(chunk, response.responses, strict=True):
+        for r, single in zip(built, response.responses, strict=True):
             if single.success:
                 _record_push_outcome("success")
                 continue

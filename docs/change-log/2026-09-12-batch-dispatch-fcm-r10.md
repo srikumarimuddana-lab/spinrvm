@@ -107,10 +107,10 @@ one grouped call (`send_each`, up to 500 messages) instead of N independent ones
 
 | File path | What changed | Why |
 |---|---|---|
-| `backend/features.py` | Extracted `_build_fcm_message()` (pure code motion from `_deliver_push_now`); added `send_dispatch_offer_pushes_batch()` and `_FCM_BATCH_SIZE`. | R10 |
+| `backend/features.py` | Extracted `_build_fcm_message()` (pure code motion from `_deliver_push_now`); added `send_dispatch_offer_pushes_batch()` and `_FCM_BATCH_SIZE`. Follow-up (review): added `_send_expo_with_retry()` helper; moved message-building inside its own per-recipient try; corrected a stale docstring line. | R10 |
 | `backend/routes/rides/matching.py` | Batch-offer loop collects pushes into `_dispatch_pushes` instead of spawning per-driver; one guarded `spawn()` call after the loop. | R10 |
 | `backend/routes/rides/_deps.py` | Re-exported `send_dispatch_offer_pushes_batch` (both dual-import blocks). | R10 |
-| `backend/tests/test_dispatch_push_batch.py` | New file — 10 tests covering token-batching, success/failure/stale-token/chunking behavior of the new function. | R10 |
+| `backend/tests/test_dispatch_push_batch.py` | New file — 10 tests covering token-batching, success/failure/stale-token/chunking behavior of the new function. Follow-up (review): +3 tests (Expo failure/exception retry, one recipient's build failure not aborting the chunk). | R10 |
 | `backend/tests/test_dispatch_notify_loop_branches.py` | Updated 2 tests (`test_push_title_includes_area_boost_bonus`, `test_push_title_is_bare_fare_when_no_incentives`) to assert against the new batch call site instead of the removed per-driver `send_push_notification` call; `test_push_notification_failure_is_non_fatal` needed no test-code change (it caught the real bug above by continuing to fail until the code was fixed). | R10 |
 
 ## 7. Before / after
@@ -164,7 +164,8 @@ user-visible surface at all (see §5).
 ## 9. Verification performed
 
 - [x] Automated tests run:
-  - `pytest backend/tests/test_dispatch_push_batch.py backend/tests/test_dispatch_notify_loop_branches.py backend/tests/test_offer_timeout.py backend/tests/test_dispatch_metrics.py backend/tests/test_rides_matching_coverage.py backend/tests/test_e2e_wav_dispatch.py backend/tests/test_dispatch_claim_parity.py backend/tests/test_dispatch_match_attempt_branches.py backend/tests/test_scheduled_dispatch_cr.py backend/tests/test_p3_push_notifications.py backend/tests/test_features.py backend/tests/test_marketing_broadcast.py backend/tests/test_marketing_push_coverage.py backend/tests/test_messaging_fan_out.py backend/tests/test_n10_admin_push_target_app.py -m "not slow" --no-cov -q` → **271 passed**.
+  - `pytest backend/tests/test_dispatch_push_batch.py backend/tests/test_dispatch_notify_loop_branches.py backend/tests/test_offer_timeout.py backend/tests/test_dispatch_metrics.py backend/tests/test_rides_matching_coverage.py backend/tests/test_e2e_wav_dispatch.py backend/tests/test_dispatch_claim_parity.py backend/tests/test_dispatch_match_attempt_branches.py backend/tests/test_scheduled_dispatch_cr.py backend/tests/test_p3_push_notifications.py backend/tests/test_features.py backend/tests/test_marketing_broadcast.py backend/tests/test_marketing_push_coverage.py backend/tests/test_messaging_fan_out.py backend/tests/test_n10_admin_push_target_app.py -m "not slow" --no-cov -q` → **271 passed** (initial commit); **175 passed** on the targeted re-run after the review follow-up fix below.
+  - A broader `-k "push or dispatch or matching or notification"` sweep across the full backend test suite → **882 passed, 4 skipped** (pre-existing, unrelated), 0 failed.
   - `ruff check` + `ruff format --check` on all 4 touched Python files → clean.
 - [x] Blast-radius grep performed: confirmed every `send_push_notification` call site in the
   codebase (~13 non-dispatch call sites: `chat.py`, `safety.py`, `lifecycle.py`,
@@ -180,16 +181,32 @@ user-visible surface at all (see §5).
   makes N independent `messaging.send()` Firebase calls (gather only changes *when* they fire,
   not *how many network round trips* happen), which doesn't address the roadmap's actual ask
   (`send_each`'s single batched call).
-- [ ] Adversarial post-implementation review (CLAUDE.md gate #10): `spinr-dispatch-reviewer`
-  dispatched against the actual diff, focused on dispatch-hot-path risk given this touches
-  shared notification infrastructure. **Still in flight at commit time** — this commit does
-  not wait on it, because the code is independently verified via the full test matrix in
-  §9 above (271 targeted + 882 broad regression tests, including two real defects the review
-  process for this exact change already caught and fixed pre-commit: the batch-timeout-handler
-  spawn-guard gap in §4, and the two `test_dispatch_notify_loop_branches.py` test updates).
-  Any finding from the reviewer will land as a named follow-up commit against this same CIL,
-  not a silent fix — check this repo's commit log after this file's own commit for one
-  referencing "R10 review follow-up" before treating this item as fully closed.
+- [x] Adversarial post-implementation review (CLAUDE.md gate #10): `spinr-dispatch-reviewer` run
+  against the actual diff, focused on dispatch-hot-path risk given this touches shared
+  notification infrastructure. **Found and fixed two real blockers in a follow-up commit**
+  (landed against this same CIL, not silently):
+  1. The Expo-token peel-off path spawned `_send_expo_push(...)` fire-and-forget with no result
+     check — an Expo delivery failure recorded the outcome metric but never enqueued a retry,
+     a real regression from the pre-R10 path (which went through `send_push_notification`'s
+     time-critical retry-queue fallback). **Fixed** by wrapping the Expo send in a new
+     `_send_expo_with_retry` helper that calls `_enqueue_retry` on a `False`/exception result,
+     spawned the same way. Two new tests (`test_expo_send_failure_enqueues_retry`,
+     `test_expo_send_exception_enqueues_retry`) pin this.
+  2. `_build_fcm_message(...)` was called in a list comprehension *outside* the try/except
+     wrapping `send_each` — a construction failure for even one recipient would have raised out
+     of the spawned task uncaught, silently dropping delivery **and** retry-enqueue for every
+     other driver in that chunk (a fault-isolation regression versus the pre-R10 one-task-per-
+     driver design). **Fixed** by building each message inside its own try, routing a build
+     failure through `_enqueue_retry` per-recipient, and only handing successfully-built
+     messages to `send_each`. `test_one_recipients_message_build_failure_does_not_abort_the_rest_of_the_chunk`
+     pins this — one recipient's build failure now retries just that recipient while the rest of
+     the chunk still sends.
+  Also corrected a stale docstring line on `_build_fcm_message` (claimed the caller must import
+  `firebase_admin.messaging` first; the function actually does its own local import, matching
+  `_deliver_push_now`'s pattern). No blockers found in the original per-caller reasoning, the
+  `_build_fcm_message` extraction's behavior-preservation, the `zip(..., strict=True)` ordering
+  assumption, or the token-lookup batching/fallback — all independently verified clean by the
+  reviewer.
 - [ ] **Real production build:** N/A — backend-only Python change, no frontend build applies.
 
 ### What was NOT verified

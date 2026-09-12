@@ -34,7 +34,8 @@ import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
-import { TrackBaseUrlContext } from './_layout';
+import { TrackBaseUrlContext, DirectionsProxyEnabledContext } from './_layout';
+import { fetchDirectionsRoute } from '@shared/api/directions';
 import { getRideMapCoords } from '../utils/rideMapCoords';
 import { useTranslation } from '../i18n';
 
@@ -266,6 +267,76 @@ function RideInProgressScreenContent() {
   const [routeFetched, setRouteFetched] = useState(
     !!(tripRouteCoords && tripRouteCoords.length > 1),
   );
+
+  // R7 (docs/audit/ride-experience/ROADMAP.md): shared by both the on-device
+  // MapViewDirections onReady below and the backend-proxy effect that tries
+  // first when dark-launched on -- same result shape ({coordinates, duration}),
+  // one place for the ETA-preference logic instead of two copies.
+  const handleRouteReady = (result: { coordinates: any[]; duration: number | null }) => {
+    if (!result.coordinates?.length) return;
+    setTripRouteCoords(result.coordinates);
+    setActiveRideRouteCoords(result.coordinates);
+    // Prefer haversine from the driver's current position rather than the
+    // Directions total duration (pickup→dropoff), which overstates remaining
+    // time if the driver has already moved.
+    const dLat = currentDriver?.lat;
+    const dLng = currentDriver?.lng;
+    const dropLat = currentRide?.dropoff_lat;
+    const dropLng = currentRide?.dropoff_lng;
+    const etaMin =
+      dLat != null && dLng != null && dropLat != null && dropLng != null
+        ? _haversineEtaMin(dLat, dLng, dropLat, dropLng)
+        : Math.ceil(result.duration ?? 0);
+    setEta(etaMin);
+    setLastEtaMin(etaMin);
+    // Flip the reactive flag last so the haversine effect sees the correct
+    // ETA state rather than overwriting it immediately.
+    setRouteFetched(true);
+    if (mapRef.current && result.coordinates.length > 1) {
+      mapRef.current.fitToCoordinates(result.coordinates, {
+        edgePadding: { top: 80, right: 50, bottom: 280, left: 50 },
+        animated: true,
+      });
+    }
+  };
+
+  const directionsProxyEnabled = useContext(DirectionsProxyEnabledContext);
+  const [routeProxyFailed, setRouteProxyFailed] = useState(false);
+
+  // R7: try the backend Directions proxy before the on-device
+  // MapViewDirections fallback below, using the same trigger condition. On
+  // any failure, routeProxyFailed flips true and the JSX falls through to
+  // that fallback unchanged -- a proxy outage never means no route line.
+  useEffect(() => {
+    if (!directionsProxyEnabled || routeProxyFailed) return;
+    if (!routeOrigin || !routeDestination) return;
+    if (activeRideRouteCoords !== null || tripRouteCoords.length >= 2) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchDirectionsRoute(routeOrigin, routeDestination);
+        if (cancelled) return;
+        if (result.coordinates.length > 0) {
+          handleRouteReady({ coordinates: result.coordinates, duration: result.duration });
+        } else {
+          setRouteProxyFailed(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[RideInProgress] Directions proxy failed, falling back to on-device:', e);
+          setRouteProxyFailed(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleRouteReady
+    // closes over state already covered by this effect's own deps (or, for
+    // currentDriver/currentRide, values only used for the ETA-preference
+    // branch, not whether/what to fetch); it's redefined every render, so
+    // adding it would refire this effect on every render.
+  }, [directionsProxyEnabled, routeProxyFailed, routeOrigin, routeDestination, activeRideRouteCoords, tripRouteCoords.length]);
 
   // Update ETA from driver's live position via haversine — no Maps API call.
   // Fires immediately on mount when routeFetched is already true (store hit),
@@ -701,43 +772,20 @@ function RideInProgressScreenContent() {
             {/* Route: reuse saved polyline or store coords if available.
                 Only call Directions API when no cached route exists at all.
                 Origin is the stable pickup — never the live driver position —
-                so MapViewDirections fires at most once per ride. */}
+                so MapViewDirections fires at most once per ride. (R7) skipped
+                while the backend proxy attempt above is still in flight or
+                has already succeeded. */}
             {routeOrigin && routeDestination &&
               process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY &&
-              activeRideRouteCoords === null && tripRouteCoords.length < 2 && (
+              activeRideRouteCoords === null && tripRouteCoords.length < 2 &&
+              (!directionsProxyEnabled || routeProxyFailed) && (
               <MapViewDirections
                 origin={routeOrigin}
                 destination={routeDestination}
                 apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY}
                 strokeWidth={0}
                 strokeColor="transparent"
-                onReady={(result: any) => {
-                  if (!result.coordinates?.length) return;
-                  setTripRouteCoords(result.coordinates);
-                  setActiveRideRouteCoords(result.coordinates);
-                  // Prefer haversine from the driver's current position rather
-                  // than the Directions total duration (pickup→dropoff), which
-                  // overstates remaining time if the driver has already moved.
-                  const dLat = currentDriver?.lat;
-                  const dLng = currentDriver?.lng;
-                  const dropLat = currentRide?.dropoff_lat;
-                  const dropLng = currentRide?.dropoff_lng;
-                  const etaMin =
-                    dLat != null && dLng != null && dropLat != null && dropLng != null
-                      ? _haversineEtaMin(dLat, dLng, dropLat, dropLng)
-                      : Math.ceil(result.duration);
-                  setEta(etaMin);
-                  setLastEtaMin(etaMin);
-                  // Flip the reactive flag last so the haversine effect sees
-                  // the correct ETA state rather than overwriting it immediately.
-                  setRouteFetched(true);
-                  if (mapRef.current && result.coordinates?.length > 1) {
-                    mapRef.current.fitToCoordinates(result.coordinates, {
-                      edgePadding: { top: 80, right: 50, bottom: 280, left: 50 },
-                      animated: true,
-                    });
-                  }
-                }}
+                onReady={handleRouteReady}
               />
             )}
 

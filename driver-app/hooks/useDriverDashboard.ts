@@ -749,7 +749,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // relies entirely on the background task — keep it dense during trip
     // phases, coarse when idle. No-op until go-online has started the task.
     const inTripPhase = TRACKED_TRIP_PHASES.includes(rideState);
-    updateBackgroundLocationCadence(inTripPhase ? TRIP_CADENCE : IDLE_CADENCE).catch(() => {});
+    updateBackgroundLocationCadence(inTripPhase ? TRIP_CADENCE : IDLE_CADENCE).catch((e) => {
+      // Never rethrow out of an effect, but never swallow either: a failed
+      // tighten means this trip is still sampling at idle cadence, which is the
+      // difference between a route and a straight line. backgroundLocation has
+      // already parked a foreground replay for the Android-backgrounded case.
+      console.warn(
+        `[Location] Failed to apply ${inTripPhase ? 'trip' : 'idle'} background cadence:`,
+        e instanceof Error ? e.message : e,
+      );
+    });
     // Persist the trip-active flag so a geofence wake can use trip cadence for
     // future capture; it cannot reconstruct samples missed after a force-quit.
     setBackgroundTripActive(inTripPhase).catch(() => {});

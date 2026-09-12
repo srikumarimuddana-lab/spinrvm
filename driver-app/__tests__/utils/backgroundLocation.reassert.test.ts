@@ -68,9 +68,13 @@ jest.mock('../../utils/crashlytics', () => ({
 }));
 jest.mock('../../lib/androidAuto/carFixChannel', () => ({ publishCarFix: jest.fn() }));
 
+import * as SecureStore from 'expo-secure-store';
 import {
   reassertDispatchTaskUnlocked,
   _resetDeferredReassert,
+  _resetLastAppliedCadence,
+  TRIP_CADENCE,
+  IDLE_CADENCE,
 } from '../../utils/backgroundLocation';
 
 const AppStateMock = AppState as unknown as { currentState: string };
@@ -164,5 +168,75 @@ describe('reassertDispatchTaskUnlocked foreground gate', () => {
       expect.any(Error),
       expect.objectContaining({ location: 'reassert_failed' }),
     );
+  });
+});
+
+/**
+ * The self-heal picks the cadence it re-asserts. It used to read the persisted
+ * trip flag as a plain boolean, so ANY failure to read it — most importantly an
+ * iOS Keychain item stored WHEN_UNLOCKED being unreadable with the screen locked
+ * — resolved to "no trip" and pinned a live ride to IDLE_CADENCE, once a minute,
+ * for the whole trip. Live evidence 2026-09-12 (ride SPR-VWSR6C, iOS, screen
+ * locked): 18 background fixes in 967 s, ~1 per 54 s, against a 4 s trip cadence.
+ */
+describe('reassertDispatchTaskUnlocked cadence selection', () => {
+  const readFlag = SecureStore.getItemAsync as jest.Mock;
+  const appliedInterval = (call: number) =>
+    (mockStartUpdates.mock.calls[call][1] as { timeInterval: number }).timeInterval;
+
+  beforeEach(() => {
+    _resetDeferredReassert();
+    _resetLastAppliedCadence();
+    jest.clearAllMocks();
+    appStateListeners.length = 0;
+    AppStateMock.currentState = 'active';
+    Platform.OS = 'ios';
+    mockHasStarted.mockResolvedValue(true);
+    mockGetBgPerms.mockResolvedValue({ status: 'granted' });
+    mockStartUpdates.mockResolvedValue(undefined);
+    readFlag.mockResolvedValue('true');
+  });
+
+  it('applies trip cadence while the flag reports an active ride', async () => {
+    await reassertDispatchTaskUnlocked();
+    expect(appliedInterval(0)).toBe(TRIP_CADENCE.timeInterval);
+  });
+
+  it('applies idle cadence when the flag is definitively absent', async () => {
+    readFlag.mockResolvedValue(null);
+    await reassertDispatchTaskUnlocked();
+    expect(appliedInterval(0)).toBe(IDLE_CADENCE.timeInterval);
+  });
+
+  it('never downgrades a live trip to idle when the flag cannot be read', async () => {
+    // Establish a live trip first, so the module knows trip cadence is in force.
+    await reassertDispatchTaskUnlocked();
+    expect(appliedInterval(0)).toBe(TRIP_CADENCE.timeInterval);
+
+    // Screen locks: the Keychain read now fails rather than returning a value.
+    readFlag.mockRejectedValue(new Error('Keychain unavailable while locked'));
+    await reassertDispatchTaskUnlocked();
+
+    expect(appliedInterval(1)).toBe(TRIP_CADENCE.timeInterval);
+    expect(appliedInterval(1)).not.toBe(IDLE_CADENCE.timeInterval);
+  });
+
+  it('repeated unreadable heals keep re-asserting trip cadence, not drifting to idle', async () => {
+    await reassertDispatchTaskUnlocked();
+    readFlag.mockRejectedValue(new Error('Keychain unavailable while locked'));
+    await reassertDispatchTaskUnlocked();
+    await reassertDispatchTaskUnlocked();
+    await reassertDispatchTaskUnlocked();
+
+    expect(mockStartUpdates).toHaveBeenCalledTimes(4);
+    for (let i = 1; i < 4; i++) {
+      expect(appliedInterval(i)).toBe(TRIP_CADENCE.timeInterval);
+    }
+  });
+
+  it('falls back to idle only when nothing is known — no trip ever established', async () => {
+    readFlag.mockRejectedValue(new Error('Keychain unavailable while locked'));
+    await reassertDispatchTaskUnlocked();
+    expect(appliedInterval(0)).toBe(IDLE_CADENCE.timeInterval);
   });
 });

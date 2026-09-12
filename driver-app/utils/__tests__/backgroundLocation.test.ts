@@ -46,6 +46,13 @@ jest.mock('expo-secure-store', () => ({
   }),
   setItemAsync: jest.fn(() => Promise.resolve()),
   deleteItemAsync: jest.fn(() => Promise.resolve()),
+  // Distinct, truthy stand-ins for the opaque native constants — without them
+  // a keychainAccessible assertion compares undefined to undefined and passes
+  // no matter what the code asked for.
+  AFTER_FIRST_UNLOCK: 'AFTER_FIRST_UNLOCK',
+  AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY',
+  WHEN_UNLOCKED: 'WHEN_UNLOCKED',
+  WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY',
 }));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -157,7 +164,20 @@ describe('setBackgroundTripActive', () => {
 
   it('persists the trip flag when a ride is active', async () => {
     await setBackgroundTripActive(true);
-    expect(SecureStore.setItemAsync).toHaveBeenCalledWith('spinr_bg_trip_active', 'true');
+    expect(SecureStore.setItemAsync).toHaveBeenCalledWith('spinr_bg_trip_active', 'true', {
+      keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+    });
+  });
+
+  it('stores the trip flag so the headless task can still read it while the screen is locked', async () => {
+    // Regression: the default (WHEN_UNLOCKED) made this item unreadable the
+    // moment the device locked, so the ~60s self-heal saw "no trip" and pinned a
+    // live ride to IDLE_CADENCE. Live evidence 2026-09-12, ride SPR-VWSR6C: 18
+    // background fixes in 967s (~1 per 54s) instead of the 4s trip cadence.
+    await setBackgroundTripActive(true);
+    const [, , options] = (SecureStore.setItemAsync as jest.Mock).mock.calls[0];
+    expect(options?.keychainAccessible).toBe(SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY);
+    expect(options?.keychainAccessible).not.toBe(SecureStore.WHEN_UNLOCKED);
   });
 
   it('clears the trip flag when idle', async () => {

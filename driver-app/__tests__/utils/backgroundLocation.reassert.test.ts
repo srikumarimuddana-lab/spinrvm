@@ -73,6 +73,7 @@ import {
   reassertDispatchTaskUnlocked,
   _resetDeferredReassert,
   _resetLastAppliedCadence,
+  recoverTripLocation,
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../../utils/backgroundLocation';
@@ -238,5 +239,55 @@ describe('reassertDispatchTaskUnlocked cadence selection', () => {
     readFlag.mockRejectedValue(new Error('Keychain unavailable while locked'));
     await reassertDispatchTaskUnlocked();
     expect(appliedInterval(0)).toBe(IDLE_CADENCE.timeInterval);
+  });
+});
+
+/**
+ * recoverTripLocation answers "is tracking running", not "did the cadence
+ * change succeed". The FCM/WS `location_health` nudge fires precisely when the
+ * backend has seen a trip stop reporting, and its caller only force-flushes the
+ * durable outbox when this returns true. On Android the foreground-service
+ * re-promotion is refused while backgrounded — the normal state when the nudge
+ * arrives — so treating that refusal as "not running" would skip the flush and
+ * log a misleading "check location permission" while tracking was in fact fine.
+ */
+describe('recoverTripLocation return value', () => {
+  const FGS_REFUSAL = Object.assign(
+    new Error('java.lang.IllegalStateException has been rejected.'),
+    { cause: new Error('Foreground service cannot be started when the application is in the background') },
+  );
+
+  beforeEach(() => {
+    _resetDeferredReassert();
+    _resetLastAppliedCadence();
+    jest.clearAllMocks();
+    appStateListeners.length = 0;
+    AppStateMock.currentState = 'active';
+    Platform.OS = 'ios';
+    mockHasStarted.mockResolvedValue(true);
+    mockGetBgPerms.mockResolvedValue({ status: 'granted' });
+    mockStartUpdates.mockResolvedValue(undefined);
+    (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(null);
+  });
+
+  it('still reports running when the cadence re-assert is refused for being backgrounded', async () => {
+    mockStartUpdates.mockRejectedValue(FGS_REFUSAL);
+    await expect(recoverTripLocation()).resolves.toBe(true);
+  });
+
+  it('parks a foreground replay rather than leaving the trip on idle cadence', async () => {
+    mockStartUpdates.mockRejectedValue(FGS_REFUSAL);
+    await recoverTripLocation();
+    expect(appStateListeners).toHaveLength(1);
+  });
+
+  it('reports not running when the task is genuinely down and cannot be restarted', async () => {
+    mockHasStarted.mockResolvedValue(false);
+    mockGetBgPerms.mockResolvedValue({ status: 'denied' });
+    await expect(recoverTripLocation()).resolves.toBe(false);
+  });
+
+  it('reports running on the normal success path', async () => {
+    await expect(recoverTripLocation()).resolves.toBe(true);
   });
 });

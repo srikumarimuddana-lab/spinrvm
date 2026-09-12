@@ -166,7 +166,7 @@ async def _fetch_directions_route(
         if cached:
             return json.loads(cached)
     except Exception:
-        logger.warning("_fetch_directions_route: cache get failed", exc_info=False)
+        logger.warning("_fetch_directions_route: cache get failed")
     # Budget-gate before spending: this is the highest-volume Directions call
     # site in the app (every /rides/estimate, plus every booking confirm
     # lacking a valid estimate token) and, until this fix, the only one of
@@ -254,7 +254,7 @@ async def _fetch_directions_route(
             try:
                 await redis_set(cache_key, json.dumps(result), ttl=_FARE_DIRECTIONS_CACHE_TTL_S)
             except Exception:
-                logger.warning("_fetch_directions_route: cache set failed", exc_info=False)
+                logger.warning("_fetch_directions_route: cache set failed")
         return result
     except Exception as exc:
         # Money path: this decides whether the ride bills on the road route or

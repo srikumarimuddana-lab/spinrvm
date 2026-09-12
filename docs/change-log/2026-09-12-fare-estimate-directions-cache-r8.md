@@ -208,6 +208,25 @@ from Redis — no code change needed, since a fresh cache simply refills from li
   answer), and is the same class of gap C104 already tracks for `maps_budget.py`'s
   check-then-increment pattern more broadly; not a new risk this change introduces.
 
+### Post-merge addendum: CI caught a real defect this session's own verification missed
+
+`backend/tests/test_loguru_call_conventions.py::test_no_exc_info_kwarg_in_loguru_calls` — a
+codebase-wide static scanner CLAUDE.md documents (checked for in this session's other loguru
+edits, but not re-run as part of R8's own verification sweep before commit) — failed CI on this
+commit: the two new cache-failure `logger.warning(...)` calls above passed `exc_info=False`, a
+stdlib-logging kwarg loguru-bound loggers don't support (silently swallowed as an unused
+`str.format` keyword, per CLAUDE.md's documented gotcha). Functionally harmless — no traceback
+was ever captured either way, since neither call opted into one — but it violates the repo's own
+lint-equivalent guardrail and would have shipped past `ruff check` undetected (this rule is
+pytest-only, not a ruff rule). **Fixed** by removing `exc_info=False` from both lines (behavior-
+identical; the annotation was never doing anything). Verified via
+`pytest tests/test_loguru_call_conventions.py` (8/8 passing) and a full re-run of
+`test_directions_route.py` (22/22).
+**Process note:** this session's R8 verification ran the targeted test files, `ruff check`,
+and a broader dispatch/estimate/ride sweep, but never the full backend suite — the one check
+that would have caught this before it reached CI. Recorded here rather than silently amended,
+since it's a real gap in what "verified" meant for this change at commit time.
+
 ## 10. Sign-off
 
 - [x] Rollback plan is concrete and testable (`git revert`, or a Redis key-prefix flush with

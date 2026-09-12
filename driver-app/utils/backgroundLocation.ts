@@ -25,6 +25,26 @@ const API_URL = spinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
 
+// Every value this module persists is read back from the HEADLESS background
+// task, which runs while the screen is locked — that is the whole point of it.
+// expo-secure-store defaults to WHEN_UNLOCKED (iOS kSecAttrAccessibleWhenUnlocked),
+// which makes an item unreadable the moment the device locks. With the default,
+// a locked-screen trip silently lost its dense cadence: the ~60s self-heal below
+// read TRIP_ACTIVE_KEY, got nothing, concluded "no trip" and re-applied
+// IDLE_CADENCE to a live ride once a minute (observed 2026-09-12 on ride
+// SPR-VWSR6C: 18 background fixes in 967s ≈ one per 54s — idle, not the 4s trip
+// cadence), and getBackgroundAuthToken() likewise found no token and deferred
+// every upload until the driver next unlocked. AFTER_FIRST_UNLOCK keeps the item
+// readable while locked once the device has been unlocked since boot;
+// THIS_DEVICE_ONLY additionally keeps these credentials out of any backup/
+// restore to another device.
+//
+// NOTE: iOS applies this attribute at WRITE time, so an item stored by an older
+// build keeps its old accessibility until it is written again.
+const KEYCHAIN_BACKGROUND_READABLE = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+} as const;
+
 // This producer's own anti-spoof state — the teleport comparison is only
 // meaningful between consecutive fixes from the SAME watcher (see
 // locationIntegrity.ts). Gates DISPLAY (the car marker) only, never capture.
@@ -221,8 +241,8 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
       const expiresAt = parseInt(fgExpiry, 10);
       if (Date.now() < expiresAt - 30_000) {
         // Cache it for subsequent background fires within this process
-        await SecureStore.setItemAsync('bg_access_token', fgToken);
-        await SecureStore.setItemAsync('bg_access_token_expires', fgExpiry);
+        await SecureStore.setItemAsync('bg_access_token', fgToken, KEYCHAIN_BACKGROUND_READABLE);
+        await SecureStore.setItemAsync('bg_access_token_expires', fgExpiry, KEYCHAIN_BACKGROUND_READABLE);
         return fgToken;
       }
     }
@@ -368,6 +388,17 @@ export const TRIP_CADENCE: BgLocationConfig = {
   accuracy: Location.Accuracy.High,
 };
 
+// Last cadence successfully applied to the live task. Used by the self-heal to
+// re-assert what is already in force when it cannot establish whether a trip is
+// active — re-asserting the current cadence is always safe, whereas guessing
+// IDLE downgrades a live ride.
+let _lastAppliedCadence: BgLocationConfig | null = null;
+
+/** @internal Test-only — forget the remembered cadence between cases. */
+export function _resetLastAppliedCadence(): void {
+  _lastAppliedCadence = null;
+}
+
 async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
   const interval = config?.timeInterval ?? IDLE_CADENCE.timeInterval!;
   const distance = config?.distanceInterval ?? IDLE_CADENCE.distanceInterval!;
@@ -388,6 +419,10 @@ async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
       notificationColor: '#6C63FF',
     },
   });
+  // Only after the native call resolves — a rejected apply left the previous
+  // cadence in force, so recording the attempted one would make the self-heal
+  // re-assert a cadence the task never actually had.
+  _lastAppliedCadence = config ?? IDLE_CADENCE;
 }
 
 /**
@@ -534,15 +569,25 @@ export async function reassertDispatchTaskUnlocked(): Promise<void> {
     }
     const { status } = await Location.getBackgroundPermissionsAsync();
     if (status !== 'granted') return;
-    let tripActive = false;
+    // Tri-state on purpose: true / false / unknown. An unreadable flag used to
+    // collapse to `false`, which made this repair path *cause* the outage it
+    // exists to fix — it re-applied IDLE_CADENCE to a live ride every ~60s.
+    // Unknown must therefore re-assert whatever is already in force, never idle.
+    let tripActive: boolean | null = null;
     try {
       tripActive = (await SecureStore.getItemAsync(TRIP_ACTIVE_KEY)) === 'true';
     } catch {
-      // Unreadable flag → idle cadence; the ride-state effect re-tightens it.
+      // Still unknown — fall through to the last-applied cadence below.
     }
+    const cadence =
+      tripActive === null
+        ? (_lastAppliedCadence ?? IDLE_CADENCE)
+        : tripActive
+          ? TRIP_CADENCE
+          : IDLE_CADENCE;
     // startLocationUpdatesAsync on a live task replaces options in place and
     // re-runs the native foreground promotion — the repair we're here for.
-    await _applyTaskOptions(tripActive ? TRIP_CADENCE : IDLE_CADENCE);
+    await _applyTaskOptions(cadence);
     console.log('[BgLocation] Dispatch task re-asserted');
   } catch (e) {
     if (_isBackgroundedForegroundServiceRejection(e)) {
@@ -600,7 +645,26 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
     if (!isRunning) return;
     const { status } = await Location.getBackgroundPermissionsAsync();
     if (status !== 'granted') return;
-    await _applyTaskOptions(config);
+    try {
+      await _applyTaskOptions(config);
+    } catch (e) {
+      // Android 12+ refuses to re-promote the foreground service while the app
+      // is backgrounded — which is exactly when this call matters most, because
+      // the trip-phase tighten fires from a driver who has just put the phone
+      // down or handed the screen to Android Auto. The throw leaves the running
+      // task on its PREVIOUS cadence (idle), so swallowing it silently costs the
+      // whole trip its dense sampling. Park a foreground replay so it self-heals
+      // the moment the activity resumes, and let the caller see the failure.
+      if (_isBackgroundedForegroundServiceRejection(e)) {
+        console.warn('[BgLocation] Cadence change blocked while backgrounded — deferred to next foreground');
+        deferReassertUntilForeground();
+        throw e;
+      }
+      recordNonFatal(e, {
+        domain: 'drivers', surface: 'driver-app', location: 'cadence_apply_failed',
+      });
+      throw e;
+    }
     console.log(
       `[BgLocation] Cadence updated (t=${config.timeInterval ?? IDLE_CADENCE.timeInterval}ms ` +
         `d=${config.distanceInterval ?? IDLE_CADENCE.distanceInterval}m)`,
@@ -690,7 +754,7 @@ async function stopBackgroundLocationUnlocked(): Promise<void> {
 export async function setBackgroundTripActive(active: boolean): Promise<void> {
   try {
     if (active) {
-      await SecureStore.setItemAsync(TRIP_ACTIVE_KEY, 'true');
+      await SecureStore.setItemAsync(TRIP_ACTIVE_KEY, 'true', KEYCHAIN_BACKGROUND_READABLE);
     } else {
       await SecureStore.deleteItemAsync(TRIP_ACTIVE_KEY);
     }
@@ -807,7 +871,7 @@ async function _startGeofenceRecoveryInner(lat: number, lng: number, myGeneratio
   }
 
   // Persist the centre so the displacement gate survives process death.
-  await SecureStore.setItemAsync(GEOFENCE_CENTRE_KEY, JSON.stringify({ lat, lng }))
+  await SecureStore.setItemAsync(GEOFENCE_CENTRE_KEY, JSON.stringify({ lat, lng }), KEYCHAIN_BACKGROUND_READABLE)
     .catch(() => { /* Gate degrades to "always re-arm" — safe direction. */ });
   // PIPEDA: never log raw lat/lng.
   console.log(`[Geofence] Armed (r=${GEOFENCE_RADIUS_M}m)`);

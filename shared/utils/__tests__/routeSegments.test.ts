@@ -24,6 +24,18 @@ describe('routeQualityLabel', () => {
     ).toBe('Distance estimated from booking · GPS incomplete');
   });
 
+  it('shows the from-booking copy for planned_capped, over the discarded reconstruction ratios', () => {
+    // SPR-EG7X86: the finalizer capped a 15.1 km reconstruction to the 9.21 km
+    // booking; route_quality still carries the reconstruction's 74/26 split.
+    expect(
+      routeQualityLabel({
+        distance_basis: 'planned_capped',
+        observed_distance_ratio: 0.742,
+        inferred_distance_ratio: 0.258,
+      }),
+    ).toBe('Distance from booking · GPS route implausible');
+  });
+
   it('does not alter observed/reconstructed labels', () => {
     expect(
       routeQualityLabel({ observed_distance_ratio: 0.87, inferred_distance_ratio: 0.13 }),

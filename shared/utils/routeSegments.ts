@@ -148,6 +148,12 @@ export function routeQualityLabel(quality: unknown): string {
   // estimate, not a measured value — say so plainly rather than implying a
   // precise GPS figure (the honest-labeling fix for the incident).
   if (value?.distance_basis === 'planned_estimated') return 'Distance estimated from booking · GPS incomplete';
+  // The mirror case: GPS was complete but the road reconstruction came out
+  // implausibly long (ride SPR-EG7X86, 2026-09-12: 15.1 km for a 9.2 km
+  // trip), so the finalizer published the booked distance instead. The
+  // observed/inferred ratios below belong to the discarded reconstruction
+  // and must not be shown beside a figure that is not GPS-measured.
+  if (value?.distance_basis === 'planned_capped') return 'Distance from booking · GPS route implausible';
   const observedRatio =
     typeof value?.observed_distance_ratio === 'number' ? value.observed_distance_ratio : undefined;
   const inferredRatio =

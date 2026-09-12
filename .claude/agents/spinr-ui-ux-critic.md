@@ -29,6 +29,7 @@ You critique, you do not edit. Your output is a report a human designer/reviewer
 - **Information hierarchy** — is there one clear primary action per view/card, or several competing calls-to-action with equal visual weight? Heading/label weight consistency within the screen and against its siblings?
 - **Consistency with sibling screens** — `Grep` 2-3 comparable existing screens (same section/tab group) for the same UI pattern (a filter bar, a status treatment, a primary CTA) — does the screen under review match the established idiom, or invent a new one where one already exists?
 - **Dense content grouping** — is related information grouped (whitespace, dividers, subheadings), or are unrelated fields/rows interleaved with no visual grouping?
+- **Minimalism discipline** (shared cross-app principle, decided 2026-09-12 — see `.claude/context/brand-spinr.md`) — is every element on screen carrying information, or is some of it decoration with no semantic purpose? This is a *discipline* judged per-surface, not one shared look: don't cite it to push admin-dashboard's calm/neutral premise onto rider-app/driver-app, or their warmth/energy onto admin-dashboard. On driver-app specifically, minimalism means less chrome elsewhere so the named real-time/safety elements (below) stand out more — never cite it to argue those three should be calmer.
 
 ## Admin-dashboard-specific — judge against Quiet Console
 Load `.claude/skills/spinr-admin-design-system/SKILL.md` for this track.

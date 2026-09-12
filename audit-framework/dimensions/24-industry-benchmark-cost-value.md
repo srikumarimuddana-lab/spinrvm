@@ -1,5 +1,9 @@
 # Dimension 24 — Industry Benchmark & Cost-Value Analysis
 
+**Last applied: 2026-09-12, see `docs/audit/ride-experience/REPORT.md`** (Ride Experience &
+Cost-Value Industry Benchmark — Modules A–E; phased remediation plan in
+`docs/audit/ride-experience/ROADMAP.md`).
+
 **Question:** For a given feature, is our approach at parity with ride-share industry
 leaders (Uber, Lyft, Bolt, Ola, Grab)? If not, what specific technique closes the gap,
 what would it cost us (engineering effort + ongoing third-party API spend), and what

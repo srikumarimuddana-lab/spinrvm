@@ -72,6 +72,19 @@ _REFRESH_TOKEN_BYTES = 48
 # escalates.
 REFRESH_REUSE_GRACE_SECONDS = 600
 
+# Grace window for a token revoked WITHOUT rotation (explicit logout, logout-all,
+# a prior cascade) and replayed moments later. Observed 2026-09-12 on the admin
+# dashboard: logout() fires the cookie-clearing BFF call without awaiting it and
+# navigates to /login, whose bootstrap refreshes with the cookie still present —
+# the just-revoked token was replayed 1.3 s after its own logout, classified as
+# theft, and the cascade logged the founder out of every admin session while
+# they were approving driver documents. The credential is dead either way; a
+# cascade here can only kill the user's OTHER live sessions. Kept short — this
+# is a same-client overlap window, not the mobile "lost rotation response"
+# case the 10-min rotation grace above exists for. A replay past it still
+# escalates.
+REFRESH_REVOKE_RACE_GRACE_SECONDS = 60
+
 
 def _parse_iso_dt(value) -> Optional[datetime]:
     """Parse a tz-aware UTC datetime from a DB timestamp value, or None."""
@@ -89,22 +102,23 @@ def _parse_iso_dt(value) -> Optional[datetime]:
 
 
 def _is_benign_rotation_replay(row: dict) -> bool:
-    """True when a revoked-token replay is a normal rotation race, not theft.
+    """True when a revoked-token replay is a client race, not theft.
 
-    Requires BOTH:
-      • ``replaced_by`` is set — the token was rotated forward by a successful
-        refresh. A token revoked WITHOUT a replacement was killed by an explicit
-        logout or a prior cascade, and replaying that is always a real signal.
-      • It was revoked within ``REFRESH_REUSE_GRACE_SECONDS`` — a stolen token
-        replayed well after the window still escalates.
+    Two windows, chosen by HOW the token died:
+      • ``replaced_by`` set — rotated forward by a successful refresh. A replay
+        within ``REFRESH_REUSE_GRACE_SECONDS`` is a retry after a lost rotation
+        response or two near-simultaneous refreshes.
+      • ``replaced_by`` empty — killed by an explicit logout, logout-all or a
+        prior cascade. A replay within ``REFRESH_REVOKE_RACE_GRACE_SECONDS`` is
+        the same client's logout/refresh overlap (see the constant).
+    A stolen token replayed after its window still escalates.
     """
-    if not row.get("replaced_by"):
-        return False
     revoked_at = _parse_iso_dt(row.get("revoked_at"))
     if not revoked_at:
         return False
     age = (datetime.now(timezone.utc) - revoked_at).total_seconds()
-    return 0 <= age <= REFRESH_REUSE_GRACE_SECONDS
+    window = REFRESH_REUSE_GRACE_SECONDS if row.get("replaced_by") else REFRESH_REVOKE_RACE_GRACE_SECONDS
+    return 0 <= age <= window
 
 
 def _hash_refresh_token(raw: str) -> str:
@@ -242,10 +256,13 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
         # cascades. Either way the client gets a generic 401 (no oracle).
         if _is_benign_rotation_replay(row):
             logger.warning(
-                "refresh: benign rotation replay within grace window — "
+                "refresh: benign {} replay within grace window — "
                 "returning 401 without cascade "
-                f"(row_id={row.get('id')} user_id={row.get('user_id')} "
-                f"audience={row.get('audience')})"
+                "(row_id={} user_id={} audience={})",
+                "rotation" if row.get("replaced_by") else "post-revoke",
+                row.get("id"),
+                row.get("user_id"),
+                row.get("audience"),
             )
             return None
         # One cascade per dead row. The cascade answers the first replay by
@@ -287,7 +304,19 @@ REUSE_AUDIT_ACTION = "refresh_token_reuse_detected"
 
 
 async def _reuse_already_handled(row: dict) -> bool:
-    """True when this exact revoked row has already triggered the cascade.
+    """True when a cascade has already answered this revoked row.
+
+    Either the row was the replayed token that triggered a cascade, or it is
+    one of the rows that cascade revoked (``cascade_revoked_row_ids``). The
+    second case matters as much as the first: every session a cascade kills
+    still holds its cookie/keychain token and replays it when its access
+    token expires up to an hour later. Observed 2026-09-12 (admin): a session
+    killed at 03:19:57 replayed at 04:05:17, and because that row id was not
+    the one on record, the replay re-cascaded and killed the fresh session
+    the founder had logged into at 03:21 — each dead session became a
+    landmine for the next live one. A holder of a cascade-revoked credential
+    never had the sessions minted after that cascade, so revoking them again
+    protects nothing.
 
     Reads the audit_logs row the cascade writes (Step 4 below) rather than a
     new column: the record is already the 7-year forensic trail for the
@@ -330,7 +359,14 @@ async def _reuse_already_handled(row: dict) -> bool:
         # replay must run the cascade again. Rows written before this flag
         # existed have no `cascade_ok` and are treated as not handled, which
         # errs toward one extra cascade, never toward a suppressed one.
-        if isinstance(details, dict) and details.get("replayed_row_id") == row_id and details.get("cascade_ok") is True:
+        if not isinstance(details, dict) or details.get("cascade_ok") is not True:
+            continue
+        if details.get("replayed_row_id") == row_id:
+            return True
+        # Rows written before the cascade recorded its victims carry no list;
+        # a victim of one of those cascades still re-cascades once.
+        revoked_ids = details.get("cascade_revoked_row_ids")
+        if isinstance(revoked_ids, list) and row_id in revoked_ids:
             return True
     return False
 
@@ -438,13 +474,16 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
     except Exception as e:
         logger.error(f"reuse-cascade: token_version bump failed (table={target_table} user={user_id}): {e}")
 
-    # Step 3: refresh-token cascade.
-    revoked_count = 0
+    # Step 3: refresh-token cascade. The ids go into the audit row so a later
+    # replay from one of the sessions killed here is recognised as already
+    # answered (see _reuse_already_handled) instead of cascading again.
+    revoked_ids: list[str] = []
     try:
-        revoked_count = await revoke_all_for_user(user_id) if user_id else 0
+        revoked_ids = await revoke_all_for_user_ids(user_id) if user_id else []
         revoke_ok = True
     except Exception as e:
         logger.error(f"reuse-cascade: revoke_all_for_user failed (user={user_id}): {e}")
+    revoked_count = len(revoked_ids)
 
     # Step 3.5 (B-P1-11): kick live WebSocket sockets for the user.
     # Without this, an attacker holding the access token paired with
@@ -486,6 +525,7 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
             "replaced_by": row.get("replaced_by"),
             "cascade_token_version": new_version,
             "cascade_refresh_revoked": revoked_count,
+            "cascade_revoked_row_ids": revoked_ids,
             # Read back by _reuse_already_handled: a repeat replay of this row
             # skips the cascade only when both destructive steps succeeded.
             "cascade_ok": bump_ok and revoke_ok,
@@ -539,6 +579,15 @@ async def revoke_all_for_user(user_id: str) -> int:
     This is what /auth/logout-all and the admin "force logout" action
     call. token_version bump does the access-token side; this does the
     refresh-token side. Both are necessary.
+    """
+    return len(await revoke_all_for_user_ids(user_id))
+
+
+async def revoke_all_for_user_ids(user_id: str) -> list[str]:
+    """Revoke every non-revoked refresh token for a user; return the row ids.
+
+    The reuse cascade records these ids on its audit row so a later replay
+    from one of the sessions it killed does not cascade again.
 
     Implementation note: we can't express `revoked_at IS NULL` through
     the Mongo-style wrapper's `{field: None}` syntax (postgrest-py
@@ -551,8 +600,8 @@ async def revoke_all_for_user(user_id: str) -> int:
         rows = await db.get_rows("refresh_tokens", {"user_id": user_id}, limit=1000)
     except Exception as e:
         logger.opt(exception=True).error(f"refresh_tokens scan failed for user {user_id}: {e}")
-        return 0
-    n = 0
+        return []
+    revoked: list[str] = []
     for row in rows or []:
         if row.get("revoked_at"):
             continue
@@ -562,7 +611,7 @@ async def revoke_all_for_user(user_id: str) -> int:
                 {"id": row["id"]},
                 {"$set": {"revoked_at": now_iso}},
             )
-            n += 1
+            revoked.append(str(row["id"]))
         except Exception as e:  # pragma: no cover
             logger.opt(exception=True).error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}")
-    return n
+    return revoked

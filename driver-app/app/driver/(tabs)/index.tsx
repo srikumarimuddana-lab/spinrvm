@@ -374,6 +374,29 @@ function DriverDashboard() {
   const [currentNavStep, setCurrentNavStep] = useState<StepProgress | null>(null);
   const navStepIndexRef = useRef<number | null>(null);
 
+  // Off-route-triggered refetch — Phase 1 PR D. Bypasses PR A's ride-scoped
+  // 30-min cache (force_refresh=true) so a driver who actually left the
+  // planned route gets a step list matching where they now are, rather than
+  // waiting out the TTL on stale turns for the road they're no longer on.
+  // Wired into the existing route-deviation-detection effect below, reusing
+  // its same 60s cooldown gate rather than adding a second debounce
+  // mechanism. On failure, deliberately leaves any existing navSteps in
+  // place — a transient network hiccup on a recovery attempt shouldn't
+  // blank out a still-possibly-useful instruction the driver is already
+  // seeing (unlike the initial per-leg fetch above, which clears on failure
+  // because there's nothing yet to preserve).
+  const refreshNavigationStepsOnDeviation = useCallback(async (rid: string) => {
+    try {
+      const { data } = await api.get<{ steps: NavigationStep[]; destination: string | null }>(
+        `/rides/${rid}/navigation-steps?force_refresh=true`,
+      );
+      navStepIndexRef.current = null;
+      setNavSteps(Array.isArray(data?.steps) ? data.steps : []);
+    } catch {
+      // Leave existing navSteps as-is — see comment above.
+    }
+  }, []);
+
   // Last origin actually fetched + a mirror of the live driver location, both
   // held in refs so the interval callback sees fresh values without
   // re-subscribing on every render.
@@ -1034,8 +1057,16 @@ function DriverDashboard() {
     if (offRouteStreakRef.current >= 3 && Date.now() - offRouteToastMsRef.current > 60_000) {
       offRouteToastMsRef.current = Date.now();
       showToast('info', 'Off Route', 'You have left the planned route.');
+      // Phase 1 PR D: a genuine deviation invalidates the turn-by-turn step
+      // list too, not just the toast — reuses this same 60s cooldown rather
+      // than adding a second debounce for what both share as the trigger
+      // event. A no-op when the flag is off or there's no active leg
+      // (empty response either way, same as every other call to this
+      // endpoint).
+      const rid = activeRide?.ride?.id;
+      if (rid) void refreshNavigationStepsOnDeviation(rid);
     }
-  }, [location, rideState, routeCoords]);
+  }, [location, rideState, routeCoords, activeRide?.ride?.id, refreshNavigationStepsOnDeviation]);
 
   // ── Arrival geofence auto-detect ──
   // When navigating to pickup, two consecutive displayed fixes inside the

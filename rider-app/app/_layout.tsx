@@ -67,6 +67,13 @@ export const TrackBaseUrlContext = React.createContext<string | null>(null);
 // slow/failed settings fetch never accidentally exposes the ride-less SOS
 // call path before the flag is confirmed on.
 export const RidelessSosEnabledContext = React.createContext<boolean>(false);
+// Directions proxy rollout gate (docs/audit/ride-experience/ROADMAP.md R7),
+// served from app_settings.directions_proxy_enabled via GET /settings.
+// False while loading and by default — matches the backend's own
+// fail-closed default, so a slow/failed settings fetch never accidentally
+// skips a screen's on-device MapViewDirections fallback before the flag is
+// confirmed on.
+export const DirectionsProxyEnabledContext = React.createContext<boolean>(false);
 
 // Keep the native splash up until BrandSplash has painted its first frame.
 // Both draw the same picture (halo + mark), so the handoff is invisible — but
@@ -327,6 +334,7 @@ function RootLayout() {
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const [ridelessSosEnabled, setRidelessSosEnabled] = useState<boolean>(false);
+  const [directionsProxyEnabled, setDirectionsProxyEnabled] = useState<boolean>(false);
   const fcmRegisteredRef = useRef(false);
   const backgroundedAtRef = useRef<number | null>(null);
   // Current route, mirrored into a ref so the AppState listener (registered
@@ -369,12 +377,14 @@ function RootLayout() {
           stripe_publishable_key?: string;
           track_base_url?: string;
           rideless_sos_enabled?: boolean;
+          directions_proxy_enabled?: boolean;
         }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
         const trackUrl = (res.data?.track_base_url || '').replace(/\/$/, '');
         setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
         setRidelessSosEnabled(res.data?.rideless_sos_enabled === true);
+        setDirectionsProxyEnabled(res.data?.directions_proxy_enabled === true);
       } catch (e) {
         console.log('[Settings] Failed to fetch public settings:', e);
       }
@@ -881,7 +891,7 @@ function RootLayout() {
           }}
         >
           <ThemeProvider>
-            <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} ridelessSosEnabled={ridelessSosEnabled} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
+            <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} ridelessSosEnabled={ridelessSosEnabled} directionsProxyEnabled={directionsProxyEnabled} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} forceUpdate={forceUpdate} />
           </ThemeProvider>
         </PersistQueryClientProvider>
       ) : null}
@@ -926,6 +936,7 @@ function RootLayoutInner({
   stripePublishableKey,
   trackBaseUrl,
   ridelessSosEnabled,
+  directionsProxyEnabled,
   wsState,
   confirmSheet,
   setConfirmSheet,
@@ -936,6 +947,7 @@ function RootLayoutInner({
   stripePublishableKey: string | null;
   trackBaseUrl: string | null;
   ridelessSosEnabled: boolean;
+  directionsProxyEnabled: boolean;
   wsState: import('../hooks/useRiderSocket').RiderSocketState;
   confirmSheet: { visible: boolean; title: string; message: string; variant: 'info' | 'warning' | 'danger' | 'success'; buttons: ConfirmSheetButton[] };
   setConfirmSheet: React.Dispatch<React.SetStateAction<typeof confirmSheet>>;
@@ -964,6 +976,7 @@ function RootLayoutInner({
           <StripeKeyContext.Provider value={stripePublishableKey}>
           <TrackBaseUrlContext.Provider value={trackBaseUrl}>
           <RidelessSosEnabledContext.Provider value={ridelessSosEnabled}>
+          <DirectionsProxyEnabledContext.Provider value={directionsProxyEnabled}>
           <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
             screenOptions={{
@@ -1021,6 +1034,7 @@ function RootLayoutInner({
             <Stack.Screen name="lost-and-found-chat" />
           </Stack>
           </MaybeStripeProvider>
+          </DirectionsProxyEnabledContext.Provider>
           </RidelessSosEnabledContext.Provider>
           </TrackBaseUrlContext.Provider>
           </StripeKeyContext.Provider>

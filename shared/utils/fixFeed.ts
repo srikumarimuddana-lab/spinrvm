@@ -20,6 +20,17 @@ export interface MarkerFix {
   longitude: number;
   /** Raw reported GPS heading, if any (see selectBearing for trust rules). */
   heading?: number | null;
+  /**
+   * Raw reported GPS horizontal accuracy in metres, if any (e.g.
+   * expo-location loc.coords.accuracy). Forwarded straight through to
+   * gpsSmoothing.ts's smoothFix() by both CarMarker copies (they spread the
+   * whole fix object into it) — a real accuracy value lets the Kalman filter
+   * trust an imprecise fix less, instead of always assuming the same
+   * DEFAULT_ACCURACY_M guess. Left undefined for producers that don't have
+   * a real accuracy value (e.g. the WS-relayed fix rider-app's CarMarker
+   * ingests today); smoothFix falls back to its own default in that case.
+   */
+  accuracyM?: number | null;
   /** Real measurement time (e.g. expo-location loc.timestamp). */
   timestampMs: number;
 }

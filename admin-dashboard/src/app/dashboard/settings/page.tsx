@@ -907,6 +907,26 @@ export default function SettingsPage() {
                                     available) the location — same data the dashboard surfaces.
                                 </p>
                             </div>
+                            <Separator />
+                            <div className="flex items-center justify-between gap-4 pt-1">
+                                <div>
+                                    <Label htmlFor="route-deviation-alert-enabled">
+                                        Route-deviation safety alert
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Opens a safety incident when a driver on an active trip is
+                                        sustained &gt;500m off the booked route for 60+ seconds.
+                                        Ships dark (off) — verify the paging path in staging before
+                                        enabling in production.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="route-deviation-alert-enabled"
+                                    aria-label="Route-deviation safety alert enabled"
+                                    checked={!!settings.route_deviation_alert_enabled}
+                                    onCheckedChange={(v) => update("route_deviation_alert_enabled", v)}
+                                />
+                            </div>
                         </CardContent>
                     </Card>
 
@@ -1180,6 +1200,23 @@ export default function SettingsPage() {
                                     aria-label="Corporate billing enabled"
                                     checked={!!settings.corporate_billing_enabled}
                                     onCheckedChange={(v) => update("corporate_billing_enabled", v)}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label htmlFor="stale-ride-alert-enabled">Stale in-progress ride alert</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses the alert for an in-progress ride whose driver hasn&apos;t reported a
+                                        location in 10+ minutes (a likely abandoned/force-killed app). Alert-only —
+                                        never touches ride state or insurance periods either way; flip off only to
+                                        silence alert noise.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="stale-ride-alert-enabled"
+                                    aria-label="Stale in-progress ride alert enabled"
+                                    checked={settings.stale_in_progress_ride_alert_enabled !== false}
+                                    onCheckedChange={(v) => update("stale_in_progress_ride_alert_enabled", v)}
                                 />
                             </div>
                         </CardContent>

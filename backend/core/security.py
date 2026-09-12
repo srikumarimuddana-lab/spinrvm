@@ -9,6 +9,34 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
+def _report_firebase_init_failure() -> None:
+    """C97 recommendation #2 (Sentry half): give the loud `logger.error(...)`
+    calls below an explicitly-tagged Sentry event.
+
+    This module uses stdlib `logging`, which `server.py`'s `LoggingIntegration
+    (event_level="ERROR", ...)` already auto-captures — but that auto-capture
+    does not gain a `domain` tag: `tags_from_log_extra` (the helper that lifts
+    `domain`/`surface`/... into Sentry tags) is only wired to the loguru bridge
+    (`server.py`'s loguru sink / `utils/sentry_runtime.py`), not to stdlib
+    `logging`'s `extra=`. Without an explicit capture here these events would
+    arrive taggable only by `surface` (stamped globally by
+    `utils.sentry_scrub.scrub_event`), not by `domain`, unlike every other
+    Sentry capture site in this codebase. `env` is not passed explicitly —
+    it's already the global `environment=` set on `sentry_sdk.init(...)`
+    in server.py, not a per-event tag.
+
+    Same lazy-import-inside-try/except shape as `utils/driver_statement_pdf.py`'s
+    capture site: telemetry must never be the reason Firebase init fails to
+    complete, so any error reporting this fails is swallowed after a debug log.
+    """
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.capture_exception(tags={"domain": "drivers", "surface": "backend"})
+    except Exception as sentry_err:  # pragma: no cover - telemetry must never break startup
+        logger.debug(f"Firebase init failure: Sentry capture unavailable: {sentry_err}")
+
+
 def init_firebase():
     """Initialize Firebase Admin SDK"""
     try:
@@ -39,5 +67,7 @@ def init_firebase():
                     "all FCM pushes will be silently dropped",
                     exc_info=True,
                 )
+                _report_firebase_init_failure()
     except Exception:
         logger.error("Firebase initialization failed — all FCM pushes will be silently dropped", exc_info=True)
+        _report_firebase_init_failure()

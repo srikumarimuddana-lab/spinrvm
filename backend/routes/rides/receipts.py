@@ -11,9 +11,11 @@ from ._deps import (  # noqa: F401
     Depends,
     HTTPException,
     Request,
+    Response,
     RideStatus,
     get_current_user,
     ride_action_limit,
+    ride_read_limit,
     send_ride_receipt,
 )
 from ._shared import (  # noqa: F401
@@ -157,6 +159,78 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
     }
 
     return {"success": True, "receipt": receipt_data}
+
+
+@router.get("/{ride_id}/receipt.pdf")
+@ride_read_limit
+async def get_ride_receipt_pdf(
+    ride_id: str,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Download the branded ride-receipt PDF — the backend's one official
+    generator (utils/receipt_pdf.py via utils/email_receipt.py's
+    build_receipt_pdf_bytes), not a client-side re-implementation.
+
+    R9 (docs/audit/ride-experience/ROADMAP.md): rider-app previously built
+    its own bespoke HTML receipt in JS for the "Download invoice" action,
+    agreeing with this generator only because both happened to read the same
+    settled ride fields — with nothing keeping them in sync if either
+    changed. The app now fetches these bytes directly instead.
+
+    Rate-limited (unlike the JSON sibling ``get_ride_receipt`` above) because
+    this handler does real work per call — an outbound route-snapshot fetch
+    plus a synchronous PDF render — that the JSON endpoint doesn't; the
+    default IP-keyed limiter alone is too loose for that cost profile.
+    """
+    ride = await _deps.db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to view this receipt")
+
+    if ride.get("status") not in RideStatus.terminal_statuses():
+        raise HTTPException(
+            status_code=400,
+            detail="Receipts are only available for completed or cancelled rides",
+        )
+
+    # Same driver-hydration shape as services/payment_service.py's
+    # send_ride_receipt / send_ride_receipt_result — merges the driver's user
+    # profile (name) with driver-table fields (code, vehicle) the PDF
+    # generator needs and the user record doesn't have.
+    driver_info = None
+    if ride.get("driver_id"):
+        drv = await _deps.db_supabase.get_driver_by_id(ride["driver_id"])
+        if drv:
+            du = await _deps.db_supabase.get_user_by_id(drv.get("user_id"))
+            if du:
+                driver_info = {
+                    **du,
+                    "name": f"{du.get('first_name', '')} {du.get('last_name', '')}".strip(),
+                    "driver_code": drv.get("driver_code", ""),
+                    "driver_vehicle": f"{drv.get('vehicle_make', '')} {drv.get('vehicle_model', '')}".strip(),
+                }
+
+    tip_amount = Decimal(str(ride.get("tip_amount") or 0))
+    try:
+        from ...utils.email_receipt import build_receipt_pdf_bytes
+    except ImportError:
+        from utils.email_receipt import build_receipt_pdf_bytes  # type: ignore
+
+    try:
+        pdf_bytes = await build_receipt_pdf_bytes(ride, current_user, driver_info, _f(tip_amount))
+    except Exception as e:
+        _deps.logger.opt(exception=True).error(f"Receipt PDF generation failed for ride {ride_id}: {e}")
+        raise HTTPException(status_code=503, detail="Could not generate receipt PDF. Please try again later.") from e
+
+    ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="Spinr-receipt-{ref}.pdf"'},
+    )
 
 
 @router.post("/{ride_id}/email-receipt")

@@ -2975,6 +2975,129 @@ async def test_get_ride_receipt_fare_lock_settings_lookup_failure_falls_back_to_
     assert result["receipt"]["fare_locked"] is False
 
 
+# ── get_ride_receipt_pdf (R9, docs/audit/ride-experience/ROADMAP.md) ───────────
+# rider-app used to re-derive the receipt in client-side JS; it now downloads
+# these bytes instead. Same auth/status guards as get_ride_receipt (the JSON
+# endpoint) plus the PDF-generation call itself.
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_pdf_not_found():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import get_ride_receipt_pdf
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await get_ride_receipt_pdf(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_pdf_wrong_rider():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import get_ride_receipt_pdf
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
+        with pytest.raises(HTTPException) as exc:
+            await get_ride_receipt_pdf(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_pdf_not_completed():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import get_ride_receipt_pdf
+
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+        mock_db.get_ride = AsyncMock(return_value=_ride(status="in_progress", rider_id=_RIDER_ID))
+        with pytest.raises(HTTPException) as exc:
+            await get_ride_receipt_pdf(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_pdf_success_returns_pdf_bytes():
+    from backend.routes.rides import get_ride_receipt_pdf
+
+    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=_DRIVER_ID, ride_code="SPIN-9")
+    driver_row = {
+        "id": _DRIVER_ID,
+        "user_id": "drv-user",
+        "driver_code": "D9",
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Camry",
+    }
+    driver_user = {"first_name": "Bob", "last_name": "Smith"}
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch(
+            "backend.utils.email_receipt.build_receipt_pdf_bytes", AsyncMock(return_value=b"%PDF-fake")
+        ) as mock_build,
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
+        mock_db.get_user_by_id = AsyncMock(return_value=driver_user)
+        response = await get_ride_receipt_pdf(ride_id=_RIDE_ID, current_user=_USER)
+
+    assert response.status_code == 200
+    assert response.media_type == "application/pdf"
+    assert response.body == b"%PDF-fake"
+    assert "Spinr-receipt-SPIN-9.pdf" in response.headers["content-disposition"]
+    # Same driver-hydration shape as services/payment_service.py's
+    # send_ride_receipt — merged user profile + driver-table fields.
+    mock_build.assert_awaited_once()
+    call_args = mock_build.await_args
+    assert call_args.args[0] == ride
+    assert call_args.args[1] == _USER
+    assert call_args.args[2]["name"] == "Bob Smith"
+    assert call_args.args[2]["driver_code"] == "D9"
+    assert call_args.args[2]["driver_vehicle"] == "Toyota Camry"
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_pdf_no_driver_still_succeeds():
+    from backend.routes.rides import get_ride_receipt_pdf
+
+    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None, ride_code="SPIN-1")
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch(
+            "backend.utils.email_receipt.build_receipt_pdf_bytes", AsyncMock(return_value=b"%PDF-fake")
+        ) as mock_build,
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        response = await get_ride_receipt_pdf(ride_id=_RIDE_ID, current_user=_USER)
+
+    assert response.status_code == 200
+    mock_build.assert_awaited_once()
+    assert mock_build.await_args.args[2] is None
+
+
+@pytest.mark.anyio
+async def test_get_ride_receipt_pdf_generation_failure_returns_503():
+    from fastapi import HTTPException
+
+    from backend.routes.rides import get_ride_receipt_pdf
+
+    ride = _ride(status="completed", rider_id=_RIDER_ID, driver_id=None)
+    with (
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch(
+            "backend.utils.email_receipt.build_receipt_pdf_bytes",
+            AsyncMock(side_effect=RuntimeError("fpdf exploded")),
+        ),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        with pytest.raises(HTTPException) as exc:
+            await get_ride_receipt_pdf(ride_id=_RIDE_ID, current_user=_USER)
+    assert exc.value.status_code == 503
+
+
 # ── email_ride_receipt ────────────────────────────────────────────────────────
 
 

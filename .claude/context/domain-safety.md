@@ -151,11 +151,23 @@ Rules specific to safety domain:
   capture. Blocked on legal review before it could be built: Saskatchewan is
   one-party consent, but a platform recording *both* parties needs explicit
   consent from each plus retention/access rules.
-- **Route-deviation safety alert** — does not exist. `utils/route_validation.py`
-  computes a `deviation_pct`, but that is **GPS-spoofing fraud detection** on
-  completed trips; it does not run live and pings nobody on the safety team.
+- **Route-deviation safety alert** — **built 2026-09-11, dark-launched
+  (not yet verified in staging or turned on).** `utils/route_validation.py`
+  still only computes `deviation_pct` as **GPS-spoofing fraud detection**
+  on completed trips (unchanged, still not live) — the live check is a
+  separate module, `utils/route_deviation_alerter.py`. Every 30s it
+  compares each `in_progress` ride's driver position (`drivers.lat/lng`)
+  against that ride's booked route (`rides.planned_route_polyline`); a
+  driver sustained >500m off that route for >=60s opens a `safety_incidents`
+  row (`category="route_deviation"`) and pages the safety team via the same
+  `notify_safety_team()` fan-out `safety_checkin_loop.py` uses. Alert-only —
+  never mutates ride/driver state, same reasoning as
+  `stale_in_progress_ride_alerter.py`. Gated behind
+  `app_settings.route_deviation_alert_enabled` (default **False** — ship
+  dark, verify in staging, then flip on; do not assume this is live in
+  production just because the code exists).
 
-**Intended, not built:** the 22:00–05:00 auto-enable, audio recording, the
+**Intended, not built:** the 22:00–05:00 auto-enable and audio recording —
 >500 m/60 s live deviation ping, and the 15-minute check-in threshold.
 
 ## Common pitfalls

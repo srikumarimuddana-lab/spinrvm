@@ -79,6 +79,7 @@ _DISTANCE_RECOMPUTE_TRIGGER_BY_BASIS = {
     "observed_legacy": "route_reconstruction",
     "reconstructed": "reconstructed_distance",
     "planned_estimated": "coverage_fallback",
+    "planned_capped": "implausible_distance_cap",
     "gps_measured": "late_tail_refinalization",
 }
 
@@ -601,6 +602,8 @@ def resolve_measured_distance_km(
     min_coverage: float = 0.6,
     max_straight_share: float = 0.25,
     min_vs_straight: float = 0.8,
+    gps_km: float = 0.0,
+    max_vs_reference: float = 1.3,
 ) -> "tuple[float, str]":
     """Decide the measured distance a completed ride should DISPLAY (never bill).
 
@@ -617,6 +620,16 @@ def resolve_measured_distance_km(
         connectors dominate) OR the candidate is physically impossible (below
         ``min_vs_straight`` × the crow-flies endpoints distance) → keep the
         planned/booked distance rather than publish a wrong GPS number.
+      * ``planned_capped`` — the candidate is implausibly LONG: more than
+        ``max_vs_reference`` × the larger of the booked distance and the
+        spike-filtered GPS sum (``gps_km``). Map matching over a dense
+        two-stream trail plus routed "connectors" for a few short gaps can
+        overshoot badly — ride SPR-EG7X86 (2026-09-12): 11.2 km matched +
+        3.9 km of connectors for 99 s of gaps = 15.1 km published for a trip
+        the booking (9.21 km) and the GPS sum (9.17 km) both put at ~9.2 km.
+        A real detour lengthens the GPS sum too, so it still passes; only a
+        number BOTH references disagree with is capped, and the booked
+        distance is published instead (ADR 016).
 
     Straight-line connector distance is NEVER included in the number — a blind
     chord across an unrouted gap is not a believable road distance.
@@ -636,6 +649,17 @@ def resolve_measured_distance_km(
     # in the incident) — fall back to the booked estimate.
     if straight_line_km and candidate < min_vs_straight * float(straight_line_km):
         return round(float(planned_km or 0), 3), "planned_estimated"
+
+    # Implausibility ceiling (see docstring). Anchored on the booked distance:
+    # the GPS chord sum alone is a LOWER bound (a hole contributes one chord,
+    # shorter than the road through it), so without a booking there is nothing
+    # trustworthy to cap against and the floor / straight-share rules below
+    # stand on their own.
+    planned = float(planned_km or 0)
+    if planned > 0:
+        reference = max(planned, float(gps_km or 0))
+        if candidate > max_vs_reference * reference:
+            return round(planned, 3), "planned_capped"
 
     if candidate > 0 and straight_share <= max_straight_share:
         if coverage >= min_coverage:
@@ -683,11 +707,13 @@ async def _recompute_ride_distance_stats(
     fare_lock = False
     min_coverage = 0.6
     fallback_enabled = True
+    max_vs_reference = 1.3
     try:
         _settings = (await get_app_settings()) or {}
         fare_lock = _settings.get("fare_lock_enabled", False)
         min_coverage = float(_settings.get("route_min_observed_coverage_ratio", 0.6))
         fallback_enabled = bool(_settings.get("route_distance_fallback_enabled", True))
+        max_vs_reference = float(_settings.get("route_distance_max_vs_reference_ratio", 1.3))
     except Exception:
         logger.debug("distance-resolution settings read failed during recompute; using defaults", exc_info=True)
 
@@ -704,8 +730,26 @@ async def _recompute_ride_distance_stats(
             planned_km=planned_distance,
             straight_line_km=_endpoint_straight_line_km(ride),
             min_coverage=min_coverage,
+            # Spike-filtered straight-segment sum over the trail: the one
+            # measured figure that does not depend on map matching.
+            gps_km=float(distances.actual_distance_km_haversine or 0),
+            max_vs_reference=max_vs_reference,
         )
         new_actual = float(new_actual)
+        if distance_basis == "planned_capped":
+            logger.warning(
+                "ride %s: reconstructed distance %.2fkm exceeds %.2fx the larger of planned %.2fkm / GPS sum %.2fkm "
+                "— publishing the booked distance (observed=%.2f routed=%.2f coverage=%.2f)",
+                ride_id,
+                float(reconstructed.get("observed_distance_km") or 0)
+                + float(reconstructed.get("routed_connector_distance_km") or 0),
+                max_vs_reference,
+                float(planned_distance or 0),
+                float(distances.actual_distance_km_haversine or 0),
+                float(reconstructed.get("observed_distance_km") or 0),
+                float(reconstructed.get("routed_connector_distance_km") or 0),
+                coverage,
+            )
     elif reconstructed is not None:
         # Fallback disabled — legacy observed-only behaviour, flagged as such.
         new_actual = float(reconstructed.get("observed_distance_km") or 0)

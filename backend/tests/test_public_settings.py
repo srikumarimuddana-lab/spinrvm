@@ -37,6 +37,27 @@ async def test_reflects_flag_when_enabled():
 
 
 @pytest.mark.anyio
+async def test_directions_proxy_flag_defaults_off_when_unset():
+    """docs/audit/ride-experience/ROADMAP.md R7 dark-launch gate."""
+    from backend.routes import settings as settings_mod
+
+    with patch.object(settings_mod, "get_app_settings", AsyncMock(return_value={})):
+        result = await settings_mod.get_public_settings()
+
+    assert result["directions_proxy_enabled"] is False
+
+
+@pytest.mark.anyio
+async def test_directions_proxy_flag_reflects_when_enabled():
+    from backend.routes import settings as settings_mod
+
+    with patch.object(settings_mod, "get_app_settings", AsyncMock(return_value={"directions_proxy_enabled": True})):
+        result = await settings_mod.get_public_settings()
+
+    assert result["directions_proxy_enabled"] is True
+
+
+@pytest.mark.anyio
 async def test_existing_public_fields_still_returned():
     """Regression guard: adding the new field must not drop/rename the
     fields mobile clients already depend on."""

@@ -22,6 +22,62 @@ export const ACCURACY_OVERRIDE_MS = 30_000;
 // sees the chip appear promptly.
 export const MIN_DISPLAYED_SPEED_MPS = 3; // ~10.8 km/h
 
+// Age past which a fix's coords.speed is presumed stale and the chip clamps
+// to 0 instead of showing it. `watchPositionAsync`'s distanceInterval gate
+// (LOCATION_CONFIGS in useDriverDashboard.ts) goes fully quiet at a genuine
+// standstill — no new fix means `location.coords.speed` just holds whatever
+// the last real reading was, which was live-reported as a value (e.g.
+// 57 km/h) sitting on screen for minutes after the vehicle actually stopped.
+// 6s comfortably clears every LOCATION_CONFIGS timeInterval (worst case 10s
+// for trip_completed, but the chip is speed==0 relevant states only; the
+// next-worst live states are 8s/4s) while being short enough that a stop
+// reads as a stop within a couple of ticks, not minutes. Paired with
+// displaySpeedKmh's caller re-evaluating on a 1s UI tick (index.tsx), not
+// only when a new fix arrives — a frozen `location` object can't otherwise
+// tell the chip time has passed.
+export const MAX_SPEED_FIX_AGE_MS = 6_000;
+
+/**
+ * Speed in m/s, clamped for both known failure modes: GPS noise near zero
+ * (MIN_DISPLAYED_SPEED_MPS) and a stale fix held past MAX_SPEED_FIX_AGE_MS
+ * with no fresh reading to overwrite it. Shared by the speed chip
+ * (displaySpeedKmh, below) and the follow-camera's zoom-tier selection
+ * (index.tsx) — both read the same raw `location.coords.speed`, and both
+ * were independently affected by the same two failure modes: the chip's own
+ * live-reported "stuck at 57 km/h" bug, and the zoom tier's own
+ * live-reported "zooms in/out while idle" bug (FOLLOW_ZOOM_TIERS' stopped
+ * tier ceiling is 2 m/s — comfortably inside the ~2.2 m/s of GPS noise a
+ * parked vehicle has been live-reported showing, so an unclamped reading
+ * could cross the tier boundary from noise alone, with TIER_HYSTERESIS_MPS
+ * doing nothing to stop it since the noise itself, not a real speed change,
+ * was driving the crossing). Pure so both failure modes are unit-testable
+ * without a device or a location mock.
+ */
+export function effectiveSpeedMps(
+  speedMps: number | null | undefined,
+  fixTimestampMs: number | null | undefined,
+  nowMs: number,
+): number {
+  const age = typeof fixTimestampMs === 'number' && Number.isFinite(fixTimestampMs)
+    ? nowMs - fixTimestampMs
+    : null;
+  if (age != null && age > MAX_SPEED_FIX_AGE_MS) return 0;
+  const sp = speedMps ?? 0;
+  return sp >= MIN_DISPLAYED_SPEED_MPS ? sp : 0;
+}
+
+/**
+ * Speed-chip display value, km/h — see effectiveSpeedMps for the clamping
+ * this builds on.
+ */
+export function displaySpeedKmh(
+  speedMps: number | null | undefined,
+  fixTimestampMs: number | null | undefined,
+  nowMs: number,
+): number {
+  return Math.round(effectiveSpeedMps(speedMps, fixTimestampMs, nowMs) * 3.6);
+}
+
 /**
  * Should this fix move the marker / feed the live WS position?
  * (Durable trip capture is NOT gated by this — capture-before-filter.)

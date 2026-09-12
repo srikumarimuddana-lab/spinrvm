@@ -60,6 +60,17 @@ jest.mock('react-native-maps', () => {
   };
 });
 jest.mock('react-native-maps-directions', () => () => null);
+// R7: DirectionsProxyEnabledContext lives in app/_layout.tsx, which pulls in
+// @stripe/stripe-react-native (a native module unavailable in Jest) -- mock
+// the whole module down to just the one export this screen reads, same
+// pattern homeScreen.test.tsx already uses for RidelessSosEnabledContext.
+jest.mock('../app/_layout', () => ({
+  DirectionsProxyEnabledContext: require('react').createContext(false),
+}));
+const mockFetchDirectionsRoute = jest.fn();
+jest.mock('@shared/api/directions', () => ({
+  fetchDirectionsRoute: (...a: any[]) => mockFetchDirectionsRoute(...a),
+}));
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
 jest.mock('@shared/components/RoutePins', () => ({ RoutePins: () => null }));
 jest.mock('@shared/components/CarMarker', () => ({ CarMarker: () => null, resolveMarkerVariant: () => 'sedan' }));
@@ -730,6 +741,95 @@ describe('server-provided route polyline', () => {
   it('clears routeCoordinates when routePolyline is removed', async () => {
     mockRideState.routePolyline = null;
     await expect(renderScreen()).resolves.toBeDefined();
+  });
+});
+
+// R7 (docs/audit/ride-experience/ROADMAP.md): the backend Directions proxy
+// is tried first when dark-launched on via DirectionsProxyEnabledContext,
+// with the on-device MapViewDirections fallback (mocked to `() => null`
+// throughout this file) reserved for when the proxy is off or fails.
+describe('Directions proxy (R7)', () => {
+  const { DirectionsProxyEnabledContext } = require('../app/_layout');
+
+  async function renderWithProxyFlag(enabled: boolean) {
+    let r: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      r = TestRenderer.create(
+        <DirectionsProxyEnabledContext.Provider value={enabled}>
+          <RideOptionsScreen />
+        </DirectionsProxyEnabledContext.Provider>,
+      );
+      await flush();
+    });
+    renderer = r!;
+    return r!;
+  }
+
+  it('does not call the proxy when the flag is off (default)', async () => {
+    await renderScreen();
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
+  });
+
+  it('calls the proxy with pickup/dropoff/stops when the flag is on', async () => {
+    mockRideState.stops = [{ lat: 52.135, lng: -106.67, address: 'Stop 1' }];
+    mockFetchDirectionsRoute.mockResolvedValue({
+      coordinates: [{ latitude: 52.13, longitude: -106.66 }, { latitude: 52.14, longitude: -106.68 }],
+      distance: 2.1,
+      duration: 6,
+    });
+
+    await renderWithProxyFlag(true);
+
+    expect(mockFetchDirectionsRoute).toHaveBeenCalledWith(
+      { latitude: 52.13, longitude: -106.66 },
+      { latitude: 52.14, longitude: -106.68 },
+      [{ latitude: 52.135, longitude: -106.67 }],
+    );
+  });
+
+  it('persists the proxy result into routePolyline the same way onReadyDirections does', async () => {
+    mockFetchDirectionsRoute.mockResolvedValue({
+      coordinates: [{ latitude: 52.13, longitude: -106.66 }, { latitude: 52.14, longitude: -106.68 }],
+      distance: 2.1,
+      duration: 6,
+    });
+
+    await renderWithProxyFlag(true);
+
+    expect(mockSetRoutePolyline).toHaveBeenCalledWith([
+      { latitude: 52.13, longitude: -106.66 },
+      { latitude: 52.14, longitude: -106.68 },
+    ]);
+  });
+
+  it('never calls the proxy a second time once a route is already present', async () => {
+    mockRideState.routePolyline = [[52.13, -106.66], [52.14, -106.68]];
+
+    await renderWithProxyFlag(true);
+
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
+  });
+
+  it('falls through to on-device MapViewDirections when the proxy call rejects', async () => {
+    mockFetchDirectionsRoute.mockRejectedValue(new Error('proxy down'));
+
+    const r = await renderWithProxyFlag(true);
+
+    // The mocked MapViewDirections renders as `() => null`, so there's no
+    // element to assert on directly -- the meaningful assertion is that the
+    // screen doesn't crash and routePolyline was never (wrongly) persisted
+    // from a failed attempt.
+    expect(r).toBeDefined();
+    expect(mockSetRoutePolyline).not.toHaveBeenCalled();
+  });
+
+  it('falls through to on-device MapViewDirections when the proxy returns zero coordinates', async () => {
+    mockFetchDirectionsRoute.mockResolvedValue({ coordinates: [], distance: null, duration: null });
+
+    const r = await renderWithProxyFlag(true);
+
+    expect(r).toBeDefined();
+    expect(mockSetRoutePolyline).not.toHaveBeenCalled();
   });
 });
 

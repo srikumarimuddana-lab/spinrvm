@@ -342,11 +342,14 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: SPACING.sm,
       marginBottom: 10,
       gap: 6,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.08,
-      shadowRadius: 6,
-      elevation: 3,
+      // No shadow/elevation here: this pill sits inside hudArea's
+      // Animated.View, which sets overflow:'hidden' to clip the
+      // expand/collapse spring. On Android, a parent clipping overflow
+      // combined with a descendant's `elevation` renders as a solid black
+      // patch instead of a soft shadow (RN/Android rendering defect — see
+      // hudArea's comment) — reported as a black patch around the vehicle
+      // pill both offline and briefly after going online. The border below
+      // carries the visual definition instead.
       borderWidth: 1,
       borderColor: colors.border,
       maxWidth: '90%',
@@ -370,6 +373,10 @@ function createStyles(colors: ThemeColors) {
       letterSpacing: 0.5,
     },
 
+    // collapsedHudPill and statusPillWrapper deliberately carry no
+    // shadow/elevation — see vehiclePill's comment above. Both also live
+    // inside hudArea's overflow:'hidden' Animated.View, so the same
+    // Android black-patch defect applies to them.
     collapsedHudPill: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -380,19 +387,8 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.success,
       gap: 6,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.1,
-      shadowRadius: 4,
-      elevation: 3,
     },
-    statusPillWrapper: {
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.1,
-      shadowRadius: 4,
-      elevation: 3,
-    },
+    statusPillWrapper: {},
     statusPillOnline: {
       flexDirection: 'row',
       alignItems: 'center',

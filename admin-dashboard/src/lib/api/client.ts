@@ -136,7 +136,11 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
                         throw new Error(retryMsg);
                     }
                 }
-                useAuthStore.getState().logout();
+                // Wait for the server to clear the refresh cookie BEFORE the
+                // full page load: the /login bootstrap refreshes with whatever
+                // cookie it finds, and refreshing with a just-revoked token
+                // trips the backend's reuse cascade (see authStore.logout).
+                await useAuthStore.getState().logout();
                 if (typeof window !== "undefined") {
                     window.location.href = "/login";
                 }

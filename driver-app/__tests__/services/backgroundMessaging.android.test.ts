@@ -218,6 +218,45 @@ describe('backgroundMessaging (Android)', () => {
 
       await expect(handler({ data: { type: 'location_health' } })).resolves.toBeUndefined();
     });
+
+    // C97 recommendation #4 (background/killed fallback): an unhandled type
+    // must not be silently dropped with zero trace, but must also NOT
+    // render a Notifee notification of its own -- the OS already
+    // auto-displays every non-data-only type's real FCM `notification`
+    // block (see the branch's own comment for why a display here would be
+    // a duplicate, not a fix).
+    it('logs and does nothing else for a data-only type outside the known set', async () => {
+      const { registerBackgroundMessageHandlers } = loadModule();
+      registerBackgroundMessageHandlers();
+      const handler = mockSetBackgroundMessageHandler.mock.calls[0][0];
+
+      await expect(
+        handler({ data: { type: 'document_expiry_warning', document_id: 'doc-1' } }),
+      ).resolves.toBeUndefined();
+
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Unhandled background/killed FCM data-only message type'),
+        'document_expiry_warning',
+      );
+      expect(mockDisplayRideOfferNotification).not.toHaveBeenCalled();
+      expect(mockSetItem).not.toHaveBeenCalled();
+      const bg = require('../../utils/backgroundLocation');
+      expect(bg.recoverTripLocation).not.toHaveBeenCalled();
+    });
+
+    it('does not log the new fallback for a message with no type at all', async () => {
+      const { registerBackgroundMessageHandlers } = loadModule();
+      registerBackgroundMessageHandlers();
+      const handler = mockSetBackgroundMessageHandler.mock.calls[0][0];
+
+      await expect(handler({ data: {} })).resolves.toBeUndefined();
+
+      expect(console.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('Unhandled background/killed FCM data-only message type'),
+        expect.anything(),
+      );
+      expect(mockDisplayRideOfferNotification).not.toHaveBeenCalled();
+    });
   });
 
   describe('notifee.onBackgroundEvent routing', () => {

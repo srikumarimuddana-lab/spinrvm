@@ -36,14 +36,25 @@ jest.mock('react-native-maps', () => {
 // markerPlayback is a value import CarMarker needs at runtime; no driver-app
 // mock exists for it (unlike vehicleTracking, which jest.config.js maps to
 // the real module), so stub the minimal surface CarMarker calls.
-jest.mock('@shared/utils/markerPlayback', () => ({
-  PLAYBACK_DELAY_MS: 300,
-  // jest.fn() (not a plain arrow) so individual tests can override the
-  // return value to exercise the ticker's bearing-selection path.
-  playbackPosition: jest.fn(() => null), // default: no buffered fix, ticker is a no-op
-  pushFix: jest.fn(),
-  shouldResetBuffer: () => false,
-}));
+jest.mock('@shared/utils/markerPlayback', () => {
+  // pushFix/shouldResetBuffer are the REAL implementations (cheap, pure array
+  // ops) wrapped in jest.fn() so bufferRef.current genuinely accumulates —
+  // most describe blocks below never look at that array (playbackPosition
+  // stays fully mocked, so the ticker's rendered position/bearing is always
+  // whatever a test sets it to, independent of the real buffer), but the
+  // "jump-triggered reset" describe block needs isFirstFix to actually turn
+  // false after a real fix has been ingested, which a permanent no-op mock
+  // could never produce.
+  const actual = jest.requireActual('@shared/utils/markerPlayback');
+  return {
+    PLAYBACK_DELAY_MS: 300,
+    // jest.fn() (not a plain arrow) so individual tests can override the
+    // return value to exercise the ticker's bearing-selection path.
+    playbackPosition: jest.fn(() => null), // default: no buffered fix, ticker is a no-op
+    pushFix: jest.fn(actual.pushFix),
+    shouldResetBuffer: jest.fn(actual.shouldResetBuffer),
+  };
+});
 
 jest.mock('expo-image', () => {
   const ReactActual = require('react');
@@ -613,6 +624,96 @@ describe('CarMarker — first fix after a remount snaps instead of gliding (2026
       setValueSpy.mockRestore();
       Platform.OS = originalPlatformOS;
     }
+  });
+});
+
+describe('CarMarker — a jump-triggered reset does not re-open the raw-heading fallback (2026-09-12, "facing east")', () => {
+  // hasMovementBearingRef exists so a platform-placeholder heading (Android's
+  // literal 0 for "no bearing", or any other stale/garbage value) can never
+  // override a direction the marker has already established from real
+  // movement — see selectBearing()'s own doc comment. Before this fix, ANY
+  // buffer reset (isFirstFix OR shouldResetBuffer) cleared that latch, which
+  // re-opened the exact placeholder-heading window on every jump a live
+  // vehicle goes through (offline->online remount, ride-end mapKey bump, a
+  // real background/tunnel gap) — not just on a genuine first-ever mount.
+  // Live-testing report: the marker snapping to a wrong heading ("facing
+  // east") right after one of these resets.
+  const mockPlaybackPosition = playbackPosition as jest.Mock;
+  const mountCoord = { latitude: 50.4452, longitude: -104.6189 };
+  // ~89m due north — clears MIN_BEARING_MOVE_M so the first tick selects a
+  // real 'travel' bearing and sets hasMovementBearingRef true.
+  const drivingNorthTo = { latitude: 50.446, longitude: -104.6189 };
+  // ~800m away — comfortably past SNAP_DISTANCE_M(500), so shouldResetBuffer
+  // (now the REAL implementation — see the module mock above) returns true.
+  const jumpTarget = { latitude: mountCoord.latitude + 0.0072, longitude: mountCoord.longitude };
+  const BASE = 1_700_000_000_000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(BASE);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    mockPlaybackPosition.mockReturnValue(null);
+  });
+
+  it('freezes the bearing instead of trusting a raw heading right after the jump, once movement had already established one', () => {
+    mockPlaybackPosition.mockReturnValue({
+      coordinate: drivingNorthTo,
+      bearing: 0, // due north — a clean, distinct value from the "wrong" 90 below
+      mode: 'interpolating',
+    });
+    const onBearingChange = jest.fn();
+    const { rerender, unmount } = render(
+      <CarMarker
+        coordinate={mountCoord}
+        heading={0}
+        fixTimestampMs={BASE}
+        onBearingChange={onBearingChange}
+      />,
+    );
+
+    // Establish a real movement bearing (source: 'travel') — hasMovementBearingRef
+    // is now true.
+    act(() => { jest.advanceTimersByTime(500); });
+    expect(onBearingChange).toHaveBeenCalledWith(0);
+    expect(onBearingChange).toHaveBeenCalledTimes(1);
+
+    // A real, plausible jump (~800m in 25s ≈ 32 m/s — under MAX_PLAUSIBLE_SPEED_MPS,
+    // so isImplausibleJump does not reject it), arriving with a "wrong" raw
+    // heading of 90 (east) — exactly the live-testing report's symptom.
+    jest.setSystemTime(BASE + 25_000);
+    mockPlaybackPosition.mockReturnValue({
+      // ~1.1m from the reset anchor (jumpTarget, which the reset sets as
+      // prevTargetRef.current): far enough to clear the ticker's 0.5m
+      // "parked, skip churn" guard (which would return before ever calling
+      // selectBearing, making this test pass vacuously either way) but well
+      // under MIN_BEARING_MOVE_M(3), so selectBearing takes the "under
+      // threshold" branch that falls back to the raw reported heading.
+      coordinate: { latitude: jumpTarget.latitude + 0.00001, longitude: jumpTarget.longitude },
+      bearing: null,
+      mode: 'waiting', // not interpolating/extrapolating — no playback-spline override
+    });
+    rerender(
+      <CarMarker
+        coordinate={jumpTarget}
+        heading={90}
+        fixTimestampMs={BASE + 25_000}
+        onBearingChange={onBearingChange}
+      />,
+    );
+    act(() => { jest.advanceTimersByTime(500); });
+
+    // Before this fix: the reset cleared hasMovementBearingRef, so the raw
+    // heading (90) would win and onBearingChange would fire with it. After
+    // this fix: hasMovementBearingRef survives a non-first-fix reset, so
+    // selectBearing returns {bearing: null, source: 'none'} and the ticker
+    // emits nothing this tick — the icon stays frozen at its last known
+    // (north) heading instead of snapping to a placeholder-adjacent guess.
+    expect(onBearingChange).not.toHaveBeenCalledWith(90);
+    expect(onBearingChange).toHaveBeenCalledTimes(1);
+
+    unmount();
   });
 });
 

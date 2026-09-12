@@ -33,6 +33,50 @@ describe('smoothFix', () => {
     expect(Math.abs(state!.latitude - trueFinalLat)).toBeLessThan(0.0002); // within ~22m
   });
 
+  it('damps a low-accuracy (weak-signal) fix harder than the same jitter reported as high-accuracy', () => {
+    // Same ~30m jitter, same elapsed time — only the reported accuracy
+    // differs. A parked vehicle near buildings/underground parking commonly
+    // reports a large accuracyM on a drifted fix (this is the exact
+    // "ghost movement while parked" scenario: CarMarker.tsx spreads its raw
+    // fix — including accuracyM, once a producer supplies one — straight
+    // into this function). The Kalman gain must fall as measurement
+    // variance rises, so the same drift moves the estimate less when the
+    // fix says it's unreliable.
+    const seededGood = smoothFix(null, { latitude: 52.1, longitude: -106.6, timestampMs: 0 });
+    const seededBad = smoothFix(null, { latitude: 52.1, longitude: -106.6, timestampMs: 0 });
+
+    const goodAccuracy = smoothFix(
+      seededGood,
+      { latitude: 52.1003, longitude: -106.6, timestampMs: 1_000, accuracyM: 5 },
+    );
+    const poorAccuracy = smoothFix(
+      seededBad,
+      { latitude: 52.1003, longitude: -106.6, timestampMs: 1_000, accuracyM: 40 },
+    );
+
+    const goodShift = goodAccuracy.latitude - seededGood.latitude;
+    const poorShift = poorAccuracy.latitude - seededBad.latitude;
+    expect(poorShift).toBeGreaterThan(0); // still moves toward the fix, just less
+    expect(poorShift).toBeLessThan(goodShift);
+  });
+
+  it('falls back to the documented default accuracy when the fix omits one', () => {
+    // A producer (e.g. rider-app's WS-relayed fix) that doesn't have a real
+    // accuracy value must not crash or silently disable damping — it should
+    // behave exactly as this module did before accuracyM plumbing existed.
+    const seededNoAccuracy = smoothFix(null, { latitude: 52.1, longitude: -106.6, timestampMs: 0 });
+    const seededOmitted = smoothFix(null, { latitude: 52.1, longitude: -106.6, timestampMs: 0 });
+    const withExplicitDefault = smoothFix(
+      seededNoAccuracy,
+      { latitude: 52.1003, longitude: -106.6, timestampMs: 1_000, accuracyM: 8 }, // DEFAULT_ACCURACY_M
+    );
+    const withOmittedField = smoothFix(
+      seededOmitted,
+      { latitude: 52.1003, longitude: -106.6, timestampMs: 1_000 }, // no accuracyM at all
+    );
+    expect(withOmittedField.latitude).toBeCloseTo(withExplicitDefault.latitude, 12);
+  });
+
   it('treats an out-of-order/duplicate timestamp as a no-op rather than corrupting variance', () => {
     const seeded = smoothFix(null, { latitude: 52.1, longitude: -106.6, timestampMs: 5_000 });
     const stale = smoothFix(seeded, { latitude: 52.5, longitude: -106.6, timestampMs: 1_000 });

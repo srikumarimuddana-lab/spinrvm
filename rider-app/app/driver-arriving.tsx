@@ -1,5 +1,6 @@
 import React, { useCallback, useContext, useEffect, useState, useMemo, useRef } from 'react';
-import { TrackBaseUrlContext } from './_layout';
+import { TrackBaseUrlContext, DirectionsProxyEnabledContext } from './_layout';
+import { fetchDirectionsRoute } from '@shared/api/directions';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -57,6 +58,13 @@ function DriverArrivingScreenContent() {
   // app_settings.track_base_url. Same source as ride-in-progress.tsx so
   // ops can rotate the share domain without a mobile rebuild.
   const trackBaseUrl = useContext(TrackBaseUrlContext);
+  // R7 (docs/audit/ride-experience/ROADMAP.md): try the backend Directions
+  // proxy before either of this screen's two on-device MapViewDirections
+  // calls when dark-launched on. Each leg tracks its own failure flag so a
+  // failure on one (e.g. driver→pickup) doesn't block the other.
+  const directionsProxyEnabled = useContext(DirectionsProxyEnabledContext);
+  const [driverProxyFailed, setDriverProxyFailed] = useState(false);
+  const [rideProxyFailed, setRideProxyFailed] = useState(false);
   const {
     currentRide, currentDriver, fetchRide, triggerEmergency,
     driverEtaSeconds, cancelRide, clearRide,
@@ -211,6 +219,76 @@ function DriverArrivingScreenContent() {
     [currentRide?.id, rideCoords?.dropoffLat, rideCoords?.dropoffLng],
   );
   const freeCancelWindowSeconds = (currentRide as any)?.free_cancel_window_seconds ?? 120;
+
+  // R7: driver→pickup leg via the backend proxy. Same trigger condition as
+  // the on-device MapViewDirections call below (driverOriginSnapshot set,
+  // no cached route yet). On failure, driverProxyFailed flips true and the
+  // JSX falls through to that on-device call unchanged.
+  useEffect(() => {
+    if (!directionsProxyEnabled || driverProxyFailed) return;
+    if (!driverOriginSnapshot || activeDriverRouteCoords !== null) return;
+    if (rideCoords?.pickupLat == null || rideCoords?.pickupLng == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchDirectionsRoute(driverOriginSnapshot, {
+          latitude: rideCoords.pickupLat,
+          longitude: rideCoords.pickupLng,
+        });
+        if (cancelled) return;
+        if (result.coordinates.length > 0) {
+          if (result.duration != null) setMapEtaMinutes(Math.ceil(result.duration));
+          setDriverRouteCoords(result.coordinates);
+          setActiveDriverRouteCoords(result.coordinates);
+        } else {
+          setDriverProxyFailed(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[DriverArriving] Directions proxy failed (driver leg), falling back to on-device:', e);
+          setDriverProxyFailed(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    directionsProxyEnabled, driverProxyFailed, driverOriginSnapshot, activeDriverRouteCoords,
+    rideCoords?.pickupLat, rideCoords?.pickupLng, setActiveDriverRouteCoords,
+  ]);
+
+  // R7: pickup→dropoff leg via the backend proxy. Same trigger condition as
+  // the on-device MapViewDirections call below.
+  useEffect(() => {
+    if (!directionsProxyEnabled || rideProxyFailed) return;
+    if (!rideRouteOrigin || !rideRouteDestination) return;
+    if (activeRideRouteCoords !== null || rideRouteCoords.length >= 2) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchDirectionsRoute(rideRouteOrigin, rideRouteDestination);
+        if (cancelled) return;
+        if (result.coordinates.length > 0) {
+          setRideRouteCoords(result.coordinates);
+          setActiveRideRouteCoords(result.coordinates);
+        } else {
+          setRideProxyFailed(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[DriverArriving] Directions proxy failed (ride leg), falling back to on-device:', e);
+          setRideProxyFailed(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    directionsProxyEnabled, rideProxyFailed, rideRouteOrigin, rideRouteDestination,
+    activeRideRouteCoords, rideRouteCoords.length, setActiveRideRouteCoords,
+  ]);
 
   // ── ETA logic ──
   useEffect(() => {
@@ -467,8 +545,10 @@ function DriverArrivingScreenContent() {
               The car marker updates live; re-fetching the route on every GPS ping
               would cost ~$0.10 extra per pickup phase for no visible benefit since
               driverEtaSeconds from the backend already drives the ETA countdown. */}
-          {/* Only fetch if we don't already have coords from a previous screen visit */}
-          {driverOriginSnapshot && activeDriverRouteCoords === null && (
+          {/* Only fetch if we don't already have coords from a previous screen
+              visit, AND (R7) the backend proxy is off or has already failed --
+              while that attempt is in flight, skip this to avoid a double fetch. */}
+          {driverOriginSnapshot && activeDriverRouteCoords === null && (!directionsProxyEnabled || driverProxyFailed) && (
             <MapViewDirections
               origin={driverOriginSnapshot}
               destination={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
@@ -499,8 +579,9 @@ function DriverArrivingScreenContent() {
           />
 
           {/* Pickup → dropoff route: use saved polyline or cached coords first;
-              only call Directions API as a last resort. */}
-          {rideRouteOrigin && rideRouteDestination && activeRideRouteCoords === null && rideRouteCoords.length < 2 && (
+              only call Directions API as a last resort, and (R7) only when the
+              backend proxy is off or has already failed. */}
+          {rideRouteOrigin && rideRouteDestination && activeRideRouteCoords === null && rideRouteCoords.length < 2 && (!directionsProxyEnabled || rideProxyFailed) && (
             <MapViewDirections
               origin={rideRouteOrigin}
               destination={rideRouteDestination}

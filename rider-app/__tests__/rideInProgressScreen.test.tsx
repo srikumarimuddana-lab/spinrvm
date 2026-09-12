@@ -80,6 +80,11 @@ jest.mock('../components/RiderSOS', () => ({ RiderSOS: () => null }));
 
 jest.mock('../app/_layout', () => ({
   TrackBaseUrlContext: require('react').createContext(null),
+  DirectionsProxyEnabledContext: require('react').createContext(false),
+}));
+const mockFetchDirectionsRoute = jest.fn();
+jest.mock('@shared/api/directions', () => ({
+  fetchDirectionsRoute: (...a: any[]) => mockFetchDirectionsRoute(...a),
 }));
 
 const mockBack = jest.fn();
@@ -149,7 +154,7 @@ jest.mock('../store/rideStore', () => ({
 }));
 
 import RideInProgressScreen from '../app/ride-in-progress';
-import { TrackBaseUrlContext } from '../app/_layout';
+import { TrackBaseUrlContext, DirectionsProxyEnabledContext } from '../app/_layout';
 
 const flush = async () => {
   await Promise.resolve();
@@ -176,6 +181,20 @@ async function renderScreen() {
     renderer = TestRenderer.create(
       <TrackBaseUrlContext.Provider value={mockTrackBaseUrl}>
         <RideInProgressScreen />
+      </TrackBaseUrlContext.Provider>,
+    );
+    await flush();
+  });
+  return renderer!;
+}
+
+async function renderScreenWithDirectionsProxy(enabled: boolean) {
+  await act(async () => {
+    renderer = TestRenderer.create(
+      <TrackBaseUrlContext.Provider value={mockTrackBaseUrl}>
+        <DirectionsProxyEnabledContext.Provider value={enabled}>
+          <RideInProgressScreen />
+        </DirectionsProxyEnabledContext.Provider>
       </TrackBaseUrlContext.Provider>,
     );
     await flush();
@@ -766,5 +785,66 @@ describe('RideInProgressScreen', () => {
     expect(mockSetActiveRideRouteCoords).toHaveBeenCalledWith([
       { latitude: 50.46, longitude: -104.58 },
     ]);
+  });
+});
+
+// R7 (docs/audit/ride-experience/ROADMAP.md): the backend Directions proxy
+// is tried first for the pickup→dropoff route when dark-launched on via
+// DirectionsProxyEnabledContext, with the on-device MapViewDirections
+// fallback (this file's mockDirectionsOnReady capture) reserved for when
+// the proxy is off or fails. handleRouteReady is shared by both paths.
+describe('Directions proxy (R7)', () => {
+  beforeEach(() => {
+    mockRideState.activeRideRouteCoords = null;
+  });
+
+  it('does not call the proxy when the flag is off (default)', async () => {
+    await renderScreen();
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
+  });
+
+  it('calls the proxy with pickup/dropoff and applies the same route+ETA handling as onReady', async () => {
+    mockFetchDirectionsRoute.mockResolvedValue({
+      coordinates: [{ latitude: 50.46, longitude: -104.58 }, { latitude: 50.5, longitude: -104.5 }],
+      distance: 3.4,
+      duration: 12,
+    });
+
+    await renderScreenWithDirectionsProxy(true);
+
+    expect(mockFetchDirectionsRoute).toHaveBeenCalledWith(
+      { latitude: 50.45, longitude: -104.6 },
+      { latitude: 50.5, longitude: -104.5 },
+    );
+    expect(mockSetActiveRideRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.46, longitude: -104.58 }, { latitude: 50.5, longitude: -104.5 },
+    ]);
+    expect(mockSetLastEtaMin).toHaveBeenCalled();
+  });
+
+  it('falls through to on-device MapViewDirections when the proxy call rejects', async () => {
+    mockFetchDirectionsRoute.mockRejectedValue(new Error('proxy down'));
+
+    const r = await renderScreenWithDirectionsProxy(true);
+
+    expect(r).toBeDefined();
+    expect(mockSetActiveRideRouteCoords).not.toHaveBeenCalled();
+  });
+
+  it('falls through to on-device MapViewDirections when the proxy returns zero coordinates', async () => {
+    mockFetchDirectionsRoute.mockResolvedValue({ coordinates: [], distance: null, duration: null });
+
+    const r = await renderScreenWithDirectionsProxy(true);
+
+    expect(r).toBeDefined();
+    expect(mockSetActiveRideRouteCoords).not.toHaveBeenCalled();
+  });
+
+  it('never calls the proxy when a route is already cached', async () => {
+    mockRideState.activeRideRouteCoords = [{ latitude: 1, longitude: 1 }, { latitude: 2, longitude: 2 }];
+
+    await renderScreenWithDirectionsProxy(true);
+
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
   });
 });

@@ -222,6 +222,7 @@ from .rating import (  # noqa: F401
 from .receipts import (  # noqa: F401
     email_ride_receipt,
     get_ride_receipt,
+    get_ride_receipt_pdf,
 )
 from .safety import (  # noqa: F401
     EmergencyRequest,
@@ -248,6 +249,7 @@ from .stops import (  # noqa: F401
 )
 from .tracking import (  # noqa: F401
     get_live_route,
+    get_navigation_steps,
 )
 
 api_router = APIRouter(tags=["Rides"])
@@ -395,10 +397,12 @@ __all__ = [
     "get_current_user_allow_expired",
     "get_fares_for_location",
     "get_live_route",
+    "get_navigation_steps",
     "get_ride",
     "get_ride_history",
     "get_ride_messages",
     "get_ride_receipt",
+    "get_ride_receipt_pdf",
     "get_rider_stats",
     "get_scheduled_rides",
     "get_service_area_polygon",

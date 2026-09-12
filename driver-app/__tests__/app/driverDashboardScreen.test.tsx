@@ -97,6 +97,16 @@ jest.mock('react-native-maps', () => {
   };
 });
 jest.mock('react-native-maps-directions', () => () => null);
+// R7 (docs/audit/ride-experience/ROADMAP.md): dark-launched off by default
+// (useDirectionsProxyFlag reads GET /settings, mocked below to resolve
+// {data: {}} for any URL not special-cased, i.e. directions_proxy_enabled
+// is undefined -> false) -- see driver-dashboard-route.test.ts for the
+// static wiring/gating pins; this file only needs to confirm the proxy
+// stays inert during this suite's normal (flag-off) renders.
+const mockFetchDirectionsRoute = jest.fn();
+jest.mock('@shared/api/directions', () => ({
+  fetchDirectionsRoute: (...a: any[]) => mockFetchDirectionsRoute(...a),
+}));
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
 jest.mock('@shared/components/RoutePins', () => ({ RoutePins: () => null }));
 const mockCarMarkerMounts = jest.fn();
@@ -1160,5 +1170,77 @@ describe('follow-camera throttle (CAMERA_ANIM_MS coalescing)', () => {
       r.update(<DriverDashboardScreen />);
     });
     expect(animateCamera).toHaveBeenCalledTimes(2); // leading edge again, no wait
+  });
+});
+
+describe('offline<->online camera framing', () => {
+  // rideState stays 'idle' across this toggle (only `isOnline` changes), and
+  // going offline halts watchPositionAsync entirely (useDriverDashboard.ts),
+  // so before this fix nothing ever re-framed the camera on this transition
+  // — it just stayed wherever the follow-camera effect had last left it.
+  // CarMarker is mocked to `() => null` (see top-of-file comment), so
+  // camBearingRef/markerPosRef stay null and `center`/`heading` are always
+  // derived from the raw location fix, same as the throttle tests above.
+  it('zooms out on going offline', async () => {
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    animateCamera.mockClear(); // drop the mount-time leading-edge call
+
+    act(() => {
+      mockDashboardState = { ...mockDashboardState, isOnline: false };
+      r.update(<DriverDashboardScreen />);
+    });
+
+    expect(animateCamera).toHaveBeenCalledTimes(1);
+    const call = animateCamera.mock.calls[0][0];
+    expect(call.zoom).toBe(14);
+    expect(call.heading).toBe(0);
+    expect(call.center).toEqual({ latitude: LOCATION.coords.latitude, longitude: LOCATION.coords.longitude });
+  });
+
+  it('zooms back in on returning online', async () => {
+    mockDashboardState = { ...mockDashboardState, isOnline: false };
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    animateCamera.mockClear();
+
+    act(() => {
+      mockDashboardState = { ...mockDashboardState, isOnline: true };
+      r.update(<DriverDashboardScreen />);
+    });
+
+    expect(animateCamera).toHaveBeenCalledTimes(1);
+    expect(animateCamera.mock.calls[0][0].zoom).toBe(17.5); // FOLLOW_ZOOM_TIERS[0] — stopped/idle tier
+  });
+
+  it('does not fire on a re-render where isOnline is unchanged', async () => {
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    animateCamera.mockClear();
+
+    act(() => {
+      mockDashboardState = { ...mockDashboardState, wsLatency: 42 }; // unrelated re-render
+      r.update(<DriverDashboardScreen />);
+    });
+
+    expect(animateCamera).not.toHaveBeenCalled();
+  });
+});
+
+// R7 (docs/audit/ride-experience/ROADMAP.md): the Directions proxy is
+// dark-launched off by default (useDirectionsProxyFlag reads GET /settings,
+// which this suite's mockApiGet resolves to {data: {}} for any
+// un-special-cased URL, i.e. directions_proxy_enabled is undefined -> false).
+// See driver-dashboard-route.test.ts for the static wiring/gating pins --
+// GOOGLE_MAPS_API_KEY is a module-load-time constant here, which makes a
+// dynamic flag-on scenario impractical in this file the same way it already
+// is for the pre-existing on-device needsDirections-true branch (also only
+// covered statically, not dynamically, in this test suite).
+describe('Directions proxy (R7)', () => {
+  it('never calls the proxy during a normal (flag-off) render', async () => {
+    mockDriverState.rideState = 'navigating_to_pickup';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    await renderScreen();
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
   });
 });

@@ -41,6 +41,16 @@ jest.mock('react-native-maps', () => {
   return { __esModule: true, default: MapView, PROVIDER_GOOGLE: 'google' };
 });
 jest.mock('react-native-maps-directions', () => () => null);
+// R7: DirectionsProxyEnabledContext lives in app/_layout.tsx, which pulls in
+// @stripe/stripe-react-native (a native module unavailable in Jest) -- mock
+// the whole module down to just the one export this screen reads.
+jest.mock('../app/_layout', () => ({
+  DirectionsProxyEnabledContext: require('react').createContext(false),
+}));
+const mockFetchDirectionsRoute = jest.fn();
+jest.mock('@shared/api/directions', () => ({
+  fetchDirectionsRoute: (...a: any[]) => mockFetchDirectionsRoute(...a),
+}));
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
 jest.mock('@shared/components/RoutePins', () => ({ RoutePins: () => null }));
 jest.mock('@shared/components/CarMarker', () => ({ CarMarker: () => null }));
@@ -130,6 +140,7 @@ import DriverArrivedScreen from '../app/driver-arrived';
 import MapViewDirections from 'react-native-maps-directions';
 import ConfirmSheet from '../components/ConfirmSheet';
 import CancelReasonSheet from '../components/CancelReasonSheet';
+import { DirectionsProxyEnabledContext } from '../app/_layout';
 
 const flush = async () => {
   await Promise.resolve();
@@ -153,6 +164,18 @@ let renderer: TestRenderer.ReactTestRenderer | null = null;
 async function renderScreen() {
   await act(async () => {
     renderer = TestRenderer.create(<DriverArrivedScreen />);
+    await flush();
+  });
+  return renderer!;
+}
+
+async function renderScreenWithDirectionsProxy(enabled: boolean) {
+  await act(async () => {
+    renderer = TestRenderer.create(
+      <DirectionsProxyEnabledContext.Provider value={enabled}>
+        <DriverArrivedScreen />
+      </DirectionsProxyEnabledContext.Provider>,
+    );
     await flush();
   });
   return renderer!;
@@ -525,3 +548,60 @@ describe('DriverArrivedScreen', () => {
 // driver-arriving, ride-details, ride-options, confirm-pickup,
 // ride-completed) — an accepted, pre-existing, repo-wide gap, not something
 // to fix ad hoc in one screen's test file.
+
+// R7 (docs/audit/ride-experience/ROADMAP.md): the backend Directions proxy
+// is tried first for the pickup→dropoff route when dark-launched on via
+// DirectionsProxyEnabledContext, with the on-device MapViewDirections
+// fallback (mocked throughout this file) reserved for when the proxy is
+// off or fails.
+describe('Directions proxy (R7)', () => {
+  it('does not call the proxy when the flag is off (default)', async () => {
+    await renderScreen();
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
+  });
+
+  it('calls the proxy with pickup/dropoff and persists a successful result', async () => {
+    mockFetchDirectionsRoute.mockResolvedValue({
+      coordinates: [{ latitude: 50.45, longitude: -104.6 }, { latitude: 50.5, longitude: -104.5 }],
+      distance: 3.4,
+      duration: 9,
+    });
+
+    await renderScreenWithDirectionsProxy(true);
+
+    expect(mockFetchDirectionsRoute).toHaveBeenCalledWith(
+      { latitude: 50.45, longitude: -104.6 },
+      { latitude: 50.5, longitude: -104.5 },
+    );
+  });
+
+  it('falls through to on-device MapViewDirections when the proxy call rejects', async () => {
+    mockFetchDirectionsRoute.mockRejectedValue(new Error('proxy down'));
+
+    const r = await renderScreenWithDirectionsProxy(true);
+
+    expect(r).toBeDefined();
+  });
+
+  it('never calls the proxy a second time once a route is already present', async () => {
+    mockFetchDirectionsRoute.mockResolvedValue({
+      coordinates: [{ latitude: 50.45, longitude: -104.6 }, { latitude: 50.5, longitude: -104.5 }],
+      distance: 3.4,
+      duration: 9,
+    });
+
+    const r = await renderScreenWithDirectionsProxy(true);
+    expect(mockFetchDirectionsRoute).toHaveBeenCalledTimes(1);
+
+    // Re-render with the same resolved state should not re-trigger the effect.
+    await act(async () => {
+      r.update(
+        <DirectionsProxyEnabledContext.Provider value={true}>
+          <DriverArrivedScreen />
+        </DirectionsProxyEnabledContext.Provider>,
+      );
+      await flush();
+    });
+    expect(mockFetchDirectionsRoute).toHaveBeenCalledTimes(1);
+  });
+});

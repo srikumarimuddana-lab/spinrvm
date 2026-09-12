@@ -139,7 +139,12 @@ interface AuthState {
     setCsrfToken: (token: string | null) => void;
     scheduleRefresh: (accessExpiresAt: string) => void;
     setLoading: (loading: boolean) => void;
-    logout: () => void;
+    /**
+     * Clears local auth state synchronously; the returned promise settles
+     * once the server has cleared the HttpOnly refresh cookie (never
+     * rejects). Await it before a full-page navigation — see lib/api/client.ts.
+     */
+    logout: () => Promise<void>;
     checkAuth: () => Promise<void>;
     silentRefresh: () => Promise<void>;
     initAuth: () => Promise<void>;
@@ -198,11 +203,20 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
             isAuthenticated: false,
             isLoading: false
         });
-        // Clear the HttpOnly RT cookie server-side (fire-and-forget).
-        fetch("/api/admin/auth/logout", {
+        // Clear the HttpOnly RT cookie server-side. Callers that stay on the
+        // page may ignore the promise; a caller about to force a full page
+        // load must await it. 2026-09-12: the 401 path fired this and set
+        // window.location in the same tick, so the /login bootstrap's
+        // silentRefresh ran with the cookie still present and replayed the
+        // token the logout had just revoked — the backend read that as theft
+        // and cascade-revoked every admin session.
+        return fetch("/api/admin/auth/logout", {
             method: "POST",
             ...(csrfToken ? { headers: { "X-CSRF-Token": csrfToken } } : {}),
-        }).catch(() => {});
+        }).then(
+            () => undefined,
+            () => undefined,
+        );
     },
 
     // Exchange the HttpOnly refresh cookie for a new short-lived access

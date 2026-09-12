@@ -7808,9 +7808,35 @@ record of what was assumed vs. what was actually true</summary>
   exists yet) to produce a modeled total cash-gap range of **≈$2,050 (low
   scenario) to ≈$25,500 (high scenario)** across 10%/25%/50% Stripe reserve-hold
   scenarios. This checkbox stays unchecked: the model is planning input, not the
-  acceptance criterion. The actual acceptance bar below — a real, Stripe-confirmed
-  (not publicly-documented-default) account-specific timeline — is still open and
-  cannot be completed from this session (no Stripe dashboard/API access here).
+  acceptance criterion.
+  **Update 2026-09-12 — the "no Stripe access" blocker is gone; half the
+  acceptance bar is now confirmed, the other half surfaced a bigger, more
+  urgent finding.** Stripe connector access was authorized this session.
+  Pulled real account data directly (`acct_1SSk2XFXFgLO2LdO`) — full detail in
+  `docs/finance/stripe-payout-readiness.md` §7:
+  - Real payout delay is **`delay_days: 3`**, not the public-docs 7–14 day
+    figure this model was built on — materially better.
+  - Account is ~10 months old (created 2025-11-12), fully verified
+    (`charges_enabled`/`payouts_enabled: true`, no `requirements.currently_due`)
+    — well past Stripe's new-account scrutiny window this whole item was
+    originally worried about.
+  - **No reserve is currently held** (`connect_reserved: $0 CAD`).
+  - **New finding, more urgent than the original reserve-hold worry:** the
+    account's payout `interval` is **`"manual"`**, and there has been
+    **exactly one payout, ever** (2026-03-31, $92.96 CAD — confirmed complete
+    via `has_more: false`). `$415.79 CAD` is sitting available in the Stripe
+    balance right now, un-paid-out, because nobody has been manually
+    triggering payouts. This is an account-configuration choice, not a
+    Stripe-imposed delay — fully within Spinr's control, but **needs the
+    owner's decision** (switch to automatic daily/weekly payouts, or keep
+    manual deliberately with an explicit recurring process) — not something
+    to flip unilaterally. Not changed here.
+  - **Still not resolved:** the actual reserve-*percentage* policy under a
+    real launch-week volume spike (the 10–50% scenarios in §6.3) —
+    `connect_reserved: $0` only proves no hold is active today at current
+    (near-zero) volume; it says nothing about what a real spike would
+    trigger. That still needs either a real volume event or the direct
+    Stripe conversation in §4.2/§6.6 option 3.
 - **Issue/gap:** Stripe imposes a non-waivable 7–14 day first-payout delay for new
   platform accounts and can hold reserves for up to 180 days, explicitly triggered by
   "a sales spike, a promotion, or a sudden increase in disputes." Spinr's planned
@@ -7830,17 +7856,22 @@ record of what was assumed vs. what was actually true</summary>
   2026-08-31, see §6 below**); consider staggering the driver blitz and rider promo
   rather than running both at full intensity in week 1. Full detail and mitigation
   options: `docs/finance/stripe-payout-readiness.md` (§6 for the dollar model, §4/§6.6
-  for mitigation tradeoffs). **The direct-with-Stripe confirmation itself remains
-  outstanding — not something a coding session can do.**
+  for mitigation tradeoffs; §7, added 2026-09-12, for the real account data now
+  confirmed directly via Stripe's API). **The reserve-*percentage* question under
+  real launch-week volume still needs either a real volume event or a direct
+  Stripe conversation (§4.2/§6.6 option 3) — that part remains outstanding, not
+  something any session can confirm from API access alone.**
 - **Files:** none (operational/financial planning, not a code fix) — reference doc at
   `docs/finance/stripe-payout-readiness.md`; cross-referenced from
   `docs/runbooks/saskatoon-launch.md` §P-5 (new gate added same pass).
-- **Acceptance (still open):** real (not publicly-documented-default) Stripe payout
-  timeline confirmed for Spinr's account, and a written answer to "can operating cash
-  cover driver payouts if Stripe holds a reserve during the launch-week spike." The
-  second half now has a first-pass written answer (the §6 model: ≈$2K–$25.5K modeled
-  gap, mitigation options laid out) — the first half (actual Stripe confirmation) is
-  the remaining blocker to closing this item.
+- **Acceptance (partially closed 2026-09-12):** real (not publicly-documented-default)
+  Stripe payout timeline confirmed for Spinr's account — **done** (§7: `delay_days: 3`,
+  account ~10 months old and fully verified, no active reserve hold). Still open:
+  the reserve-*percentage* policy under real launch-week volume (needs a real spike
+  or a direct Stripe conversation), and — newly surfaced, not part of the original
+  acceptance bar but arguably more urgent — the owner's decision on the account's
+  manual payout schedule (see §7's new finding above: real revenue sitting unpaid-out
+  in Stripe since the account's one-and-only payout, 2026-03-31).
 
 ### G2. 116 migration files merged to `main` had never been applied to the live database
 - [x] **Status:** CLOSED 2026-08-21 (same session) — schema-drift audit run, confirmed
@@ -22974,7 +23005,9 @@ how much they de-risk a public launch._
      intended permanent design — currently undocumented either way.
 - **Owner / follow-up:** needs a person with EAS dev-build + DHU (or physical head unit)
   access — no session in this repo's agent integration has that. Flag for the next mobile/
-  device-testing cycle.
+  device-testing cycle. **See also C103** (2026-09-12): this item is one of five standing
+  access-gap symptoms consolidated into one tracking entry there — update this item's own
+  status in place when resolved, rather than filing a new duplicate.
 - **Files (reference only, no code changed by this entry):** `driver-app/lib/androidAuto/
   carSurface.tsx`, `driver-app/lib/androidAuto/carMapCamera.ts`, `driver-app/eas.json`,
   `docs/carplay-android-auto.md`, `docs/change-log/2026-08-16-android-auto-hardware-
@@ -23955,12 +23988,43 @@ how much they de-risk a public launch._
      migration work like this one. Recorded as a dated, time-boxed
      exception in `.claude/context/connector-scoping.md`, not a silent
      "won't fix."
-  - **Not verified:** whether any real `charge.refunded` webhook ever hit
-    production before today while the column was missing (the "every real
-    refund webhook would have 500'd" implication raised above). Out of
-    scope for this closure — would require a Stripe dashboard / Sentry
-    log review, not a schema check. If this matters, it's a follow-up, not
-    part of C88.
+  - **Follow-up closed 2026-09-12:** the "every real refund webhook would
+    have 500'd" implication above does not hold — checked directly, not
+    assumed. Stripe's live `GET /v1/refunds` (account `acct_1SSk2XFXFgLO2LdO`,
+    `has_more: false`, so this is the complete list) shows exactly **14 real
+    refunds ever made on this account**, all between **2026-04-18 and
+    2026-06-17** — well before migration 408 (applied 2026-09-08). Cross-checked
+    all 14 `payment_intent_id`s against production `rides` directly
+    (`soavhtdhefowwvforzwb`): **zero matches** — none of these 14 refunds are
+    linked to any Spinr ride. `routes/webhooks.py`'s `charge.refunded` handler
+    only reads/writes `rides.refund_amount` inside its `if rides:` branch
+    (line ~1191); when no ride matches (`else` branch, line ~1446), it calls
+    `_record_orphan_refund()` instead — a separate path with no dependency on
+    that column at all. So even on today's code, none of these 14 events would
+    ever have touched `refund_amount`. Going further: `stripe_orphan_refunds`
+    (the table `_record_orphan_refund` would have written to) was only created
+    by migration 254, applied **2026-08-18** — itself nearly 2 months *after*
+    the last of the 14 refunds (2026-06-17). So at the time these actually
+    happened, the orphan-refund path didn't exist yet either; whatever the
+    "no ride found" branch did back then (per this function's own docstring:
+    "only a log warning was left behind") also never touched `refund_amount`.
+    Confirmed the table is empty today (`SELECT * FROM stripe_orphan_refunds`
+    → 0 rows), consistent with this timeline. Independently corroborated via
+    Sentry (`spinr-backend`/`crimson-smoke-7445`, 180-day window, covering the
+    full April–June range): zero error events match `message:*refund_amount*
+    OR error.value:*refund_amount*`, and a broader 50-result sample of
+    `routes/webhooks.py`-culprit errors contains no refund-related entries
+    either. **Conclusion: no real production refund webhook was ever affected
+    by the missing column** — not because an error was silently swallowed
+    anywhere, but because none of the refunds that actually occurred were
+    tied to a ride in the first place. C88 is now fully closed, including
+    this thread.
+  - **What was NOT verified in this follow-up:** whether Stripe actually
+    attempted delivery of these 14 `charge.refunded` events to the webhook
+    endpoint at all (delivery-attempt history is Dashboard-only, not exposed
+    via the API this session used) — moot for this specific question, since
+    even a successful delivery would have taken the no-op/orphan path either
+    way, per the code read above.
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
 ### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`
@@ -24995,6 +25059,21 @@ how much they de-risk a public launch._
   2026-09-11 addendum above; wired Firebase's own tap-detection into the router rather than
   removing the expo-notifications path, since the latter is still genuinely needed for the local
   welcome-nudge notification.
+- **Status update 2026-09-11 (this session):** recommendations **2, 3, 4 now all fully addressed.**
+  #3 and #4's foreground half were found already shipped by other sessions before this one started
+  (re-verified directly by reading current code, not by trusting this file); this session's own
+  contribution was #2's remaining Sentry-tagging half (`core/security.py`'s already-loud log
+  failure now also fires an explicitly `domain=drivers`/`surface=backend`-tagged
+  `sentry_sdk.capture_exception`, since the loguru-only `tags_from_log_extra` bridge doesn't cover
+  this module's stdlib `logging` calls) and #4's remaining background/killed half
+  (`backgroundMessaging.ts` gets a log-only fallback for a data-only type outside the 3
+  explicitly-handled ones — deliberately no notification display, since one would duplicate what
+  the OS already shows for every non-data-only type per the correction above; closes the
+  "un-actioned, forward-looking risk" this entry already named). Full detail, blast-radius greps,
+  and verification: `docs/change-log/2026-09-11-c97-push-notification-fixes.md`. **Still open:**
+  #1 (ops check on Fly/Railway Firebase credential) — blocked on C99, no ops access from any
+  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — needs a real compiled iOS build not
+  available here.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 
@@ -25246,6 +25325,231 @@ how much they de-risk a public launch._
   `shared/components/CarMarker.tsx` (per C90/C70/the three prior
   `CarMarker.tsx` change-logs cross-referenced above — the actual
   component whose retry logic the failing suite exercises).
+
+### C101. `shared/components/CarMarker.tsx` (rider-app) was missing a route-rebase fix and an Android rotation-smoothing fix that `driver-app/components/CarMarker.tsx` already had in production — distinct from C90 (three *other* ported fixes)
+
+- [x] **Status:** FIXED at the code level 2026-09-12 — **device verification still pending**, tracked
+  under the new R14 access-gap entry below, not re-listed as its own device-pass item here.
+- **Found by:** the 2026-09-12 ride-experience industry-benchmark audit
+  (`docs/audit/ride-experience/module-c-shared.md`), which diffed `shared/` and `driver-app`'s
+  `CarMarker.tsx` copies at a feature level specifically because they are a registered fork
+  (see the new `docs/known-forks.md`).
+- **What was wrong:** (1) the route-coordinate-changed effect in the shared file only stored the
+  new route reference — it never re-based `lastRouteSegmentIndexRef` onto the new polyline, so a
+  stale segment index could give the marker a ~90°-wrong bearing approaching a turn (the "car
+  drives sideways" bug driver-app's own drivers reported and had fixed for them on 2026-09-11).
+  (2) Android's `Marker.rotation` is a plain native prop, so the shared file stepped it directly
+  to each tick's target instead of interpolating, visibly snapping the icon through corners — the
+  "no smooth animation" issue driver-app fixed on 2026-09-09. Riders were exposed to both for as
+  long as the fork existed; drivers were not, because their app got the fix and rider-app's never
+  did.
+- **Fix:** ported both from `driver-app/components/CarMarker.tsx` verbatim — both depended only
+  on primitives already present in the shared file. Full detail, before/after snippets, and the
+  consumer/blast-radius list: `docs/change-log/2026-09-12-carmarker-route-rebase-and-android-rotation-port.md`.
+- **Why this is not a C90 duplicate:** C90 tracks three *other* ported fixes (image-load retry,
+  marker-icon smoothing, heading fixes) already device-unverified. This is two *additional*,
+  previously-unfound gaps in the same file pair — five ported fixes total now, none of them ever
+  verified end-to-end on a real device, which is exactly the pattern R14 (below) exists to fix.
+- **R11 landed 2026-09-12:** decided to keep the two files (driver-app's course-up-camera props
+  are legitimately driver-only) and add the mechanical parity guard —
+  `shared/components/__tests__/CarMarkerParity.test.ts` diffs both files' `CarMarkerProps`
+  interface and fails on any undeclared prop divergence, closing the "sixth gap recurs silently"
+  risk this line used to describe as open. See `docs/known-forks.md`'s registry row.
+
+### C102. Receipt PDF/HTML generator (`utils/receipt_pdf.py` + `utils/email_receipt.py`) never renders a discount/promo line, unlike the JSON receipt endpoint
+
+- [ ] **Status:** OPEN — found, not fixed, deliberately out of scope for the change that surfaced it.
+- **Found by:** `spinr-money-auditor`'s adversarial review of the R9 receipt-PDF-reconciliation
+  change (`docs/audit/ride-experience/ROADMAP.md` R9,
+  `docs/change-log/2026-09-12-receipt-pdf-reconciliation.md`).
+- **What's wrong:** `receipt_pdf.py`'s `_fare_lines` and `email_receipt.py`'s `_build_fare_rows`
+  (shared by the emailed-receipt PDF and, as of R9, the new `GET /rides/{id}/receipt.pdf`
+  rider-facing download) never append a `Promo (...)`/`Promo discount` negative line when
+  `discount_amount > 0`. `backend/routes/rides/_shared.py::_build_fare_breakdown` — used by the
+  JSON receipt endpoint (`GET /rides/{id}/receipt`, the in-app receipt screen) — already does
+  this correctly. The PDF's total still reconciles to what was actually charged (the discount is
+  baked into `grand_total`), so this is a line-item-transparency gap, not a money-correctness or
+  overcharge bug: CLAUDE.md's "every charge maps to a disclosed line item" principle is about
+  disclosed *charges*, and a discount is the one line type this generator omits.
+- **Why not fixed as part of R9:** R9's stated scope was "make the app fetch the existing
+  generator's bytes instead of building its own" (generator parity, not generator correctness).
+  This gap pre-dates R9 entirely — the deleted client-side `buildReceiptHtml` didn't render a
+  discount line either, so R9 didn't regress anything — but R9 does make the gap directly
+  rider-triggerable on demand (`GET /rides/{id}/receipt.pdf`) rather than only reachable via an
+  emailed attachment nobody re-triggers, which is why the auditor flagged it now rather than it
+  staying unnoticed indefinitely.
+- **Suggested fix:** add the same discount-line logic `_build_fare_breakdown` already has to
+  `_fare_lines`/`_build_fare_rows` (or better, have both read from one shared line-builder so a
+  future fare-line type doesn't have to be added in three places — but that refactor is a
+  separate, larger change from this one-line fix and should be scoped on its own merits, not
+  bundled here).
+
+### C103. Device / ops verification access gap — one root cause behind five standing open items (C70, C90, C91's final step, C97 #1, C97 #5), consolidated per R14 rather than re-listed separately
+- [ ] **Status:** OPEN — governance/resourcing item, not a code change. Filed 2026-09-12 per
+  `docs/audit/ride-experience/ROADMAP.md` R14 (source: G-3, `EXTENDS-C99`).
+- **What this consolidates (do not file these five again as separate new items — update the
+  originals in place, and update this entry's checklist below):**
+  1. **C70** — Android Auto DHU/hardware re-validation. Needs an EAS dev build + Android Auto
+     Desktop Head Unit (or a real head-unit) to confirm marker heading, camera rotation, and
+     heatmap rendering on-surface. Last real pass: 2026-08-16; at least 5 AA-surface changes
+     have shipped since with no re-validation.
+  2. **C90** — physical Android device/emulator, for the three ported `CarMarker.tsx` fixes
+     (route-segment continuity hint, GPS pre-smoothing, ring-freeze re-arm) now live in both
+     rider-app and driver-app (the rider-app port landed via this session's R1/R11 work,
+     `docs/change-log/2026-09-12-...` CarMarker fork reconciliation — code-level parity is
+     confirmed, on-device rendering is not).
+  3. **C91's remaining step** — re-capturing the `dashboard-monitoring` visual-regression
+     baseline via `update-visual-baselines.yml`, which requires GitHub Actions-dispatch access
+     no session in this repo's agent integration has. The code fix (seeding a fixture driver so
+     the baseline actually includes a marker) shipped 2026-09-08; only the baseline PNG itself
+     is blocked.
+  4. **C97 #1** — ops check: confirm `FIREBASE_SERVICE_ACCOUNT_JSON` is actually set/valid on
+     both Fly.io and Railway. Costs nothing once someone has CLI/dashboard access; itself
+     blocked on **C99** (no Fly/Railway CLI access, Firebase MCP server can't authenticate from
+     this environment either).
+  5. **C97 #5** — a real compiled iOS build, to confirm the `UIBackgroundModes` finding
+     (flagged SUSPECTED, unconfirmed) for driver-app push delivery in the backgrounded state.
+- **New tracking item added by this consolidation (previously had no entry at all):**
+  6. **REC-A-10's iOS Live Activity** (`docs/audit/ride-experience/module-a-rider-app.md`) —
+     the rider-app lock-screen live ride-status tracking (Live Activity on iOS, ongoing
+     notification on Android) has never been watched render on a real device in any audited
+     session. Independently arrived at the same architecture Uber publishes (server-driven,
+     `dropoffArea: null` privacy choice on the lock screen) and is rated GREEN/preserve on
+     code review alone — but code review is not device confirmation, and this is the same
+     class of gap as the five above, just never previously logged.
+- **Also folded in (verification debt, not a new device need):** REC-C-03/REC-C-04's Android
+  rotation-interpolation and route-re-anchoring ports (`shared/components/CarMarker.tsx`,
+  shipped this session per R1/R11) will need the same on-device confirmation as C90's three
+  fixes once a device pass happens — do not schedule a second, separate device session for
+  these; fold them into the same C90 pass.
+- **Root cause (one, not five):** no Claude Code session in this repo's agent/environment
+  integration has access to any of: a physical Android device or emulator, an Android Auto
+  DHU or head unit, a compiled iOS build/simulator with push entitlements, GitHub
+  Actions-dispatch (for `workflow_dispatch`-triggered jobs like baseline re-capture), or
+  Fly.io/Railway ops CLI/dashboard access. Every one of the five (now six) items above is a
+  symptom of that single missing capability, not five independent gaps — which is exactly why
+  this audit's own module report (Module B) found the same four IDs re-appearing across
+  unrelated findings and recommended one entry instead of continuing to re-file each
+  discovery as its own new item.
+- **Why this is P1 despite being zero engineering effort:** it is causally upstream of real
+  shipped bugs — driver-app's marker-heading fixes exist *because* a human happened to be on a
+  real test ride and caught it; rider-app has no equivalent human-in-the-loop and no
+  visual-regression tooling to substitute (per CLAUDE.md §6, rider-app/driver-app have none at
+  all). Leaving this open means the same class of on-device-only regression keeps recurring,
+  silently, until the next person who happens to be testing on a real phone notices.
+- **Action (a resourcing decision, not an engineering task):**
+  1. Name a human owner for a recurring device-verification pass — cadence should be at least
+     "after any change to `shared/components/CarMarker.tsx`, `driver-app/lib/androidAuto/`, or
+     driver-app's push/notification pipeline," not calendar-fixed, since the trigger is
+     "surface touched," not time elapsed.
+  2. That owner (or whoever they delegate to) needs, at minimum: a physical Android phone (or
+     emulator) with the Android Auto DHU installed; a compiled iOS build with push
+     entitlements (TestFlight or a local Xcode build); GitHub Actions-dispatch permission on
+     this repo (to run `update-visual-baselines.yml`); and Fly.io/Railway dashboard or CLI
+     access scoped to this project only (see the org-wide project-scoped-access guardrail this
+     session's user preferences require — a device-verification owner should get read/deploy
+     access to Spinr's own Fly/Railway apps specifically, not blanket org access).
+  3. Record each pass's result as a dated `docs/change-log/` entry, same pattern as
+     `docs/change-log/2026-08-16-android-auto-hardware-validation.md`, and update the
+     originating item's own checklist (C70/C90/C91/C97/this entry) rather than leaving this
+     entry as the only place the outcome is recorded.
+- **Owner / follow-up:** unassigned — needs the user to name a person. This entry exists so the
+  next audit of this surface finds one open item with a clear ask, not five (now six)
+  independently-discovered symptoms of the same access gap.
+- **Files (reference only, no code changed by this entry):** `driver-app/lib/androidAuto/
+  carSurface.tsx`, `shared/components/CarMarker.tsx`, `admin-dashboard/e2e/visual-regression.
+  spec.ts`, `.github/workflows/update-visual-baselines.yml`, `backend/core/security.py`,
+  `docs/audit/ride-experience/module-a-rider-app.md` (REC-A-10), `docs/audit/ride-experience/
+  ROADMAP.md` (R14).
+
+### C104. `maps_budget.py`'s daily-spend circuit breaker is a non-atomic check-then-increment — a request burst can overshoot the cap before it trips
+- [ ] **Status:** OPEN — found, not fixed. Out of scope for the change that surfaced it.
+- **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
+  `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
+  `docs/change-log/2026-09-12-directions-proxy-r7.md`).
+- **What's wrong:** `backend/utils/maps_budget.py`'s `check_budget()` (read spend, compare to
+  cap) and `record_call()` (increment spend) are two separate operations, not one atomic step.
+  Every proxy endpoint in `backend/routes/maps_proxy.py` (autocomplete, details,
+  reverse-geocode, and now directions) calls `_ensure_budget()` → `check_budget()` before doing
+  its paid work, then `record_call()` after. Concurrent requests can all read
+  `spent < budget` before any of them has recorded its own spend, so a burst — a retry storm,
+  a scripted abuse attempt, or simply many legitimate users hitting the proxy in the same
+  second — can push total spend past the daily cap by more than one call's worth before the
+  breaker actually trips on the next request.
+- **Why this matters more after R7:** this pattern pre-dates R7 and already existed for all
+  three original proxy endpoints — it was lower-severity while `GET /directions` (the
+  highest per-call-cost SKU in this file) was called only from the AI-assistant booking tool
+  path (already budget-gated, low volume) and `route_distance.py`'s live-route fallback
+  (already budget-gated, rate-limited by its own polling cadence). R7 adds this same endpoint
+  as the eventual sole proxy target for 6 client-direct call sites across both mobile apps —
+  once `app_settings.directions_proxy_enabled` is turned on broadly, request volume through
+  this exact TOCTOU window goes up materially.
+- **Why not fixed as part of R7:** `check_budget`/`record_call` are shared primitives used by
+  every SKU in this file plus `backend/ai/tools_booking.py`'s three call sites — fixing the
+  race requires an atomic Redis operation (increment-then-compare, rolling back the increment
+  only if it pushed spend over budget) touching a function with many existing callers, which
+  is a larger, separate change from R7's stated scope (add one new endpoint + dark-launch
+  flag). R7's endpoint is not a new instance of this bug — it inherits an existing one.
+- **Suggested fix:** replace the check-then-act pair with a single atomic Redis `INCRBYFLOAT`
+  (or a Lua script for compare-and-set semantics) that increments spend first and only rejects
+  (rolling back the increment) if the post-increment total exceeds the daily cap — the same
+  pattern used elsewhere in this codebase for idempotent/atomic counters (e.g. Stripe event
+  claiming via `claim_stripe_event`). Should be exercised against `mock_supabase_client`/mock
+  Redis fixtures with a concurrent-request test before landing, per CLAUDE.md's state-machine/
+  money-adjacent dry-run gate (this is spend-tracking, not literal money movement, but the
+  same "prove it under concurrency" discipline applies).
+- **Files (reference only, no code changed by this entry):** `backend/utils/maps_budget.py`
+  (`check_budget`, `record_call`, `_ensure_budget` call sites in `routes/maps_proxy.py`),
+  `backend/ai/tools_booking.py`.
+- **Addendum (2026-09-12, R8):** `backend/routes/rides/_shared.py::_fetch_directions_route`
+  (the fare-estimate Directions call, budget-gated in R2 and Redis-cached in R8) is another
+  call site sharing this exact `check_budget`/`record_call` primitive — not enumerated above
+  since this entry was filed from `maps_proxy.py`'s perspective, but the same race applies
+  here. R8 additionally introduces a related but distinct risk on the same call site: two
+  concurrent requests for the *same* coordinates that both miss the new fare-estimate cache
+  can each independently pass `check_budget()` before either calls `record_call()` — a
+  cache-stampede duplicate spend, not a double-charge to any rider (both calls return the same
+  correct distance). `spinr-money-auditor`'s R8 review confirmed this is cost-only, not a
+  billing-correctness risk, and accepted it as tracked here rather than requiring an in-flight
+  request lock before R8 could ship. Any eventual fix for this entry's atomic-counter suggestion
+  should account for `_shared.py`'s call site too, not just `maps_proxy.py`'s four.
+
+### C105. `GET /maps/directions` proxy has no result cache, unlike its sibling live-route endpoint — acceptable for dark-launch, should close before broad rollout
+- [ ] **Status:** OPEN — found, not fixed. Explicitly flagged by the reviewer as acceptable to
+  ship as-is for now, not a blocker for R7's dark-launched merge.
+- **Found by:** `spinr-performance-sla-reviewer`'s adversarial review of R7's new
+  `GET /maps/directions` proxy endpoint (same source as C104 above).
+- **What's wrong:** `backend/utils/route_distance.py`'s sibling live-route fallback
+  (`_compute_route_via_google`) caches results in Redis on a rounded-coordinate key with a 30s
+  TTL specifically to dedupe concurrent viewers of the same leg. The new `get_directions`
+  endpoint in `backend/routes/maps_proxy.py` has no equivalent cache. Concrete overlap risk
+  once R7's flag is on broadly: the driver dashboard's origin→pickup fetch and the rider's
+  `driver-arriving.tsx` driver-leg fetch request near-identical coordinates around the same
+  time for the same ride, each billed and counted separately against the shared
+  `"directions"` SKU bucket that fare-estimate (`_shared.py`) and the live-route fallback also
+  draw from — an uncached burst could trip the daily budget breaker for unrelated features
+  (autocomplete, geocode) sharing that same bucket.
+- **Separately flagged (same review):** the endpoint's `_HTTP_TIMEOUT = 5.0` (shared across
+  every endpoint in the file) has no retry; a slow/hanging Google response blocks the handler
+  up to ~5s before erroring out and each client call site falls through to its on-device
+  `MapViewDirections` fallback. None of the 6 R7 call sites block screen render while waiting,
+  so this is not a UI stall, but a stale/missing proxy-sourced route line for up to 5s on a
+  slow call is an avoidable degradation. Consider trimming to ~2-3s given Google Directions
+  Essentials typically responds in the low hundreds of ms — but this is shared with the other
+  3 endpoints in the file, so changing it needs a look at whether any of them relies on
+  headroom closer to 5s.
+- **Why acceptable to ship without this:** `app_settings.directions_proxy_enabled` defaults to
+  `false` (R7's dark-launch flag) and no environment has fleet-wide traffic through this
+  endpoint yet — reviewer's own verdict was "acceptable for dark-launch."
+- **Action before ramping the flag on broadly (staging canary or production):** add a short-TTL
+  Redis cache mirroring `_compute_route_via_google`'s rounded-coordinate key pattern (do not
+  copy `route_distance.py`'s cache key scheme verbatim if fine-grained precision matters more
+  here than it does there — see R8's own warning about this exact trap for the fare-estimate
+  cache); re-evaluate the 5s timeout in light of real observed Directions API latency once
+  traffic exists to measure.
+- **Files (reference only, no code changed by this entry):** `backend/routes/maps_proxy.py`
+  (`get_directions`, `_HTTP_TIMEOUT`), `backend/utils/route_distance.py`
+  (`_compute_route_via_google`, reference pattern to adapt, not copy verbatim).
 
 ## Recently completed (do not redo)
 

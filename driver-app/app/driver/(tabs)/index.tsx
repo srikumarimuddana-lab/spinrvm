@@ -35,6 +35,8 @@ import { SafetyShield } from '@shared/components/SafetyShield';
 import { SafetyOverlay } from '@shared/components/SafetyOverlay';
 import { useDriverSafetyTrigger } from '../../../hooks/useDriverSafetyTrigger';
 import { useDriverDiscreetSosFlag } from '../../../hooks/useDriverDiscreetSosFlag';
+import { useDirectionsProxyFlag } from '../../../hooks/useDirectionsProxyFlag';
+import { fetchDirectionsRoute } from '@shared/api/directions';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
 import {
@@ -42,9 +44,11 @@ import {
   publishLiveRoute,
   registerLiveRoutePublisher,
 } from '../../../hooks/liveRouteShared';
-import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, MIN_DISPLAYED_SPEED_MPS } from '../../../utils/locationDisplayGate';
+import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, displaySpeedKmh, effectiveSpeedMps } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
+import { trackStepProgress, type NavigationStep, type StepProgress } from '@shared/utils/navigationSteps';
+import { NavigationStepBanner } from '../../../components/dashboard/NavigationStepBanner';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -222,6 +226,19 @@ function DriverDashboard() {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
+  // Speed-chip staleness tick: `location` only changes when a new GPS fix
+  // arrives, but the chip needs to clamp to 0 once the CURRENT fix ages past
+  // MAX_SPEED_FIX_AGE_MS even while no new fix arrives at all (a genuine
+  // standstill — see displaySpeedKmh's own doc comment). A 1s re-render tick
+  // is what lets that clamp actually fire on a timer instead of waiting on
+  // the next unrelated re-render to happen to notice the fix is now stale.
+  const [, setSpeedTick] = useState(0);
+  useEffect(() => {
+    if (!isOnline) return;
+    const timer = setInterval(() => setSpeedTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [isOnline]);
+
   // Surge multiplier for the driver's service area — fetched on mount and
   // refreshed every 2 minutes (matching the surge engine interval).
   const [surgeMultiplier, setSurgeMultiplier] = useState<number>(1.0);
@@ -348,6 +365,40 @@ function DriverDashboard() {
   const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
 
+  // Turn-by-turn navigation steps — Phase 1 PR C
+  // (docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md §7.3).
+  // Fetched once per ride+leg (server caches per-leg for 30 min, PR A), not
+  // polled — the endpoint returns an empty list while
+  // app_settings.driver_turn_by_turn_enabled is off, so this renders nothing
+  // and costs nothing extra until the flag flips on; no separate flag check
+  // needed here.
+  const [navSteps, setNavSteps] = useState<NavigationStep[]>([]);
+  const [currentNavStep, setCurrentNavStep] = useState<StepProgress | null>(null);
+  const navStepIndexRef = useRef<number | null>(null);
+
+  // Off-route-triggered refetch — Phase 1 PR D. Bypasses PR A's ride-scoped
+  // 30-min cache (force_refresh=true) so a driver who actually left the
+  // planned route gets a step list matching where they now are, rather than
+  // waiting out the TTL on stale turns for the road they're no longer on.
+  // Wired into the existing route-deviation-detection effect below, reusing
+  // its same 60s cooldown gate rather than adding a second debounce
+  // mechanism. On failure, deliberately leaves any existing navSteps in
+  // place — a transient network hiccup on a recovery attempt shouldn't
+  // blank out a still-possibly-useful instruction the driver is already
+  // seeing (unlike the initial per-leg fetch above, which clears on failure
+  // because there's nothing yet to preserve).
+  const refreshNavigationStepsOnDeviation = useCallback(async (rid: string) => {
+    try {
+      const { data } = await api.get<{ steps: NavigationStep[]; destination: string | null }>(
+        `/rides/${rid}/navigation-steps?force_refresh=true`,
+      );
+      navStepIndexRef.current = null;
+      setNavSteps(Array.isArray(data?.steps) ? data.steps : []);
+    } catch {
+      // Leave existing navSteps as-is — see comment above.
+    }
+  }, []);
+
   // Last origin actually fetched + a mirror of the live driver location, both
   // held in refs so the interval callback sees fresh values without
   // re-subscribing on every render.
@@ -374,6 +425,122 @@ function DriverDashboard() {
   const [osrmRouteActive, setOsrmRouteActive] = useState(false);
   const osrmRouteActiveRef = useRef(false);
   useEffect(() => { osrmRouteActiveRef.current = osrmRouteActive; }, [osrmRouteActive]);
+
+  // R7 (docs/audit/ride-experience/ROADMAP.md): dark-launch gate for routing
+  // this screen's MapViewDirections fallback through the backend proxy
+  // instead of calling Google directly from the device. `loaded` gates the
+  // on-device fallback below so a mid-flow mount (e.g. app relaunch while
+  // already navigating to pickup) can't fire both paths for the same
+  // directionsKey generation before the flag value is known -- see
+  // useDirectionsProxyFlag.ts's own comment for the race this closes.
+  const { enabled: directionsProxyEnabled, loaded: directionsProxyFlagLoaded } = useDirectionsProxyFlag();
+  // Which directionsKey generation the proxy already failed for -- reset
+  // implicitly every time directionsKey increments (the same periodic
+  // retry the on-device path already gets via its own key-remount), so a
+  // stale failure never permanently blocks a later attempt as the driver
+  // moves.
+  const [proxyFailedKey, setProxyFailedKey] = useState<number | null>(null);
+
+  // R7: duplicates (deliberately, not refactored into a shared helper --
+  // see the on-device needsDirections/origin/destination block below, and
+  // its own comment) the route-rendering IIFE's origin/destination/
+  // needsDirections derivation, hoisted here because a top-level effect
+  // can't read values computed inside a JSX-only IIFE. Both copies are
+  // reviewed together in this one commit, so they can't silently drift the
+  // way two independently-evolving files could.
+  // Rounded to the same 3-decimal (~110m) grid the on-device
+  // MapViewDirections jitter guard uses (its lodash.isEqual compares props
+  // at this same precision -- see the render-path comment below), hoisted
+  // as plain variables so the useMemo dependency array below can reference
+  // them directly: react-hooks/use-memo requires deps to be simple
+  // expressions, not inline `Math.round(...)` calls.
+  const roundedDriverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
+  const roundedDriverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
+
+  // R7: duplicates (deliberately, not refactored into a shared helper --
+  // see the on-device needsDirections/origin/destination block below, and
+  // its own comment) the route-rendering IIFE's origin/destination/
+  // needsDirections derivation, hoisted here because a top-level effect
+  // can't read values computed inside a JSX-only IIFE. Both copies are
+  // reviewed together in this one commit, so they can't silently drift the
+  // way two independently-evolving files could.
+  const proxyRouteParams = useMemo(() => {
+    if (
+      !ride ||
+      !(rideState === 'ride_offered' || rideState === 'navigating_to_pickup' ||
+        rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress')
+    ) {
+      return null;
+    }
+    const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
+    const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
+    const useSavedRoute = hasSavedRoute && (rideState === 'ride_offered' || rideState === 'trip_in_progress');
+    if (!GOOGLE_MAPS_API_KEY || useSavedRoute || osrmRouteActive) return null;
+
+    const pNavLat = (ride as any).pickup_nav_lat ?? ride.pickup_lat;
+    const pNavLng = (ride as any).pickup_nav_lng ?? ride.pickup_lng;
+
+    let origin: { latitude: number; longitude: number };
+    let destination: { latitude: number; longitude: number };
+    if (rideState === 'ride_offered') {
+      origin = { latitude: pNavLat, longitude: pNavLng };
+      destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+    } else if (rideState === 'trip_in_progress') {
+      origin = roundedDriverLat != null && roundedDriverLng != null
+        ? { latitude: roundedDriverLat, longitude: roundedDriverLng }
+        : { latitude: pNavLat, longitude: pNavLng };
+      destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+    } else {
+      origin = roundedDriverLat != null && roundedDriverLng != null
+        ? { latitude: roundedDriverLat, longitude: roundedDriverLng }
+        : { latitude: pNavLat, longitude: pNavLng };
+      destination = { latitude: pNavLat, longitude: pNavLng };
+    }
+    return { origin, destination };
+  }, [ride, rideState, osrmRouteActive, roundedDriverLat, roundedDriverLng]);
+
+  // R7: try the backend Directions proxy before the on-device
+  // MapViewDirections fallback below. On failure, records the current
+  // directionsKey as failed so the JSX falls through to that fallback
+  // unchanged -- a proxy outage never means no route line at all.
+  useEffect(() => {
+    if (!directionsProxyEnabled || !proxyRouteParams) return;
+    if (proxyFailedKey === directionsKey) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchDirectionsRoute(proxyRouteParams.origin, proxyRouteParams.destination);
+        if (cancelled) return;
+        if (result.coordinates.length > 0) {
+          setRouteCoords(result.coordinates);
+          setDirectionsFailed(false);
+          if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
+          if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+          lastDirectionsFetchRef.current = {
+            lat: proxyRouteParams.origin.latitude,
+            lng: proxyRouteParams.origin.longitude,
+            ts: Date.now(),
+          };
+          if (directionsKey === 0 && mapRef.current && result.coordinates.length > 1) {
+            mapRef.current.fitToCoordinates(result.coordinates, {
+              edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
+              animated: true,
+            });
+          }
+        } else {
+          setProxyFailedKey(directionsKey);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[DriverDashboard] Directions proxy failed, falling back to on-device:', e);
+          setProxyFailedKey(directionsKey);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [directionsProxyEnabled, proxyRouteParams, proxyFailedKey, directionsKey]);
 
   useEffect(() => {
     if (rideState !== 'navigating_to_pickup') return;
@@ -665,6 +832,66 @@ function DriverDashboard() {
      
   }, [activeRide?.ride?.id, rideState]);
 
+  // Turn-by-turn steps for the active leg — one fetch per ride+leg, keyed by
+  // a ref rather than by re-checking navSteps/state so this doesn't refire
+  // on every render once fetched. Resets the step-index continuity ref on a
+  // genuine leg change (pickup -> dropoff) so trackStepProgress starts fresh
+  // rather than carrying over an index from the wrong leg's step list.
+  const fetchedNavLegRef = useRef<string | null>(null);
+  useEffect(() => {
+    const rid = activeRide?.ride?.id;
+    const destination: 'pickup' | 'dropoff' | null =
+      rideState === 'trip_in_progress'
+        ? 'dropoff'
+        : rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup'
+          ? 'pickup'
+          : null;
+    if (!rid || !destination) {
+      fetchedNavLegRef.current = null;
+      navStepIndexRef.current = null;
+      setNavSteps([]);
+      setCurrentNavStep(null);
+      return;
+    }
+    const legKey = `${rid}:${destination}`;
+    if (fetchedNavLegRef.current === legKey) return;
+    fetchedNavLegRef.current = legKey;
+    navStepIndexRef.current = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get<{ steps: NavigationStep[]; destination: string | null }>(
+          `/rides/${rid}/navigation-steps`,
+        );
+        if (cancelled) return;
+        setNavSteps(Array.isArray(data?.steps) ? data.steps : []);
+      } catch {
+        if (!cancelled) setNavSteps([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRide?.ride?.id, rideState]);
+
+  // Which step the driver is currently on + distance remaining to its
+  // maneuver, re-derived on every GPS tick via the same continuity-hint
+  // discipline snapToRoute already uses (shared/utils/navigationSteps.ts).
+  useEffect(() => {
+    const c = location?.coords;
+    if (!c || navSteps.length === 0) {
+      setCurrentNavStep(null);
+      return;
+    }
+    const progress = trackStepProgress(
+      navSteps,
+      { latitude: c.latitude, longitude: c.longitude },
+      navStepIndexRef.current,
+    );
+    navStepIndexRef.current = progress?.stepIndex ?? null;
+    setCurrentNavStep(progress);
+  }, [location, navSteps]);
+
   // When the app comes back to the foreground, arm a one-shot re-center
   // for the next location update. `initialRegion` above is one-shot, so
   // without this the map stays pinned to whatever fix was set before the
@@ -801,15 +1028,34 @@ function DriverDashboard() {
   // the latest computed params so a fast-changing heading/position is
   // coalesced, never silently dropped.
   const CAMERA_ANIM_MS = 700;
+  // Approach-zoom thresholds — Phase 1 PR C. Boost is capped (MAX_MANEUVER_ZOOM)
+  // rather than left open-ended so a very-close maneuver never zooms in past
+  // what's still useful for the driver to see the surrounding road.
+  const MANEUVER_ZOOM_THRESHOLD_M = 150;
+  const MANEUVER_ZOOM_BOOST = 1;
+  const MAX_MANEUVER_ZOOM = FOLLOW_ZOOM_TIERS[FOLLOW_ZOOM_TIERS.length - 1].zoom + MANEUVER_ZOOM_BOOST;
   const lastCameraUpdateRef = useRef(0);
   const pendingCameraTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!COURSE_UP_RIDE_STATES.has(rideState) || !followRef.current) return;
     const c = location?.coords;
     if (!c || !mapRef.current) return;
-    const tier = zoomTierForSpeed(c.speed, followZoomTierRef.current);
+    const tier = zoomTierForSpeed(
+      effectiveSpeedMps(c.speed, location?.timestamp, Date.now()),
+      followZoomTierRef.current,
+    );
     followZoomTierRef.current = tier;
-    const zoom = FOLLOW_ZOOM_TIERS[tier].zoom;
+    let zoom = FOLLOW_ZOOM_TIERS[tier].zoom;
+    // Approach-zoom: nudge in one extra zoom level inside
+    // MANEUVER_ZOOM_THRESHOLD_M of an upcoming turn, same idea as a
+    // dedicated nav app tightening its view on intersection approach — the
+    // street/turn the driver needs is more legible right when it matters,
+    // without changing the ordinary speed-tiered zoom the rest of the drive.
+    // Additive to FOLLOW_ZOOM_TIERS, never active without a fetched step
+    // (currentNavStep is null while the flag is off or between legs).
+    if (currentNavStep && currentNavStep.distanceToManeuverMeters <= MANEUVER_ZOOM_THRESHOLD_M) {
+      zoom = Math.min(zoom + MANEUVER_ZOOM_BOOST, MAX_MANEUVER_ZOOM);
+    }
 
     const mapHeading = courseUp && camBearingRef.current != null ? camBearingRef.current : 0;
     // Pin the car low: shift the center ahead of the car along the travel
@@ -853,7 +1099,34 @@ function DriverDashboard() {
       }
     };
     // mapRef is a stable useRef object from useDriverDashboard().
-  }, [location, rideState, mapRef, courseUp]);
+  }, [location, rideState, mapRef, courseUp, currentNavStep]);
+  // Explicit offline<->online camera framing. rideState stays 'idle' across
+  // this toggle (only `isOnline` changes) — going offline tears down
+  // watchPositionAsync entirely (useDriverDashboard.ts's location-
+  // subscription effect: `if (!isOnline) return`), so no new `location` ever
+  // arrives to re-trigger the follow-camera effect above. Left alone, the
+  // camera just stays wherever that effect last put it — possibly zoomed to
+  // a driving tier, mid-turn heading — instead of the calmer, predictable
+  // framing live-testing asked for: zoom OUT and settle while offline/
+  // parked, zoom back IN on return. Heading uses the same course-up/
+  // north-up rule as the follow camera and compass toggle (camBearingRef
+  // when courseUp is on) rather than hard-coding north, so the car icon
+  // keeps pointing toward the top of the screen exactly like it does while
+  // driving course-up — not just toward true north, which would only
+  // coincidentally point up.
+  const OFFLINE_IDLE_ZOOM = 14; // zoomed out — neighbourhood context while parked
+  const prevIsOnlineForCameraRef = useRef(isOnline);
+  useEffect(() => {
+    if (isOnline === prevIsOnlineForCameraRef.current) return;
+    const c = location?.coords;
+    if (!c || !mapRef.current) return; // retried on the next location tick
+    prevIsOnlineForCameraRef.current = isOnline;
+    followZoomTierRef.current = null; // re-derive fresh once fixes resume
+    const zoom = isOnline ? FOLLOW_ZOOM_TIERS[0].zoom : OFFLINE_IDLE_ZOOM;
+    const heading = courseUp && camBearingRef.current != null ? camBearingRef.current : 0;
+    const center = markerPosRef.current ?? { latitude: c.latitude, longitude: c.longitude };
+    mapRef.current.animateCamera({ center, zoom, heading }, { duration: 600 });
+  }, [isOnline, location, courseUp, mapRef]);
   useEffect(() => {
     if (!pendingRecenterRef.current) return;
     if (!location?.coords || !mapRef.current) return;
@@ -902,8 +1175,16 @@ function DriverDashboard() {
     if (offRouteStreakRef.current >= 3 && Date.now() - offRouteToastMsRef.current > 60_000) {
       offRouteToastMsRef.current = Date.now();
       showToast('info', 'Off Route', 'You have left the planned route.');
+      // Phase 1 PR D: a genuine deviation invalidates the turn-by-turn step
+      // list too, not just the toast — reuses this same 60s cooldown rather
+      // than adding a second debounce for what both share as the trigger
+      // event. A no-op when the flag is off or there's no active leg
+      // (empty response either way, same as every other call to this
+      // endpoint).
+      const rid = activeRide?.ride?.id;
+      if (rid) void refreshNavigationStepsOnDeviation(rid);
     }
-  }, [location, rideState, routeCoords]);
+  }, [location, rideState, routeCoords, activeRide?.ride?.id, refreshNavigationStepsOnDeviation]);
 
   // ── Arrival geofence auto-detect ──
   // When navigating to pickup, two consecutive displayed fixes inside the
@@ -1175,7 +1456,14 @@ function DriverDashboard() {
           // only a live route (OSRM or Directions) can describe driver -> pickup.
           const useSavedRoute = hasSavedRoute &&
             (rideState === 'ride_offered' || rideState === 'trip_in_progress');
-          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive;
+          // (R7) skipped while the backend proxy attempt above is still in
+          // flight for this directionsKey generation or has already succeeded.
+          // Also held off until the flag itself has loaded -- otherwise this
+          // would mount on the `enabled=false` default the instant before a
+          // `true` value arrives, firing both this on-device call and the
+          // proxy for the same generation with no way to cancel this one.
+          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive &&
+            directionsProxyFlagLoaded && (!directionsProxyEnabled || proxyFailedKey === directionsKey);
 
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
           const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
@@ -1501,19 +1789,37 @@ function DriverDashboard() {
         )
       )}
 
+      {/* Next-turn instruction banner — Phase 1 PR C. Renders only once a
+          step has actually been fetched and tracked (empty while the
+          driver_turn_by_turn_enabled flag is off, or between legs), so this
+          is fully inert dark-launched behavior — see PR A's endpoint
+          contract in docs/change-log/2026-09-12-driver-turn-by-turn-navigation-steps-endpoint.md. */}
+      {(rideState === 'navigating_to_pickup' ||
+        rideState === 'arrived_at_pickup' ||
+        rideState === 'trip_in_progress') &&
+        currentNavStep && (
+          <NavigationStepBanner
+            step={currentNavStep.step}
+            distanceToManeuverMeters={currentNavStep.distanceToManeuverMeters}
+            topOffset={insets.top + 8}
+          />
+        )}
+
       {/* Current speed — GPS-derived (coords.speed, m/s), shown at all times
           while online so the readout doesn't pop in/out as speed crosses the
-          threshold. Below MIN_DISPLAYED_SPEED_MPS the RAW value is GPS speed
-          noise, not real motion — a stationary vehicle was live-reported
-          showing ~8 km/h from that noise alone (see locationDisplayGate.ts)
-          — so the DISPLAYED value is clamped to a literal 0 rather than
-          showing the noisy figure or hiding the chip entirely. */}
+          threshold. displaySpeedKmh clamps two known failure modes: GPS
+          noise near zero (a stationary vehicle live-reported ~8 km/h from
+          noise alone) and a STALE fix — watchPositionAsync goes quiet at a
+          genuine standstill, so without this the chip held whatever the last
+          real speed was (live-reported: 57 km/h sitting on screen for
+          minutes after the vehicle actually stopped) instead of reading 0.
+          The speedTick state above forces this to re-evaluate every second
+          even with no new fix, so staleness clamps on a timer, not only when
+          the next fix happens to arrive. See locationDisplayGate.ts. */}
       {isOnline && (
         <View style={[styles.speedChip, { bottom: insets.bottom + 124 }]} pointerEvents="none">
           <Text style={styles.speedChipValue} allowFontScaling={false}>
-            {(location.coords.speed ?? 0) >= MIN_DISPLAYED_SPEED_MPS
-              ? Math.round((location.coords.speed ?? 0) * 3.6)
-              : 0}
+            {displaySpeedKmh(location.coords.speed, location.timestamp, Date.now())}
           </Text>
           <Text style={styles.speedChipUnit} allowFontScaling={false}>km/h</Text>
         </View>

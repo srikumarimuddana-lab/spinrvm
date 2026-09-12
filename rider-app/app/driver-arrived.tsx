@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Image, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
@@ -27,6 +27,8 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { useTranslation } from '../i18n';
+import { fetchDirectionsRoute } from '@shared/api/directions';
+import { DirectionsProxyEnabledContext } from './_layout';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
@@ -49,6 +51,12 @@ function DriverArrivedScreenContent() {
   const resumeKey = useAppResumeKey();
   const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
   const [driverPhotoError, setDriverPhotoError] = useState(false);
+  // R7 (docs/audit/ride-experience/ROADMAP.md): try the backend Directions
+  // proxy before the on-device MapViewDirections fallback when dark-launched
+  // on. proxyFailed lets a proxy failure fall through to the existing
+  // on-device call unchanged rather than showing no route.
+  const directionsProxyEnabled = useContext(DirectionsProxyEnabledContext);
+  const [proxyFailed, setProxyFailed] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -146,6 +154,51 @@ function DriverArrivedScreenContent() {
     // map far more often than the pickup/driver-position use case calls for.
   }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentDriver?.lat, currentDriver?.lng]);
 
+  // R7: try the backend Directions proxy for the pickup→dropoff route before
+  // the on-device MapViewDirections fallback below. On any failure,
+  // proxyFailed flips true and the JSX falls through to that fallback
+  // unchanged -- a proxy outage never means no route line at all.
+  useEffect(() => {
+    if (!directionsProxyEnabled || proxyFailed) return;
+    if (routeCoords.length > 0) return;
+    if (
+      currentRide?.pickup_lat == null || currentRide?.pickup_lng == null ||
+      currentRide?.dropoff_lat == null || currentRide?.dropoff_lng == null
+    ) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchDirectionsRoute(
+          { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng },
+          { latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng },
+        );
+        if (cancelled) return;
+        if (result.coordinates.length > 0) {
+          setRouteCoords(result.coordinates);
+          if (mapRef.current && result.coordinates.length > 1) {
+            mapRef.current.fitToCoordinates(result.coordinates, {
+              edgePadding: { top: 100, right: 60, bottom: 320, left: 60 },
+              animated: true,
+            });
+          }
+        } else {
+          setProxyFailed(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[DriverArrived] Directions proxy failed, falling back to on-device:', e);
+          setProxyFailed(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    directionsProxyEnabled, proxyFailed, routeCoords.length,
+    currentRide?.pickup_lat, currentRide?.pickup_lng, currentRide?.dropoff_lat, currentRide?.dropoff_lng,
+  ]);
+
   const handleMessage = () => router.push({ pathname: '/chat-driver', params: { rideId } } as any);
 
   const handleShareTrip = async () => {
@@ -188,8 +241,10 @@ function DriverArrivedScreenContent() {
           userInterfaceStyle={isDark ? "dark" : "light"}
         >
 
-          {/* Route: pickup → dropoff */}
-          {GOOGLE_MAPS_API_KEY && (
+          {/* Route: pickup → dropoff. (R7) skipped while the backend proxy
+              attempt above is still in flight or has already succeeded --
+              only renders once the proxy is off or has failed. */}
+          {GOOGLE_MAPS_API_KEY && (!directionsProxyEnabled || proxyFailed) && (
             <MapViewDirections
               origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
               destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}

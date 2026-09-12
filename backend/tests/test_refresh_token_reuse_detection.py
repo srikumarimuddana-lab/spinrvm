@@ -285,7 +285,7 @@ async def test_first_replay_cascade_writes_the_audit_row_the_dedupe_reads():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "user-rider-1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-victim-1", "rtk-victim-2"])),
         patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
     ):
         from utils.refresh_tokens import REUSE_AUDIT_ACTION, _handle_refresh_token_reuse, _reuse_already_handled
@@ -297,11 +297,19 @@ async def test_first_replay_cascade_writes_the_audit_row_the_dedupe_reads():
     assert len(audit_inserts) == 1
     doc = audit_inserts[0]
     assert doc["action"] == REUSE_AUDIT_ACTION
-    assert json.loads(doc["details"])["replayed_row_id"] == row["id"]
+    details = json.loads(doc["details"])
+    assert details["replayed_row_id"] == row["id"]
+    assert details["cascade_refresh_revoked"] == 2
+    assert details["cascade_revoked_row_ids"] == ["rtk-victim-1", "rtk-victim-2"]
 
-    # And the dedupe reads exactly that shape back.
+    # And the dedupe reads exactly that shape back — for the replayed row AND
+    # for each session the cascade killed.
     with patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[doc])):
         assert await _reuse_already_handled(row) is True
+        victim = dict(row, id="rtk-victim-2", replaced_by=None)
+        assert await _reuse_already_handled(victim) is True
+        stranger = dict(row, id="rtk-never-seen", replaced_by=None)
+        assert await _reuse_already_handled(stranger) is False
 
 
 @pytest.mark.asyncio
@@ -323,7 +331,7 @@ async def test_partial_cascade_does_not_suppress_the_next_replay():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "user-rider-1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(side_effect=RuntimeError("db blip"))),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(side_effect=RuntimeError("db blip"))),
         patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse, _reuse_already_handled
@@ -356,16 +364,213 @@ async def test_pre_flag_audit_rows_do_not_suppress_the_cascade():
         assert await _reuse_already_handled(row) is False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-09-12, admin dashboard, two cascades in one evening:
+#   03:19:56 logout revoked the token (no rotation) → 03:19:57 the /login page
+#   bootstrap replayed it with the cookie still present → cascade killed the
+#   founder's live session (SPR docs review mid-flow).
+#   03:21 fresh login → 04:05:17 a session KILLED BY that first cascade woke up
+#   (access token expired) and replayed its own dead row → not the row on
+#   record → cascade again → killed the fresh session too.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _seconds_ago(seconds: float) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
 @pytest.mark.asyncio
-async def test_recent_revocation_without_rotation_still_cascades():
-    """A token revoked WITHOUT a replacement (explicit logout / a prior
-    cascade), even moments ago, is a real signal — replaying it MUST still
-    cascade. The grace applies only to rotated-forward tokens."""
+async def test_replay_seconds_after_a_logout_revoke_does_not_cascade_but_is_recorded():
+    """The same client's logout/refresh overlap: revoked without rotation
+    1.3 s ago. Dead credential, generic 401, no cascade — but the revoke may
+    have been an admin force-logout on a suspected account, so the replay
+    still gets its audit row (cascade_ok False, so it never suppresses a later
+    real cascade) and a Sentry warning with its own tag."""
+    import json
+
     cascade_mock = AsyncMock()
-    row = _recently_revoked_rotated_row(replaced_by=None)
+    capture_mock = MagicMock()
+    inserted: list[tuple[str, dict]] = []
+
+    async def _insert_one(table, doc):
+        inserted.append((table, doc))
+        return {"id": "audit-race"}
+
+    row = _revoked_row(audience="admin", user_id="admin-001")
+    row["replaced_by"] = None
+    row["revoked_at"] = _seconds_ago(1.3)
 
     with (
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", capture_mock),
+    ):
+        from utils.refresh_tokens import REUSE_AUDIT_ACTION, _reuse_already_handled, lookup_refresh_token
+
+        result = await lookup_refresh_token("logged-out-raw")
+
+        assert result is None
+        cascade_mock.assert_not_called()
+        capture_mock.assert_called_once()
+        assert capture_mock.call_args.kwargs.get("benign_race") is True
+
+        audit_docs = [doc for table, doc in inserted if table == "audit_logs"]
+        assert len(audit_docs) == 1
+        assert audit_docs[0]["action"] == REUSE_AUDIT_ACTION
+        details = json.loads(audit_docs[0]["details"])
+        assert details["replayed_row_id"] == row["id"]
+        assert details["benign"] == "post_revoke_race"
+        assert details["cascade_ok"] is False
+
+        # That record must never count as a completed cascade.
+        with patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=audit_docs)):
+            assert await _reuse_already_handled(row) is False
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_race_window_is_admin_only():
+    """Rider/driver credential theft is the threat model the cascade exists
+    for, and the mobile clients await their logout before navigating, so the
+    same 1.3 s replay on a rider row still cascades."""
+    cascade_mock = AsyncMock()
+    row = _revoked_row(audience="rider", user_id="user-rider-1")
+    row["replaced_by"] = None
+    row["revoked_at"] = _seconds_ago(1.3)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[])),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("logged-out-rider-raw")
+
+    assert result is None
+    cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_race_audit_insert_failure_never_reaches_the_auth_path():
+    cascade_mock = AsyncMock()
+    row = _revoked_row(audience="admin", user_id="admin-001")
+    row["replaced_by"] = None
+    row["revoked_at"] = _seconds_ago(2)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        assert await lookup_refresh_token("logged-out-raw") is None  # MUST NOT raise
+    cascade_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_logout_revoke_replay_past_the_race_window_still_cascades():
+    """The short window is for a same-client overlap only; a token revoked by
+    logout and replayed minutes later is still a theft signal (the rotation
+    grace does NOT apply to a non-rotated revoke)."""
+    cascade_mock = AsyncMock()
+    row = _revoked_row(audience="admin", user_id="admin-001")
+    row["replaced_by"] = None
+    row["revoked_at"] = _seconds_ago(180)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[])),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("logged-out-raw-late")
+
+    assert result is None
+    cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_replay_from_a_session_killed_by_an_earlier_cascade_does_not_cascade_again():
+    """The 04:05:17 landmine: the replayed row was never the trigger of a
+    cascade, but it is listed as a victim of one. Logged and alerted as a
+    repeat, sessions minted after that cascade left alone."""
+    import json
+
+    cascade_mock = AsyncMock()
+    capture_mock = MagicMock()
+    victim = _revoked_row(audience="admin", user_id="admin-001")
+    victim["id"] = "rtk-victim-dfc2"
+    victim["replaced_by"] = None
+    victim["revoked_at"] = _seconds_ago(45 * 60)
+    earlier_cascade = {
+        "id": "audit-0319",
+        "action": "refresh_token_reuse_detected",
+        "entity_type": "user",
+        "entity_id": "admin-001",
+        "details": json.dumps(
+            {
+                "replayed_row_id": "rtk-trigger-01cb",
+                "audience": "admin",
+                "cascade_ok": True,
+                "cascade_revoked_row_ids": ["rtk-victim-ae5a", "rtk-victim-dfc2"],
+            }
+        ),
+    }
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=victim)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[earlier_cascade])),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", capture_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("stale-tab-raw")
+
+    assert result is None
+    cascade_mock.assert_not_called()
+    capture_mock.assert_called_once()
+    assert capture_mock.call_args.kwargs.get("repeated") is True
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_for_user_keeps_its_count_contract():
+    """/auth/logout-all and admin force-logout read an int; the cascade reads
+    the ids. Both come from one scan."""
+    rows = [
+        {"id": "rtk-a", "revoked_at": None},
+        {"id": "rtk-b", "revoked_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "rtk-c", "revoked_at": None},
+    ]
+    update_mock = AsyncMock(return_value=True)
+    with (
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=rows)),
+        patch("utils.refresh_tokens.db.update_one", update_mock),
+    ):
+        from utils.refresh_tokens import revoke_all_for_user, revoke_all_for_user_ids
+
+        assert await revoke_all_for_user_ids("user-x") == ["rtk-a", "rtk-c"]
+        assert await revoke_all_for_user("user-x") == 2
+    assert update_mock.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_recent_revocation_without_rotation_still_cascades():
+    """A token revoked WITHOUT a replacement (explicit logout / a prior
+    cascade) gets only the short same-client race window, never the 10-min
+    rotation grace: five minutes after a logout, a replay MUST still cascade."""
+    cascade_mock = AsyncMock()
+    row = _recently_revoked_rotated_row(replaced_by=None, revoked_at=_seconds_ago(5 * 60))
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[])),
         patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
     ):
         from utils.refresh_tokens import lookup_refresh_token
@@ -401,13 +606,13 @@ async def test_cascade_bumps_users_token_version_for_rider():
         return {"id": payload.get("id")}
 
     async def _revoke_all(_uid):
-        return 7
+        return [f"rtk-{i}" for i in range(7)]
 
     with (
         patch("utils.refresh_tokens.db.find_one", AsyncMock(side_effect=_find_one)),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(side_effect=_update_one)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(side_effect=_revoke_all)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(side_effect=_revoke_all)),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
@@ -441,7 +646,7 @@ async def test_cascade_bumps_admin_staff_for_admin_audience():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(side_effect=_find_one)),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(side_effect=_update_one)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=2)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1", "rtk-2"])),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
@@ -472,7 +677,7 @@ async def test_cascade_skips_token_version_for_admin_001_super_admin():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=None)),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(side_effect=_update_one)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1"])),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
@@ -491,13 +696,13 @@ async def test_cascade_skips_token_version_for_admin_001_super_admin():
 
 @pytest.mark.asyncio
 async def test_cascade_calls_revoke_all_for_user():
-    revoke_all_mock = AsyncMock(return_value=3)
+    revoke_all_mock = AsyncMock(return_value=["rtk-1", "rtk-2", "rtk-3"])
 
     with (
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
-        patch("utils.refresh_tokens.revoke_all_for_user", revoke_all_mock),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", revoke_all_mock),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
@@ -522,7 +727,7 @@ async def test_cascade_kicks_ws_sockets_for_rider_audience():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=0)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=[])),
         patch("socket_manager.manager.kick_user", kick_mock),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
@@ -545,7 +750,7 @@ async def test_cascade_kicks_admin_ws_sockets_for_admin_audience():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "staff-1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-2"})),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=0)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=[])),
         patch("socket_manager.manager.kick_user", kick_mock),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
@@ -573,7 +778,7 @@ async def test_cascade_continues_to_audit_when_ws_kick_fails():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=0)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=[])),
         patch(
             "socket_manager.manager.kick_user",
             AsyncMock(side_effect=RuntimeError("redis exploded")),
@@ -606,7 +811,7 @@ async def test_cascade_writes_audit_log_with_production_schema():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=2)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1", "rtk-2"])),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
@@ -644,14 +849,14 @@ async def test_cascade_swallows_token_version_bump_failure():
     async def _failing_update(*_, **__):
         raise RuntimeError("DB connection refused")
 
-    revoke_mock = AsyncMock(return_value=5)
+    revoke_mock = AsyncMock(return_value=["rtk-1", "rtk-2", "rtk-3", "rtk-4", "rtk-5"])
     insert_mock = AsyncMock(return_value={"id": "audit-1"})
 
     with (
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(side_effect=_failing_update)),
         patch("utils.refresh_tokens.db.insert_one", insert_mock),
-        patch("utils.refresh_tokens.revoke_all_for_user", revoke_mock),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", revoke_mock),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
@@ -675,7 +880,7 @@ async def test_cascade_swallows_audit_insert_failure():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_failing_insert)),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1"])),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 
@@ -693,7 +898,7 @@ async def test_cascade_swallows_sentry_capture_failure():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", insert_mock),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1"])),
         patch("sentry_sdk.capture_message", side_effect=RuntimeError("sentry unreachable")),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
@@ -715,7 +920,7 @@ async def test_sentry_capture_carries_surface_tag():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=1)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(return_value=["rtk-1"])),
         patch("sentry_sdk.capture_message", capture_mock),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
@@ -739,7 +944,7 @@ async def test_cascade_swallows_revoke_all_failure():
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
         patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
         patch("utils.refresh_tokens.db.insert_one", insert_mock),
-        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(side_effect=_failing_revoke)),
+        patch("utils.refresh_tokens.revoke_all_for_user_ids", AsyncMock(side_effect=_failing_revoke)),
     ):
         from utils.refresh_tokens import _handle_refresh_token_reuse
 

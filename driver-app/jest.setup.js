@@ -20,6 +20,14 @@ jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(() => Promise.resolve(null)),
   setItemAsync: jest.fn(() => Promise.resolve()),
   deleteItemAsync: jest.fn(() => Promise.resolve()),
+  // Keychain accessibility constants. Real values are opaque natives; these
+  // stand-ins only need to be distinct and truthy so a test can assert which
+  // level a write asked for. Without them every keychainAccessible assertion
+  // silently compares undefined to undefined and proves nothing.
+  AFTER_FIRST_UNLOCK: 'AFTER_FIRST_UNLOCK',
+  AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY',
+  WHEN_UNLOCKED: 'WHEN_UNLOCKED',
+  WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'WHEN_UNLOCKED_THIS_DEVICE_ONLY',
 }));
 
 // Mock expo-constants

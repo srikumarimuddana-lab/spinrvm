@@ -314,6 +314,241 @@ async def test_reverse_geocode_caches_on_miss(mock_redis, monkeypatch):
 # ── route-level: budget breaker ───────────────────────────────────────────────
 
 
+# ── route-level: Directions proxy (R7, docs/audit/ride-experience/ROADMAP.md) ──
+
+_DIRECTIONS_OK_PAYLOAD = {
+    "status": "OK",
+    "routes": [
+        {
+            "legs": [
+                {"distance": {"value": 5000}, "duration": {"value": 600}},
+            ],
+            "overview_polyline": {"points": "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
+        }
+    ],
+}
+
+
+@pytest.mark.anyio
+async def test_directions_decodes_route_and_records_budget_call(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils import maps_budget
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(_DIRECTIONS_OK_PAYLOAD))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        result = await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result == {
+        "coordinates": [[38.5, -120.2], [40.7, -120.95], [43.252, -126.453]],
+        "distance_km": 5.0,
+        "duration_minutes": 10.0,
+    }
+    mock_client.get.assert_awaited_once()
+    _, kwargs = mock_client.get.await_args
+    assert kwargs["params"]["origin"] == "38.5,-120.2"
+    assert kwargs["params"]["destination"] == "43.252,-126.453"
+    assert "waypoints" not in kwargs["params"]
+    # Shares the same "directions" SKU bucket as _fetch_directions_route /
+    # route_distance.py's live-route fallback -- not a new bucket.
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == pytest.approx(maps_budget._PRICE_USD["directions"], rel=0.01)
+
+
+@pytest.mark.anyio
+async def test_directions_preserves_waypoint_order_unoptimized(mock_redis, monkeypatch):
+    """Rider-entered stops are priced/dispatched in the given order -- this
+    proxy must never let Google reorder them (no optimizeWaypoints)."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(_DIRECTIONS_OK_PAYLOAD))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints="40.0,-121.0|41.0,-122.0",
+            current_user={"id": "rider_1"},
+        )
+
+    _, kwargs = mock_client.get.await_args
+    assert kwargs["params"]["waypoints"] == "40.0,-121.0|41.0,-122.0"
+    assert "optimizeWaypoints" not in kwargs["params"]
+
+
+@pytest.mark.anyio
+async def test_directions_rejects_malformed_origin(mock_redis, monkeypatch):
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    with pytest.raises(HTTPException) as exc:
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="not-a-latlng",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_directions_rejects_out_of_range_coordinates(mock_redis, monkeypatch):
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    with pytest.raises(HTTPException) as exc:
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="200,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_directions_rejects_malformed_waypoint(mock_redis, monkeypatch):
+    """`_parse_latlng` is reused for each waypoint pair -- a bad one must 400
+    the same way a bad origin/destination does, not 500 or silently drop."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    with pytest.raises(HTTPException) as exc:
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints="40.0,-121.0|bad-data",
+            current_user={"id": "rider_1"},
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_directions_502s_on_malformed_polyline(mock_redis, monkeypatch):
+    """decode_polyline raises ValueError on a truncated/malformed encoded
+    string -- must surface as a clean 502, not an unhandled 500."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    bad_payload = {
+        "status": "OK",
+        "routes": [
+            {
+                "legs": [{"distance": {"value": 5000}, "duration": {"value": 600}}],
+                # Truncated mid-varint -- decode_polyline can't terminate cleanly.
+                "overview_polyline": {"points": "_p~iF~ps|U_ulL"},
+            }
+        ],
+    }
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(bad_payload))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(HTTPException) as exc:
+            await maps_proxy.get_directions(
+                request=_fake_request(),
+                origin="38.5,-120.2",
+                destination="43.252,-126.453",
+                waypoints=None,
+                current_user={"id": "rider_1"},
+            )
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.anyio
+async def test_directions_502s_on_non_ok_status(mock_redis, monkeypatch):
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response({"status": "ZERO_RESULTS", "routes": []}))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(HTTPException) as exc:
+            await maps_proxy.get_directions(
+                request=_fake_request(),
+                origin="38.5,-120.2",
+                destination="43.252,-126.453",
+                waypoints=None,
+                current_user={"id": "rider_1"},
+            )
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.anyio
+async def test_directions_502s_when_google_request_fails(mock_redis, monkeypatch):
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(side_effect=RuntimeError("network down"))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(HTTPException) as exc:
+            await maps_proxy.get_directions(
+                request=_fake_request(),
+                origin="38.5,-120.2",
+                destination="43.252,-126.453",
+                waypoints=None,
+                current_user={"id": "rider_1"},
+            )
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.anyio
+async def test_directions_503s_when_budget_exhausted(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils import maps_budget
+
+    monkeypatch.setattr(maps_budget, "_daily_budget_usd", lambda: 0.001)
+    await maps_budget.record_call("directions")  # $0.005 spent, over budget
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    with pytest.raises(HTTPException) as exc:
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+    assert exc.value.status_code == 503
+    assert "budget" in exc.value.detail.lower()
+
+
 @pytest.mark.anyio
 async def test_autocomplete_503s_when_budget_exhausted(mock_redis, monkeypatch):
     from routes import maps_proxy

@@ -89,6 +89,7 @@ KNOWN_SETTINGS_COLUMNS = frozenset(
         "corporate_kyb_reverify_after_months",
         "corporate_subscription_billing_enabled",
         "corporate_wallet_admin_adjust_daily_cap",
+        "directions_proxy_enabled",
         "driver_discreet_sos_enabled",
         "driver_heatmap_enabled",
         "driver_heatmap_v2_enabled",

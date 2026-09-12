@@ -10,10 +10,18 @@ Endpoints (mounted at ``/api/v1/maps/*``):
 - ``GET /maps/places/autocomplete?input=&session_token=`` — rider typeahead
 - ``GET /maps/places/details?place_id=&session_token=`` — finalise a session
 - ``GET /maps/reverse-geocode?lat=&lng=`` — drop-pin → address
+- ``GET /maps/directions?origin=&destination=&waypoints=`` — road route for
+  the client-side map-line fallback (R7, docs/audit/ride-experience/
+  ROADMAP.md). Dark-launched behind ``app_settings.directions_proxy_enabled``
+  — callers decide whether to use this or call Google directly; this route
+  does not itself gate on the flag.
 
 Cost shape: Places API (New) bills autocomplete requests and the final
 Place Details Essentials call separately when a user selects a prediction.
 Reverse-geocode hits a 24h Redis cache keyed by 4-decimal lat/lng (~11m).
+Directions is billed per call, same SKU as ``routes/rides/_shared.py``'s
+fare-estimate Directions call and ``utils/route_distance.py``'s live-route
+fallback — this proxy shares the same ``"directions"`` budget bucket.
 
 All endpoints require an authenticated rider/driver. The Maps key is read
 from ``app_settings.google_maps_api_key`` so it can be rotated without
@@ -43,7 +51,9 @@ try:
         places_new_headers,
     )
     from ..utils.maps_budget import check_budget, record_call
+    from ..utils.polyline import decode_polyline
     from ..utils.rate_limiter import default_limiter as limiter
+    from ..utils.rate_limiter import get_user_or_ip_key
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:  # pragma: no cover - dual import path
     import db_supabase  # type: ignore
@@ -60,7 +70,9 @@ except ImportError:  # pragma: no cover - dual import path
         places_new_headers,
     )
     from utils.maps_budget import check_budget, record_call  # type: ignore
+    from utils.polyline import decode_polyline  # type: ignore
     from utils.rate_limiter import default_limiter as limiter  # type: ignore
+    from utils.rate_limiter import get_user_or_ip_key  # type: ignore
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -89,9 +101,7 @@ async def _maps_key() -> str:
     settings_row = await get_app_settings()
     api_key = (settings_row or {}).get("google_maps_api_key") or ""
     if not api_key:
-        raise HTTPException(
-            status_code=503, detail="Google Maps API key not configured"
-        )
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
     return api_key
 
 
@@ -233,9 +243,7 @@ async def reverse_geocode(
             data = resp.json()
     except Exception as e:
         logger.error("[maps_proxy] reverse-geocode request failed: %s", e)
-        raise HTTPException(
-            status_code=502, detail="Failed to call Geocoding API"
-        ) from e
+        raise HTTPException(status_code=502, detail="Failed to call Geocoding API") from e
 
     if data.get("status") not in ("OK", "ZERO_RESULTS"):
         logger.error("[maps_proxy] reverse-geocode API error: %s", data.get("status"))
@@ -244,18 +252,106 @@ async def reverse_geocode(
     await record_call("geocode")
 
     results = data.get("results", [])
-    formatted = (
-        results[0]["formatted_address"] if results else f"{cache_lat}, {cache_lng}"
-    )
+    formatted = results[0]["formatted_address"] if results else f"{cache_lat}, {cache_lng}"
 
     try:
         await redis_set(cache_key, formatted, ttl=_REVERSE_GEOCODE_TTL)
     except Exception:
-        logger.warning(
-            "[maps_proxy] failed to cache reverse-geocode result", exc_info=False
-        )
+        logger.warning("[maps_proxy] failed to cache reverse-geocode result", exc_info=False)
 
     return {"formatted_address": formatted, "cached": False}
+
+
+def _parse_latlng(raw: str, field: str) -> tuple:
+    """Parse a required 'lat,lng' query param. Raises 400 on any bad input."""
+    try:
+        lat_str, lng_str = raw.split(",")
+        lat, lng = float(lat_str), float(lng_str)
+    except (ValueError, AttributeError) as e:
+        raise HTTPException(status_code=400, detail=f"{field} must be 'lat,lng'") from e
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail=f"{field} out of range")
+    return lat, lng
+
+
+@api_router.get("/directions")
+@limiter.limit("60/minute", key_func=get_user_or_ip_key)
+async def get_directions(
+    request: Request,
+    origin: str = Query(..., min_length=1, max_length=64, description="'lat,lng'"),
+    destination: str = Query(..., min_length=1, max_length=64, description="'lat,lng'"),
+    waypoints: Optional[str] = Query(
+        default=None, max_length=512, description="'lat,lng|lat,lng|...' stop order, never optimized"
+    ),
+    current_user: dict = Depends(get_current_user),
+):
+    """Proxy Google Directions for the client-side map-line fallback (R7).
+
+    Rider-app/driver-app screens that render a `MapViewDirections` fallback
+    line (when the backend didn't already supply a route polyline) call this
+    instead of Google directly, once each call site is migrated and
+    ``app_settings.directions_proxy_enabled`` is on — the server key never
+    reaches the device for those calls. This route itself does not check
+    that flag; it is a plain, always-available proxy like this file's
+    sibling autocomplete/details/reverse-geocode endpoints, and the flag is
+    purely a client-side rollout switch (see the module docstring).
+
+    Waypoint order is preserved exactly as given — never optimized. A
+    caller relying on a specific stop sequence (e.g. rider-entered stops
+    priced and dispatched in that order) must not have this endpoint
+    silently reorder them.
+
+    Returns ``{"coordinates": [[lat, lng], ...], "distance_km": float|None,
+    "duration_minutes": float|None}`` — the same information a
+    `MapViewDirections.onReady` callback provides, pre-decoded so the client
+    doesn't need its own polyline decoder for this path.
+    """
+    await _ensure_budget()
+    api_key = await _maps_key()
+
+    o_lat, o_lng = _parse_latlng(origin, "origin")
+    d_lat, d_lng = _parse_latlng(destination, "destination")
+
+    params: dict = {
+        "origin": f"{o_lat},{o_lng}",
+        "destination": f"{d_lat},{d_lng}",
+        "key": api_key,
+    }
+    if waypoints:
+        stops = [_parse_latlng(pair, "waypoints") for pair in waypoints.split("|")]
+        params["waypoints"] = "|".join(f"{lat},{lng}" for lat, lng in stops)
+
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.get("https://maps.googleapis.com/maps/api/directions/json", params=params)
+            data = resp.json()
+    except Exception as e:
+        logger.error("[maps_proxy] directions request failed: %s", e)
+        raise HTTPException(status_code=502, detail="Failed to call Directions API") from e
+
+    await record_call("directions")
+
+    if data.get("status") != "OK" or not data.get("routes"):
+        logger.warning("[maps_proxy] directions API non-OK status: %s", data.get("status"))
+        raise HTTPException(status_code=502, detail="No route found")
+
+    route = data["routes"][0]
+    legs = route.get("legs", [])
+    distance_m = sum(leg.get("distance", {}).get("value", 0) for leg in legs)
+    duration_s = sum(leg.get("duration", {}).get("value", 0) for leg in legs)
+    polyline_str = route.get("overview_polyline", {}).get("points", "")
+
+    try:
+        coordinates = decode_polyline(polyline_str) if polyline_str else []
+    except ValueError as e:
+        logger.error("[maps_proxy] directions polyline decode failed: %s", e)
+        raise HTTPException(status_code=502, detail="Malformed route from Directions API") from e
+
+    return {
+        "coordinates": coordinates,
+        "distance_km": round(distance_m / 1000, 2) if distance_m else None,
+        "duration_minutes": round(duration_s / 60, 1) if duration_s else None,
+    }
 
 
 def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

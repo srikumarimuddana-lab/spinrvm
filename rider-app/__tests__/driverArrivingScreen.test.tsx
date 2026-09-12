@@ -104,6 +104,11 @@ jest.mock('@shared/utils/responsive', () => ({
 
 jest.mock('../app/_layout', () => ({
   TrackBaseUrlContext: require('react').createContext(null),
+  DirectionsProxyEnabledContext: require('react').createContext(false),
+}));
+const mockFetchDirectionsRoute = jest.fn();
+jest.mock('@shared/api/directions', () => ({
+  fetchDirectionsRoute: (...a: any[]) => mockFetchDirectionsRoute(...a),
 }));
 
 const mockBack = jest.fn();
@@ -187,7 +192,7 @@ jest.mock('../store/rideStore', () => ({
 }));
 
 import DriverArrivingScreen from '../app/driver-arriving';
-import { TrackBaseUrlContext } from '../app/_layout';
+import { TrackBaseUrlContext, DirectionsProxyEnabledContext } from '../app/_layout';
 
 const flush = async () => {
   await Promise.resolve();
@@ -219,6 +224,20 @@ async function renderScreen() {
     renderer = TestRenderer.create(
       <TrackBaseUrlContext.Provider value={mockTrackBaseUrl}>
         <DriverArrivingScreen />
+      </TrackBaseUrlContext.Provider>,
+    );
+    await flush();
+  });
+  return renderer!;
+}
+
+async function renderScreenWithDirectionsProxy(enabled: boolean) {
+  await act(async () => {
+    renderer = TestRenderer.create(
+      <TrackBaseUrlContext.Provider value={mockTrackBaseUrl}>
+        <DirectionsProxyEnabledContext.Provider value={enabled}>
+          <DriverArrivingScreen />
+        </DirectionsProxyEnabledContext.Provider>
       </TrackBaseUrlContext.Provider>,
     );
     await flush();
@@ -906,5 +925,84 @@ describe('DriverArrivingScreen', () => {
       const r = await renderScreen();
       expect(allText(r)).toContain('"•"');
     });
+  });
+});
+
+// R7 (docs/audit/ride-experience/ROADMAP.md): the backend Directions proxy
+// is tried first for both legs (driver→pickup, pickup→dropoff) when
+// dark-launched on via DirectionsProxyEnabledContext, with the on-device
+// MapViewDirections fallback (mocked throughout this file) reserved for
+// when the proxy is off or fails.
+describe('Directions proxy (R7)', () => {
+  it('does not call the proxy for either leg when the flag is off (default)', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.44, lng: -104.62 };
+    await renderScreen();
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
+  });
+
+  it('calls the proxy for the driver→pickup leg and persists a successful result', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.44, lng: -104.62 };
+    mockFetchDirectionsRoute.mockResolvedValue({
+      coordinates: [{ latitude: 50.44, longitude: -104.62 }, { latitude: 50.45, longitude: -104.6 }],
+      distance: 1.2,
+      duration: 4,
+    });
+
+    await renderScreenWithDirectionsProxy(true);
+
+    expect(mockFetchDirectionsRoute).toHaveBeenCalledWith(
+      { latitude: 50.44, longitude: -104.62 },
+      { latitude: 50.45, longitude: -104.6 },
+    );
+    expect(mockSetActiveDriverRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.44, longitude: -104.62 },
+      { latitude: 50.45, longitude: -104.6 },
+    ]);
+  });
+
+  it('calls the proxy for the pickup→dropoff leg and persists a successful result', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = null; // no driver leg -- isolates the ride leg
+    mockFetchDirectionsRoute.mockResolvedValue({
+      coordinates: [{ latitude: 50.45, longitude: -104.6 }, { latitude: 50.5, longitude: -104.5 }],
+      distance: 3.4,
+      duration: 9,
+    });
+
+    await renderScreenWithDirectionsProxy(true);
+
+    expect(mockFetchDirectionsRoute).toHaveBeenCalledWith(
+      { latitude: 50.45, longitude: -104.6 },
+      { latitude: 50.5, longitude: -104.5 },
+    );
+    expect(mockSetActiveRideRouteCoords).toHaveBeenCalledWith([
+      { latitude: 50.45, longitude: -104.6 },
+      { latitude: 50.5, longitude: -104.5 },
+    ]);
+  });
+
+  it('falls through to on-device MapViewDirections for a leg whose proxy call rejects, without affecting the other leg', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.44, lng: -104.62 };
+    mockFetchDirectionsRoute.mockRejectedValue(new Error('proxy down'));
+
+    const r = await renderScreenWithDirectionsProxy(true);
+
+    expect(r).toBeDefined();
+    expect(mockSetActiveDriverRouteCoords).not.toHaveBeenCalled();
+    expect(mockSetActiveRideRouteCoords).not.toHaveBeenCalled();
+  });
+
+  it('never calls the proxy for a leg that already has a cached route', async () => {
+    mockRideState.currentRide = RIDE_WITH_DRIVER;
+    mockRideState.currentDriver = { ...CURRENT_DRIVER, lat: 50.44, lng: -104.62 };
+    mockRideState.activeDriverRouteCoords = [{ latitude: 1, longitude: 1 }];
+    mockRideState.activeRideRouteCoords = [{ latitude: 2, longitude: 2 }];
+
+    await renderScreenWithDirectionsProxy(true);
+
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
   });
 });

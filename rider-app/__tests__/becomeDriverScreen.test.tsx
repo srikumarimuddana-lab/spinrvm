@@ -196,7 +196,7 @@ describe('BecomeDriverScreen', () => {
       await flush();
     });
     const expectedUrl = Platform.OS === 'ios'
-      ? 'https://apps.apple.com/ca/app/spinr-driver/id0000000000'
+      ? 'https://apps.apple.com/ca/app/spinr-driver/id6755680810'
       : 'https://play.google.com/store/apps/details?id=com.spinr.driver';
     expect(Linking.openURL).toHaveBeenCalledWith(expectedUrl);
   });

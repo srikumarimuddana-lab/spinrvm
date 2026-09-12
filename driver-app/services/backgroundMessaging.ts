@@ -189,6 +189,26 @@ export function registerBackgroundMessageHandlers(): void {
       return;
     }
 
+    // C97 recommendation #4 (background/killed half): every OTHER data-only
+    // FCM type falls through to here with no display path in this handler.
+    // Deliberately log-only, not a Notifee display: per
+    // backend/features.py's `is_data_only` gate, `new_ride_assignment` and
+    // `live_activity` are the ONLY data-only types this backend ever sends —
+    // every other type (chat, document/license expiry, generic alerts, ride
+    // status changes) carries a real FCM `notification` block that Android/
+    // iOS already auto-display with zero app code running, background or
+    // killed. Rendering our own notification here for those types would
+    // produce a **duplicate**, not close a gap (see ACTION_ITEMS.md's C97
+    // entry, "One un-actioned, forward-looking risk worth naming"). What
+    // this branch actually guards against: a *future* data-only type added
+    // to `is_data_only` without also getting its own background display
+    // path here — today that would be silently invisible with zero trace.
+    // This log is that trace, and nothing more.
+    if (data?.type && data.type !== 'new_ride_assignment') {
+      console.warn('[Push] Unhandled background/killed FCM data-only message type (no display path here):', data.type);
+      return;
+    }
+
     if (data?.type !== 'new_ride_assignment' || !data?.ride_id) return;
 
     const fare = toNum(data.fare) ?? 0;

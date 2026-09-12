@@ -18,10 +18,12 @@ from ._deps import (  # noqa: F401
     SpinrException,
     _httpx,
     _re,
+    check_budget,
     get_service_area_polygon,
     logger,
     multi_leg_distance,
     point_in_polygon,
+    record_call,
 )
 
 
@@ -121,6 +123,24 @@ async def _fetch_directions_route(
     """
     if not api_key:
         return None
+    # Budget-gate before spending: this is the highest-volume Directions call
+    # site in the app (every /rides/estimate, plus every booking confirm
+    # lacking a valid estimate token) and, until this fix, the only one of
+    # them with no budget accounting at all — a spend spike here would not
+    # trip the daily breaker while every sibling call site (maps_proxy.py,
+    # route_distance.py's live-route fallback, the AI booking tool) correctly
+    # stops. Soft-fail into the existing haversine fallback on exhaustion,
+    # matching this function's own documented contract (callers treat a
+    # ``None`` result as "fall back to straight-line distance") rather than
+    # raising, which would break that contract for every caller.
+    allowed, spent, budget = await check_budget()
+    if not allowed:
+        logger.warning(
+            "_fetch_directions_route: daily Maps budget reached ({:.2f}/{:.2f} USD) — falling back to haversine distance",
+            spent,
+            budget,
+        )
+        return None
     try:
         params: dict = {
             "origin": f"{pickup_lat},{pickup_lng}",
@@ -135,6 +155,11 @@ async def _fetch_directions_route(
                 params=params,
             )
             data = resp.json()
+        # Record the spend as soon as the call actually reaches Google —
+        # before inspecting the response — so a non-OK status or a malformed
+        # payload still counts against the daily estimate (same placement as
+        # route_distance.py's sibling "directions" call site).
+        await record_call("directions")
         if data.get("status") != "OK" or not data.get("routes"):
             logger.warning(
                 "_fetch_directions_route: status={} — no route returned",

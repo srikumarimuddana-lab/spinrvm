@@ -23005,7 +23005,9 @@ how much they de-risk a public launch._
      intended permanent design — currently undocumented either way.
 - **Owner / follow-up:** needs a person with EAS dev-build + DHU (or physical head unit)
   access — no session in this repo's agent integration has that. Flag for the next mobile/
-  device-testing cycle.
+  device-testing cycle. **See also C103** (2026-09-12): this item is one of five standing
+  access-gap symptoms consolidated into one tracking entry there — update this item's own
+  status in place when resolved, rather than filing a new duplicate.
 - **Files (reference only, no code changed by this entry):** `driver-app/lib/androidAuto/
   carSurface.tsx`, `driver-app/lib/androidAuto/carMapCamera.ts`, `driver-app/eas.json`,
   `docs/carplay-android-auto.md`, `docs/change-log/2026-08-16-android-auto-hardware-
@@ -25381,6 +25383,161 @@ how much they de-risk a public launch._
   future fare-line type doesn't have to be added in three places — but that refactor is a
   separate, larger change from this one-line fix and should be scoped on its own merits, not
   bundled here).
+
+### C103. Device / ops verification access gap — one root cause behind five standing open items (C70, C90, C91's final step, C97 #1, C97 #5), consolidated per R14 rather than re-listed separately
+- [ ] **Status:** OPEN — governance/resourcing item, not a code change. Filed 2026-09-12 per
+  `docs/audit/ride-experience/ROADMAP.md` R14 (source: G-3, `EXTENDS-C99`).
+- **What this consolidates (do not file these five again as separate new items — update the
+  originals in place, and update this entry's checklist below):**
+  1. **C70** — Android Auto DHU/hardware re-validation. Needs an EAS dev build + Android Auto
+     Desktop Head Unit (or a real head-unit) to confirm marker heading, camera rotation, and
+     heatmap rendering on-surface. Last real pass: 2026-08-16; at least 5 AA-surface changes
+     have shipped since with no re-validation.
+  2. **C90** — physical Android device/emulator, for the three ported `CarMarker.tsx` fixes
+     (route-segment continuity hint, GPS pre-smoothing, ring-freeze re-arm) now live in both
+     rider-app and driver-app (the rider-app port landed via this session's R1/R11 work,
+     `docs/change-log/2026-09-12-...` CarMarker fork reconciliation — code-level parity is
+     confirmed, on-device rendering is not).
+  3. **C91's remaining step** — re-capturing the `dashboard-monitoring` visual-regression
+     baseline via `update-visual-baselines.yml`, which requires GitHub Actions-dispatch access
+     no session in this repo's agent integration has. The code fix (seeding a fixture driver so
+     the baseline actually includes a marker) shipped 2026-09-08; only the baseline PNG itself
+     is blocked.
+  4. **C97 #1** — ops check: confirm `FIREBASE_SERVICE_ACCOUNT_JSON` is actually set/valid on
+     both Fly.io and Railway. Costs nothing once someone has CLI/dashboard access; itself
+     blocked on **C99** (no Fly/Railway CLI access, Firebase MCP server can't authenticate from
+     this environment either).
+  5. **C97 #5** — a real compiled iOS build, to confirm the `UIBackgroundModes` finding
+     (flagged SUSPECTED, unconfirmed) for driver-app push delivery in the backgrounded state.
+- **New tracking item added by this consolidation (previously had no entry at all):**
+  6. **REC-A-10's iOS Live Activity** (`docs/audit/ride-experience/module-a-rider-app.md`) —
+     the rider-app lock-screen live ride-status tracking (Live Activity on iOS, ongoing
+     notification on Android) has never been watched render on a real device in any audited
+     session. Independently arrived at the same architecture Uber publishes (server-driven,
+     `dropoffArea: null` privacy choice on the lock screen) and is rated GREEN/preserve on
+     code review alone — but code review is not device confirmation, and this is the same
+     class of gap as the five above, just never previously logged.
+- **Also folded in (verification debt, not a new device need):** REC-C-03/REC-C-04's Android
+  rotation-interpolation and route-re-anchoring ports (`shared/components/CarMarker.tsx`,
+  shipped this session per R1/R11) will need the same on-device confirmation as C90's three
+  fixes once a device pass happens — do not schedule a second, separate device session for
+  these; fold them into the same C90 pass.
+- **Root cause (one, not five):** no Claude Code session in this repo's agent/environment
+  integration has access to any of: a physical Android device or emulator, an Android Auto
+  DHU or head unit, a compiled iOS build/simulator with push entitlements, GitHub
+  Actions-dispatch (for `workflow_dispatch`-triggered jobs like baseline re-capture), or
+  Fly.io/Railway ops CLI/dashboard access. Every one of the five (now six) items above is a
+  symptom of that single missing capability, not five independent gaps — which is exactly why
+  this audit's own module report (Module B) found the same four IDs re-appearing across
+  unrelated findings and recommended one entry instead of continuing to re-file each
+  discovery as its own new item.
+- **Why this is P1 despite being zero engineering effort:** it is causally upstream of real
+  shipped bugs — driver-app's marker-heading fixes exist *because* a human happened to be on a
+  real test ride and caught it; rider-app has no equivalent human-in-the-loop and no
+  visual-regression tooling to substitute (per CLAUDE.md §6, rider-app/driver-app have none at
+  all). Leaving this open means the same class of on-device-only regression keeps recurring,
+  silently, until the next person who happens to be testing on a real phone notices.
+- **Action (a resourcing decision, not an engineering task):**
+  1. Name a human owner for a recurring device-verification pass — cadence should be at least
+     "after any change to `shared/components/CarMarker.tsx`, `driver-app/lib/androidAuto/`, or
+     driver-app's push/notification pipeline," not calendar-fixed, since the trigger is
+     "surface touched," not time elapsed.
+  2. That owner (or whoever they delegate to) needs, at minimum: a physical Android phone (or
+     emulator) with the Android Auto DHU installed; a compiled iOS build with push
+     entitlements (TestFlight or a local Xcode build); GitHub Actions-dispatch permission on
+     this repo (to run `update-visual-baselines.yml`); and Fly.io/Railway dashboard or CLI
+     access scoped to this project only (see the org-wide project-scoped-access guardrail this
+     session's user preferences require — a device-verification owner should get read/deploy
+     access to Spinr's own Fly/Railway apps specifically, not blanket org access).
+  3. Record each pass's result as a dated `docs/change-log/` entry, same pattern as
+     `docs/change-log/2026-08-16-android-auto-hardware-validation.md`, and update the
+     originating item's own checklist (C70/C90/C91/C97/this entry) rather than leaving this
+     entry as the only place the outcome is recorded.
+- **Owner / follow-up:** unassigned — needs the user to name a person. This entry exists so the
+  next audit of this surface finds one open item with a clear ask, not five (now six)
+  independently-discovered symptoms of the same access gap.
+- **Files (reference only, no code changed by this entry):** `driver-app/lib/androidAuto/
+  carSurface.tsx`, `shared/components/CarMarker.tsx`, `admin-dashboard/e2e/visual-regression.
+  spec.ts`, `.github/workflows/update-visual-baselines.yml`, `backend/core/security.py`,
+  `docs/audit/ride-experience/module-a-rider-app.md` (REC-A-10), `docs/audit/ride-experience/
+  ROADMAP.md` (R14).
+
+### C104. `maps_budget.py`'s daily-spend circuit breaker is a non-atomic check-then-increment — a request burst can overshoot the cap before it trips
+- [ ] **Status:** OPEN — found, not fixed. Out of scope for the change that surfaced it.
+- **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
+  `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
+  `docs/change-log/2026-09-12-directions-proxy-r7.md`).
+- **What's wrong:** `backend/utils/maps_budget.py`'s `check_budget()` (read spend, compare to
+  cap) and `record_call()` (increment spend) are two separate operations, not one atomic step.
+  Every proxy endpoint in `backend/routes/maps_proxy.py` (autocomplete, details,
+  reverse-geocode, and now directions) calls `_ensure_budget()` → `check_budget()` before doing
+  its paid work, then `record_call()` after. Concurrent requests can all read
+  `spent < budget` before any of them has recorded its own spend, so a burst — a retry storm,
+  a scripted abuse attempt, or simply many legitimate users hitting the proxy in the same
+  second — can push total spend past the daily cap by more than one call's worth before the
+  breaker actually trips on the next request.
+- **Why this matters more after R7:** this pattern pre-dates R7 and already existed for all
+  three original proxy endpoints — it was lower-severity while `GET /directions` (the
+  highest per-call-cost SKU in this file) was called only from the AI-assistant booking tool
+  path (already budget-gated, low volume) and `route_distance.py`'s live-route fallback
+  (already budget-gated, rate-limited by its own polling cadence). R7 adds this same endpoint
+  as the eventual sole proxy target for 6 client-direct call sites across both mobile apps —
+  once `app_settings.directions_proxy_enabled` is turned on broadly, request volume through
+  this exact TOCTOU window goes up materially.
+- **Why not fixed as part of R7:** `check_budget`/`record_call` are shared primitives used by
+  every SKU in this file plus `backend/ai/tools_booking.py`'s three call sites — fixing the
+  race requires an atomic Redis operation (increment-then-compare, rolling back the increment
+  only if it pushed spend over budget) touching a function with many existing callers, which
+  is a larger, separate change from R7's stated scope (add one new endpoint + dark-launch
+  flag). R7's endpoint is not a new instance of this bug — it inherits an existing one.
+- **Suggested fix:** replace the check-then-act pair with a single atomic Redis `INCRBYFLOAT`
+  (or a Lua script for compare-and-set semantics) that increments spend first and only rejects
+  (rolling back the increment) if the post-increment total exceeds the daily cap — the same
+  pattern used elsewhere in this codebase for idempotent/atomic counters (e.g. Stripe event
+  claiming via `claim_stripe_event`). Should be exercised against `mock_supabase_client`/mock
+  Redis fixtures with a concurrent-request test before landing, per CLAUDE.md's state-machine/
+  money-adjacent dry-run gate (this is spend-tracking, not literal money movement, but the
+  same "prove it under concurrency" discipline applies).
+- **Files (reference only, no code changed by this entry):** `backend/utils/maps_budget.py`
+  (`check_budget`, `record_call`, `_ensure_budget` call sites in `routes/maps_proxy.py`),
+  `backend/ai/tools_booking.py`.
+
+### C105. `GET /maps/directions` proxy has no result cache, unlike its sibling live-route endpoint — acceptable for dark-launch, should close before broad rollout
+- [ ] **Status:** OPEN — found, not fixed. Explicitly flagged by the reviewer as acceptable to
+  ship as-is for now, not a blocker for R7's dark-launched merge.
+- **Found by:** `spinr-performance-sla-reviewer`'s adversarial review of R7's new
+  `GET /maps/directions` proxy endpoint (same source as C104 above).
+- **What's wrong:** `backend/utils/route_distance.py`'s sibling live-route fallback
+  (`_compute_route_via_google`) caches results in Redis on a rounded-coordinate key with a 30s
+  TTL specifically to dedupe concurrent viewers of the same leg. The new `get_directions`
+  endpoint in `backend/routes/maps_proxy.py` has no equivalent cache. Concrete overlap risk
+  once R7's flag is on broadly: the driver dashboard's origin→pickup fetch and the rider's
+  `driver-arriving.tsx` driver-leg fetch request near-identical coordinates around the same
+  time for the same ride, each billed and counted separately against the shared
+  `"directions"` SKU bucket that fare-estimate (`_shared.py`) and the live-route fallback also
+  draw from — an uncached burst could trip the daily budget breaker for unrelated features
+  (autocomplete, geocode) sharing that same bucket.
+- **Separately flagged (same review):** the endpoint's `_HTTP_TIMEOUT = 5.0` (shared across
+  every endpoint in the file) has no retry; a slow/hanging Google response blocks the handler
+  up to ~5s before erroring out and each client call site falls through to its on-device
+  `MapViewDirections` fallback. None of the 6 R7 call sites block screen render while waiting,
+  so this is not a UI stall, but a stale/missing proxy-sourced route line for up to 5s on a
+  slow call is an avoidable degradation. Consider trimming to ~2-3s given Google Directions
+  Essentials typically responds in the low hundreds of ms — but this is shared with the other
+  3 endpoints in the file, so changing it needs a look at whether any of them relies on
+  headroom closer to 5s.
+- **Why acceptable to ship without this:** `app_settings.directions_proxy_enabled` defaults to
+  `false` (R7's dark-launch flag) and no environment has fleet-wide traffic through this
+  endpoint yet — reviewer's own verdict was "acceptable for dark-launch."
+- **Action before ramping the flag on broadly (staging canary or production):** add a short-TTL
+  Redis cache mirroring `_compute_route_via_google`'s rounded-coordinate key pattern (do not
+  copy `route_distance.py`'s cache key scheme verbatim if fine-grained precision matters more
+  here than it does there — see R8's own warning about this exact trap for the fare-estimate
+  cache); re-evaluate the 5s timeout in light of real observed Directions API latency once
+  traffic exists to measure.
+- **Files (reference only, no code changed by this entry):** `backend/routes/maps_proxy.py`
+  (`get_directions`, `_HTTP_TIMEOUT`), `backend/utils/route_distance.py`
+  (`_compute_route_via_google`, reference pattern to adapt, not copy verbatim).
 
 ## Recently completed (do not redo)
 

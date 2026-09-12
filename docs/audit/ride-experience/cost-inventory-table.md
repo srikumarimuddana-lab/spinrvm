@@ -33,6 +33,21 @@ Google's public pricing page (see Sources in the module report) — they matched
 | 14 | FCM (Firebase Cloud Messaging) | `backend/features.py:1324-1450` (`_deliver_push_now`) | Every dispatch offer (1 call per candidate driver per batch — no multicast), every ride lifecycle transition, cancellations, chat, safety | **N/A — free at Spinr's volume** (FCM has no per-call charge for this message volume class) | N/A | **Retry**: `push_retry_queue` + `push_retry_loop` (30s poll, exp. backoff, 5 attempts) — see REC-D-03 for the batching (not cost) gap | N/A dollar-cost, but flagged for throughput/architecture (REC-D-03) |
 | 15 | Expo Push API | `backend/features.py:1255-1292` (`_send_expo_push`) | Same trigger set as #14, for Expo-managed tokens | **N/A — free** | N/A | Same retry queue as #14 | N/A |
 | 16 | Stripe (PaymentIntent auth/capture/refund) | Referenced by `.claude/context/domain-payments.md`; not a file in Module D's named scope (fare_service.py touches settlement, not Stripe calls directly) | Every ride settlement | Metered by Stripe itself (2.9%+30¢ class fees), not by `maps_budget.py` | N/A | Stripe SDK idempotency keys (3-layer, see domain-payments.md) | NOT DEEPLY AUDITED this pass — out of named scope; Stripe's own dashboard is the real spend-visibility tool, not this table |
+| 17 | Google Directions (legacy, on-device, `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`) | `rider-app/app/ride-options.tsx:845` (`MapViewDirections` fallback mount) | Rider views ride options before a route polyline exists yet | **NO** — device calls Google directly, bypassing `maps_budget.py` entirely | **NO** spend cache — the library's own `lodash.isEqual` prop guard only prevents re-fetch on identical rounded coords, it is not a cost cache | **NO** | **HIGH → MITIGATION SHIPPED, PENDING ENABLEMENT** (R7, 2026-09-12): a `try backend proxy, fall back on-device` path now exists (`shared/api/directions.ts` → `backend/routes/maps_proxy.py` `GET /directions`, metered/cached/circuit-breakered same as #4), gated by `app_settings.directions_proxy_enabled`, **default `false`** — this row's real-world exposure is unchanged from HIGH until an admin flips that flag |
+| 18 | Google Directions (legacy, on-device) | `rider-app/app/driver-arriving.tsx:552` (driver→rider leg) | Driver en route to pickup, live re-route as driver moves | **NO** | **NO** | **NO** | Same as #17 — proxy path shipped (two independent proxy effects, one per leg), same flag, same default-off exposure |
+| 19 | Google Directions (legacy, on-device) | `rider-app/app/driver-arriving.tsx:585` (rider→pickup leg) | Same screen, second `MapViewDirections` mount | **NO** | **NO** | **NO** | Same as #17/#18 |
+| 20 | Google Directions (legacy, on-device) | `rider-app/app/driver-arrived.tsx:248` | Driver arrived, pre-trip route line while waiting for `in_progress` | **NO** | **NO** | **NO** | Same as #17 |
+| 21 | Google Directions (legacy, on-device) | `rider-app/app/ride-in-progress.tsx:782` | Trip in progress, route line when no saved `planned_route_polyline` | **NO** | **NO** | **NO** | Same as #17 |
+| 22 | Google Directions (legacy, on-device) | `driver-app/app/driver/(tabs)/index.tsx:1374` | Driver dashboard, `navigating_to_pickup`/`arrived_at_pickup` route line | **NO** | **NO** | **NO** | Same as #17 — this call site's proxy path additionally closes a flag-load race and a GPS-jitter over-fetch risk the others don't share (see `docs/change-log/2026-09-12-directions-proxy-r7.md`) |
+
+**Update 2026-09-12 (R7/G-1):** rows 17–22 close the "backend-only" gap this table's own
+`ACTION_ITEMS.md` E13 note flagged — the six client-direct `MapViewDirections` call sites
+(four rider-app files, one of them with two mount points, plus one driver-app file) are now
+inventoried alongside the backend SKUs. Each has a shipped, dark-launched proxy mitigation
+(`app_settings.directions_proxy_enabled`, default `false`); until that flag is turned on in
+an environment, the real spend/visibility exposure these rows describe is unchanged from the
+original G-1 finding. See `docs/change-log/2026-09-12-directions-proxy-r7.md` for the full
+Change Impact Log.
 
 ## Headline gaps (severity HIGH)
 

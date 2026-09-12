@@ -248,6 +248,7 @@ from .stops import (  # noqa: F401
 )
 from .tracking import (  # noqa: F401
     get_live_route,
+    get_navigation_steps,
 )
 
 api_router = APIRouter(tags=["Rides"])
@@ -395,6 +396,7 @@ __all__ = [
     "get_current_user_allow_expired",
     "get_fares_for_location",
     "get_live_route",
+    "get_navigation_steps",
     "get_ride",
     "get_ride_history",
     "get_ride_messages",

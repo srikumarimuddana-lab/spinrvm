@@ -32,9 +32,11 @@ Why map-matching (OSRM /match) and not routing (OSRM /route or Directions)?
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import math
+import re
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
@@ -773,6 +775,125 @@ async def _compute_route_via_google(
     except Exception:
         logger.warning("[route_distance] live-route cache set failed", exc_info=False)
     return result
+
+
+# Turn-by-turn maneuver list (Phase 1 of
+# docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md).
+# Deliberately NOT part of compute_route()'s OSRM-first/Directions-fallback
+# chain used by the 6s-polled live-route line: OSRM's own step/maneuver text
+# is rougher quality (Option C in that proposal, rejected), and baking
+# steps=true into a call made every 6s would multiply Directions call volume
+# by that poll cadence. This is fetched once per leg by the caller (see
+# routes/rides/tracking.py's own ride+leg-scoped cache) and only refetched on
+# a genuine off-route event — not on a timer.
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+# Cross-ride/cross-viewer dedupe cache, same shape as _LIVE_ROUTE_CACHE_TTL_S
+# above but longer-lived: unlike the live route line, a turn-by-turn step
+# list for a fixed origin/destination pair doesn't need to track the driver's
+# continuous movement — it only needs to survive long enough that two
+# concurrent requests for the same leg (e.g. a cache miss on the ride-scoped
+# key in tracking.py, or two different rides that happen to share a route)
+# don't both pay for a Directions call.
+_NAV_STEPS_CACHE_TTL_S = 300
+
+
+def _strip_html_instructions(raw: str) -> str:
+    """Google's html_instructions are raw HTML meant for a webpage
+    ("Turn <b>right</b> onto <b>Albert St</b>") — strip tags and decode
+    entities for a plain-text UI string. Trusted provider output, but tags
+    are stripped rather than rendered regardless."""
+    if not raw:
+        return ""
+    return html.unescape(_HTML_TAG_RE.sub("", raw)).strip()
+
+
+async def compute_navigation_steps(
+    from_lat: float, from_lng: float, to_lat: float, to_lng: float
+) -> Optional[List[dict]]:
+    """Turn-by-turn maneuver list via Google Directions steps=true. Budget-
+    gated and Redis-cached, same pattern as _compute_route_via_google above.
+
+    Returns a list of {instruction, maneuver, distanceMeters, startLocation,
+    endLocation} dicts (one per Google Directions step, across all legs of
+    the response — a single-destination request normally has one leg), or
+    None when no API key is configured, the budget is exhausted, or every
+    call/parse fails. Callers should treat None the same as an empty list —
+    "no turn-by-turn available this leg," not an error to surface.
+    """
+    app_settings = await get_app_settings() or {}
+    api_key = (app_settings.get("google_maps_api_key") or "").strip()
+    if not api_key:
+        return None
+
+    cache_key = f"nav_steps:{round(from_lat, 5)},{round(from_lng, 5)}:{round(to_lat, 5)},{round(to_lng, 5)}"
+    try:
+        cached = await redis_get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        logger.warning("[route_distance] nav-steps cache get failed", exc_info=False)
+
+    allowed, spent, budget = await check_budget()
+    if not allowed:
+        logger.warning(
+            "[route_distance] Maps daily budget reached (%.2f/%.2f USD) — skipping navigation-steps fetch",
+            spent,
+            budget,
+        )
+        return None
+
+    params = {
+        "origin": f"{from_lat},{from_lng}",
+        "destination": f"{to_lat},{to_lng}",
+        "mode": "driving",
+        "steps": "true",
+        "key": api_key,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            resp = await client.get(_DIRECTIONS_URL, params=params)
+        await record_call("directions")
+        if resp.status_code != 200:
+            logger.warning("[route_distance] Directions API (steps) returned %d", resp.status_code)
+            return None
+        data = resp.json()
+    except Exception as e:
+        logger.warning("[route_distance] Directions API (steps) call failed: %s", e)
+        return None
+
+    routes = data.get("routes") or []
+    if data.get("status") != "OK" or not routes:
+        logger.warning("[route_distance] Directions (steps) status=%s", data.get("status"))
+        return None
+
+    steps: List[dict] = []
+    for leg in routes[0].get("legs") or []:
+        for step in leg.get("steps") or []:
+            instruction = _strip_html_instructions(step.get("html_instructions") or "")
+            if not instruction:
+                continue
+            start_loc = step.get("start_location") or {}
+            end_loc = step.get("end_location") or {}
+            steps.append(
+                {
+                    "instruction": instruction,
+                    # Google omits this key entirely for a plain "continue
+                    # straight" step — None is the correct absence value,
+                    # not a parse failure.
+                    "maneuver": step.get("maneuver"),
+                    "distanceMeters": _num_or_zero((step.get("distance") or {}).get("value")),
+                    "startLocation": [start_loc.get("lat"), start_loc.get("lng")] if start_loc else None,
+                    "endLocation": [end_loc.get("lat"), end_loc.get("lng")] if end_loc else None,
+                }
+            )
+    if not steps:
+        return None
+
+    try:
+        await redis_set(cache_key, json.dumps(steps), ttl=_NAV_STEPS_CACHE_TTL_S)
+    except Exception:
+        logger.warning("[route_distance] nav-steps cache set failed", exc_info=False)
+    return steps
 
 
 async def snap_to_road(lat: float, lng: float) -> Optional[Tuple[float, float]]:

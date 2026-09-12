@@ -152,3 +152,117 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
         _deps.logger.warning(f"live-route cache write failed for ride_id={ride_id}: {exc}")
 
     return result
+
+
+# Ride+leg-scoped cache for the turn-by-turn step list — Phase 1 of
+# docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md.
+# Deliberately keyed on (ride_id, leg) alone, NOT the driver's live position
+# like LIVE_ROUTE_CACHE_PREFIX above: the step list for a leg is fixed once
+# the leg starts (the frontend tracks progress against it locally, see the
+# proposal's PR B), so re-deriving it on every few metres of GPS movement
+# would be wasteful and would keep resetting step-index tracking. A genuine
+# off-route event (PR D) deletes this key to force a refetch instead of
+# waiting out the TTL.
+NAV_STEPS_CACHE_PREFIX = "nav_steps_leg:"
+NAV_STEPS_CACHE_TTL_SECONDS = 1800  # generous — a single leg rarely exceeds this
+
+
+def navigation_steps_cache_key(ride_id: str, destination: str) -> str:
+    return f"{NAV_STEPS_CACHE_PREFIX}{ride_id}:{destination}"
+
+
+@router.get("/{ride_id}/navigation-steps")
+async def get_navigation_steps(
+    ride_id: str,
+    force_refresh: bool = False,
+    current_user: dict = Depends(get_current_user),
+):
+    """Turn-by-turn maneuver list for the active leg (pickup pre-trip, dropoff
+    in-trip). Feature-flagged off by default (app_settings.driver_turn_by_turn_
+    enabled) — returns an empty list while off, same shape either way so the
+    client never needs to branch on the flag itself.
+
+    Fetched via utils.route_distance.compute_navigation_steps (Google
+    Directions steps=true, budget-gated, its own short-lived cross-ride
+    cache) and cached again here per ride+leg for
+    NAV_STEPS_CACHE_TTL_SECONDS — see that constant's own comment for why
+    this cache is leg-scoped rather than position-scoped like /live-route's.
+    `force_refresh` bypasses this ride-scoped cache (but not the budget
+    check) for a genuine off-route recalculation.
+    """
+    try:
+        from ...settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
+    app_settings = await get_app_settings() or {}
+    if not app_settings.get("driver_turn_by_turn_enabled"):
+        return {"steps": [], "destination": None}
+
+    ride = await _deps.db_supabase.get_ride(ride_id)
+    if not ride:
+        raise RideNotFoundException(ride_id=ride_id, message_key=ErrorKeys.RIDE_NOT_FOUND)
+
+    # Ownership: rider or assigned driver (admin allowed) — same check as
+    # /live-route above.
+    is_rider = ride.get("rider_id") == current_user["id"]
+    driver_self = await _deps.driver_row_for(current_user)
+    is_driver = bool(driver_self) and ride.get("driver_id") == driver_self["id"]
+    if not (is_rider or is_driver) and not current_user.get("_admin_verified"):
+        raise HTTPException(status_code=403, detail="Not authorized to view this ride")
+
+    status = ride.get("status")
+    if status in ("driver_assigned", "driver_accepted", "driver_arrived"):
+        dest_lat, dest_lng, destination = ride.get("pickup_lat"), ride.get("pickup_lng"), "pickup"
+    elif status == "in_progress":
+        dest_lat, dest_lng, destination = ride.get("dropoff_lat"), ride.get("dropoff_lng"), "dropoff"
+    else:
+        return {"steps": [], "destination": None}
+
+    assigned = (
+        (lambda _r: _r[0] if _r else None)(
+            await _deps.db_supabase.get_rows("drivers", {"id": ride.get("driver_id")}, limit=1)
+        )
+        if ride.get("driver_id")
+        else None
+    )
+    o_lat = assigned.get("lat") if assigned else None
+    o_lng = assigned.get("lng") if assigned else None
+    if o_lat is None or o_lng is None or dest_lat is None or dest_lng is None:
+        return {"steps": [], "destination": destination}
+
+    try:
+        from ...utils.redis_client import redis_delete, redis_get, redis_set
+        from ...utils.route_distance import compute_navigation_steps
+    except ImportError:
+        from utils.redis_client import redis_delete, redis_get, redis_set  # type: ignore
+        from utils.route_distance import compute_navigation_steps  # type: ignore
+
+    cache_key = navigation_steps_cache_key(ride_id, destination)
+    if force_refresh:
+        try:
+            await redis_delete(cache_key)
+        except Exception as exc:
+            _deps.logger.warning(f"navigation-steps cache delete failed for ride_id={ride_id}: {exc}")
+    else:
+        try:
+            cached = await redis_get(cache_key)
+        except Exception as exc:
+            _deps.logger.warning(f"navigation-steps cache read failed for ride_id={ride_id}: {exc}")
+            cached = None
+        if cached:
+            try:
+                return json.loads(cached)
+            except ValueError:
+                pass  # unreadable entry — fall through and recompute
+
+    steps = await compute_navigation_steps(float(o_lat), float(o_lng), float(dest_lat), float(dest_lng))
+    result = {"steps": steps or [], "destination": destination}
+
+    if steps:  # only cache a real result — a failed fetch is retried next call
+        try:
+            await redis_set(cache_key, json.dumps(result), ttl=NAV_STEPS_CACHE_TTL_SECONDS)
+        except Exception as exc:
+            _deps.logger.warning(f"navigation-steps cache write failed for ride_id={ride_id}: {exc}")
+
+    return result

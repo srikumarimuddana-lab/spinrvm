@@ -302,14 +302,24 @@ surface defect with a known, already-proven fix sitting unapplied one file away.
 - **Gates:** **CIL required** for every implementation PR (dispatch + driver live surface).
   Re-verify all pricing against `developers.google.com/maps/billing-and-pricing/pricing` before
   committing a budget — this audit could not reach it (`EGRESS_BLOCKED`).
-- **Status (2026-09-12):** Precondition 1 (R2) shipped earlier this session — the fare-estimate
-  Directions call is now budget-gated and cached. **Phase 1 itself remains not started**: this
-  is a 2–3 week (+3–5 day Routes API adjustment) feature build with its own architecture spec,
-  new maneuver-parsing UI, and the re-route debounce design Precondition 2 requires before any
-  code starts — out of scope for a single audit-follow-through session. Explicitly deferred,
-  not silently dropped: the next session that picks this up should re-verify Routes API SKU
-  pricing first (this session's own egress was blocked to Google's pricing page) before writing
-  the debounce spec, since that number is what decides GO vs NO-GO per this entry's own text.
+- **Status (2026-09-12, corrected same day):** Precondition 1 (R2) shipped earlier this session —
+  the fare-estimate Directions call is now budget-gated and cached. This entry originally read
+  "Phase 1 itself remains not started" — that is now **stale**: a **parallel** Claude Code
+  session shipped Phase 1 in full (PRs #5289, #5292, #5294, #5295, merged 2026-09-12
+  13:43–16:56, see `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7) while
+  this session's own PR #5290 (which wrote this entry) was still in flight — neither session's
+  audit trail was visible to the other before both merged to `main` within hours of each other.
+  **Do not start Phase 1 architecture/spec work — it is done.** However, the shipped
+  implementation did **not** apply this entry's own "Architecture change to the proposal" above:
+  it built on the Legacy Directions endpoint (`steps=true`) rather than the Routes API
+  (`computeRoutes`) this entry explicitly required, apparently because the parallel session's own
+  decision log never cross-referenced this entry. Tracked as `ACTION_ITEMS.md` C106 rather than
+  silently corrected in place — a live, driver-facing endpoint should get the same review this
+  session's other changes got before anyone rewrites it. Remaining open work on R12: Phase 2
+  (live re-route + lane guidance) and Phase 3 (offline/CarPlay/Android Auto nav surface) per the
+  proposal's own phasing — neither started, both still require the Routes-API-vs-Legacy call to
+  be resolved first (C106) since Phase 2's re-route logic sits on top of whichever API Phase 1
+  ends up using.
 
 ### R13 — GCP Billing Budgets integration for real Maps/Firebase spend **[P2]**
 

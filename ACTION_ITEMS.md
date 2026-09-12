@@ -25551,6 +25551,49 @@ how much they de-risk a public launch._
   (`get_directions`, `_HTTP_TIMEOUT`), `backend/utils/route_distance.py`
   (`_compute_route_via_google`, reference pattern to adapt, not copy verbatim).
 
+### C106. R12 Phase 1 (turn-by-turn navigation) shipped on the Legacy Google Directions API, not the Routes API this session's own ROADMAP.md audit required
+- [ ] **Status:** OPEN — found, not fixed. Documentation-only finding; no code changed by this
+  entry.
+- **Found by:** cross-session verification against `git log origin/main` while checking R12/R13
+  status before starting follow-up work. R12 Phase 1 (PRs #5289, #5292, #5294, #5295, merged
+  2026-09-12 13:43–16:56) shipped from a **parallel** Claude Code session
+  (`session_01XWMswUC9h7qTYCt6mLiw2A`) while this session's own PR #5290 — which authored the
+  ROADMAP.md entry below — was still in flight. Neither session's audit trail was visible to the
+  other before both merged to `main` within hours of each other.
+- **What's wrong:** `docs/audit/ride-experience/ROADMAP.md`'s R12 entry explicitly required:
+  "**Architecture change to the proposal:** build against the **Routes API** (`computeRoutes`,
+  `routes.legs.steps.navigationInstruction` FieldMask), **not** by flipping `steps=true` on the
+  Legacy Directions endpoint. Legacy went to maintenance status 2025-03-01 and gets no new
+  features; building new maneuver parsing on it is day-one technical debt." The shipped
+  implementation does exactly what this said not to do:
+  `backend/utils/route_distance.py::compute_navigation_steps`'s own docstring reads "Turn-by-turn
+  maneuver list via Google Directions **steps=true**" — the Legacy endpoint — called from the new
+  `GET /rides/{ride_id}/navigation-steps` endpoint in `backend/routes/rides/tracking.py`.
+- **Why this happened:** the parallel session's own decision log
+  (`docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7.2, "Decisions (answered
+  via `AskUserQuestion`, 2026-09-12)") records 3 decisions — steps-call caching strategy, Phase 1
+  scope (no live re-route), and the `app_settings` flag — but never addresses Legacy-vs-Routes-API
+  at all. Its own §7.1 re-verification pass covered the current backend call sites in real detail
+  but had no way to cross-reference this session's ROADMAP.md R12 entry, written concurrently in a
+  different session.
+- **What's confirmed fine:** budget gating was addressed, matching the proposal's own §7.1-flagged
+  requirement ("the new steps-fetching call must not repeat that gap") —
+  `compute_navigation_steps`'s docstring confirms "budget-gated." This is not a cost-governance
+  gap, only an API-generation choice.
+- **Impact if left as-is:** Legacy Directions works today and is not scheduled for shutdown, only
+  maintenance mode (no new features — e.g. no future traffic-aware turn refinements). Real but not
+  urgent technical debt, not a live bug or regression.
+- **Recommendation:** do not silently rewrite the already-shipped, driver-facing navigation
+  endpoint without the same review this session's other changes got (CLAUDE.md gate #10). A
+  future session/human should decide GO/NO-GO on migrating `compute_navigation_steps` to Routes
+  API's `computeRoutes`, weighing the ROADMAP's own original SKU-tier concern (Routes API's
+  traffic-aware routing is an Advanced-SKU pricing trigger, unlike Legacy) against Legacy's frozen
+  feature set.
+- **Files (reference only, no code changed by this entry):** `backend/utils/route_distance.py`
+  (`compute_navigation_steps`), `backend/routes/rides/tracking.py` (`get_navigation_steps`),
+  `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7,
+  `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

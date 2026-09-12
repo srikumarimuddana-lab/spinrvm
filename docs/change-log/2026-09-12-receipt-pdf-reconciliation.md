@@ -77,6 +77,21 @@ implementation.
   `rider-app/package.json`. Because it already ships as part of every Expo SDK 57 native build
   today, this is not a new native module requiring an EAS rebuild before it works — it is
   already compiled into the currently-shipped binary.
+- **Adversarial post-implementation review findings, fixed before this commit's follow-up:**
+  `spinr-security-auditor` found the new endpoint had no dedicated rate limit — the sibling
+  JSON receipt endpoint (`get_ride_receipt`) also has none, but this endpoint's actual cost is
+  materially higher (an outbound route-snapshot HTTP fetch plus a synchronous PDF render per
+  call), so the loose IP-keyed global default (`100/minute`, `1000/hour`) was too permissive
+  for its resource profile. Fixed by adding `@ride_read_limit` (`120/minute`, per-user keyed —
+  the same limiter `get_ride`/`get_ride_history` already use), verified against
+  `tests/test_rate_limit_decorator_order.py` (which specifically catches the "decorator applied
+  above `@router.get`, silently never runs" failure mode this repo has hit before) before this
+  commit. `spinr-money-auditor`'s review (in progress in parallel, results pending) covers
+  receipt-correctness/PII; no blocking findings from the security pass otherwise — see that
+  review's INFO-level notes on `ride_code`'s header-injection surface (confirmed non-exploitable
+  today: server-generated from a fixed alphanumeric alphabet, verified by grepping every write
+  site) and the pre-existing 404-vs-403 existence-disclosure pattern this endpoint inherits
+  unchanged from its sibling.
 - **Fare/tax correctness note (checked, not just assumed):** `get_ride_receipt_pdf` does NOT
   duplicate the JSON receipt endpoint's fare-lock/snapshot relabeling logic
   (`get_ride_receipt`'s `fare_locked`/`relabel_booked_distance_lines` branch) — it hands the raw
@@ -103,7 +118,7 @@ implementation.
 | File path | What changed | Why |
 |---|---|---|
 | `backend/utils/email_receipt.py` | Added `build_receipt_pdf_bytes()`, reusing the existing snapshot-resolution + `generate_receipt_pdf()` call. | R9 |
-| `backend/routes/rides/receipts.py` | Added `GET /{ride_id}/receipt.pdf` endpoint (`get_ride_receipt_pdf`), mirroring `get_ride_receipt`'s ownership/status checks and `email_ride_receipt`'s driver-hydration shape. | R9 |
+| `backend/routes/rides/receipts.py` | Added `GET /{ride_id}/receipt.pdf` endpoint (`get_ride_receipt_pdf`), mirroring `get_ride_receipt`'s ownership/status checks and `email_ride_receipt`'s driver-hydration shape; added `@ride_read_limit` after adversarial review flagged the endpoint's cost profile as heavier than its unrated JSON sibling. | R9 |
 | `backend/routes/rides/_deps.py` | (No functional change — `Response` was already imported here.) | — |
 | `backend/routes/rides/__init__.py` | Re-exported `get_ride_receipt_pdf` (import block + `__all__`). | R9 (facade convention) |
 | `backend/tests/test_coverage_rides.py` | Added 6 tests for the new endpoint (not-found, wrong-rider, not-completed, success, no-driver, generation-failure-503). | R9 |

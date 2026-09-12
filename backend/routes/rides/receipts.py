@@ -15,6 +15,7 @@ from ._deps import (  # noqa: F401
     RideStatus,
     get_current_user,
     ride_action_limit,
+    ride_read_limit,
     send_ride_receipt,
 )
 from ._shared import (  # noqa: F401
@@ -161,7 +162,12 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
 
 
 @router.get("/{ride_id}/receipt.pdf")
-async def get_ride_receipt_pdf(ride_id: str, current_user: dict = Depends(get_current_user)):
+@ride_read_limit
+async def get_ride_receipt_pdf(
+    ride_id: str,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
     """Download the branded ride-receipt PDF — the backend's one official
     generator (utils/receipt_pdf.py via utils/email_receipt.py's
     build_receipt_pdf_bytes), not a client-side re-implementation.
@@ -171,6 +177,11 @@ async def get_ride_receipt_pdf(ride_id: str, current_user: dict = Depends(get_cu
     agreeing with this generator only because both happened to read the same
     settled ride fields — with nothing keeping them in sync if either
     changed. The app now fetches these bytes directly instead.
+
+    Rate-limited (unlike the JSON sibling ``get_ride_receipt`` above) because
+    this handler does real work per call — an outbound route-snapshot fetch
+    plus a synchronous PDF render — that the JSON endpoint doesn't; the
+    default IP-keyed limiter alone is too loose for that cost profile.
     """
     ride = await _deps.db_supabase.get_ride(ride_id)
     if not ride:

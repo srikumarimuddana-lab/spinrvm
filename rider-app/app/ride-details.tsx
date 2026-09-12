@@ -8,13 +8,14 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api, { getApiErrorMessage, getAuthHeader } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import { useAuthStore } from '@shared/store/authStore';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import SpinrConfig from '@shared/config/spinr.config';
 import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -33,100 +34,6 @@ const _num = (n: any): number => {
   const v = typeof n === 'number' ? n : parseFloat(String(n ?? 0));
   return Number.isFinite(v) ? v : 0;
 };
-const _money = (n: any): string => _num(n).toFixed(2);
-
-// Branded HTML receipt for the rider's own ride, rendered to PDF via expo-print.
-// PIPEDA: rider's own data only; driver block is name + vehicle (NO phone/plate).
-export function buildReceiptHtml(ride: any): string {
-  const code = ride?.ride_code || String(ride?.id || '').slice(0, 8).toUpperCase() || '—';
-  const dateRaw = ride?.ride_completed_at || ride?.created_at;
-  const date = dateRaw ? new Date(dateRaw).toLocaleString() : '';
-  const driverName =
-    ride?.driver_name ||
-    `${ride?.driver?.first_name || ''} ${ride?.driver?.last_name || ''}`.trim();
-  const vehicle = ride?.driver_vehicle || '';
-  const driverCode = ride?.driver_code || ride?.driver?.driver_code || '';
-  const driverSub = [driverCode, vehicle].filter(Boolean).join(' · ') || 'Your driver';
-
-  const line = (l: string, a: string) =>
-    `<tr><td style="color:#666;padding:4px 0">${l}</td><td style="text-align:right;color:#1a1a1a">${a}</td></tr>`;
-  const rows: string[] = [
-    line('Base fare', '$' + _money(ride?.base_fare)),
-    line(`Distance (${_num(ride?.distance_km).toFixed(1)} km)`, '$' + _money(ride?.distance_fare)),
-    line(`Time (${_num(ride?.duration_minutes).toFixed(0)} min)`, '$' + _money(ride?.time_fare)),
-  ];
-  if (_num(ride?.booking_fee) > 0) rows.push(line('Booking fee', '$' + _money(ride?.booking_fee)));
-  rows.push('<tr><td colspan="2" style="border-top:1px dashed #eee"></td></tr>');
-  rows.push(line('Subtotal', '$' + _money(ride?.total_fare)));
-
-  // GST/PST as separate line items from the persisted breakdown (SK regulatory);
-  // fall back to the grand_total gap so the lines reconcile to what was charged.
-  const tb = ride?.tax_breakdown && typeof ride.tax_breakdown === 'object' ? ride.tax_breakdown : {};
-  let hadTax = false;
-  for (const [label, payload] of Object.entries(tb)) {
-    const amt = _num((payload as any)?.amount);
-    const rate = _num((payload as any)?.rate);
-    if (amt === 0) continue;
-    hadTax = true;
-    rows.push(line(`${label}${rate ? ` (${rate.toFixed(0)}%)` : ''}`, '$' + _money(amt)));
-  }
-  if (!hadTax) {
-    const gap = _num(ride?.grand_total) - _num(ride?.total_fare);
-    if (gap > 0.005) rows.push(line('Tax', '$' + _money(gap)));
-  }
-  if (_num(ride?.tip_amount) > 0) rows.push(line('Tip', '$' + _money(ride?.tip_amount)));
-
-  const grand = _num(ride?.grand_total) + _num(ride?.tip_amount);
-  const driverBlock = driverName
-    ? `<tr><td style="padding:0 24px 16px"><table width="100%" style="background:#f9f9f9;border-radius:12px"><tr><td style="padding:12px 14px">
-       <p style="margin:0;font-size:13px;font-weight:600;color:#1a1a1a">${driverName}</p>
-       <p style="margin:2px 0 0;font-size:12px;color:#999">${driverSub}</p></td></tr></table></td></tr>`
-    : '';
-  const routeRevision = _num(ride?.route_revision);
-  const isActualSnapshot =
-    _num(ride?.route_schema_version) >= 2 &&
-    routeRevision > 0 &&
-    _num(ride?.snapshot_revision) === routeRevision;
-  const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
-  // Bare map image, no caption: revision numbers and GPS-coverage percentages
-  // are operator diagnostics and live on the admin ride-detail modal now. A v2
-  // ride whose snapshot revision is stale still renders nothing at all — never
-  // a stale image — it just no longer explains itself in provenance copy. The
-  // alt text keeps the actual/planned distinction for screen readers.
-  const routeMap = routeSnapshotUrl
-    ? `<tr><td style="padding:0 24px 12px"><img src="${routeSnapshotUrl}" alt="Actual route" width="472" style="width:100%;max-width:472px;border-radius:12px;display:block" /></td></tr>`
-    : _num(ride?.route_schema_version) >= 2
-      ? ''
-      : ride?.route_snapshot_url
-        ? `<tr><td style="padding:0 24px 12px"><img src="${ride.route_snapshot_url}" alt="Planned route" width="472" style="width:100%;max-width:472px;border-radius:12px;display:block" /></td></tr>`
-        : '';
-
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
-  <body style="margin:0;background:#f5f5f5;font-family:-apple-system,Roboto,sans-serif">
-  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;background:#fff">
-    <tr><td style="background:#ee2b2b;padding:24px;text-align:center">
-      <h1 style="color:#fff;margin:0;font-size:26px;font-weight:800">Spinr</h1>
-      <p style="color:rgba(255,255,255,.85);margin:4px 0 0;font-size:13px">Ride Receipt</p></td></tr>
-    <tr><td style="padding:20px 24px 0;text-align:center">
-      <p style="color:#ee2b2b;font-size:34px;font-weight:800;margin:0">$${_money(grand)} CAD</p>
-      <p style="color:#999;font-size:12px;margin:4px 0 0">${date}</p>
-      <p style="color:#999;font-size:11px;margin:6px 0 0">Ride <strong style="color:#1a1a1a">${code}</strong></p></td></tr>
-    ${routeMap}
-    <tr><td style="padding:16px 24px"><table width="100%" style="background:#f9f9f9;border-radius:12px"><tr><td style="padding:14px">
-      <p style="color:#999;font-size:10px;margin:0;text-transform:uppercase">Pickup</p>
-      <p style="color:#1a1a1a;font-size:13px;margin:2px 0 12px">${ride?.pickup_address || '—'}</p>
-      <p style="color:#999;font-size:10px;margin:0;text-transform:uppercase">Dropoff</p>
-      <p style="color:#1a1a1a;font-size:13px;margin:2px 0 0">${ride?.dropoff_address || '—'}</p></td></tr></table></td></tr>
-    <tr><td style="padding:0 24px 12px"><table width="100%" style="font-size:13px">${rows.join('')}
-      <tr><td colspan="2" style="border-top:1px solid #eee"></td></tr>
-      <tr><td style="padding:8px 0;font-weight:700;font-size:15px">Total</td>
-      <td style="text-align:right;color:#ee2b2b;font-weight:800;font-size:17px">$${_money(grand)}</td></tr></table></td></tr>
-    ${driverBlock}
-    <tr><td style="padding:12px 24px 24px;text-align:center;border-top:1px solid #f0f0f0">
-      <p style="color:#bbb;font-size:11px;margin:0">Spinr Mobility Inc. · Saskatoon, SK</p>
-      <p style="color:#bbb;font-size:11px;margin:3px 0 0">support@spinr.ca · www.spinr.ca</p></td></tr>
-  </table></body></html>`;
-}
 
 export default function RideDetailsScreen() {
   const router = useRouter();
@@ -157,19 +64,36 @@ export default function RideDetailsScreen() {
   const handleDownloadInvoice = async () => {
     if (pdfBusy) return;
     setPdfBusy(true);
+    // Native modules — dynamic import so an older build without them degrades
+    // gracefully (caught below) instead of crashing at startup.
+    let FS: typeof import('expo-file-system');
+    let Sharing: typeof import('expo-sharing');
     try {
-      // Native modules — dynamic import so an older build without them degrades
-      // gracefully (caught below) instead of crashing at startup.
-      const Print = await import('expo-print');
-      const Sharing = await import('expo-sharing');
-      const { uri } = await Print.printToFileAsync({ html: buildReceiptHtml(ride) });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Spinr ride receipt' });
-      } else {
-        showToast('Saved', 'Receipt PDF generated.', 'success');
-      }
+      FS = await import('expo-file-system');
+      Sharing = await import('expo-sharing');
     } catch {
       showToast('PDF Unavailable', 'PDF export requires the latest app version. Please update the app and try again.', 'warning');
+      setPdfBusy(false);
+      return;
+    }
+    try {
+      // Fetches the backend's one official receipt PDF (utils/receipt_pdf.py
+      // via routes/rides/receipts.py::get_ride_receipt_pdf) instead of
+      // rendering a second, independently-implemented HTML receipt on-device
+      // (R9, docs/audit/ride-experience/ROADMAP.md).
+      const token = await getAuthHeader();
+      const file = await FS.File.downloadFileAsync(
+        `${SpinrConfig.backendUrl}/api/v1/rides/${rideId}/receipt.pdf`,
+        FS.Paths.cache,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {}, idempotent: true },
+      );
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(file.uri, { mimeType: 'application/pdf', dialogTitle: 'Spinr ride receipt' });
+      } else {
+        showToast('Saved', 'Receipt PDF downloaded.', 'success');
+      }
+    } catch (e: any) {
+      showToast('Download Failed', getApiErrorMessage(e, 'Could not download the receipt. Please check your connection and try again.'), 'danger');
     } finally {
       setPdfBusy(false);
     }

@@ -50,8 +50,10 @@ interface RiderStatement {
 
 // Branded HTML summary of the rider's OWN monthly work-ride statement
 // (GET /rider/work-profile/:companyId/statement/:month, scoped server-side
-// to this rider's own membership), rendered to PDF via expo-print — same
-// approach ride-details.tsx's buildReceiptHtml uses for the ride receipt.
+// to this rider's own membership), rendered to PDF via expo-print. Unlike
+// the ride receipt (ride-details.tsx, which now fetches the backend's one
+// official PDF — R9, docs/audit/ride-experience/ROADMAP.md), no backend
+// PDF generator exists for this statement, so it stays client-rendered.
 // Money values are the Decimal-quantized strings the backend already
 // returns (e.g. "12.50"); never re-parsed as floats here.
 export function buildStatementHtml(companyName: string, month: string, statement: RiderStatement): string {

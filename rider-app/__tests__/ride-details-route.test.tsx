@@ -45,11 +45,15 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).not.toContain('fetchFallbackRoute');
   });
 
-  it('gates the receipt snapshot on a matching revision, without provenance copy', () => {
-    // routeRevision still decides whether the snapshot is the CURRENT one — a
-    // stale image must never reach a receipt. What went away is the caption
-    // that printed the revision number and the GPS-coverage quality beside it.
-    expect(source).toContain('_num(ride?.snapshot_revision) === routeRevision');
+  it('no longer builds its own receipt PDF/HTML — the backend generator gates the snapshot revision instead', () => {
+    // R9 (docs/audit/ride-experience/ROADMAP.md): the client-side
+    // buildReceiptHtml generator (and its own routeRevision ===
+    // snapshot_revision staleness gate) was removed entirely.
+    // "Download invoice" now fetches GET /rides/{id}/receipt.pdf, the
+    // backend's one official PDF (utils/receipt_pdf.py) — its own
+    // snapshot-staleness gating is pinned server-side in
+    // backend/tests/test_receipt_route_snapshot.py, not here.
+    expect(source).not.toContain('buildReceiptHtml');
     expect(source).not.toContain('Actual route (revision ${routeRevision})');
     expect(source).not.toContain('Route snapshot unavailable');
   });

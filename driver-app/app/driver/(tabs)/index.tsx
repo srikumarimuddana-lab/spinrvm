@@ -45,6 +45,8 @@ import {
 import { FOLLOW_ZOOM_TIERS, zoomTierForSpeed, displaySpeedKmh, effectiveSpeedMps } from '../../../utils/locationDisplayGate';
 import { DARK_MAP_STYLE } from '../../../utils/mapStyles';
 import { destinationPoint, snapToRoute } from '@shared/utils/vehicleTracking';
+import { trackStepProgress, type NavigationStep, type StepProgress } from '@shared/utils/navigationSteps';
+import { NavigationStepBanner } from '../../../components/dashboard/NavigationStepBanner';
 import { SPACING, FONT } from '@shared/utils/responsive';
 import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -360,6 +362,17 @@ function DriverDashboard() {
   // skip so a parked driver doesn't burn API calls when nothing has changed.
   const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
+
+  // Turn-by-turn navigation steps — Phase 1 PR C
+  // (docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md §7.3).
+  // Fetched once per ride+leg (server caches per-leg for 30 min, PR A), not
+  // polled — the endpoint returns an empty list while
+  // app_settings.driver_turn_by_turn_enabled is off, so this renders nothing
+  // and costs nothing extra until the flag flips on; no separate flag check
+  // needed here.
+  const [navSteps, setNavSteps] = useState<NavigationStep[]>([]);
+  const [currentNavStep, setCurrentNavStep] = useState<StepProgress | null>(null);
+  const navStepIndexRef = useRef<number | null>(null);
 
   // Last origin actually fetched + a mirror of the live driver location, both
   // held in refs so the interval callback sees fresh values without
@@ -678,6 +691,66 @@ function DriverDashboard() {
      
   }, [activeRide?.ride?.id, rideState]);
 
+  // Turn-by-turn steps for the active leg — one fetch per ride+leg, keyed by
+  // a ref rather than by re-checking navSteps/state so this doesn't refire
+  // on every render once fetched. Resets the step-index continuity ref on a
+  // genuine leg change (pickup -> dropoff) so trackStepProgress starts fresh
+  // rather than carrying over an index from the wrong leg's step list.
+  const fetchedNavLegRef = useRef<string | null>(null);
+  useEffect(() => {
+    const rid = activeRide?.ride?.id;
+    const destination: 'pickup' | 'dropoff' | null =
+      rideState === 'trip_in_progress'
+        ? 'dropoff'
+        : rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup'
+          ? 'pickup'
+          : null;
+    if (!rid || !destination) {
+      fetchedNavLegRef.current = null;
+      navStepIndexRef.current = null;
+      setNavSteps([]);
+      setCurrentNavStep(null);
+      return;
+    }
+    const legKey = `${rid}:${destination}`;
+    if (fetchedNavLegRef.current === legKey) return;
+    fetchedNavLegRef.current = legKey;
+    navStepIndexRef.current = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get<{ steps: NavigationStep[]; destination: string | null }>(
+          `/rides/${rid}/navigation-steps`,
+        );
+        if (cancelled) return;
+        setNavSteps(Array.isArray(data?.steps) ? data.steps : []);
+      } catch {
+        if (!cancelled) setNavSteps([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRide?.ride?.id, rideState]);
+
+  // Which step the driver is currently on + distance remaining to its
+  // maneuver, re-derived on every GPS tick via the same continuity-hint
+  // discipline snapToRoute already uses (shared/utils/navigationSteps.ts).
+  useEffect(() => {
+    const c = location?.coords;
+    if (!c || navSteps.length === 0) {
+      setCurrentNavStep(null);
+      return;
+    }
+    const progress = trackStepProgress(
+      navSteps,
+      { latitude: c.latitude, longitude: c.longitude },
+      navStepIndexRef.current,
+    );
+    navStepIndexRef.current = progress?.stepIndex ?? null;
+    setCurrentNavStep(progress);
+  }, [location, navSteps]);
+
   // When the app comes back to the foreground, arm a one-shot re-center
   // for the next location update. `initialRegion` above is one-shot, so
   // without this the map stays pinned to whatever fix was set before the
@@ -814,6 +887,12 @@ function DriverDashboard() {
   // the latest computed params so a fast-changing heading/position is
   // coalesced, never silently dropped.
   const CAMERA_ANIM_MS = 700;
+  // Approach-zoom thresholds — Phase 1 PR C. Boost is capped (MAX_MANEUVER_ZOOM)
+  // rather than left open-ended so a very-close maneuver never zooms in past
+  // what's still useful for the driver to see the surrounding road.
+  const MANEUVER_ZOOM_THRESHOLD_M = 150;
+  const MANEUVER_ZOOM_BOOST = 1;
+  const MAX_MANEUVER_ZOOM = FOLLOW_ZOOM_TIERS[FOLLOW_ZOOM_TIERS.length - 1].zoom + MANEUVER_ZOOM_BOOST;
   const lastCameraUpdateRef = useRef(0);
   const pendingCameraTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -825,7 +904,17 @@ function DriverDashboard() {
       followZoomTierRef.current,
     );
     followZoomTierRef.current = tier;
-    const zoom = FOLLOW_ZOOM_TIERS[tier].zoom;
+    let zoom = FOLLOW_ZOOM_TIERS[tier].zoom;
+    // Approach-zoom: nudge in one extra zoom level inside
+    // MANEUVER_ZOOM_THRESHOLD_M of an upcoming turn, same idea as a
+    // dedicated nav app tightening its view on intersection approach — the
+    // street/turn the driver needs is more legible right when it matters,
+    // without changing the ordinary speed-tiered zoom the rest of the drive.
+    // Additive to FOLLOW_ZOOM_TIERS, never active without a fetched step
+    // (currentNavStep is null while the flag is off or between legs).
+    if (currentNavStep && currentNavStep.distanceToManeuverMeters <= MANEUVER_ZOOM_THRESHOLD_M) {
+      zoom = Math.min(zoom + MANEUVER_ZOOM_BOOST, MAX_MANEUVER_ZOOM);
+    }
 
     const mapHeading = courseUp && camBearingRef.current != null ? camBearingRef.current : 0;
     // Pin the car low: shift the center ahead of the car along the travel
@@ -869,7 +958,7 @@ function DriverDashboard() {
       }
     };
     // mapRef is a stable useRef object from useDriverDashboard().
-  }, [location, rideState, mapRef, courseUp]);
+  }, [location, rideState, mapRef, courseUp, currentNavStep]);
   // Explicit offline<->online camera framing. rideState stays 'idle' across
   // this toggle (only `isOnline` changes) — going offline tears down
   // watchPositionAsync entirely (useDriverDashboard.ts's location-
@@ -1543,6 +1632,22 @@ function DriverDashboard() {
           </View>
         )
       )}
+
+      {/* Next-turn instruction banner — Phase 1 PR C. Renders only once a
+          step has actually been fetched and tracked (empty while the
+          driver_turn_by_turn_enabled flag is off, or between legs), so this
+          is fully inert dark-launched behavior — see PR A's endpoint
+          contract in docs/change-log/2026-09-12-driver-turn-by-turn-navigation-steps-endpoint.md. */}
+      {(rideState === 'navigating_to_pickup' ||
+        rideState === 'arrived_at_pickup' ||
+        rideState === 'trip_in_progress') &&
+        currentNavStep && (
+          <NavigationStepBanner
+            step={currentNavStep.step}
+            distanceToManeuverMeters={currentNavStep.distanceToManeuverMeters}
+            topOffset={insets.top + 8}
+          />
+        )}
 
       {/* Current speed — GPS-derived (coords.speed, m/s), shown at all times
           while online so the readout doesn't pop in/out as speed crosses the

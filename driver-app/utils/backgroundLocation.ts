@@ -698,7 +698,23 @@ export async function recoverTripLocation(): Promise<boolean> {
     if (!isRunning) {
       return await startBackgroundLocation(TRIP_CADENCE);
     }
-    await updateBackgroundLocationCadence(TRIP_CADENCE);
+    try {
+      await updateBackgroundLocationCadence(TRIP_CADENCE);
+    } catch (e) {
+      // The return value means "is tracking running", NOT "did the cadence
+      // change succeed". Android 12+ refuses the foreground-service
+      // re-promotion while the app is backgrounded, which is the NORMAL state
+      // when this nudge arrives (screen off, or Android Auto). The task is
+      // still registered and still delivering at its previous cadence, and a
+      // foreground replay is already parked by the throw site — so reporting
+      // "not running" here would be wrong twice over: it skips the caller's
+      // force-flush of the durable outbox (the single most valuable thing a
+      // location_health nudge triggers, and the reason points end up rejected
+      // outside the retention window) and logs a misleading "check location
+      // permission" at the driver. Only a genuine failure should degrade it.
+      if (!_isBackgroundedForegroundServiceRejection(e)) throw e;
+      console.warn('[BgLocation] recover: cadence re-assert deferred to foreground; tracking still running');
+    }
     return true;
   } catch (e) {
     console.warn('[BgLocation] recoverTripLocation failed', e);

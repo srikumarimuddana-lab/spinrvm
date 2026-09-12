@@ -870,6 +870,33 @@ function DriverDashboard() {
     };
     // mapRef is a stable useRef object from useDriverDashboard().
   }, [location, rideState, mapRef, courseUp]);
+  // Explicit offline<->online camera framing. rideState stays 'idle' across
+  // this toggle (only `isOnline` changes) — going offline tears down
+  // watchPositionAsync entirely (useDriverDashboard.ts's location-
+  // subscription effect: `if (!isOnline) return`), so no new `location` ever
+  // arrives to re-trigger the follow-camera effect above. Left alone, the
+  // camera just stays wherever that effect last put it — possibly zoomed to
+  // a driving tier, mid-turn heading — instead of the calmer, predictable
+  // framing live-testing asked for: zoom OUT and settle while offline/
+  // parked, zoom back IN on return. Heading uses the same course-up/
+  // north-up rule as the follow camera and compass toggle (camBearingRef
+  // when courseUp is on) rather than hard-coding north, so the car icon
+  // keeps pointing toward the top of the screen exactly like it does while
+  // driving course-up — not just toward true north, which would only
+  // coincidentally point up.
+  const OFFLINE_IDLE_ZOOM = 14; // zoomed out — neighbourhood context while parked
+  const prevIsOnlineForCameraRef = useRef(isOnline);
+  useEffect(() => {
+    if (isOnline === prevIsOnlineForCameraRef.current) return;
+    const c = location?.coords;
+    if (!c || !mapRef.current) return; // retried on the next location tick
+    prevIsOnlineForCameraRef.current = isOnline;
+    followZoomTierRef.current = null; // re-derive fresh once fixes resume
+    const zoom = isOnline ? FOLLOW_ZOOM_TIERS[0].zoom : OFFLINE_IDLE_ZOOM;
+    const heading = courseUp && camBearingRef.current != null ? camBearingRef.current : 0;
+    const center = markerPosRef.current ?? { latitude: c.latitude, longitude: c.longitude };
+    mapRef.current.animateCamera({ center, zoom, heading }, { duration: 600 });
+  }, [isOnline, location, courseUp, mapRef]);
   useEffect(() => {
     if (!pendingRecenterRef.current) return;
     if (!location?.coords || !mapRef.current) return;

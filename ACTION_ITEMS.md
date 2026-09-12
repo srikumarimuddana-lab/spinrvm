@@ -25545,8 +25545,19 @@ how much they de-risk a public launch._
   should account for `_shared.py`'s call site too, not just `maps_proxy.py`'s four.
 
 ### C105. `GET /maps/directions` proxy has no result cache, unlike its sibling live-route endpoint — acceptable for dark-launch, should close before broad rollout
-- [ ] **Status:** OPEN — found, not fixed. Explicitly flagged by the reviewer as acceptable to
-  ship as-is for now, not a blocker for R7's dark-launched merge.
+- [x] **Status:** CLOSED (2026-09-12) — Redis result cache added to `get_directions`, 30s TTL,
+  fail-open, never caches a degenerate (`distance_km: None`/empty-`coordinates`) result. Uses
+  UNIFORM fine (5-decimal, ~1m) precision on every coordinate (origin, destination, waypoints) —
+  NOT `_compute_route_via_google`'s coarse-origin scheme, despite this entry's own suggestion
+  below to mirror it. An implementation pass checked all 5 real client call sites first and found
+  3 of them (`ride-options.tsx`, `ride-in-progress.tsx`, `driver-arrived.tsx`) pass a FIXED,
+  per-ride pickup as "origin" paired with a fixed dropoff, not a moving position — coarsening the
+  origin there would let two different bookings' distinct-but-nearby pickups collide in the
+  cache whenever their dropoffs also round together (e.g. two riders headed to the same airport
+  from doors 100m apart), serving one rider's confirmed route to another. Only
+  `driver-arriving.tsx` and the driver dashboard have a genuinely moving origin; fine precision
+  there is a cache-hit-rate cost, not a correctness one. See
+  `docs/change-log/2026-09-12-directions-proxy-cache-c105.md` for the full writeup.
 - **Found by:** `spinr-performance-sla-reviewer`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (same source as C104 above).
 - **What's wrong:** `backend/utils/route_distance.py`'s sibling live-route fallback

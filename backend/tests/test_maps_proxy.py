@@ -354,6 +354,7 @@ async def test_directions_decodes_route_and_records_budget_call(mock_redis, monk
         "coordinates": [[38.5, -120.2], [40.7, -120.95], [43.252, -126.453]],
         "distance_km": 5.0,
         "duration_minutes": 10.0,
+        "cached": False,
     }
     mock_client.get.assert_awaited_once()
     _, kwargs = mock_client.get.await_args
@@ -525,6 +526,211 @@ async def test_directions_502s_when_google_request_fails(mock_redis, monkeypatch
                 current_user={"id": "rider_1"},
             )
     assert exc.value.status_code == 502
+
+
+# ── route-level: Directions proxy result cache (C105, ACTION_ITEMS.md) ───────
+
+
+@pytest.mark.anyio
+async def test_directions_cache_hit_skips_google_call(mock_redis, monkeypatch):
+    import json
+
+    from routes import maps_proxy
+    from utils import maps_budget
+    from utils.redis_client import redis_set
+
+    cache_key = maps_proxy._directions_cache_key(38.5, -120.2, 43.252, -126.453, [])
+    cached_payload = {
+        "coordinates": [[38.5, -120.2], [43.252, -126.453]],
+        "distance_km": 12.3,
+        "duration_minutes": 4.5,
+    }
+    await redis_set(cache_key, json.dumps(cached_payload), ttl=30)
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+    bad_client = MagicMock()
+    bad_client.__aenter__ = AsyncMock(return_value=bad_client)
+    bad_client.__aexit__ = AsyncMock(return_value=False)
+    bad_client.get = AsyncMock(side_effect=AssertionError("must not call Google on cache hit"))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=bad_client):
+        result = await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result == {**cached_payload, "cached": True}
+    # No budget consumed -- the Google call (and its record_call) never happened.
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == 0.0
+
+
+@pytest.mark.anyio
+async def test_directions_cache_miss_populates_cache(mock_redis, monkeypatch):
+    import json
+
+    from routes import maps_proxy
+    from utils.redis_client import redis_get
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(_DIRECTIONS_OK_PAYLOAD))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        result = await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result["cached"] is False
+    cache_key = maps_proxy._directions_cache_key(38.5, -120.2, 43.252, -126.453, [])
+    cached = await redis_get(cache_key)
+    assert cached is not None
+    stored = json.loads(cached)
+    assert stored["distance_km"] == 5.0
+    assert stored["coordinates"]
+
+
+@pytest.mark.anyio
+async def test_directions_degenerate_result_never_cached(mock_redis, monkeypatch):
+    """A result with no billable distance and no coordinates must never be
+    cached -- a stale bad entry would keep returning it for the whole TTL
+    window (mirrors the R8 money-auditor finding in _shared.py)."""
+    from routes import maps_proxy
+    from utils.redis_client import redis_get
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    degenerate_payload = {
+        "status": "OK",
+        "routes": [
+            {
+                "legs": [{"distance": {"value": 0}, "duration": {"value": 0}}],
+                "overview_polyline": {"points": ""},
+            }
+        ],
+    }
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(degenerate_payload))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        result = await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result["distance_km"] is None
+    assert result["coordinates"] == []
+
+    cache_key = maps_proxy._directions_cache_key(38.5, -120.2, 43.252, -126.453, [])
+    assert await redis_get(cache_key) is None
+
+
+@pytest.mark.anyio
+async def test_directions_waypoint_order_changes_cache_key(mock_redis, monkeypatch):
+    """Two different waypoint orderings for the same origin/destination must
+    not collide -- each is billed and cached independently (waypoint order
+    is never optimized, so it's a different route)."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(_DIRECTIONS_OK_PAYLOAD))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints="40.0,-121.0|41.0,-122.0",
+            current_user={"id": "rider_1"},
+        )
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints="41.0,-122.0|40.0,-121.0",
+            current_user={"id": "rider_1"},
+        )
+
+    # Both requests hit Google -- the second ordering did not read the
+    # first's cache entry.
+    assert mock_client.get.await_count == 2
+
+    key_a = maps_proxy._directions_cache_key(38.5, -120.2, 43.252, -126.453, [(40.0, -121.0), (41.0, -122.0)])
+    key_b = maps_proxy._directions_cache_key(38.5, -120.2, 43.252, -126.453, [(41.0, -122.0), (40.0, -121.0)])
+    assert key_a != key_b
+
+
+@pytest.mark.anyio
+async def test_directions_cache_get_failure_falls_through_to_google(mock_redis, monkeypatch):
+    """A Redis read error must fail open -- the request still succeeds via
+    Google, it just can't benefit from the cache."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+    monkeypatch.setattr(maps_proxy, "redis_get", AsyncMock(side_effect=RuntimeError("redis down")))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(_DIRECTIONS_OK_PAYLOAD))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        result = await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result["distance_km"] == 5.0
+    assert result["cached"] is False
+
+
+@pytest.mark.anyio
+async def test_directions_cache_set_failure_does_not_break_request(mock_redis, monkeypatch):
+    """A Redis write error after a successful Google call must not surface
+    to the caller -- the response is still returned normally."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+    monkeypatch.setattr(maps_proxy, "redis_set", AsyncMock(side_effect=RuntimeError("redis down")))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(_DIRECTIONS_OK_PAYLOAD))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        result = await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints=None,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result["distance_km"] == 5.0
+    assert result["cached"] is False
 
 
 @pytest.mark.anyio

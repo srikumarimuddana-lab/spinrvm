@@ -21709,16 +21709,28 @@ how much they de-risk a public launch._
   correction. A 2026-09-11 session nearly re-dispatched this exact retro as
   fresh work off this stale line; verify the change-log/audit-doc trail
   before trusting an "Action" list's ordering, same lesson this file's own
-  history keeps teaching. Next actionable step is **T3**: additive per-phase
+  history keeps teaching. ~~Next actionable step is **T3**: additive per-phase
   timing metrics in `repositories/_base.py` `run_sync` and the dispatch
-  attempt → T4 staging (E1 — three human actions) → T5 run
-  `loadtest/locustfile.py` at 600 users against staging and record the numbers
-  → T6 confirm pooler mode/port/pool-size/IPv4 reachability on the real project
-  → T7 write ADR-011 (Accepted or Rejected) and add it to `docs/adr/README.md`.
-  Decisions D1–D6 in the plan's §8 need Kiran.
-- **Files:** none changed yet. Phase 0 targets: `backend/repositories/_base.py`,
+  attempt~~ **T3 done — correcting a second stale pointer found 2026-09-12.**
+  T3 shipped 2026-09-04 via PR #4968: `spinr_dispatch_attempt_duration_ms{phase=candidate_read|rank|claim|offer_insert|insurance|notify}`,
+  `spinr_db_run_sync_queue_wait_ms`/`spinr_db_run_sync_exec_ms`,
+  `spinr_dispatch_attempt_db_calls`, and `spinr_dispatch_claim_path_total{path=...}` are
+  all live on `main`, with tests in `backend/tests/test_dispatch_metrics.py`
+  (10/10 passing, re-verified 2026-09-12) — see
+  `docs/change-log/2026-09-04-c50-phase0-t3-dispatch-timing-metrics.md`. A
+  2026-09-12 session nearly re-implemented this exact instrumentation as fresh
+  work off this stale line — the same trap this entry already flagged for T2
+  above; it stopped short of opening a duplicate PR once it read the actual
+  code first. Next actionable step is now → T4 staging (E1 — three human
+  actions) → T5 run `loadtest/locustfile.py` at 600 users against staging and
+  record the numbers → T6 confirm pooler mode/port/pool-size/IPv4 reachability
+  on the real project → T7 write ADR-011 (Accepted or Rejected) and add it to
+  `docs/adr/README.md`. Decisions D1–D6 in the plan's §8 need Kiran.
+- **Files:** T3's files (`backend/repositories/_base.py`,
   `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_metrics.py`,
-  `loadtest/README.md`. Phase 1+ files are enumerated per task in the plan.
+  `loadtest/README.md`) already changed via PR #4968 — see correction above.
+  Remaining Phase 0 steps (T4–T7) are staging/ops/decision work, not new code
+  files. Phase 1+ files are enumerated per task in the plan.
 - **Acceptance:** ADR-011 exists in `docs/adr/` with a recorded decision. If
   Rejected, close this item. If Accepted, this item stays open through the
   plan's Phase 3 (flag `dispatch_direct_pool_enabled` on in production for a

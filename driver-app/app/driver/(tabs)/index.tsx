@@ -35,6 +35,8 @@ import { SafetyShield } from '@shared/components/SafetyShield';
 import { SafetyOverlay } from '@shared/components/SafetyOverlay';
 import { useDriverSafetyTrigger } from '../../../hooks/useDriverSafetyTrigger';
 import { useDriverDiscreetSosFlag } from '../../../hooks/useDriverDiscreetSosFlag';
+import { useDirectionsProxyFlag } from '../../../hooks/useDirectionsProxyFlag';
+import { fetchDirectionsRoute } from '@shared/api/directions';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
 import {
@@ -387,6 +389,122 @@ function DriverDashboard() {
   const [osrmRouteActive, setOsrmRouteActive] = useState(false);
   const osrmRouteActiveRef = useRef(false);
   useEffect(() => { osrmRouteActiveRef.current = osrmRouteActive; }, [osrmRouteActive]);
+
+  // R7 (docs/audit/ride-experience/ROADMAP.md): dark-launch gate for routing
+  // this screen's MapViewDirections fallback through the backend proxy
+  // instead of calling Google directly from the device. `loaded` gates the
+  // on-device fallback below so a mid-flow mount (e.g. app relaunch while
+  // already navigating to pickup) can't fire both paths for the same
+  // directionsKey generation before the flag value is known -- see
+  // useDirectionsProxyFlag.ts's own comment for the race this closes.
+  const { enabled: directionsProxyEnabled, loaded: directionsProxyFlagLoaded } = useDirectionsProxyFlag();
+  // Which directionsKey generation the proxy already failed for -- reset
+  // implicitly every time directionsKey increments (the same periodic
+  // retry the on-device path already gets via its own key-remount), so a
+  // stale failure never permanently blocks a later attempt as the driver
+  // moves.
+  const [proxyFailedKey, setProxyFailedKey] = useState<number | null>(null);
+
+  // R7: duplicates (deliberately, not refactored into a shared helper --
+  // see the on-device needsDirections/origin/destination block below, and
+  // its own comment) the route-rendering IIFE's origin/destination/
+  // needsDirections derivation, hoisted here because a top-level effect
+  // can't read values computed inside a JSX-only IIFE. Both copies are
+  // reviewed together in this one commit, so they can't silently drift the
+  // way two independently-evolving files could.
+  // Rounded to the same 3-decimal (~110m) grid the on-device
+  // MapViewDirections jitter guard uses (its lodash.isEqual compares props
+  // at this same precision -- see the render-path comment below), hoisted
+  // as plain variables so the useMemo dependency array below can reference
+  // them directly: react-hooks/use-memo requires deps to be simple
+  // expressions, not inline `Math.round(...)` calls.
+  const roundedDriverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
+  const roundedDriverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
+
+  // R7: duplicates (deliberately, not refactored into a shared helper --
+  // see the on-device needsDirections/origin/destination block below, and
+  // its own comment) the route-rendering IIFE's origin/destination/
+  // needsDirections derivation, hoisted here because a top-level effect
+  // can't read values computed inside a JSX-only IIFE. Both copies are
+  // reviewed together in this one commit, so they can't silently drift the
+  // way two independently-evolving files could.
+  const proxyRouteParams = useMemo(() => {
+    if (
+      !ride ||
+      !(rideState === 'ride_offered' || rideState === 'navigating_to_pickup' ||
+        rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress')
+    ) {
+      return null;
+    }
+    const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
+    const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
+    const useSavedRoute = hasSavedRoute && (rideState === 'ride_offered' || rideState === 'trip_in_progress');
+    if (!GOOGLE_MAPS_API_KEY || useSavedRoute || osrmRouteActive) return null;
+
+    const pNavLat = (ride as any).pickup_nav_lat ?? ride.pickup_lat;
+    const pNavLng = (ride as any).pickup_nav_lng ?? ride.pickup_lng;
+
+    let origin: { latitude: number; longitude: number };
+    let destination: { latitude: number; longitude: number };
+    if (rideState === 'ride_offered') {
+      origin = { latitude: pNavLat, longitude: pNavLng };
+      destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+    } else if (rideState === 'trip_in_progress') {
+      origin = roundedDriverLat != null && roundedDriverLng != null
+        ? { latitude: roundedDriverLat, longitude: roundedDriverLng }
+        : { latitude: pNavLat, longitude: pNavLng };
+      destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+    } else {
+      origin = roundedDriverLat != null && roundedDriverLng != null
+        ? { latitude: roundedDriverLat, longitude: roundedDriverLng }
+        : { latitude: pNavLat, longitude: pNavLng };
+      destination = { latitude: pNavLat, longitude: pNavLng };
+    }
+    return { origin, destination };
+  }, [ride, rideState, osrmRouteActive, roundedDriverLat, roundedDriverLng]);
+
+  // R7: try the backend Directions proxy before the on-device
+  // MapViewDirections fallback below. On failure, records the current
+  // directionsKey as failed so the JSX falls through to that fallback
+  // unchanged -- a proxy outage never means no route line at all.
+  useEffect(() => {
+    if (!directionsProxyEnabled || !proxyRouteParams) return;
+    if (proxyFailedKey === directionsKey) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchDirectionsRoute(proxyRouteParams.origin, proxyRouteParams.destination);
+        if (cancelled) return;
+        if (result.coordinates.length > 0) {
+          setRouteCoords(result.coordinates);
+          setDirectionsFailed(false);
+          if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
+          if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+          lastDirectionsFetchRef.current = {
+            lat: proxyRouteParams.origin.latitude,
+            lng: proxyRouteParams.origin.longitude,
+            ts: Date.now(),
+          };
+          if (directionsKey === 0 && mapRef.current && result.coordinates.length > 1) {
+            mapRef.current.fitToCoordinates(result.coordinates, {
+              edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
+              animated: true,
+            });
+          }
+        } else {
+          setProxyFailedKey(directionsKey);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[DriverDashboard] Directions proxy failed, falling back to on-device:', e);
+          setProxyFailedKey(directionsKey);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [directionsProxyEnabled, proxyRouteParams, proxyFailedKey, directionsKey]);
 
   useEffect(() => {
     if (rideState !== 'navigating_to_pickup') return;
@@ -1218,7 +1336,14 @@ function DriverDashboard() {
           // only a live route (OSRM or Directions) can describe driver -> pickup.
           const useSavedRoute = hasSavedRoute &&
             (rideState === 'ride_offered' || rideState === 'trip_in_progress');
-          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive;
+          // (R7) skipped while the backend proxy attempt above is still in
+          // flight for this directionsKey generation or has already succeeded.
+          // Also held off until the flag itself has loaded -- otherwise this
+          // would mount on the `enabled=false` default the instant before a
+          // `true` value arrives, firing both this on-device call and the
+          // proxy for the same generation with no way to cancel this one.
+          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive &&
+            directionsProxyFlagLoaded && (!directionsProxyEnabled || proxyFailedKey === directionsKey);
 
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
           const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;

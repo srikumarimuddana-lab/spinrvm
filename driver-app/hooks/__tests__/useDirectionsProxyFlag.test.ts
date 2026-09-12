@@ -22,33 +22,31 @@ beforeEach(() => {
 });
 
 describe('useDirectionsProxyFlag', () => {
-  it('reads false initially (before the fetch resolves)', () => {
+  it('reads {enabled: false, loaded: false} initially (before the fetch resolves)', () => {
     mockGet.mockReturnValue(new Promise(() => {})); // never resolves
     const { result } = renderHook(() => useDirectionsProxyFlag());
-    expect(result.current).toBe(false);
+    expect(result.current).toEqual({ enabled: false, loaded: false });
   });
 
-  it('resolves to true when the backend has the flag enabled', async () => {
+  it('resolves to {enabled: true, loaded: true} when the backend has the flag enabled', async () => {
     mockGet.mockResolvedValue({ data: { directions_proxy_enabled: true } });
     const { result } = renderHook(() => useDirectionsProxyFlag());
 
-    await waitFor(() => expect(result.current).toBe(true));
+    await waitFor(() => expect(result.current).toEqual({ enabled: true, loaded: true }));
     expect(mockGet).toHaveBeenCalledWith('/settings');
   });
 
-  it('resolves to false when the backend has the flag disabled', async () => {
+  it('resolves to {enabled: false, loaded: true} when the backend has the flag disabled', async () => {
     mockGet.mockResolvedValue({ data: { directions_proxy_enabled: false } });
     const { result } = renderHook(() => useDirectionsProxyFlag());
 
-    await waitFor(() => expect(mockGet).toHaveBeenCalled());
-    expect(result.current).toBe(false);
+    await waitFor(() => expect(result.current).toEqual({ enabled: false, loaded: true }));
   });
 
-  it('fails closed to false on a fetch error', async () => {
+  it('fails closed to {enabled: false, loaded: true} on a fetch error', async () => {
     mockGet.mockRejectedValue(new Error('network down'));
     const { result } = renderHook(() => useDirectionsProxyFlag());
 
-    await waitFor(() => expect(mockGet).toHaveBeenCalled());
-    expect(result.current).toBe(false);
+    await waitFor(() => expect(result.current).toEqual({ enabled: false, loaded: true }));
   });
 });

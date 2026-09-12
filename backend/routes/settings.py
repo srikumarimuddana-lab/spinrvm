@@ -63,6 +63,11 @@ async def get_public_settings():
         # backend endpoint (POST /rides/emergency) also enforces this flag
         # itself (fail-closed), so this is a UX gate, not the only gate.
         "rideless_sos_enabled": bool(settings.get("rideless_sos_enabled", False)),
+        # Directions proxy rollout gate (docs/audit/ride-experience/
+        # ROADMAP.md R7) -- dark-launched, both apps. False = every
+        # MapViewDirections call site keeps calling Google Directions
+        # directly from the device with the bundled key, unchanged.
+        "directions_proxy_enabled": bool(settings.get("directions_proxy_enabled", False)),
         # Safety panel — global config. Only the LOCAL AUTHORITY varies per
         # service area (migration 316); the Spinr-side contacts and tile
         # toggles are the same everywhere, so keeping them here means changing

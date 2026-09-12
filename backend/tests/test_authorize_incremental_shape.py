@@ -265,3 +265,102 @@ class TestAccountIneligibleForIncrementalAuth:
 
         assert outcome.status == "failed"
         assert mock_stripe.PaymentIntent.create.call_count == 2
+
+
+@pytest.fixture(autouse=True)
+def _clear_incremental_auth_cache():
+    """The account-ineligibility cache is module-level state.
+
+    Without this, whichever test first triggers the refusal would silently
+    change what every later test observes on its FIRST PaymentIntent.create —
+    including the assertion above that the first attempt asks for incremental
+    authorization. Reset on both sides so the suite stays order-independent.
+    """
+    from backend.utils import stripe_charge
+
+    stripe_charge._reset_incremental_auth_eligibility_cache()
+    yield
+    stripe_charge._reset_incremental_auth_eligibility_cache()
+
+
+@pytest.mark.asyncio
+class TestIneligibilityIsRememberedAcrossBookings:
+    """Once Stripe says the ACCOUNT cannot request incremental authorization,
+    asking again only mints a PaymentIntent certain to fail — and each failure
+    fires a payment_intent.payment_failed webhook for a ride row the booking
+    flow has not inserted yet, which the webhook handler answers with a 500 so
+    Stripe retries. That was one orphaned failed PI, one 500 and one Sentry
+    error per booking, observed 4/4 on 2026-09-12.
+    """
+
+    async def test_second_booking_does_not_request_incremental_auth_at_all(self):
+        from backend.utils import stripe_charge
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.create.side_effect = [
+            _FakeAccountIneligibleError(),  # booking 1, attempt 1 — refused
+            _intent(),  # booking 1, attempt 2 — succeeds
+            _intent(),  # booking 2 — must succeed FIRST try
+        ]
+
+        with (
+            _patch_settings(),
+            patch.object(stripe_charge, "stripe", mock_stripe),
+            patch.object(stripe_charge, "_StripeCardError", _NeverMatches),
+            patch.object(stripe_charge, "_StripeBaseError", Exception),
+        ):
+            first = await stripe_charge.authorize_ride(
+                ride={"id": "ride_1"},
+                rider_id="rider_1",
+                amount=Decimal("25.00"),
+                payment_method_id="pm_1",
+                stripe_customer_id="cus_1",
+            )
+            second = await stripe_charge.authorize_ride(
+                ride={"id": "ride_2"},
+                rider_id="rider_1",
+                amount=Decimal("25.00"),
+                payment_method_id="pm_1",
+                stripe_customer_id="cus_1",
+            )
+
+        assert first.status == "authorized"
+        assert second.status == "authorized"
+        # Three creates total, not four: the second booking skipped the doomed one.
+        assert mock_stripe.PaymentIntent.create.call_count == 3
+
+        third_kwargs = mock_stripe.PaymentIntent.create.call_args_list[2].kwargs
+        assert "request_incremental_authorization" not in third_kwargs["payment_method_options"]["card"]
+
+    async def test_the_skip_does_not_survive_a_cache_reset(self):
+        """Eligibility is cached, not persisted — a restart must re-probe."""
+        from backend.utils import stripe_charge
+
+        stripe_charge._mark_incremental_auth_ineligible()
+        stripe_charge._reset_incremental_auth_eligibility_cache()
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.create.side_effect = [_intent()]
+        with (
+            _patch_settings(),
+            patch.object(stripe_charge, "stripe", mock_stripe),
+            patch.object(stripe_charge, "_StripeCardError", _NeverMatches),
+            patch.object(stripe_charge, "_StripeBaseError", Exception),
+        ):
+            await stripe_charge.authorize_ride(
+                ride={"id": "ride_3"},
+                rider_id="rider_1",
+                amount=Decimal("25.00"),
+                payment_method_id="pm_1",
+                stripe_customer_id="cus_1",
+            )
+
+        kwargs = mock_stripe.PaymentIntent.create.call_args_list[0].kwargs
+        assert kwargs["payment_method_options"]["card"]["request_incremental_authorization"] == "if_available"
+
+    async def test_first_observation_logs_once_not_per_booking(self):
+        from backend.utils import stripe_charge
+
+        assert stripe_charge._mark_incremental_auth_ineligible() is True
+        assert stripe_charge._mark_incremental_auth_ineligible() is False
+        assert stripe_charge._mark_incremental_auth_ineligible() is False

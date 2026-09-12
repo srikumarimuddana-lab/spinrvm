@@ -205,7 +205,10 @@ def generate_receipt_pdf(
     tip_d = _d(tip)
     rows, grand = _fare_lines(ride, tip_d)
 
-    ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "—")
+    # Placeholder is a plain hyphen, not an em dash: Helvetica is an fpdf2 core
+    # font (latin-1 only) and a bare "—" raises on output, failing the WHOLE
+    # attachment. See to_latin1's docstring.
+    ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "-")
     dt = parse_iso_utc(ride.get("ride_completed_at") or ride.get("created_at") or "")
     date_str = dt.strftime("%B %d, %Y at %I:%M %p") if dt else ""
 
@@ -266,7 +269,10 @@ def generate_receipt_pdf(
     if route_snapshot_note:
         pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(120, 80, 20)
-        pdf.multi_cell(W, 4, route_snapshot_note.replace("—", "-"))
+        # to_latin1 rather than a lone em-dash replace: that only covered the
+        # one character someone happened to hit, and any other unencodable
+        # glyph in this note would still fail the whole attachment.
+        pdf.multi_cell(W, 4, to_latin1(route_snapshot_note))
         pdf.ln(2)
 
     # Route
@@ -278,7 +284,11 @@ def generate_receipt_pdf(
         pdf.cell(W, 5, label.upper(), ln=True)
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(30, 30, 30)
-        pdf.multi_cell(W, 5, value or "—")
+        # Addresses are free text from geocoding and can carry a dash, an
+        # accent or a curly quote — all unencodable in Helvetica. This line
+        # raised FPDFUnicodeEncodingException on every completed ride
+        # (2026-09-12 18:37 and 19:30), so no rider received a PDF receipt.
+        pdf.multi_cell(W, 5, to_latin1(value) or "-")
         pdf.ln(1)
 
     _route("Pickup", ride.get("pickup_address", ""))
@@ -303,9 +313,9 @@ def generate_receipt_pdf(
             continue
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(90, 90, 90)
-        pdf.cell(W * 0.7, 6, label, border=0)
+        pdf.cell(W * 0.7, 6, to_latin1(label), border=0)
         pdf.set_text_color(20, 20, 20)
-        pdf.cell(W * 0.3, 6, amount, border=0, align="R", ln=True)
+        pdf.cell(W * 0.3, 6, to_latin1(amount), border=0, align="R", ln=True)
 
     # Total box
     pdf.ln(2)
@@ -323,11 +333,14 @@ def generate_receipt_pdf(
     # Driver (name + vehicle only — PIPEDA)
     if driver_name:
         pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(W, 6, driver_name, ln=True)
+        # A driver's real name is the single most likely field to carry an
+        # accented character, and it is not optional content — folding beats
+        # losing the receipt.
+        pdf.cell(W, 6, to_latin1(driver_name), ln=True)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(150, 150, 150)
         detail = " - ".join(p for p in (driver_code, vehicle) if p) or "Your driver"
-        pdf.cell(W, 5, detail, ln=True)
+        pdf.cell(W, 5, to_latin1(detail), ln=True)
         pdf.set_text_color(0, 0, 0)
         pdf.ln(2)
 

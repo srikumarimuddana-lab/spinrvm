@@ -23955,12 +23955,43 @@ how much they de-risk a public launch._
      migration work like this one. Recorded as a dated, time-boxed
      exception in `.claude/context/connector-scoping.md`, not a silent
      "won't fix."
-  - **Not verified:** whether any real `charge.refunded` webhook ever hit
-    production before today while the column was missing (the "every real
-    refund webhook would have 500'd" implication raised above). Out of
-    scope for this closure — would require a Stripe dashboard / Sentry
-    log review, not a schema check. If this matters, it's a follow-up, not
-    part of C88.
+  - **Follow-up closed 2026-09-12:** the "every real refund webhook would
+    have 500'd" implication above does not hold — checked directly, not
+    assumed. Stripe's live `GET /v1/refunds` (account `acct_1SSk2XFXFgLO2LdO`,
+    `has_more: false`, so this is the complete list) shows exactly **14 real
+    refunds ever made on this account**, all between **2026-04-18 and
+    2026-06-17** — well before migration 408 (applied 2026-09-08). Cross-checked
+    all 14 `payment_intent_id`s against production `rides` directly
+    (`soavhtdhefowwvforzwb`): **zero matches** — none of these 14 refunds are
+    linked to any Spinr ride. `routes/webhooks.py`'s `charge.refunded` handler
+    only reads/writes `rides.refund_amount` inside its `if rides:` branch
+    (line ~1191); when no ride matches (`else` branch, line ~1446), it calls
+    `_record_orphan_refund()` instead — a separate path with no dependency on
+    that column at all. So even on today's code, none of these 14 events would
+    ever have touched `refund_amount`. Going further: `stripe_orphan_refunds`
+    (the table `_record_orphan_refund` would have written to) was only created
+    by migration 254, applied **2026-08-18** — itself nearly 2 months *after*
+    the last of the 14 refunds (2026-06-17). So at the time these actually
+    happened, the orphan-refund path didn't exist yet either; whatever the
+    "no ride found" branch did back then (per this function's own docstring:
+    "only a log warning was left behind") also never touched `refund_amount`.
+    Confirmed the table is empty today (`SELECT * FROM stripe_orphan_refunds`
+    → 0 rows), consistent with this timeline. Independently corroborated via
+    Sentry (`spinr-backend`/`crimson-smoke-7445`, 180-day window, covering the
+    full April–June range): zero error events match `message:*refund_amount*
+    OR error.value:*refund_amount*`, and a broader 50-result sample of
+    `routes/webhooks.py`-culprit errors contains no refund-related entries
+    either. **Conclusion: no real production refund webhook was ever affected
+    by the missing column** — not because an error was silently swallowed
+    anywhere, but because none of the refunds that actually occurred were
+    tied to a ride in the first place. C88 is now fully closed, including
+    this thread.
+  - **What was NOT verified in this follow-up:** whether Stripe actually
+    attempted delivery of these 14 `charge.refunded` events to the webhook
+    endpoint at all (delivery-attempt history is Dashboard-only, not exposed
+    via the API this session used) — moot for this specific question, since
+    even a successful delivery would have taken the no-op/orphan path either
+    way, per the code read above.
 - **Found during:** post-merge verification attempt for PR #5088 (F1).
 
 ### C89. Decision needed: re-scope the Supabase connector to reach `Spinr-Prod`/`MobileAppStaging`

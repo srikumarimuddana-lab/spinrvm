@@ -25348,8 +25348,11 @@ how much they de-risk a public launch._
   marker-icon smoothing, heading fixes) already device-unverified. This is two *additional*,
   previously-unfound gaps in the same file pair — five ported fixes total now, none of them ever
   verified end-to-end on a real device, which is exactly the pattern R14 (below) exists to fix.
-- **Not yet done:** the R11 fork-reconciliation decision (a mechanical parity guard so a sixth
-  gap can't recur silently) — tracked separately, not blocking this fix.
+- **R11 landed 2026-09-12:** decided to keep the two files (driver-app's course-up-camera props
+  are legitimately driver-only) and add the mechanical parity guard —
+  `shared/components/__tests__/CarMarkerParity.test.ts` diffs both files' `CarMarkerProps`
+  interface and fails on any undeclared prop divergence, closing the "sixth gap recurs silently"
+  risk this line used to describe as open. See `docs/known-forks.md`'s registry row.
 
 ## Recently completed (do not redo)
 

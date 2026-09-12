@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -23,6 +23,8 @@ import MapView, { Marker, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { RouteLine } from '@shared/components/RouteLine';
 import { RoutePins } from '@shared/components/RoutePins';
+import { fetchDirectionsRoute } from '@shared/api/directions';
+import { DirectionsProxyEnabledContext } from './_layout';
 
 import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
@@ -215,6 +217,12 @@ function RideOptionsScreenContent() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [mapReady, setMapReady] = useState(false);
+  // R7 (docs/audit/ride-experience/ROADMAP.md): try the backend Directions
+  // proxy before the on-device MapViewDirections fallback when dark-launched
+  // on. proxyFailed lets a proxy failure (network, budget, 5xx) fall through
+  // to the existing on-device call unchanged rather than showing no route.
+  const directionsProxyEnabled = useContext(DirectionsProxyEnabledContext);
+  const [proxyFailed, setProxyFailed] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   // Bounds for the schedule picker, refreshed to "now" at the moment the
   // sheet opens (in the onPress handler below) rather than recomputed with
@@ -536,6 +544,59 @@ function RideOptionsScreenContent() {
     }
   };
 
+  // R7: try the backend Directions proxy first when dark-launched on, using
+  // the exact same trigger condition and result handling as the on-device
+  // MapViewDirections fallback below (routeCoordinates.length === 0). On
+  // any failure, proxyFailed flips true and the JSX falls through to that
+  // same on-device fallback unchanged -- a proxy outage never means no
+  // route line at all.
+  //
+  // Checks routePolyline directly (not just routeCoordinates) because the
+  // routePolyline-sync effect above and this effect both run on the same
+  // initial commit -- routeCoordinates is still its pre-sync stale value
+  // ([]) the first time this effect sees it, which would otherwise fire an
+  // unnecessary proxy fetch even when the server already supplied a route.
+  useEffect(() => {
+    if (!directionsProxyEnabled || proxyFailed) return;
+    if (routePolyline && routePolyline.length >= 2) return;
+    if (routeCoordinates.length > 0) return;
+    if (!pickup?.lat || !pickup?.lng || !dropoff?.lat || !dropoff?.lng) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const waypointStops = stops
+          .filter((s: any) => s.lat && s.lng)
+          .map((s: any) => ({ latitude: s.lat, longitude: s.lng }));
+        // NO optimizeWaypoints: same reasoning as the on-device call below --
+        // the backend prices + dispatches `stops` in the rider-entered order.
+        const result = await fetchDirectionsRoute(
+          { latitude: pickup.lat, longitude: pickup.lng },
+          { latitude: dropoff.lat, longitude: dropoff.lng },
+          waypointStops,
+        );
+        if (cancelled) return;
+        if (result.coordinates.length > 0) {
+          onReadyDirections({ coordinates: result.coordinates });
+        } else {
+          setProxyFailed(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[RideOptions] Directions proxy failed, falling back to on-device:', e);
+          setProxyFailed(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onReadyDirections is
+    // a stable-shaped closure over state already in this effect's own deps
+    // (mapReady/mapBottomInset only affect the post-fetch camera fit, not
+    // whether/what to fetch); adding it would refire this effect on every
+    // render since it's redefined each render.
+  }, [directionsProxyEnabled, proxyFailed, routePolyline, routeCoordinates.length, pickup, dropoff, stops]);
+
   const handleSelect = (index: number) => {
     if (!estimates[index]?.available) {
       showToast('Unavailable', 'This vehicle type is not available right now.', 'warning');
@@ -776,8 +837,11 @@ function RideOptionsScreenContent() {
           }}
         >
           {/* Fallback: only call Google Directions client-side if the backend
-              didn't return a route_polyline with the estimate response. */}
-          {GOOGLE_MAPS_API_KEY && routeCoordinates.length === 0 && (
+              didn't return a route_polyline with the estimate response, AND
+              (R7) the backend Directions proxy is off or has already failed
+              -- while the proxy attempt above is still in flight, skip this
+              so the two paths never fetch the same route twice. */}
+          {GOOGLE_MAPS_API_KEY && routeCoordinates.length === 0 && (!directionsProxyEnabled || proxyFailed) && (
             <MapViewDirections
               origin={{ latitude: pickup.lat, longitude: pickup.lng }}
               destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}

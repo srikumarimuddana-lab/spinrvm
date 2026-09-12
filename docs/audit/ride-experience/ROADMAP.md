@@ -302,6 +302,14 @@ surface defect with a known, already-proven fix sitting unapplied one file away.
 - **Gates:** **CIL required** for every implementation PR (dispatch + driver live surface).
   Re-verify all pricing against `developers.google.com/maps/billing-and-pricing/pricing` before
   committing a budget — this audit could not reach it (`EGRESS_BLOCKED`).
+- **Status (2026-09-12):** Precondition 1 (R2) shipped earlier this session — the fare-estimate
+  Directions call is now budget-gated and cached. **Phase 1 itself remains not started**: this
+  is a 2–3 week (+3–5 day Routes API adjustment) feature build with its own architecture spec,
+  new maneuver-parsing UI, and the re-route debounce design Precondition 2 requires before any
+  code starts — out of scope for a single audit-follow-through session. Explicitly deferred,
+  not silently dropped: the next session that picks this up should re-verify Routes API SKU
+  pricing first (this session's own egress was blocked to Google's pricing page) before writing
+  the debounce spec, since that number is what decides GO vs NO-GO per this entry's own text.
 
 ### R13 — GCP Billing Budgets integration for real Maps/Firebase spend **[P2]**
 
@@ -316,6 +324,12 @@ surface defect with a known, already-proven fix sitting unapplied one file away.
   integration needs as its starting input — **once G-1's six client-direct rows are added (R7)**.
   Do not start R13 from the table in its current, backend-only state.
 - **Priority note:** inherits E13's own; not re-scored here.
+- **Status (2026-09-12):** R7 shipped — `cost-inventory-table.md` now has rows 1–22 (backend
+  + the six client-direct sites), so this precondition is satisfied. R13 itself remains
+  **not started** this session: it needs a human to create a GCP service account with the
+  `billing.budgets` scope and configure a budget object (see `.claude/context/connector-
+  scoping.md` before adding any such credential/connector — project-scoped, never
+  organization-wide). No engineering blocker remains once that access exists.
 
 ### R14 — Close the device / ops verification access gap **[P1 governance]**
 

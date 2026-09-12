@@ -382,23 +382,93 @@ def _seconds_ago(seconds: float) -> str:
 
 
 @pytest.mark.asyncio
-async def test_replay_seconds_after_a_logout_revoke_does_not_cascade():
+async def test_replay_seconds_after_a_logout_revoke_does_not_cascade_but_is_recorded():
     """The same client's logout/refresh overlap: revoked without rotation
-    1.3 s ago. Dead credential, generic 401, no cascade."""
+    1.3 s ago. Dead credential, generic 401, no cascade — but the revoke may
+    have been an admin force-logout on a suspected account, so the replay
+    still gets its audit row (cascade_ok False, so it never suppresses a later
+    real cascade) and a Sentry warning with its own tag."""
+    import json
+
     cascade_mock = AsyncMock()
+    capture_mock = MagicMock()
+    inserted: list[tuple[str, dict]] = []
+
+    async def _insert_one(table, doc):
+        inserted.append((table, doc))
+        return {"id": "audit-race"}
+
     row = _revoked_row(audience="admin", user_id="admin-001")
     row["replaced_by"] = None
     row["revoked_at"] = _seconds_ago(1.3)
 
     with (
         patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", capture_mock),
+    ):
+        from utils.refresh_tokens import REUSE_AUDIT_ACTION, _reuse_already_handled, lookup_refresh_token
+
+        result = await lookup_refresh_token("logged-out-raw")
+
+        assert result is None
+        cascade_mock.assert_not_called()
+        capture_mock.assert_called_once()
+        assert capture_mock.call_args.kwargs.get("benign_race") is True
+
+        audit_docs = [doc for table, doc in inserted if table == "audit_logs"]
+        assert len(audit_docs) == 1
+        assert audit_docs[0]["action"] == REUSE_AUDIT_ACTION
+        details = json.loads(audit_docs[0]["details"])
+        assert details["replayed_row_id"] == row["id"]
+        assert details["benign"] == "post_revoke_race"
+        assert details["cascade_ok"] is False
+
+        # That record must never count as a completed cascade.
+        with patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=audit_docs)):
+            assert await _reuse_already_handled(row) is False
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_race_window_is_admin_only():
+    """Rider/driver credential theft is the threat model the cascade exists
+    for, and the mobile clients await their logout before navigating, so the
+    same 1.3 s replay on a rider row still cascades."""
+    cascade_mock = AsyncMock()
+    row = _revoked_row(audience="rider", user_id="user-rider-1")
+    row["replaced_by"] = None
+    row["revoked_at"] = _seconds_ago(1.3)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.get_rows", AsyncMock(return_value=[])),
         patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
     ):
         from utils.refresh_tokens import lookup_refresh_token
 
-        result = await lookup_refresh_token("logged-out-raw")
+        result = await lookup_refresh_token("logged-out-rider-raw")
 
     assert result is None
+    cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_race_audit_insert_failure_never_reaches_the_auth_path():
+    cascade_mock = AsyncMock()
+    row = _revoked_row(audience="admin", user_id="admin-001")
+    row["replaced_by"] = None
+    row["revoked_at"] = _seconds_ago(2)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+        patch("utils.refresh_tokens._capture_reuse_event", MagicMock()),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        assert await lookup_refresh_token("logged-out-raw") is None  # MUST NOT raise
     cascade_mock.assert_not_called()
 
 

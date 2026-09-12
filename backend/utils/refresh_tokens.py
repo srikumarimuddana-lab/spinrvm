@@ -110,15 +110,24 @@ def _is_benign_rotation_replay(row: dict) -> bool:
         response or two near-simultaneous refreshes.
       • ``replaced_by`` empty — killed by an explicit logout, logout-all or a
         prior cascade. A replay within ``REFRESH_REVOKE_RACE_GRACE_SECONDS`` is
-        the same client's logout/refresh overlap (see the constant).
-    A stolen token replayed after its window still escalates.
+        the same client's logout/refresh overlap (see the constant). Admin
+        audience only: that overlap is the admin dashboard's, the mobile
+        clients await their logout before navigating, and rider/driver
+        credential theft (lost phone, SIM swap) is the threat model the
+        cascade exists for — widen only with evidence of a mobile race.
+    A stolen token replayed after its window still escalates. The caller
+    records a post-revoke race (audit row + Sentry warning) even though it
+    does not cascade — see ``_record_post_revoke_race``.
     """
     revoked_at = _parse_iso_dt(row.get("revoked_at"))
     if not revoked_at:
         return False
     age = (datetime.now(timezone.utc) - revoked_at).total_seconds()
-    window = REFRESH_REUSE_GRACE_SECONDS if row.get("replaced_by") else REFRESH_REVOKE_RACE_GRACE_SECONDS
-    return 0 <= age <= window
+    if row.get("replaced_by"):
+        return 0 <= age <= REFRESH_REUSE_GRACE_SECONDS
+    if row.get("audience") not in _ADMIN_STAFF_AUDIENCES:
+        return False
+    return 0 <= age <= REFRESH_REVOKE_RACE_GRACE_SECONDS
 
 
 def _hash_refresh_token(raw: str) -> str:
@@ -264,6 +273,13 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
                 row.get("user_id"),
                 row.get("audience"),
             )
+            if not row.get("replaced_by"):
+                # The rotation race is routine (two tabs refreshing) and stays
+                # log-only; a replay right after a logout is rare and the revoke
+                # may have been an admin force-logout on a suspected account,
+                # so it keeps its forensic record and alert even without the
+                # cascade.
+                await _record_post_revoke_race(row)
             return None
         # One cascade per dead row. The cascade answers the first replay by
         # revoking everything issued BEFORE detection; a second replay of the
@@ -371,23 +387,74 @@ async def _reuse_already_handled(row: dict) -> bool:
     return False
 
 
-def _capture_reuse_event(row: dict, *, repeated: bool) -> None:
+async def _record_post_revoke_race(row: dict) -> None:
+    """Forensic record + alert for a replay inside the post-revoke race window.
+
+    The cascade is withheld (the credential is dead; only the user's other
+    sessions could be hurt), but the event is not silent: the revoke may have
+    been an admin force-logout on a suspected account, and the audit trail
+    must show that the dead token was presented again. Written with
+    ``cascade_ok: False`` so ``_reuse_already_handled`` never treats it as a
+    completed cascade — a replay past the window still escalates in full.
+    Best-effort; never raises into the auth path.
+    """
+    _capture_reuse_event(row, repeated=False, benign_race=True)
+    try:
+        await db.insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": REUSE_AUDIT_ACTION,
+                "entity_type": "user",
+                "entity_id": row.get("user_id") or "unknown",
+                "actor_id": "system:refresh_reuse_detector",
+                "details": json.dumps(
+                    {
+                        "replayed_row_id": row.get("id") or "",
+                        "audience": row.get("audience") or "",
+                        "replayed_user_agent": row.get("user_agent"),
+                        "replayed_ip": row.get("ip"),
+                        "original_revoked_at": row.get("revoked_at"),
+                        "replaced_by": None,
+                        "benign": "post_revoke_race",
+                        "cascade_ok": False,
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ),
+            },
+        )
+    except Exception as e:
+        logger.error(f"post-revoke-race: audit_logs insert failed (user={row.get('user_id')}): {e}")
+
+
+def _capture_reuse_event(row: dict, *, repeated: bool, benign_race: bool = False) -> None:
     """Tagged Sentry event for the alert rule (tag:spinr_alert). No-op when
     SENTRY_DSN is unset. Best-effort; never blocks the caller. A repeated
     replay of an already-cascaded row is a warning with its own tag so the
     on-call rule can keep paging on first detection without paging on every
-    later replay from the same stale install."""
+    later replay from the same stale install; a post-revoke race (no cascade)
+    is a warning with a third tag."""
     user_id = row.get("user_id") or ""
     audience = row.get("audience") or ""
     row_id = row.get("id") or ""
+    if benign_race:
+        message, level, alert = (
+            "REFRESH TOKEN REPLAY (post-revoke race, no cascade)",
+            "warning",
+            "refresh_token_post_revoke_replay",
+        )
+    elif repeated:
+        message, level, alert = "REFRESH TOKEN REPLAY (already cascaded)", "warning", "refresh_token_replay_repeat"
+    else:
+        message, level, alert = "REFRESH TOKEN REUSE DETECTED", "error", "refresh_token_reuse"
     try:
         import sentry_sdk  # type: ignore
 
         sentry_sdk.capture_message(
-            "REFRESH TOKEN REPLAY (already cascaded)" if repeated else "REFRESH TOKEN REUSE DETECTED",
-            level="warning" if repeated else "error",
+            message,
+            level=level,
             tags={
-                "spinr_alert": "refresh_token_replay_repeat" if repeated else "refresh_token_reuse",
+                "spinr_alert": alert,
                 "audience": audience or "unknown",
                 "domain": "auth",
                 "surface": "backend",
@@ -400,6 +467,7 @@ def _capture_reuse_event(row: dict, *, repeated: bool) -> None:
                     "original_revoked_at": str(row.get("revoked_at")),
                     "replaced_by": str(row.get("replaced_by")),
                     "repeated": repeated,
+                    "benign_race": benign_race,
                 },
             },
         )

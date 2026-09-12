@@ -1321,6 +1321,105 @@ def _stringify_push_data(data: Dict[str, Any] | None) -> Dict[str, str]:
     return out
 
 
+def _build_fcm_message(
+    token: str,
+    title: str,
+    body: str,
+    data: Dict[str, str] | None,
+    target_app: str | None,
+):
+    """Build the FCM ``messaging.Message`` for one recipient.
+
+    Extracted from ``_deliver_push_now`` (R10, docs/audit/ride-experience/
+    ROADMAP.md) so the batch-offer dispatch path
+    (``send_dispatch_offer_pushes_batch`` below) can build N messages for one
+    ``messaging.send_each()`` call instead of N independent
+    ``messaging.send()`` round-trips, without duplicating this Android/APNS
+    construction logic in two places. Pure code motion — no behavior change
+    from the previously-inline version; every existing single-send caller
+    goes through this unchanged.
+
+    Caller must import ``firebase_admin.messaging`` first (this function
+    takes it as an ambient import, matching ``_deliver_push_now``'s own
+    local-import pattern — see that function's docstring for why).
+    """
+    from firebase_admin import messaging
+
+    is_dispatch = (data or {}).get("type") == "new_ride_assignment"
+    is_live_activity = (data or {}).get("type") == "live_activity"
+    # Live-activity updates are also data-only so the rider app's Notifee handler
+    # renders/updates the ongoing notification itself (a system banner would
+    # duplicate it and could not be made ongoing/updated-in-place).
+    is_data_only = is_dispatch or is_live_activity
+
+    # Rider app creates "ride-updates"; driver app creates "ride-offers".
+    # Android silently drops notifications to channels that don't exist on
+    # the receiving app, so we must select the channel that matches the target.
+    android_channel = "ride-updates" if target_app == "rider" else "ride-offers"
+
+    # Android: data-only for dispatch so Notifee (driver app) renders the
+    # rich heads-up + full-screen-intent notification with Accept/Decline
+    # action buttons. Otherwise let the OS show its default banner.
+    android_cfg = messaging.AndroidConfig(
+        priority="high",
+        notification=None
+        if is_data_only
+        else messaging.AndroidNotification(
+            channel_id=android_channel,
+        ),
+    )
+    # iOS rich image: surface the offer-card banner URL via fcm_options.image
+    # so the Notification Service Extension (driver app) downloads + attaches
+    # it. mutable_content (set below) is what lets the NSE run. Harmless when
+    # no NSE is installed — iOS just ignores the image.
+    _apns_image = (data or {}).get("offer_card_url") if is_dispatch else None
+    if is_dispatch:
+        # Dispatch offer rides on a time-sensitive alert payload (custom sound
+        # + category for the Accept/Decline actions). Without this aps block,
+        # iOS shows nothing for an otherwise data-only dispatch message.
+        _apns_payload = messaging.APNSPayload(
+            aps=messaging.Aps(
+                alert=messaging.ApsAlert(title=title, body=body),
+                # CriticalSound bypasses silent mode/DND and can loop — only
+                # valid if the driver app holds Apple's critical-alerts
+                # entitlement AND has been granted criticalAlert at runtime
+                # (notifeeService.ts does NOT request it today — see
+                # core/config.py). IOS_CRITICAL_ALERTS_ENABLED must stay
+                # False until both are true: sending this without the
+                # entitlement is documented to fail/be rejected by APNs.
+                sound=(
+                    messaging.CriticalSound(name="ride_offer.caf", critical=True, volume=1.0)
+                    if app_config.IOS_CRITICAL_ALERTS_ENABLED
+                    else "ride_offer.caf"
+                ),
+                category="ride-offer",
+                content_available=True,
+                mutable_content=True,
+            ),
+        )
+    elif is_live_activity:
+        # Live-activity FCM is Android-only (iOS uses the direct ActivityKit
+        # APNs path). If it ever reaches an iOS token it must be a silent
+        # background push, not a malformed alert (Apple rate-limits those).
+        _apns_payload = messaging.APNSPayload(aps=messaging.Aps(content_available=True))
+    else:
+        _apns_payload = None
+    return messaging.Message(
+        notification=None if is_data_only else messaging.Notification(title=title, body=body),
+        data=data or {},
+        token=token,
+        android=android_cfg,
+        apns=messaging.APNSConfig(
+            headers={
+                "apns-priority": "5" if is_live_activity else "10",
+                "apns-push-type": "background" if is_live_activity else "alert",
+            },
+            fcm_options=messaging.APNSFCMOptions(image=_apns_image) if _apns_image else None,
+            payload=_apns_payload,
+        ),
+    )
+
+
 async def _deliver_push_now(
     token: str,
     title: str,
@@ -1348,81 +1447,10 @@ async def _deliver_push_now(
         _record_push_outcome("sdk_unavailable")
         return False
 
-    is_dispatch = (data or {}).get("type") == "new_ride_assignment"
-    is_live_activity = (data or {}).get("type") == "live_activity"
-    # Live-activity updates are also data-only so the rider app's Notifee handler
-    # renders/updates the ongoing notification itself (a system banner would
-    # duplicate it and could not be made ongoing/updated-in-place).
-    is_data_only = is_dispatch or is_live_activity
-
-    # Rider app creates "ride-updates"; driver app creates "ride-offers".
-    # Android silently drops notifications to channels that don't exist on
-    # the receiving app, so we must select the channel that matches the target.
-    android_channel = "ride-updates" if target_app == "rider" else "ride-offers"
-
     try:
-        # Android: data-only for dispatch so Notifee (driver app) renders the
-        # rich heads-up + full-screen-intent notification with Accept/Decline
-        # action buttons. Otherwise let the OS show its default banner.
-        android_cfg = messaging.AndroidConfig(
-            priority="high",
-            notification=None
-            if is_data_only
-            else messaging.AndroidNotification(
-                channel_id=android_channel,
-            ),
-        )
-        # iOS rich image: surface the offer-card banner URL via fcm_options.image
-        # so the Notification Service Extension (driver app) downloads + attaches
-        # it. mutable_content (set below) is what lets the NSE run. Harmless when
-        # no NSE is installed — iOS just ignores the image.
-        _apns_image = (data or {}).get("offer_card_url") if is_dispatch else None
-        if is_dispatch:
-            # Dispatch offer rides on a time-sensitive alert payload (custom sound
-            # + category for the Accept/Decline actions). Without this aps block,
-            # iOS shows nothing for an otherwise data-only dispatch message.
-            _apns_payload = messaging.APNSPayload(
-                aps=messaging.Aps(
-                    alert=messaging.ApsAlert(title=title, body=body),
-                    # CriticalSound bypasses silent mode/DND and can loop — only
-                    # valid if the driver app holds Apple's critical-alerts
-                    # entitlement AND has been granted criticalAlert at runtime
-                    # (notifeeService.ts does NOT request it today — see
-                    # core/config.py). IOS_CRITICAL_ALERTS_ENABLED must stay
-                    # False until both are true: sending this without the
-                    # entitlement is documented to fail/be rejected by APNs.
-                    sound=(
-                        messaging.CriticalSound(name="ride_offer.caf", critical=True, volume=1.0)
-                        if app_config.IOS_CRITICAL_ALERTS_ENABLED
-                        else "ride_offer.caf"
-                    ),
-                    category="ride-offer",
-                    content_available=True,
-                    mutable_content=True,
-                ),
-            )
-        elif is_live_activity:
-            # Live-activity FCM is Android-only (iOS uses the direct ActivityKit
-            # APNs path). If it ever reaches an iOS token it must be a silent
-            # background push, not a malformed alert (Apple rate-limits those).
-            _apns_payload = messaging.APNSPayload(aps=messaging.Aps(content_available=True))
-        else:
-            _apns_payload = None
-        message = messaging.Message(
-            notification=None if is_data_only else messaging.Notification(title=title, body=body),
-            data=data or {},
-            token=token,
-            android=android_cfg,
-            apns=messaging.APNSConfig(
-                headers={
-                    "apns-priority": "5" if is_live_activity else "10",
-                    "apns-push-type": "background" if is_live_activity else "alert",
-                },
-                fcm_options=messaging.APNSFCMOptions(image=_apns_image) if _apns_image else None,
-                payload=_apns_payload,
-            ),
-        )
+        message = _build_fcm_message(token, title, body, data, target_app)
         response = await asyncio.to_thread(messaging.send, message)
+        is_dispatch = (data or {}).get("type") == "new_ride_assignment"
         logger.info(f"Push notification sent to {user_id}: {response} (dispatch={is_dispatch})")
         _record_push_outcome("success")
         return True
@@ -1448,6 +1476,147 @@ async def _deliver_push_now(
         logger.opt(exception=True).error(f"Failed to send push notification to user {user_id}: {e}")
         _record_push_outcome("failed")
         return False
+
+
+# Firebase Admin SDK's send_each() batch cap (docs: up to 500 messages/call).
+_FCM_BATCH_SIZE = 500
+
+
+async def send_dispatch_offer_pushes_batch(pushes: List[Dict[str, Any]]) -> None:
+    """Batch-send FCM dispatch-offer pushes for one batch-offer round (R10,
+    docs/audit/ride-experience/ROADMAP.md).
+
+    Each item in ``pushes`` is ``{"user_id", "title", "body", "data"}`` for
+    one candidate driver. Narrowly scoped to
+    ``routes/rides/matching.py``'s batch-offer loop, which previously spawned
+    one independent ``send_push_notification()`` (one FCM round-trip) per
+    candidate driver — this replaces that with grouped
+    ``messaging.send_each()`` calls (chunked at ``_FCM_BATCH_SIZE``), which
+    return per-message results that line up with ``_record_push_outcome``'s
+    existing metric.
+
+    Deliberately bypasses ``send_push_notification``'s full per-recipient
+    pipeline rather than reusing it, because every push routed through here
+    is *always* ``priority="dispatch"`` for a data-only ``new_ride_assignment``
+    type, and both of those facts make the skipped steps no-ops for this call
+    site specifically:
+      - opt-out / quiet-hours / throttle checks: ``send_push_notification``
+        already skips all three for ``dispatch`` (a `time_critical` tier).
+      - inbox row write: ``_record_inbox_notification`` already no-ops for
+        ``new_ride_assignment`` (it's in ``_TRANSIENT_NOTIFICATION_TYPES``).
+    Do not route any other push type through this function without first
+    confirming both of those still hold for it.
+
+    Token lookup is one batched ``users`` query (``get_rows_batched_in``)
+    instead of N individual per-driver reads — the same N+1 anti-pattern
+    CLAUDE.md calls out elsewhere. An Expo-token recipient (rare/legacy) is
+    peeled off and sent via the existing single-recipient Expo path, since
+    Firebase's ``send_each`` only accepts FCM tokens.
+
+    On a failed message (stale token, generic FCM error, or send_each itself
+    raising), falls back to the retry queue exactly like
+    ``send_push_notification``'s own time-critical guarantee — dispatch
+    offers must never be silently dropped by this path either. Never raises:
+    this is spawned fire-and-forget from the dispatch hot path, exactly like
+    the per-driver call it replaces.
+    """
+    if not pushes:
+        return
+
+    try:
+        from .utils.background import spawn
+    except ImportError:
+        from utils.background import spawn  # type: ignore
+    try:
+        from .utils.push_retry import enqueue_push
+    except ImportError:
+        from utils.push_retry import enqueue_push  # type: ignore
+
+    async def _enqueue_retry(p: Dict[str, Any]) -> None:
+        try:
+            await enqueue_push(
+                p["user_id"], p["title"], p["body"], p.get("data"), priority="dispatch", target_app="driver"
+            )
+        except Exception:
+            logger.opt(exception=True).error("push_retry enqueue (batch fallback) failed")
+
+    user_ids = [p["user_id"] for p in pushes if p.get("user_id")]
+    if not user_ids:
+        return
+
+    try:
+        users = await db_supabase.get_rows_batched_in("users", "id", user_ids, columns="id,fcm_token,fcm_token_driver")
+    except Exception:
+        logger.opt(exception=True).error(f"[dispatch push batch] token lookup failed for {len(user_ids)} driver(s)")
+        # Fall back to the pre-R10 one-by-one path so a lookup hiccup doesn't
+        # silently drop the whole batch's offers.
+        for p in pushes:
+            spawn(
+                send_push_notification(
+                    p["user_id"], p["title"], p["body"], p.get("data"), priority="dispatch", target_app="driver"
+                )
+            )
+        return
+    token_by_uid = {u["id"]: (u.get("fcm_token_driver") or u.get("fcm_token")) for u in users or []}
+
+    try:
+        from firebase_admin import exceptions as firebase_exceptions
+        from firebase_admin import messaging
+    except ImportError:
+        logger.error("firebase_admin not available for push notifications — FCM delivery will fail")
+        _record_push_outcome("sdk_unavailable")
+        for p in pushes:
+            await _enqueue_retry(p)
+        return
+
+    fcm_recipients: List[Dict[str, Any]] = []
+    for p in pushes:
+        token = token_by_uid.get(p["user_id"])
+        if not token:
+            logger.warning(f"No FCM token on file for user {p['user_id']} (target_app=driver) — push dropped")
+            continue
+        stringified = _stringify_push_data(p.get("data"))
+        if _is_expo_token(token):
+            # Rare/legacy path -- send_each is FCM-only, so this one recipient
+            # goes through the existing single-send Expo path unbatched.
+            spawn(_send_expo_push(token, p["title"], p["body"], stringified))
+            continue
+        fcm_recipients.append({**p, "token": token, "data": stringified})
+
+    for i in range(0, len(fcm_recipients), _FCM_BATCH_SIZE):
+        chunk = fcm_recipients[i : i + _FCM_BATCH_SIZE]
+        messages = [_build_fcm_message(r["token"], r["title"], r["body"], r["data"], "driver") for r in chunk]
+        try:
+            response = await asyncio.to_thread(messaging.send_each, messages)
+        except Exception as e:
+            logger.opt(exception=True).error(
+                f"[dispatch push batch] send_each failed for {len(messages)} message(s): {e}"
+            )
+            for r in chunk:
+                _record_push_outcome("failed")
+                await _enqueue_retry(r)
+            continue
+
+        for r, single in zip(chunk, response.responses, strict=True):
+            if single.success:
+                _record_push_outcome("success")
+                continue
+            if isinstance(single.exception, firebase_exceptions.NotFoundError):
+                logger.warning(f"Stale FCM token for user {r['user_id']} (target_app=driver) — purging")
+                _record_push_outcome("stale_token")
+                try:
+                    await db.update_one("users", {"id": r["user_id"]}, {"fcm_token": None, "fcm_token_driver": None})
+                    rows = await db_supabase.get_rows(
+                        "push_tokens", {"user_id": r["user_id"], "token": r["token"]}, limit=1
+                    )
+                    if rows:
+                        await db_supabase.delete_one("push_tokens", {"id": rows[0]["id"]})
+                except Exception:
+                    logger.opt(exception=True).error("Failed to purge stale FCM token")
+            else:
+                logger.error(f"[dispatch push batch] send failed for user {r['user_id']}: {single.exception}")
+                _record_push_outcome("failed")
+            await _enqueue_retry(r)
 
 
 # data["type"] values that are, in the rider-app copy's own words (see

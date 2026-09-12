@@ -33,6 +33,7 @@ try:
         calculate_airport_fee,
         calculate_all_fees,
         notify_safety_team,
+        send_dispatch_offer_pushes_batch,
         send_push_notification,
     )
     from ...geo_utils import (
@@ -91,6 +92,7 @@ except ImportError:
         calculate_airport_fee,
         calculate_all_fees,
         notify_safety_team,
+        send_dispatch_offer_pushes_batch,
         send_push_notification,
     )
     from geo_utils import calculate_distance, get_service_area_polygon, multi_leg_distance, point_in_polygon

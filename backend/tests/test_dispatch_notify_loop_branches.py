@@ -488,7 +488,7 @@ async def test_push_title_includes_area_boost_bonus():
         for p in _base_patches(table_responses):
             stack.enter_context(p)
         # After _base_patches so this binding wins.
-        stack.enter_context(patch("backend.routes.rides.matching._deps.send_push_notification", push_mock))
+        stack.enter_context(patch("backend.routes.rides.matching._deps.send_dispatch_offer_pushes_batch", push_mock))
 
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
@@ -503,9 +503,12 @@ async def test_push_title_includes_area_boost_bonus():
 
         await _match_driver_to_ride_attempt("ride-1", ride=ride)
 
+    # R10: one grouped call for the whole batch (a list of per-driver push
+    # dicts), not one call per driver.
     push_mock.assert_called_once()
-    title = push_mock.call_args.args[1]
-    assert title == "New ride · $17.50"
+    pushes = push_mock.call_args.args[0]
+    assert len(pushes) == 1
+    assert pushes[0]["title"] == "New ride · $17.50"
 
     # And it stays consistent with what the WS offer panel renders.
     payload, _ = mock_manager.send_personal_message.await_args.args
@@ -524,7 +527,7 @@ async def test_push_title_is_bare_fare_when_no_incentives():
         mock_db = stack.enter_context(patch("backend.routes.rides.matching._deps.db_supabase"))
         for p in _base_patches({}):
             stack.enter_context(p)
-        stack.enter_context(patch("backend.routes.rides.matching._deps.send_push_notification", push_mock))
+        stack.enter_context(patch("backend.routes.rides.matching._deps.send_dispatch_offer_pushes_batch", push_mock))
 
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.find_one = AsyncMock(return_value={"id": "area-1", "polygon": None})
@@ -540,4 +543,6 @@ async def test_push_title_is_bare_fare_when_no_incentives():
         await _match_driver_to_ride_attempt("ride-1", ride=ride)
 
     push_mock.assert_called_once()
-    assert push_mock.call_args.args[1] == "New ride · $12.50"
+    pushes = push_mock.call_args.args[0]
+    assert len(pushes) == 1
+    assert pushes[0]["title"] == "New ride · $12.50"

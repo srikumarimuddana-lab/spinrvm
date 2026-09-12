@@ -551,3 +551,117 @@ describe('prune (retention bounds)', () => {
     expect(database.quarantine.size).toBe(0);
   });
 });
+
+/**
+ * Models the contract MemorySqliteDatabase above deliberately relaxes.
+ * expo-sqlite's withExclusiveTransactionAsync opens a NEW native connection
+ * per call and runs a plain deferred BEGIN, so a second write that overlaps an
+ * in-flight write transaction fails at once with "database is locked" —
+ * SQLite does not consult the busy handler when promoting an already-open
+ * read transaction (enqueue reads the session row before it writes). Ride
+ * SPR-NUZCQG (2026-09-11, iOS build 29) lost 48 fixes this way (Sentry
+ * CRIMSON-SMOKE-7445-P7 / -S0).
+ */
+class LockingSqliteDatabase extends MemorySqliteDatabase {
+  private writeInFlight = false;
+  failNextTransaction = false;
+  lockErrors = 0;
+
+  async withExclusiveTransactionAsync(task: (txn: this) => Promise<void>): Promise<void> {
+    if (this.writeInFlight) {
+      this.lockErrors += 1;
+      throw new Error('Error code 5: database is locked');
+    }
+    this.writeInFlight = true;
+    try {
+      if (this.failNextTransaction) {
+        this.failNextTransaction = false;
+        throw new Error('disk full');
+      }
+      // The transaction's own connection: its writes are the ones holding the lock.
+      const connection = Object.create(this) as this & { insideTransaction: boolean };
+      connection.insideTransaction = true;
+      await task(connection);
+    } finally {
+      this.writeInFlight = false;
+    }
+  }
+
+  async runAsync(sql: string, values?: unknown[] | unknown): Promise<void> {
+    if (this.writeInFlight && !(this as { insideTransaction?: boolean }).insideTransaction) {
+      this.lockErrors += 1;
+      throw new Error('Error code 5: database is locked');
+    }
+    return super.runAsync(sql, values);
+  }
+}
+
+describe('TripLocationOutbox serialises operations on one real-contract SQLite connection', () => {
+  let database: LockingSqliteDatabase;
+  let uuidSequence: number;
+
+  beforeEach(() => {
+    database = new LockingSqliteDatabase();
+    uuidSequence = 0;
+  });
+
+  const createOutbox = () => createTripLocationOutbox({
+    openDatabase: async () => database as never,
+    randomUUID: () => `session-${++uuidSequence}`,
+    now: () => '2026-09-11T23:14:00.000Z',
+  });
+
+  it('keeps every fix when the foreground watcher and background task enqueue at once', async () => {
+    const outbox = createOutbox();
+    const points = await Promise.all([
+      outbox.enqueue(makeFix({ source: 'foreground', monotonic_ms: 1 })),
+      outbox.enqueue(makeFix({ source: 'background', monotonic_ms: 2 })),
+      outbox.enqueue(makeFix({ source: 'foreground', monotonic_ms: 3 })),
+    ]);
+
+    expect(database.lockErrors).toBe(0);
+    expect(points.map((point) => point.sequence_number)).toEqual([0, 1, 2]);
+    expect(new Set(points.map((point) => point.recording_session_id)).size).toBe(1);
+    expect(database.outbox.size).toBe(3);
+  });
+
+  it('does not fail a session close that races an enqueue', async () => {
+    const outbox = createOutbox();
+    await outbox.startSession('ride-1');
+
+    await Promise.all([outbox.enqueue(makeFix()), outbox.closeSession('ride-1')]);
+
+    expect(database.lockErrors).toBe(0);
+    expect(database.outbox.size).toBe(1);
+    expect([...database.sessions.values()][0].closed_at).toBe('2026-09-11T23:14:00.000Z');
+  });
+
+  it('does not fail the uploader acknowledge that races a capture', async () => {
+    const outbox = createOutbox();
+    const first = await outbox.enqueue(makeFix({ monotonic_ms: 1 }));
+
+    await Promise.all([
+      outbox.acknowledge(first.recording_session_id, first.sequence_number),
+      outbox.enqueue(makeFix({ monotonic_ms: 2 })),
+    ]);
+
+    expect(database.lockErrors).toBe(0);
+    expect(await outbox.pendingCount('ride-1')).toBe(1);
+  });
+
+  it('keeps serving after one operation fails', async () => {
+    const outbox = createOutbox();
+    database.failNextTransaction = true;
+
+    const [failed, queued] = await Promise.allSettled([
+      outbox.enqueue(makeFix({ monotonic_ms: 1 })),
+      outbox.enqueue(makeFix({ monotonic_ms: 2 })),
+    ]);
+
+    expect(failed.status).toBe('rejected');
+    expect((failed as PromiseRejectedResult).reason.message).toBe('disk full');
+    expect(queued.status).toBe('fulfilled');
+    expect(database.lockErrors).toBe(0);
+    expect(await outbox.pendingCount('ride-1')).toBe(1);
+  });
+});

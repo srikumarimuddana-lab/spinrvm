@@ -180,3 +180,43 @@ def test_surge_delta_is_zero_when_minimum_fare_absorbs_it():
         Decimal("0"),
     )
     assert fare_sum == Decimal("20.00")
+
+
+# ── Latin-1 folding (production incident 2026-09-12) ─────────────────────────
+# fpdf2's Helvetica is a core font and latin-1 only. Any unencodable character
+# reaching it raises FPDFUnicodeEncodingException and fails the ENTIRE
+# attachment, so no rider gets a receipt at all. Both completed rides on
+# 2026-09-12 (18:37:19 and 19:30:52) failed exactly this way on a lone em dash
+# used as the empty-address placeholder.
+
+
+def test_missing_addresses_do_not_raise_on_the_em_dash_placeholder():
+    """The original crash: an absent address fell back to a bare "—"."""
+    ride = {**_RIDE, "pickup_address": "", "dropoff_address": ""}
+    pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
+    assert bytes(pdf).startswith(b"%PDF")
+
+
+def test_non_latin1_address_is_folded_rather_than_failing_the_receipt():
+    ride = {
+        **_RIDE,
+        # Curly quote, en dash and an accent — all real geocoder output.
+        "pickup_address": "123 O\u2019Brien St \u2013 Rear Entrance",
+        "dropoff_address": "456 Rue Beaus\u00e9jour",
+    }
+    pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
+    assert bytes(pdf).startswith(b"%PDF")
+
+
+def test_accented_driver_name_still_produces_a_receipt():
+    driver = {"first_name": "Jos\u00e9", "last_name": "Mu\u00f1oz", "driver_vehicle": "Toyota Prius"}
+    pdf = generate_receipt_pdf(_RIDE, _RIDER, driver, Decimal("0"))
+    assert bytes(pdf).startswith(b"%PDF")
+
+
+def test_ride_without_a_ride_code_does_not_use_an_unencodable_placeholder():
+    ride = {**_RIDE}
+    ride.pop("ride_code")
+    ride["id"] = ""
+    pdf = generate_receipt_pdf(ride, _RIDER, _DRIVER, Decimal("0"))
+    assert bytes(pdf).startswith(b"%PDF")

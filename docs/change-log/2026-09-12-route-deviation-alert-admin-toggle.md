@@ -60,15 +60,22 @@ let an UNdeclared field silently no-op on save.
   switch only changes what the existing `route_deviation_alerter` loop
   (already live from #5269, currently reading the flag as `False`) does on
   its next 30s tick — this PR does not change that loop's code at all.
-- **Visual-regression note:** `/dashboard/settings` is one of the 6 pages with
-  a seeded, CI-blocking Playwright visual-regression baseline
-  (`e2e/visual-regression.spec.ts`, per `CLAUDE.md`'s Pre-merge gate #6). This
-  is a real, intended UI change to that page, so the baseline screenshot for
-  `dashboard-settings` **will** diff and the visual-regression CI check is
-  expected to fail on this PR until a human re-runs
-  `update-visual-baselines.yml` (this agent has no Actions-dispatch access to
-  do that itself) — this is not a spurious/flaky failure, it's the new toggle
-  rendering.
+- **Visual-regression check: confirmed passing, not just assumed.** `/dashboard/settings`
+  is one of the 6 pages with a seeded, CI-blocking Playwright visual-regression
+  baseline (`e2e/visual-regression.spec.ts`). This PR's own CI run
+  (`Visual regression (Playwright)` job, run 34701166847) executed that suite
+  and it passed 7/7, including `dashboard-settings matches baseline` — verified
+  by reading the job log directly rather than assuming a UI diff must fail it.
+  Root cause checked and confirmed: the page's `<Tabs defaultValue="integrations">`
+  (`settings/page.tsx:298`) loads with the **Integrations** tab active, and the
+  new switch lives inside `TabsContent value="email"` (the **Email & Alerts**
+  tab) — inactive-tab content a shadcn `Tabs` component doesn't render into the
+  DOM. The visual-regression spec navigates to `/dashboard/settings` and
+  screenshots on load without ever switching tabs (`e2e/visual-regression.spec.ts`'s
+  `PAGES` config: `waitFor: 'main'`, no tab-click step), so the baseline only
+  ever captures the Integrations tab — this change is structurally invisible to
+  it, not merely small enough to pass a pixel-diff threshold. No baseline
+  re-seed is needed for this PR.
 
 ## 5. User-experience effect
 
@@ -119,6 +126,10 @@ just toggle the switch off and Save — no deploy needed either way.
       pre-existing warnings the file already had, none near this change
 - [x] **Real production build**: `npm run build` — succeeded (exit code 0),
       `/dashboard/settings` compiled as part of the full route manifest
+- [x] **CI's actual visual-regression run checked, not assumed**: this PR's
+      own `Visual regression (Playwright)` CI job ran and passed 7/7 (see
+      note in §4 above on why — the new control is on a non-default tab the
+      baseline screenshot never opens)
 - [x] Blast-radius grep performed: `route_deviation_alert_enabled` across
       `admin-dashboard/` — one match (this change) before and after
 - [x] Reviewed against `CLAUDE.md`'s Settings-in-DB / feature-flag convention
@@ -141,9 +152,10 @@ just toggle the switch off and Save — no deploy needed either way.
 - [x] No silent behavior change to an already-shipped flow — this only adds
       a new, previously-inaccessible control; every existing toggle/save
       behavior on the page is untouched
-- [ ] **Visual-regression baseline will need re-seeding** — flagging this
-      explicitly per `CLAUDE.md`'s gate #6 rather than assuming the diff is
-      spurious: `dashboard-settings` is a seeded baseline page, this is a
-      real UI change, and a human with Actions-dispatch access needs to run
-      `update-visual-baselines.yml` after confirming the diff is exactly this
-      new switch.
+- [x] **Visual-regression baseline: no re-seed needed** — this PR's own CI
+      run confirmed `dashboard-settings matches baseline` still passes
+      (checked directly in the job log, not assumed): the new switch lives on
+      a tab (`Email & Alerts`) that isn't the page's default active tab
+      (`Integrations`), so it never enters the screenshot the baseline test
+      captures. If this control is later moved to a default-visible tab, this
+      reasoning stops applying and a re-seed would be needed at that point.

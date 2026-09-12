@@ -1,3 +1,10 @@
+// TRACKED FORK: driver-app/components/CarMarker.tsx is an intentional fork of
+// this file (driver-app needs course-up-camera bearing/heading callbacks
+// rider-app must not get by default). Everything else here — GPS smoothing,
+// playback buffer, route-snapping, rotation animation — is meant to stay
+// identical between the two. See docs/known-forks.md before assuming a fix
+// here doesn't apply there, and docs/audit/ride-experience/module-c-shared.md
+// for the full capability diff as of the 2026-09-12 audit.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
@@ -289,7 +296,36 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // effect, declared BEFORE the consumers so it runs first each commit.
     const routeRef = useRef(routeCoordinates);
     useEffect(() => {
+        const prev = routeRef.current;
         routeRef.current = routeCoordinates;
+        if (prev === routeCoordinates) return;
+        // Re-base the continuity hint on the NEW polyline. Segment indices are
+        // only meaningful against the array they came from, and the in-trip
+        // live route is re-anchored at the car's current position on every
+        // poll — so index 5 of the old route is index ~0 of the new one.
+        // Carrying the old index forward as `preferredFromIndex` restricted
+        // the next search to segments AHEAD of the car; approaching a turn,
+        // the first segment inside that window was the post-turn one, and
+        // the icon took its bearing (90° off) while the car was still on the
+        // straight — the "car drives sideways" seen on the 2026-09-11 test
+        // ride (fixed there, ported here 2026-09-12 — see
+        // docs/known-forks.md). Snapping the marker's current position onto
+        // the new route with an unrestricted search gives the right starting
+        // segment without losing continuity across a same-path re-poll. Not
+        // clearing to null, deliberately: that would let a nearby
+        // wrong-direction segment win the very next tick (the case the hint
+        // exists for).
+        if (!routeCoordinates || routeCoordinates.length < 2) {
+            lastRouteSegmentIndexRef.current = null;
+            return;
+        }
+        const rebased = snapToRoute(
+            prevTargetRef.current,
+            routeCoordinates,
+            MAX_ROUTE_SNAP_M,
+            null,
+        );
+        lastRouteSegmentIndexRef.current = rebased?.segmentIndex ?? null;
     }, [routeCoordinates]);
 
     // Continuously-accumulated rotation (can exceed 0–360 so shortest-arc
@@ -355,6 +391,61 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     const [androidRotation, setAndroidRotation] = useState(
         heading != null && Number.isFinite(heading) && heading >= 0 ? heading : 0,
     );
+    // Interpolated Android rotation: Marker.rotation is a plain native prop,
+    // not an Animated.Value, so stepping it directly to each tick's target
+    // (the old behavior here) snapped the icon through a corner whenever a
+    // turn's angular rate exceeded a few degrees inside one TICK_MS window —
+    // position stayed smooth via animateMarkerToCoordinate while heading
+    // visibly jumped. Ported from driver-app/components/CarMarker.tsx
+    // (2026-09-09 fix, see docs/known-forks.md): a requestAnimationFrame loop
+    // tweens rotation along the shortest arc over the same duration position
+    // animates over, so the two stay in step.
+    const androidRotationCurrentRef = useRef(rotationValueRef.current);
+    const androidRotationFromRef = useRef(rotationValueRef.current);
+    const androidRotationTargetRef = useRef(rotationValueRef.current);
+    const androidRotationStartRef = useRef(0);
+    const androidRotationDurationRef = useRef(TICK_MS);
+    const androidRotationRafRef = useRef<number | null>(null);
+    const stepAndroidRotation = useCallback(() => {
+        const elapsed = Date.now() - androidRotationStartRef.current;
+        const duration = androidRotationDurationRef.current;
+        const t = duration > 0 ? Math.min(1, elapsed / duration) : 1;
+        const from = androidRotationFromRef.current;
+        const to = androidRotationTargetRef.current;
+        const value = from + (to - from) * t;
+        androidRotationCurrentRef.current = value;
+        setAndroidRotation(((value % 360) + 360) % 360);
+        if (t < 1) {
+            androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
+        } else {
+            androidRotationRafRef.current = null;
+        }
+    }, []);
+    // Stable by construction — reads/writes only refs and the stable
+    // stepAndroidRotation callback.
+    const animateAndroidRotationTo = useCallback(
+        (bearing: number, duration: number) => {
+            const target = shortestArcRotationTarget(rotationValueRef.current, bearing);
+            if (target === rotationValueRef.current) return;
+            rotationValueRef.current = target;
+            hasBearingRef.current = true;
+            // Start the new tween from wherever the current tween actually
+            // is right now (not its old target) — else an in-flight tween
+            // would visibly jump to its previous target before starting the
+            // next leg.
+            androidRotationFromRef.current = androidRotationCurrentRef.current;
+            androidRotationTargetRef.current = target;
+            androidRotationStartRef.current = Date.now();
+            androidRotationDurationRef.current = Math.min(duration, MAX_ROTATE_MS);
+            if (androidRotationRafRef.current == null) {
+                androidRotationRafRef.current = requestAnimationFrame(stepAndroidRotation);
+            }
+        },
+        [stepAndroidRotation],
+    );
+    useEffect(() => () => {
+        if (androidRotationRafRef.current != null) cancelAnimationFrame(androidRotationRafRef.current);
+    }, []);
     const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
@@ -553,7 +644,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     hasMovementBearingRef.current = true;
                 }
                 if (isAndroid) {
-                    setAndroidRotation(((bearing % 360) + 360) % 360);
+                    animateAndroidRotationTo(bearing, TICK_MS);
                 } else {
                     animateRotationTo(bearing, TICK_MS);
                 }

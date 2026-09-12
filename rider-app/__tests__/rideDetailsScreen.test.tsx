@@ -12,8 +12,9 @@
  *    injected only when the ride has one but breakdown doesn't already
  *    carry it
  *  - handleEmailReceipt: POSTs, toasts to the user's registered email
- *  - handleDownloadInvoice: generates+shares the PDF; a failure (no
- *    native module) toasts "PDF Unavailable" instead of crashing
+ *  - handleDownloadInvoice: downloads the backend's official receipt.pdf
+ *    and shares it; a missing native module toasts "PDF Unavailable"
+ *    instead of crashing
  *  - receipt actions ("Email receipt", "Download invoice") only render
  *    for completed rides
  *  - back nav and "Get help with this ride" nav
@@ -67,16 +68,7 @@ jest.mock('@shared/store/authStore', () => ({ useAuthStore: { getState: () => mo
 const mockShowToast = jest.fn();
 jest.mock('../store/toastStore', () => ({ showToast: (...args: any[]) => mockShowToast(...args) }));
 
-const mockPrintToFileAsync = jest.fn();
-jest.mock('expo-print', () => ({ printToFileAsync: (...a: any[]) => mockPrintToFileAsync(...a) }));
-const mockIsAvailableAsync = jest.fn();
-const mockShareAsync = jest.fn();
-jest.mock('expo-sharing', () => ({
-  isAvailableAsync: (...a: any[]) => mockIsAvailableAsync(...a),
-  shareAsync: (...a: any[]) => mockShareAsync(...a),
-}));
-
-import RideDetailsScreen, { buildReceiptHtml } from '../app/ride-details';
+import RideDetailsScreen from '../app/ride-details';
 
 const flush = async () => {
   await Promise.resolve();
@@ -129,9 +121,6 @@ beforeEach(() => {
   mockApiGet.mockResolvedValue({ data: RIDE_COMPLETED });
   mockApiPost.mockResolvedValue({});
   mockGetState.mockReturnValue({ user: { email: 'jamie@example.com' } });
-  mockPrintToFileAsync.mockResolvedValue({ uri: 'file://receipt.pdf' });
-  mockIsAvailableAsync.mockResolvedValue(true);
-  mockShareAsync.mockResolvedValue(undefined);
   mockFitToCoordinates.mockClear();
 });
 
@@ -256,22 +245,24 @@ describe('RideDetailsScreen', () => {
     expect(mockShowToast).toHaveBeenCalledWith('Email Not Sent', 'Could not send receipt email. Please try again.', 'danger');
   });
 
-  // NOTE: handleDownloadInvoice uses a dynamic `await import('expo-print')`
+  // NOTE: handleDownloadInvoice uses a dynamic `await import('expo-file-system')`
   // specifically so an older build without the native module degrades to
   // this same catch branch instead of crashing (see the source comment).
   // Jest's CJS runtime throws ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING_FLAG on
   // ANY dynamic import regardless of jest.mock() — there is no
   // --experimental-vm-modules flag in this test config — so the success
-  // path (Print/Sharing actually resolving) can never be exercised here.
-  // That happens to be the exact real-world "old build" failure mode this
-  // code is defending against, so pin it directly: every tap always lands
-  // in the catch branch and shows the same graceful toast, never a crash.
+  // path (the download/share actually resolving) can never be exercised
+  // here. That happens to be the exact real-world "old build" failure mode
+  // this code is defending against, so pin it directly: every tap always
+  // lands in the first catch branch (native module import failure) and
+  // shows the same graceful toast, never a crash — never the second catch
+  // branch's "Download Failed" copy, which is reachable only once the
+  // dynamic import itself succeeds.
   it('toasts "PDF Unavailable" (dynamic import fails in Jest, same as an old build without the native module) instead of crashing', async () => {
     const r = await renderScreen();
     const downloadBtn = findButtonByText(r, 'Download invoice (PDF)');
     await act(async () => { await downloadBtn.props.onPress(); await flush(); });
     expect(mockShowToast).toHaveBeenCalledWith('PDF Unavailable', 'PDF export requires the latest app version. Please update the app and try again.', 'warning');
-    expect(mockPrintToFileAsync).not.toHaveBeenCalled();
   });
 
   it('labels the distance tile "Distance (GPS)" when actual_distance_km is present', async () => {
@@ -355,146 +346,6 @@ describe('RideDetailsScreen', () => {
     mockParams = {};
     await renderScreen();
     expect(mockApiGet).not.toHaveBeenCalled();
-  });
-});
-
-// buildReceiptHtml is exported specifically so its branches (tax-breakdown
-// formatting, the grand_total-gap tax fallback, driver-block presence, and
-// the three-way route-snapshot-image state) can be pinned directly rather
-// than only indirectly through handleDownloadInvoice — which, per the note
-// above, can never actually reach Print.printToFileAsync in Jest.
-describe('buildReceiptHtml', () => {
-  it('renders base fare/distance/time rows and a grand total with no tax breakdown', () => {
-    const html = buildReceiptHtml({
-      id: 'ride-99', created_at: '2026-08-20T10:00:00Z',
-      base_fare: '5.00', distance_fare: '3.00', time_fare: '2.00', distance_km: 5.2, duration_minutes: 12,
-      total_fare: '10.00', grand_total: '10.00',
-    });
-    expect(html).toContain('Base fare');
-    expect(html).toContain('$5.00');
-    expect(html).toContain('Distance (5.2 km)');
-    expect(html).toContain('Time (12 min)');
-    expect(html).toContain('$10.00 CAD');
-  });
-
-  it('adds a booking fee row only when booking_fee > 0', () => {
-    const withFee = buildReceiptHtml({ id: 'r1', booking_fee: '1.50', total_fare: '10', grand_total: '10' });
-    expect(withFee).toContain('Booking fee');
-    const withoutFee = buildReceiptHtml({ id: 'r2', booking_fee: '0', total_fare: '10', grand_total: '10' });
-    expect(withoutFee).not.toContain('Booking fee');
-  });
-
-  it('renders each tax_breakdown entry with its rate, skipping zero-amount entries', () => {
-    const html = buildReceiptHtml({
-      id: 'r3', total_fare: '10.00', grand_total: '10.60',
-      tax_breakdown: { GST: { amount: '0.50', rate: 5 }, PST: { amount: '0.10', rate: 6 }, Other: { amount: '0', rate: 0 } },
-    });
-    expect(html).toContain('GST (5%)');
-    expect(html).toContain('$0.50');
-    expect(html).toContain('PST (6%)');
-    expect(html).not.toContain('Other');
-  });
-
-  it('omits the "(X%)" rate suffix for a tax_breakdown entry with a zero/falsy rate', () => {
-    const html = buildReceiptHtml({
-      id: 'r3b', total_fare: '10.00', grand_total: '10.30',
-      tax_breakdown: { Levy: { amount: '0.30', rate: 0 } },
-    });
-    expect(html).toContain('Levy');
-    expect(html).not.toContain('Levy (0%)');
-  });
-
-  it('falls back to a single "Tax" line from the grand_total gap when no tax_breakdown is present', () => {
-    const html = buildReceiptHtml({ id: 'r4', total_fare: '10.00', grand_total: '10.60' });
-    expect(html).toContain('Tax');
-    expect(html).toContain('$0.60');
-  });
-
-  it('omits the fallback Tax line when the gap is negligible', () => {
-    const html = buildReceiptHtml({ id: 'r5', total_fare: '10.00', grand_total: '10.00' });
-    expect(html).not.toContain('>Tax<');
-  });
-
-  it('includes a Tip row and folds the tip into the grand total when tip_amount > 0', () => {
-    const html = buildReceiptHtml({ id: 'r6', total_fare: '10.00', grand_total: '10.00', tip_amount: '2.00' });
-    expect(html).toContain('Tip');
-    expect(html).toContain('$12.00 CAD'); // grand_total + tip
-  });
-
-  it('renders a driver block from driver_name, falling back to first/last name, with driver_code · vehicle subtitle', () => {
-    const withDriverName = buildReceiptHtml({ id: 'r7', driver_name: 'Alex Rider', driver_vehicle: 'Toyota Camry', driver_code: 'D-123' });
-    expect(withDriverName).toContain('Alex Rider');
-    expect(withDriverName).toContain('D-123 · Toyota Camry');
-
-    const withNestedDriver = buildReceiptHtml({ id: 'r8', driver: { first_name: 'Sam', last_name: 'Lee' } });
-    expect(withNestedDriver).toContain('Sam Lee');
-  });
-
-  it('omits the driver block entirely when no driver name is available', () => {
-    const html = buildReceiptHtml({ id: 'r9' });
-    expect(html).not.toContain('background:#f9f9f9;border-radius:12px"><tr><td style="padding:12px 14px"');
-  });
-
-  it('shows the actual-route snapshot image when the snapshot revision matches the ride revision', () => {
-    const html = buildReceiptHtml({
-      id: 'r10', route_schema_version: 2, route_revision: 3, snapshot_revision: 3,
-      route_snapshot_url: 'https://cdn.example.com/route.png', route_quality: 'good',
-    });
-    expect(html).toContain('https://cdn.example.com/route.png');
-    expect(html).toContain('alt="Actual route"');
-    // Revision number and GPS-coverage copy are operator diagnostics — admin only.
-    expect(html).not.toContain('revision 3');
-  });
-
-  it('renders no map at all when v2 but the snapshot revision does not match', () => {
-    const html = buildReceiptHtml({
-      id: 'r11', route_schema_version: 2, route_revision: 3, snapshot_revision: 1,
-      route_snapshot_url: 'https://cdn.example.com/stale.png',
-    });
-    // The never-a-stale-snapshot rule is what matters and is unchanged; the
-    // "Route snapshot unavailable · <quality>" line that used to explain it is
-    // provenance copy and no longer appears on a rider-facing receipt.
-    expect(html).not.toContain('stale.png');
-    expect(html).not.toContain('Route snapshot unavailable');
-  });
-
-  it('falls back to a "Planned route" image for legacy (pre-v2) rides with a snapshot url', () => {
-    const html = buildReceiptHtml({ id: 'r12', route_snapshot_url: 'https://cdn.example.com/planned.png' });
-    expect(html).toContain('planned.png');
-    // Kept as alt text for screen readers, not as visible caption copy.
-    expect(html).toContain('alt="Planned route"');
-    expect(html).not.toContain('>Planned route</p>');
-  });
-
-  it('prints no route-quality copy on the receipt for any route state', () => {
-    for (const ride of [
-      { id: 'q1', route_schema_version: 2, route_revision: 3, snapshot_revision: 3, route_snapshot_url: 'https://cdn.example.com/a.png', route_quality: { observed_distance_ratio: 0.59, inferred_distance_ratio: 0.41 } },
-      { id: 'q2', route_schema_version: 2, route_revision: 3, snapshot_revision: 1, route_quality: { coverage_ratio: 0.4, missing_tail: true } },
-      { id: 'q3', route_snapshot_url: 'https://cdn.example.com/b.png' },
-    ]) {
-      const html = buildReceiptHtml(ride);
-      expect(html).not.toContain('GPS observed');
-      expect(html).not.toContain('GPS coverage');
-      expect(html).not.toContain('Route reconstructed');
-      expect(html).not.toContain('Route verified');
-      expect(html).not.toContain('Route incomplete');
-    }
-  });
-
-  it('uses "—" as the ride code fallback when neither ride_code nor id is present', () => {
-    const html = buildReceiptHtml({});
-    expect(html).toContain('Ride <strong style="color:#1a1a1a">—</strong>');
-  });
-
-  it('treats a non-numeric fare field as $0.00 (the _num NaN fallback) instead of rendering "NaN"', () => {
-    const html = buildReceiptHtml({ id: 'r13', base_fare: 'not-a-number', total_fare: '10.00', grand_total: '10.00' });
-    expect(html).toContain('$0.00');
-    expect(html).not.toContain('NaN');
-  });
-
-  it('falls back to "Your driver" when a driver name is present but no code or vehicle is', () => {
-    const html = buildReceiptHtml({ id: 'r14', driver_name: 'Alex Rider' });
-    expect(html).toContain('Your driver');
   });
 });
 

@@ -1364,6 +1364,13 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                     )
 
             # ── Notify each claimed driver ────────────────────────────────
+            # R10 (docs/audit/ride-experience/ROADMAP.md): FCM pushes for this
+            # batch are collected here and sent in one grouped
+            # send_dispatch_offer_pushes_batch() call after the loop, instead
+            # of one independent send_push_notification() per driver. The
+            # WebSocket offer (send_personal_message, below) is untouched —
+            # only the FCM push is batched.
+            _dispatch_pushes: list[Dict[str, Any]] = []
             for driver, _eta in claimed_drivers:
                 _quest_hint = _quest_by_uid.get(driver.get("user_id"))
 
@@ -1459,23 +1466,35 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         except (TypeError, ValueError):
                             earnings_label = "New fare"
 
-                        # Fire the push without blocking the per-driver offer loop —
-                        # send_push_notification now delivers inline (≈100–300 ms FCM
-                        # round-trip), and we don't want N drivers serialized on it.
-                        # The WebSocket offer above already reached any foreground app;
-                        # this push covers backgrounded / locked / killed devices.
-                        _deps.spawn(
-                            _deps.send_push_notification(
-                                driver["user_id"],
-                                f"New ride · {earnings_label}",
-                                f"{pickup_label} → {dropoff_label}",
-                                fcm_data,
-                                priority="dispatch",
-                                target_app="driver",
-                            )
+                        # Collected for one grouped send_each() call after the
+                        # loop (R10) instead of firing per-driver here. The
+                        # WebSocket offer above already reached any foreground
+                        # app; this push covers backgrounded / locked / killed
+                        # devices, same as before — only the delivery grouping
+                        # changed.
+                        _dispatch_pushes.append(
+                            {
+                                "user_id": driver["user_id"],
+                                "title": f"New ride · {earnings_label}",
+                                "body": f"{pickup_label} → {dropoff_label}",
+                                "data": fcm_data,
+                            }
                         )
                     except Exception as e:
                         logger.opt(exception=True).error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}")
+
+            # R10: one grouped FCM send for the whole batch instead of N
+            # independent send_push_notification() round-trips. Fire-and-
+            # forget, matching the per-driver call it replaces — wrapped the
+            # same way the per-driver spawn() call was (spawn() itself can
+            # raise synchronously, e.g. "event loop full"), so a push-spawn
+            # failure here can never prevent the batch-timeout handler below
+            # from being scheduled.
+            if _dispatch_pushes:
+                try:
+                    _deps.spawn(_deps.send_dispatch_offer_pushes_batch(_dispatch_pushes))
+                except Exception as e:
+                    logger.opt(exception=True).error(f"[DISPATCH] batch push spawn failed for ride {ride_id}: {e}")
 
             # ── Batch timeout handler (no grace period) ───────────────────
             _deps.spawn(

@@ -645,6 +645,16 @@ class AppSettings(BaseModel):
     # environment before Product + Trust & Safety sign off on SMS/push copy
     # and triage-runbook readiness -- see agents/runs/sos-rideless-path/decisions.md.
     rideless_sos_enabled: bool = False
+    # ── Directions proxy rollout (docs/audit/ride-experience/ROADMAP.md R7) ─
+    # Dark-launched rollout gate: with this off (default), rider-app's and
+    # driver-app's MapViewDirections call sites keep calling Google Directions
+    # directly from the device unchanged. On, each migrated call site tries
+    # GET /maps/directions (backend/routes/maps_proxy.py, budget-gated via
+    # maps_budget.py) first and falls back to the on-device call only if the
+    # proxy request itself fails — a proxy outage degrades to today's
+    # behavior, never to no route line. Both apps. Not a credential/
+    # destination field, no masking/super-admin gate needed.
+    directions_proxy_enabled: bool = False
     # ── Legacy/re-consent notice (2026-08-19 legacy-migration audit) ─────
     # Dark-launch gate for GET/POST /consent/* (routes/legacy_consent.py).
     # Off (default): endpoint reports needs_notice=false unconditionally and

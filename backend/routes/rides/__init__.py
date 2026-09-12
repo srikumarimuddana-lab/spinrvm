@@ -222,6 +222,7 @@ from .rating import (  # noqa: F401
 from .receipts import (  # noqa: F401
     email_ride_receipt,
     get_ride_receipt,
+    get_ride_receipt_pdf,
 )
 from .safety import (  # noqa: F401
     EmergencyRequest,
@@ -401,6 +402,7 @@ __all__ = [
     "get_ride_history",
     "get_ride_messages",
     "get_ride_receipt",
+    "get_ride_receipt_pdf",
     "get_rider_stats",
     "get_scheduled_rides",
     "get_service_area_polygon",

@@ -97,6 +97,16 @@ jest.mock('react-native-maps', () => {
   };
 });
 jest.mock('react-native-maps-directions', () => () => null);
+// R7 (docs/audit/ride-experience/ROADMAP.md): dark-launched off by default
+// (useDirectionsProxyFlag reads GET /settings, mocked below to resolve
+// {data: {}} for any URL not special-cased, i.e. directions_proxy_enabled
+// is undefined -> false) -- see driver-dashboard-route.test.ts for the
+// static wiring/gating pins; this file only needs to confirm the proxy
+// stays inert during this suite's normal (flag-off) renders.
+const mockFetchDirectionsRoute = jest.fn();
+jest.mock('@shared/api/directions', () => ({
+  fetchDirectionsRoute: (...a: any[]) => mockFetchDirectionsRoute(...a),
+}));
 jest.mock('@shared/components/RouteLine', () => ({ RouteLine: () => null }));
 jest.mock('@shared/components/RoutePins', () => ({ RoutePins: () => null }));
 const mockCarMarkerMounts = jest.fn();
@@ -1214,5 +1224,23 @@ describe('offline<->online camera framing', () => {
     });
 
     expect(animateCamera).not.toHaveBeenCalled();
+  });
+});
+
+// R7 (docs/audit/ride-experience/ROADMAP.md): the Directions proxy is
+// dark-launched off by default (useDirectionsProxyFlag reads GET /settings,
+// which this suite's mockApiGet resolves to {data: {}} for any
+// un-special-cased URL, i.e. directions_proxy_enabled is undefined -> false).
+// See driver-dashboard-route.test.ts for the static wiring/gating pins --
+// GOOGLE_MAPS_API_KEY is a module-load-time constant here, which makes a
+// dynamic flag-on scenario impractical in this file the same way it already
+// is for the pre-existing on-device needsDirections-true branch (also only
+// covered statically, not dynamically, in this test suite).
+describe('Directions proxy (R7)', () => {
+  it('never calls the proxy during a normal (flag-off) render', async () => {
+    mockDriverState.rideState = 'navigating_to_pickup';
+    mockDriverState.activeRide = { ride: { id: 'ride-1' }, rider: { name: 'Alex' } };
+    await renderScreen();
+    expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
   });
 });

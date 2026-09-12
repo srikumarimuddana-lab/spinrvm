@@ -408,6 +408,11 @@ class SettingsUpdateRequest(BaseModel):
     # See schemas.py::AppSettings.rideless_sos_enabled for the sign-off
     # requirement before enabling in any environment.
     rideless_sos_enabled: Optional[bool] = None
+    # Directions proxy rollout gate (docs/audit/ride-experience/ROADMAP.md
+    # R7) -- dark-launched, both apps. Not a credential, no masking/
+    # super-admin gate needed. See schemas.py::AppSettings.
+    # directions_proxy_enabled for what flipping this on actually does.
+    directions_proxy_enabled: Optional[bool] = None
     # Legacy/re-consent notice rollout gate (ACTION_ITEMS.md, 2026-08-19
     # legacy-migration audit) -- dark-launched, both apps. Not a credential,
     # no masking/super-admin gate needed. See schemas.py::AppSettings.

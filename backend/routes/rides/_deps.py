@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,7 @@ try:
         calculate_airport_fee,
         calculate_all_fees,
         notify_safety_team,
+        send_dispatch_offer_pushes_batch,
         send_push_notification,
     )
     from ...geo_utils import (
@@ -91,6 +92,7 @@ except ImportError:
         calculate_airport_fee,
         calculate_all_fees,
         notify_safety_team,
+        send_dispatch_offer_pushes_batch,
         send_push_notification,
     )
     from geo_utils import calculate_distance, get_service_area_polygon, multi_leg_distance, point_in_polygon
@@ -258,3 +260,8 @@ db = db_supabase  # legacy alias
 import re as _re
 
 import httpx as _httpx  # noqa: E402 — late import to avoid circular at module load
+
+try:
+    from ...utils.maps_budget import check_budget, record_call
+except ImportError:
+    from utils.maps_budget import check_budget, record_call  # type: ignore

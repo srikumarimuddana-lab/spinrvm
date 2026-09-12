@@ -651,6 +651,56 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
     return _q(fare + fees + tax + tip_d)
 
 
+async def build_receipt_pdf_bytes(ride: dict, rider: dict, driver: dict = None, tip: float = 0) -> bytes:
+    """Build the branded ride-receipt PDF as raw bytes.
+
+    Reuses the same async setup (route-snapshot resolution, branded company)
+    and the same :func:`utils.receipt_pdf.generate_receipt_pdf` this module
+    already uses for the emailed receipt attachment — extracted so
+    ``routes/rides/receipts.py``'s rider-facing download endpoint returns the
+    backend's one official PDF, not a second, independently-implemented
+    renderer (R9, docs/audit/ride-experience/ROADMAP.md: rider-app used to
+    re-derive the receipt in client-side JS, agreeing with this generator
+    only because both happened to read the same settled ride fields, with no
+    mechanism keeping them in sync if either changed).
+
+    Deliberately independent of :func:`send_receipt_email_result` rather than
+    a shared internal call — that function's own snapshot/company resolution
+    stays untouched so this addition carries zero risk to the existing,
+    already-shipped email-receipt flow (routing through this helper there
+    would double the route-snapshot DB poll and image fetch per email). The
+    Decimal-money and PIPEDA (no driver phone/plate) invariants documented in
+    ``receipt_pdf.py`` apply here unchanged, since it is the exact same
+    generator.
+
+    KEEP THIS SETUP SEQUENCE IN SYNC with :func:`send_receipt_email_result`'s
+    own inline ``_await_route_receipt_projection`` →
+    ``_route_snapshot_presentation`` → ``_download_route_snapshot`` →
+    ``_branded_company`` steps below — the two call sites duplicate this
+    orchestration on purpose (see above), so a step added/reordered in one
+    must be mirrored in the other or the emailed and downloaded PDFs can
+    silently diverge.
+    """
+    ride = await _await_route_receipt_projection(ride)
+    snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
+    snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
+    company = await _branded_company()
+    try:
+        from .receipt_pdf import generate_receipt_pdf
+    except ImportError:
+        from utils.receipt_pdf import generate_receipt_pdf  # type: ignore
+    return generate_receipt_pdf(
+        ride,
+        rider,
+        driver,
+        tip,
+        route_snapshot_bytes=snapshot_bytes,
+        route_snapshot_note=snapshot_note,
+        route_snapshot_is_actual=snapshot_is_actual,
+        company=company,
+    )
+
+
 async def send_receipt_email_result(
     ride: dict, rider: dict, driver: dict = None, tip: float = 0, recipient_email: Optional[str] = None
 ):
@@ -666,6 +716,12 @@ async def send_receipt_email_result(
     ``recipient_email`` overrides the destination address (admin "send to a
     different email"). When omitted, the receipt goes to the rider on file.
     The receipt body still reflects the rider — only the To: address changes.
+
+    KEEP THIS SETUP SEQUENCE IN SYNC with :func:`build_receipt_pdf_bytes`'s
+    own ``_await_route_receipt_projection`` → ``_route_snapshot_presentation``
+    → ``_download_route_snapshot`` → ``_branded_company`` steps — see that
+    function's docstring for why the two call sites duplicate this
+    orchestration instead of sharing it.
     """
     ride = await _await_route_receipt_projection(ride)
     email = (recipient_email or rider.get("email") or "").strip()

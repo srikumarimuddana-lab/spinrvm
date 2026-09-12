@@ -62,6 +62,7 @@ _MAPS_TIMEOUT = 3.0
 
 
 try:
+    from .maps_budget import check_budget, record_call
     from .redis_client import redis_get, redis_set
 except ImportError:
     from utils.redis_client import redis_get, redis_set  # type: ignore
@@ -204,7 +205,12 @@ async def get_ride_eta_seconds(
         return eta_seconds
 
     # ── Google Distance Matrix fallback ─────────────────────────────────────
+    budget_allowed = True
     if maps_api_key:
+        budget_allowed, spent, budget = await check_budget()
+        if not budget_allowed:
+            logger.warning(f"[ETA] daily Maps budget reached ({spent:.2f}/{budget:.2f} USD) — using haversine fallback")
+    if maps_api_key and budget_allowed:
         try:
             params = {
                 "origins": f"{driver_lat},{driver_lng}",
@@ -215,8 +221,12 @@ async def get_ride_eta_seconds(
             }
             async with httpx.AsyncClient(timeout=_MAPS_TIMEOUT) as client:
                 resp = await client.get(_MAPS_URL, params=params)
-                resp.raise_for_status()
-                body = resp.json()
+            # Recorded as soon as a response comes back — Google received and
+            # answered the request regardless of HTTP status or the
+            # per-element status checked below.
+            await record_call("distance_matrix")
+            resp.raise_for_status()
+            body = resp.json()
 
             element = body["rows"][0]["elements"][0]
             if element.get("status") == "OK":
@@ -231,7 +241,7 @@ async def get_ride_eta_seconds(
             logger.error("[ETA] Maps API call failed — using haversine fallback", exc_info=True)
             eta_seconds = _haversine_eta_seconds(driver_lat, driver_lng, dest_lat, dest_lng)
     else:
-        # No API key configured — haversine only
+        # No API key configured, or daily budget exhausted — haversine only
         eta_seconds = _haversine_eta_seconds(driver_lat, driver_lng, dest_lat, dest_lng)
 
     # ── Cache result ───────────────────────────────────────────────────────
@@ -308,6 +318,13 @@ async def batch_get_etas(
             result[d["id"]] = _haversine_eta_seconds(d["lat"], d["lng"], dest_lat, dest_lng)
         return result
 
+    budget_allowed, spent, budget = await check_budget()
+    if not budget_allowed:
+        logger.warning(f"[ETA] daily Maps budget reached ({spent:.2f}/{budget:.2f} USD) — batch haversine fallback")
+        for d in drivers:
+            result[d["id"]] = _haversine_eta_seconds(d["lat"], d["lng"], dest_lat, dest_lng)
+        return result
+
     origins = "|".join(f"{d['lat']},{d['lng']}" for d in drivers[:25])
     try:
         params = {
@@ -319,8 +336,9 @@ async def batch_get_etas(
         }
         async with httpx.AsyncClient(timeout=_MAPS_TIMEOUT) as client:
             resp = await client.get(_MAPS_URL, params=params)
-            resp.raise_for_status()
-            body = resp.json()
+        await record_call("distance_matrix")
+        resp.raise_for_status()
+        body = resp.json()
 
         for i, d in enumerate(drivers[:25]):
             element = body["rows"][i]["elements"][0]

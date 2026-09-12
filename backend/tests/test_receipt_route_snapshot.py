@@ -188,6 +188,37 @@ def test_email_receipt_attaches_private_snapshot_without_an_expiring_html_url(mo
     ]
 
 
+def test_build_receipt_pdf_bytes_reuses_the_same_snapshot_and_generator_wiring(monkeypatch) -> None:
+    """R9 (docs/audit/ride-experience/ROADMAP.md): the rider-app download
+    endpoint (routes/rides/receipts.py::get_ride_receipt_pdf) calls this
+    helper for the exact PDF bytes the emailed receipt already uses - same
+    route-snapshot resolution, same generate_receipt_pdf call, same branded
+    company - not a second, independently-implemented renderer."""
+    from backend.utils import email_receipt, receipt_pdf
+
+    route = {**RIDE, "route_schema_version": 2, "route_revision": 1, "snapshot_revision": 1}
+    monkeypatch.setattr(email_receipt, "_await_route_receipt_projection", AsyncMock(return_value=route))
+    monkeypatch.setattr(email_receipt, "_download_route_snapshot", AsyncMock(return_value=None))
+    monkeypatch.setattr(email_receipt, "_branded_company", AsyncMock(return_value=None))
+    captured = {}
+
+    def _fake_generate(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return b"%PDF-from-shared-generator"
+
+    monkeypatch.setattr(receipt_pdf, "generate_receipt_pdf", _fake_generate)
+
+    result = asyncio.run(email_receipt.build_receipt_pdf_bytes(RIDE, RIDER, None, Decimal("0")))
+
+    assert result == b"%PDF-from-shared-generator"
+    # Same positional (ride, rider, driver, tip) contract generate_receipt_pdf
+    # already has for the email-attachment path.
+    assert captured["args"][:2] == (route, RIDER)
+    assert "route_snapshot_bytes" in captured["kwargs"]
+    assert "company" in captured["kwargs"]
+
+
 def test_pdf_embeds_snapshot_bytes_and_prints_truthful_quality_note() -> None:
     pdf = generate_receipt_pdf(
         RIDE,

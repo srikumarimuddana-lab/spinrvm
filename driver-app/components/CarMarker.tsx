@@ -1,3 +1,12 @@
+// TRACKED FORK: this file is an intentional fork of
+// shared/components/CarMarker.tsx (this app needs course-up-camera
+// bearing/heading callbacks — onBearingChange, mapHeadingRef — that
+// rider-app must not get by default; north-up is the correct rider-side
+// convention). Everything else — GPS smoothing, playback buffer,
+// route-snapping, rotation animation — is meant to stay identical between
+// the two. See docs/known-forks.md before assuming a fix here doesn't apply
+// to the shared copy, and docs/audit/ride-experience/module-c-shared.md for
+// the full capability diff as of the 2026-09-12 audit.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';

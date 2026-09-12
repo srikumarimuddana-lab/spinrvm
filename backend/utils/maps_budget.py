@@ -24,9 +24,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 try:
-    from .redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_incrby
+    from .redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_incrby, redis_mget
 except ImportError:  # pragma: no cover - dual import path
-    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_incrby  # type: ignore
+    from utils.redis_client import (  # type: ignore
+        redis_delete,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_incrby,
+    )
 
 try:
     from ..core.config import settings
@@ -35,7 +41,15 @@ except ImportError:  # pragma: no cover - dual import path
 
 logger = logging.getLogger(__name__)
 
-Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode", "directions", "text_search_new"]
+Sku = Literal[
+    "autocomplete",
+    "autocomplete_session",
+    "details",
+    "geocode",
+    "directions",
+    "text_search_new",
+    "distance_matrix",
+]
 
 # USD per call. Source: Google Maps Platform pricing 2026.
 # Places API (New) charges autocomplete requests separately for sessions that
@@ -49,6 +63,22 @@ Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode", "dir
 # record_call("places_text_search"), a string outside this Literal, so every
 # such call silently miscounted against no bucket and was invisible to
 # estimate_today_usd()'s budget total.
+# `distance_matrix` is Distance Matrix API, called from utils/maps_eta.py's
+# Google fallback (OSRM is tried first, at zero metered cost). This call
+# site requests `departure_time`/`traffic_model` (traffic-aware), which is
+# priced as the Advanced tier, not the $0.005 Essentials rate `directions`/
+# `geocode` above use — R4 (docs/audit/ride-experience/ROADMAP.md): this SKU
+# did not previously exist in this Literal at all, so estimate_today_usd()
+# structurally could not total it regardless of call volume. NOTE: live
+# Google Maps Platform pricing could not be fetched when this constant was
+# set (developers.google.com is EGRESS_BLOCKED from this environment, same
+# limitation the audit itself hit) — re-verify against
+# https://developers.google.com/maps/billing-and-pricing/pricing before
+# relying on this figure for a real dollar budget decision. Deliberately
+# set to the higher, traffic-aware estimate rather than reusing the
+# Essentials rate: for a circuit breaker, overestimating spend trips early
+# (safe); underestimating lets real spend hide past the ceiling (the exact
+# failure this SKU registration exists to close).
 _PRICE_USD: dict[Sku, float] = {
     "autocomplete": 0.00283,
     "autocomplete_session": 0.017,
@@ -56,6 +86,7 @@ _PRICE_USD: dict[Sku, float] = {
     "geocode": 0.005,
     "text_search_new": 0.032,
     "directions": 0.005,
+    "distance_matrix": 0.010,
 }
 
 _BUCKET_TTL_SECONDS = 26 * 3600
@@ -170,13 +201,26 @@ async def close_autocomplete_session(session_token: str | None) -> None:
 
 
 async def estimate_today_usd() -> float:
+    """Sum today's estimated spend across every tracked SKU.
+
+    Batched via a single ``redis_mget`` round-trip rather than one
+    ``redis_get`` per SKU — this is called from ``check_budget()``, which
+    ``batch_get_etas`` (R4, docs/audit/ride-experience/ROADMAP.md) now reaches
+    from the dispatch-matching hot path's purpose-built 1.2s timeout window
+    (``routes/rides/matching.py``), where N sequential round-trips eat
+    directly into that budget. ``redis_mget`` raises on a Redis error (unlike
+    ``redis_get``'s own per-key fail-open) — caught here to preserve this
+    function's documented "errors fail open" contract.
+    """
+    skus = list(_PRICE_USD.items())
+    try:
+        raw_values = await redis_mget([_key(sku) for sku, _price in skus])
+    except Exception:
+        logger.warning("[maps_budget] redis_mget failed; assuming 0 for all SKUs", exc_info=False)
+        raw_values = [None] * len(skus)
+
     total = 0.0
-    for sku, price in _PRICE_USD.items():
-        try:
-            raw = await redis_get(_key(sku))
-        except Exception:
-            logger.warning("[maps_budget] redis_get(%s) failed; assuming 0", sku, exc_info=False)
-            raw = None
+    for (_sku, price), raw in zip(skus, raw_values, strict=True):
         if raw is not None:
             try:
                 total += int(raw) * price

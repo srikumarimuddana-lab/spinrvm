@@ -25324,6 +25324,36 @@ how much they de-risk a public launch._
   `CarMarker.tsx` change-logs cross-referenced above — the actual
   component whose retry logic the failing suite exercises).
 
+### C101. `shared/components/CarMarker.tsx` (rider-app) was missing a route-rebase fix and an Android rotation-smoothing fix that `driver-app/components/CarMarker.tsx` already had in production — distinct from C90 (three *other* ported fixes)
+
+- [x] **Status:** FIXED at the code level 2026-09-12 — **device verification still pending**, tracked
+  under the new R14 access-gap entry below, not re-listed as its own device-pass item here.
+- **Found by:** the 2026-09-12 ride-experience industry-benchmark audit
+  (`docs/audit/ride-experience/module-c-shared.md`), which diffed `shared/` and `driver-app`'s
+  `CarMarker.tsx` copies at a feature level specifically because they are a registered fork
+  (see the new `docs/known-forks.md`).
+- **What was wrong:** (1) the route-coordinate-changed effect in the shared file only stored the
+  new route reference — it never re-based `lastRouteSegmentIndexRef` onto the new polyline, so a
+  stale segment index could give the marker a ~90°-wrong bearing approaching a turn (the "car
+  drives sideways" bug driver-app's own drivers reported and had fixed for them on 2026-09-11).
+  (2) Android's `Marker.rotation` is a plain native prop, so the shared file stepped it directly
+  to each tick's target instead of interpolating, visibly snapping the icon through corners — the
+  "no smooth animation" issue driver-app fixed on 2026-09-09. Riders were exposed to both for as
+  long as the fork existed; drivers were not, because their app got the fix and rider-app's never
+  did.
+- **Fix:** ported both from `driver-app/components/CarMarker.tsx` verbatim — both depended only
+  on primitives already present in the shared file. Full detail, before/after snippets, and the
+  consumer/blast-radius list: `docs/change-log/2026-09-12-carmarker-route-rebase-and-android-rotation-port.md`.
+- **Why this is not a C90 duplicate:** C90 tracks three *other* ported fixes (image-load retry,
+  marker-icon smoothing, heading fixes) already device-unverified. This is two *additional*,
+  previously-unfound gaps in the same file pair — five ported fixes total now, none of them ever
+  verified end-to-end on a real device, which is exactly the pattern R14 (below) exists to fix.
+- **R11 landed 2026-09-12:** decided to keep the two files (driver-app's course-up-camera props
+  are legitimately driver-only) and add the mechanical parity guard —
+  `shared/components/__tests__/CarMarkerParity.test.ts` diffs both files' `CarMarkerProps`
+  interface and fails on any undeclared prop divergence, closing the "sixth gap recurs silently"
+  risk this line used to describe as open. See `docs/known-forks.md`'s registry row.
+
 ## Recently completed (do not redo)
 
 | Item | Where |

@@ -50,16 +50,12 @@ async def _call_route(payload: dict):
         f"{_TARGET}._httpx.AsyncClient",
         return_value=_mock_async_client(payload),
     ):
-        return await _fetch_directions_route(
-            52.13, -106.67, 52.12, -106.65, api_key="k"
-        )
+        return await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
 
 
 class TestRoadDistanceParsing:
     async def test_single_leg_distance_duration_polyline(self):
-        payload = _ok_payload(
-            [{"distance": {"value": 1800}, "duration": {"value": 360}}]
-        )
+        payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
         route = await _call_route(payload)
         assert route is not None
         assert route["distance_km"] == 1.8
@@ -104,9 +100,7 @@ class TestSoftFailures:
 
         # Empty key → None without any HTTP call (AsyncClient must never run).
         with patch(f"{_TARGET}._httpx.AsyncClient") as client_cls:
-            route = await _fetch_directions_route(
-                52.13, -106.67, 52.12, -106.65, api_key=""
-            )
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="")
         assert route is None
         client_cls.assert_not_called()
 
@@ -161,20 +155,84 @@ class TestSoftFailures:
         assert route["polyline"] == []
 
 
+class TestBudgetGate:
+    """Roadmap R2: the highest-volume Directions call site in the app had no
+    budget accounting at all, unlike every sibling call site. Scenario this
+    covers — before: a budget spike here never tripped the daily breaker and
+    Google kept being called and billed past the ceiling; after: the call is
+    skipped and haversine's existing fallback (`select_fare_distance`) takes
+    over, exactly like every other exhausted-budget Maps call site already
+    does.
+    """
+
+    async def test_budget_exceeded_skips_http_call_entirely(self):
+        from backend.routes.rides._shared import _fetch_directions_route
+
+        with (
+            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(False, 5.5, 5.0))),
+            patch(f"{_TARGET}._httpx.AsyncClient") as client_cls,
+        ):
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+        assert route is None, "budget-exhausted state must soft-fail into haversine, not raise"
+        client_cls.assert_not_called(), "no Google call — and no spend — once the breaker is open"
+
+    async def test_budget_allowed_records_spend_on_success(self):
+        payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
+        record_mock = AsyncMock()
+        with (
+            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch(f"{_TARGET}.record_call", record_mock),
+            patch(
+                f"{_TARGET}._httpx.AsyncClient",
+                return_value=_mock_async_client(payload),
+            ),
+        ):
+            from backend.routes.rides._shared import _fetch_directions_route
+
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+        assert route is not None
+        record_mock.assert_awaited_once_with("directions")
+
+    async def test_budget_allowed_records_spend_even_on_non_ok_status(self):
+        """The spend happened the moment the request reached Google —
+        record it regardless of what Google answered, same placement as
+        route_distance.py's sibling "directions" call site."""
+        record_mock = AsyncMock()
+        with (
+            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch(f"{_TARGET}.record_call", record_mock),
+            patch(
+                f"{_TARGET}._httpx.AsyncClient",
+                return_value=_mock_async_client({"status": "ZERO_RESULTS", "routes": []}),
+            ),
+        ):
+            from backend.routes.rides._shared import _fetch_directions_route
+
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+        assert route is None
+        record_mock.assert_awaited_once_with("directions")
+
+    async def test_no_api_key_never_checks_budget(self):
+        """An empty key short-circuits before any budget/HTTP work — no
+        change from the pre-existing behavior this test already covered."""
+        from backend.routes.rides._shared import _fetch_directions_route
+
+        with patch(f"{_TARGET}.check_budget") as budget_mock:
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="")
+        assert route is None
+        budget_mock.assert_not_called()
+
+
 class TestPolylineWrapper:
     async def test_wrapper_returns_only_points(self):
         from backend.routes.rides._shared import _fetch_directions_polyline
 
-        payload = _ok_payload(
-            [{"distance": {"value": 1800}, "duration": {"value": 360}}]
-        )
+        payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
         with patch(
             f"{_TARGET}._httpx.AsyncClient",
             return_value=_mock_async_client(payload),
         ):
-            pts = await _fetch_directions_polyline(
-                52.13, -106.67, 52.12, -106.65, api_key="k"
-            )
+            pts = await _fetch_directions_polyline(52.13, -106.67, 52.12, -106.65, api_key="k")
         assert isinstance(pts, list)
         assert len(pts) == 3
 
@@ -185,7 +243,5 @@ class TestPolylineWrapper:
             f"{_TARGET}._httpx.AsyncClient",
             return_value=_mock_async_client({"status": "NOT_FOUND", "routes": []}),
         ):
-            pts = await _fetch_directions_polyline(
-                52.13, -106.67, 52.12, -106.65, api_key="k"
-            )
+            pts = await _fetch_directions_polyline(52.13, -106.67, 52.12, -106.65, api_key="k")
         assert pts is None

@@ -258,3 +258,8 @@ db = db_supabase  # legacy alias
 import re as _re
 
 import httpx as _httpx  # noqa: E402 — late import to avoid circular at module load
+
+try:
+    from ...utils.maps_budget import check_budget, record_call
+except ImportError:
+    from utils.maps_budget import check_budget, record_call  # type: ignore

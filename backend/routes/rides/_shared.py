@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import json
+
 from . import _deps
 from ._deps import (  # noqa: F401
     ROUND_HALF_UP,
@@ -25,6 +27,15 @@ from ._deps import (  # noqa: F401
     point_in_polygon,
     record_call,
 )
+
+# R8 (docs/audit/ride-experience/ROADMAP.md): Redis cache for the
+# fare-estimate Directions call. Imported directly here rather than added to
+# ``_deps`` since it's specific to this one function's caching, the same way
+# ``utils/polyline`` is imported directly a few lines below.
+try:
+    from ...utils.redis_client import redis_get, redis_set
+except ImportError:
+    from utils.redis_client import redis_get, redis_set  # type: ignore
 
 
 def _push_in_background(*args, _ctx: str = "", **kwargs) -> None:
@@ -80,6 +91,42 @@ except ImportError:
 # lower this back and resume mispricing.
 DIRECTIONS_TIMEOUT_S = 3.0
 
+# R8 (docs/audit/ride-experience/ROADMAP.md): fare-estimate Directions cache.
+# Deliberately NOT route_distance.py's cache key scheme (which rounds
+# *origin* to a ~110m grid because it serves a moving driver's imprecise
+# position). This call site has two FIXED, rider-chosen endpoints that
+# directly determine the bill -- a coarse grid would let two riders whose
+# pins are ~100m apart get billed on the same cached road distance. Keyed at
+# 5 decimals (~1m) on every coordinate instead. Does not weaken the fare
+# lock: the estimate-token mechanism (sign_estimate_token/
+# resolve_booking_distance) already pins the exact quoted distance for the
+# token-present booking path -- this cache only affects consistency across
+# repeated /rides/estimate calls (e.g. a rider dragging a pin) *before* a
+# token is issued, never quote-to-charge consistency.
+_FARE_DIRECTIONS_CACHE_TTL_S = 30
+_FARE_DIRECTIONS_CACHE_PRECISION = 5
+
+
+def _fare_directions_cache_key(
+    pickup_lat: float,
+    pickup_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+    waypoints: Optional[list],
+) -> str:
+    p = _FARE_DIRECTIONS_CACHE_PRECISION
+    key = (
+        f"fare_directions:google:{round(pickup_lat, p)},{round(pickup_lng, p)}:"
+        f"{round(dropoff_lat, p)},{round(dropoff_lng, p)}"
+    )
+    if waypoints:
+        # Order matters (never optimized -- see the waypoints param below) and
+        # must be part of the key: a different stop sequence for the same
+        # origin/destination is a different route.
+        wp = "|".join(f"{round(w['lat'], p)},{round(w['lng'], p)}" for w in waypoints)
+        key += f":wp={wp}"
+    return key
+
 
 async def _fetch_directions_route(
     pickup_lat: float,
@@ -102,9 +149,24 @@ async def _fetch_directions_route(
     priced on (see ``estimates.py``); haversine is only the fallback when this
     is unavailable. Timeout is ``DIRECTIONS_TIMEOUT_S``.
     waypoints is an optional list of {lat, lng} stop dicts (multi-stop rides).
+
+    Redis-cached for ``_FARE_DIRECTIONS_CACHE_TTL_S`` seconds on a fine
+    (5-decimal, ~1m) coordinate grid — see the cache-key/TTL comment above
+    ``_fare_directions_cache_key`` for why this must not reuse
+    ``route_distance.py``'s coarser live-route grid. A Redis outage never
+    breaks pricing: cache get/set failures are caught and logged, falling
+    through to (or skipping) the direct Google call exactly as if there were
+    no cache at all.
     """
     if not api_key:
         return None
+    cache_key = _fare_directions_cache_key(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, waypoints)
+    try:
+        cached = await redis_get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        logger.warning("_fetch_directions_route: cache get failed", exc_info=False)
     # Budget-gate before spending: this is the highest-volume Directions call
     # site in the app (every /rides/estimate, plus every booking confirm
     # lacking a valid estimate token) and, until this fix, the only one of
@@ -174,11 +236,26 @@ async def _fetch_directions_route(
         if distance_km is None and not pts:
             # Neither a billable distance nor a drawable line — nothing useful.
             return None
-        return {
+        result = {
             "polyline": pts,
             "distance_km": distance_km,
             "duration_s": duration_s if duration_s > 0 else None,
         }
+        # Only cache a result with a real billable distance. A response that
+        # decoded a polyline but hit the malformed-leg fallback above
+        # (distance_km=None) must never be cached: booking.py's no-token
+        # safety-net re-derive calls this same function and feeds
+        # distance_km straight into select_fare_distance() -- the value
+        # actually billed. Caching a null-distance answer would let an
+        # unrelated earlier /rides/estimate call silently force a later
+        # booking confirm onto the haversine fallback for 30s, the exact
+        # undercharge class the comment above already warns about.
+        if distance_km is not None:
+            try:
+                await redis_set(cache_key, json.dumps(result), ttl=_FARE_DIRECTIONS_CACHE_TTL_S)
+            except Exception:
+                logger.warning("_fetch_directions_route: cache set failed", exc_info=False)
+        return result
     except Exception as exc:
         # Money path: this decides whether the ride bills on the road route or
         # on the shorter straight line, so it must not disappear into a

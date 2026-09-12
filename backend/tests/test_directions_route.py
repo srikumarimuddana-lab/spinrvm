@@ -13,11 +13,27 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 # Classic Google-documented encoded polyline → 3 points:
 #   (38.5, -120.2), (40.7, -120.95), (43.252, -126.453)
 ENCODED_POLYLINE = "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
 
 _TARGET = "backend.routes.rides._shared"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_directions_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R8 added a 30s Redis cache to `_fetch_directions_route`, keyed on the
+    call's coordinates. Every test in this file calls it with the same fixed
+    origin/destination (52.13, -106.67, 52.12, -106.65) -- without a fresh
+    cache per test, an earlier test's cached result would leak into a later
+    one expecting different `legs`/status/etc. Mirrors conftest.py's
+    `mock_redis` fixture body, just applied file-wide via autouse rather than
+    opt-in per test."""
+    from backend.utils import redis_client as rc
+
+    monkeypatch.setattr(rc, "_local", {})
 
 
 def _mock_async_client(payload: dict) -> MagicMock:
@@ -221,6 +237,135 @@ class TestBudgetGate:
             route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="")
         assert route is None
         budget_mock.assert_not_called()
+
+
+class TestFareDirectionsCache:
+    """R8 (docs/audit/ride-experience/ROADMAP.md): fine-precision (5-decimal,
+    ~1m) Redis cache, 30s TTL, deliberately NOT route_distance.py's coarser
+    ~110m origin grid -- two fixed rider-chosen endpoints price the fare
+    directly, so a coarse grid could bill two ~100m-apart pins on the same
+    cached road distance."""
+
+    async def test_cache_hit_skips_http_call_and_budget_check(self):
+        from backend.routes.rides._shared import _fare_directions_cache_key, _fetch_directions_route
+        from backend.utils.redis_client import redis_set
+
+        cache_key = _fare_directions_cache_key(52.13, -106.67, 52.12, -106.65, None)
+        await redis_set(
+            cache_key,
+            '{"polyline": [[38.5, -120.2]], "distance_km": 1.8, "duration_s": 360}',
+            ttl=30,
+        )
+
+        with (
+            patch(f"{_TARGET}.check_budget") as budget_mock,
+            patch(f"{_TARGET}._httpx.AsyncClient") as client_cls,
+        ):
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+
+        assert route == {"polyline": [[38.5, -120.2]], "distance_km": 1.8, "duration_s": 360}
+        budget_mock.assert_not_called()
+        client_cls.assert_not_called()
+
+    async def test_cache_miss_populates_cache_for_next_call(self):
+        from backend.routes.rides._shared import _fetch_directions_route
+        from backend.utils.redis_client import redis_get
+
+        payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
+        with (
+            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
+        ):
+            first = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+        assert first is not None
+
+        from backend.routes.rides._shared import _fare_directions_cache_key
+
+        cached = await redis_get(_fare_directions_cache_key(52.13, -106.67, 52.12, -106.65, None))
+        assert cached is not None
+
+        # Second call must be served from cache -- no second HTTP round trip.
+        with patch(f"{_TARGET}._httpx.AsyncClient") as client_cls:
+            second = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+        assert second == first
+        client_cls.assert_not_called()
+
+    async def test_distinct_pins_a_hundred_meters_apart_do_not_share_a_cache_entry(self):
+        """The whole point of the 5-decimal (~1m) key vs route_distance.py's
+        ~110m grid: two riders whose pins differ by ~0.001 deg (~100m at this
+        latitude) must never be billed on each other's cached road distance."""
+        from backend.routes.rides._shared import _fare_directions_cache_key
+
+        key_a = _fare_directions_cache_key(52.1300, -106.6700, 52.12, -106.65, None)
+        key_b = _fare_directions_cache_key(52.1310, -106.6700, 52.12, -106.65, None)  # ~111m north
+        assert key_a != key_b
+
+    async def test_waypoints_change_the_cache_key(self):
+        from backend.routes.rides._shared import _fare_directions_cache_key
+
+        no_stop = _fare_directions_cache_key(52.13, -106.67, 52.12, -106.65, None)
+        with_stop = _fare_directions_cache_key(52.13, -106.67, 52.12, -106.65, [{"lat": 52.125, "lng": -106.66}])
+        assert no_stop != with_stop
+
+    async def test_none_distance_result_is_never_cached(self):
+        """A malformed leg degrades distance_km to None (see
+        TestRoadDistanceParsing.test_malformed_leg_field_degrades_to_none_distance)
+        while the polyline can still decode -- that response must never be
+        cached. booking.py's no-token safety-net re-derive calls this same
+        function and feeds distance_km straight into the billed fare; caching
+        a null-distance answer would let an unrelated earlier estimate call
+        silently force a later booking confirm onto the haversine fallback
+        for the TTL window (spinr-money-auditor finding)."""
+        from backend.routes.rides._shared import _fare_directions_cache_key, _fetch_directions_route
+        from backend.utils.redis_client import redis_get
+
+        payload = _ok_payload([{"distance": {}, "duration": {}}])  # malformed leg
+        with (
+            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
+        ):
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+
+        assert route is not None
+        assert route["distance_km"] is None
+        assert len(route["polyline"]) == 3  # polyline still decoded fine
+
+        cached = await redis_get(_fare_directions_cache_key(52.13, -106.67, 52.12, -106.65, None))
+        assert cached is None, "a null-distance result must never be cached"
+
+    async def test_cache_get_failure_falls_through_to_google_call(self):
+        """A Redis outage on the read side must never break pricing -- it
+        degrades to exactly the pre-cache behaviour (always call Google)."""
+        from backend.routes.rides._shared import _fetch_directions_route
+
+        payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
+        with (
+            patch(f"{_TARGET}.redis_get", AsyncMock(side_effect=RuntimeError("redis down"))),
+            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
+        ):
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+        assert route is not None
+        assert route["distance_km"] == 1.8
+
+    async def test_cache_set_failure_does_not_break_a_successful_response(self):
+        """A Redis outage on the write side must not turn a successful Google
+        response into a failure -- the caller still gets a real route."""
+        from backend.routes.rides._shared import _fetch_directions_route
+
+        payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
+        with (
+            patch(f"{_TARGET}.redis_set", AsyncMock(side_effect=RuntimeError("redis down"))),
+            patch(f"{_TARGET}.check_budget", AsyncMock(return_value=(True, 0.0, 5.0))),
+            patch(f"{_TARGET}.record_call", AsyncMock()),
+            patch(f"{_TARGET}._httpx.AsyncClient", return_value=_mock_async_client(payload)),
+        ):
+            route = await _fetch_directions_route(52.13, -106.67, 52.12, -106.65, api_key="k")
+        assert route is not None
+        assert route["distance_km"] == 1.8
 
 
 class TestPolylineWrapper:

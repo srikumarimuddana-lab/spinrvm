@@ -25501,6 +25501,18 @@ how much they de-risk a public launch._
 - **Files (reference only, no code changed by this entry):** `backend/utils/maps_budget.py`
   (`check_budget`, `record_call`, `_ensure_budget` call sites in `routes/maps_proxy.py`),
   `backend/ai/tools_booking.py`.
+- **Addendum (2026-09-12, R8):** `backend/routes/rides/_shared.py::_fetch_directions_route`
+  (the fare-estimate Directions call, budget-gated in R2 and Redis-cached in R8) is another
+  call site sharing this exact `check_budget`/`record_call` primitive — not enumerated above
+  since this entry was filed from `maps_proxy.py`'s perspective, but the same race applies
+  here. R8 additionally introduces a related but distinct risk on the same call site: two
+  concurrent requests for the *same* coordinates that both miss the new fare-estimate cache
+  can each independently pass `check_budget()` before either calls `record_call()` — a
+  cache-stampede duplicate spend, not a double-charge to any rider (both calls return the same
+  correct distance). `spinr-money-auditor`'s R8 review confirmed this is cost-only, not a
+  billing-correctness risk, and accepted it as tracked here rather than requiring an in-flight
+  request lock before R8 could ship. Any eventual fix for this entry's atomic-counter suggestion
+  should account for `_shared.py`'s call site too, not just `maps_proxy.py`'s four.
 
 ### C105. `GET /maps/directions` proxy has no result cache, unlike its sibling live-route endpoint — acceptable for dark-launch, should close before broad rollout
 - [ ] **Status:** OPEN — found, not fixed. Explicitly flagged by the reviewer as acceptable to

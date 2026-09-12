@@ -25463,7 +25463,27 @@ how much they de-risk a public launch._
   ROADMAP.md` (R14).
 
 ### C104. `maps_budget.py`'s daily-spend circuit breaker is a non-atomic check-then-increment — a request burst can overshoot the cap before it trips
-- [ ] **Status:** OPEN — found, not fixed. Out of scope for the change that surfaced it.
+- [~] **Status:** PARTIALLY CLOSED (2026-09-12) — the atomic primitive
+  (`reserve_budget()`, a Lua script run via `redis_eval()`) now exists in
+  `backend/utils/maps_budget.py` and is proven on the highest-volume call
+  site: `backend/routes/rides/_shared.py`'s `_fetch_directions_route`
+  (R2/R8's fare-estimate Directions call) now uses it instead of the old
+  `check_budget()`+`record_call()` pair. See
+  `docs/change-log/2026-09-12-atomic-budget-reserve-c104.md` for the full
+  writeup, including the disclosed reserve-before-call timing change and
+  what was NOT verified (no real-Redis atomicity proof — this repo's unit
+  tests have no real Redis to run the Lua script against).
+  **Remaining, tracked as a clean follow-up:** the other 8 call sites still
+  use the old non-atomic pair and are NOT yet migrated —
+  `backend/routes/maps_proxy.py`'s 4 endpoints (autocomplete, details,
+  reverse-geocode, directions), `backend/ai/tools_booking.py`'s 3 sites, and
+  `backend/utils/maps_eta.py`'s R4 Distance Matrix fallback. The primitive
+  already exists — each remaining site just needs its
+  `check_budget()`/`record_call()` pair swapped for one `reserve_budget(sku)`
+  call, the same one-line-per-site change made to `_shared.py`. Deliberately
+  not done in the same change per CLAUDE.md's task-decomposition guidance
+  (would have exceeded 5 files in one commit) — a future session/PR should
+  pick this up mechanically, file-by-file, each its own small commit.
 - **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
   `docs/change-log/2026-09-12-directions-proxy-r7.md`).

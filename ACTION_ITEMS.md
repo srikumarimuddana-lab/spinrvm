@@ -1070,6 +1070,27 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
       table-wide). Doesn't by itself prove old-app data is blended in —
       needs Spinr's confirmed launch/dual-run-start date to compare
       against, which isn't recorded in this file.
+      - **2026-09-12 — launch-date comparison run, resolved.** Spinr's
+        confirmed launch date (2026-03-30, already recorded elsewhere in
+        this file as the SIN-purge grace-period anchor) compared directly
+        against `driver_stripe_ledger` via a live read-only query against
+        production (`spinrmobileapp`, confirmed reachable this session):
+        `SELECT min(created_at), count(*), count(*) FILTER (WHERE
+        created_at < '2026-03-30'), count(DISTINCT stripe_account_id) FROM
+        driver_stripe_ledger` → earliest row `2026-04-21 13:16:31+00`,
+        **0 of 357 rows predate launch**, 50 distinct Stripe accounts.
+        **Finding: the mirror table itself contains no pre-launch old-app
+        transaction rows** — whatever "blended" means at the Stripe-account
+        level (already confirmed 2026-09-07: yes, blended), the *mirror
+        table* only starts capturing 22 days after launch, so it cannot be
+        the source of any pre-launch contamination in the $185.31–$228.08
+        reconciliation. Reframes rather than raises a new risk: those first
+        22 post-launch days (2026-03-30 to 2026-04-21) have **zero mirror
+        coverage** — any real driver payout activity in that window
+        wouldn't show up in this reconciliation at all, a coverage gap
+        distinct from the contamination question this thread originally
+        asked. Not investigated further here (out of scope for a
+        launch-date comparison); flag for whoever next touches this item.
   - **2026-09-10 — closed the "broader pre-launch question" from the
     migration-approach doc's Phase 6 (raised 2026-08-30, "not yet done as
     of this edit") for drivers/riders/rides, via live read-only queries

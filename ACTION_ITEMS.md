@@ -25484,6 +25484,16 @@ how much they de-risk a public launch._
   not done in the same change per CLAUDE.md's task-decomposition guidance
   (would have exceeded 5 files in one commit) — a future session/PR should
   pick this up mechanically, file-by-file, each its own small commit.
+  **Practical scope, precisely (per the fix's own follow-up adversarial
+  review):** 3 of these 8 remaining sites (`route_distance.py`'s
+  live-route/OSRM-fallback path, `maps_proxy.py`'s own Directions proxy,
+  `tools_booking.py`'s AI tool) write the exact same shared `"directions"`
+  Redis key `reserve_budget()` now reads atomically. A request burst through
+  any of those unmigrated sites still reproduces this item's original
+  failure mode against the same shared daily total — "closes C104" should be
+  read as "closes it for the one migrated caller's own reservation," not as
+  "the breaker's overall burst-safety is now closed." That only happens once
+  the remaining 8 sites are migrated too.
 - **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
   `docs/change-log/2026-09-12-directions-proxy-r7.md`).

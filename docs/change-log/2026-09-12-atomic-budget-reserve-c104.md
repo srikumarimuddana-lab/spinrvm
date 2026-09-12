@@ -196,3 +196,58 @@ gating call, invisible to every consumer of `_fetch_directions_route`.
 - **The remaining 8 call sites' migration** — deliberately out of scope for
   this change (see §3); tracked as a named follow-up in `ACTION_ITEMS.md` C104
   rather than silently left unaddressed.
+
+## Post-review addendum (2026-09-12)
+
+`spinr-performance-sla-reviewer`'s adversarial pass (CLAUDE.md gate #10)
+found two real issues, both fixed here before this landed:
+
+1. **Fallback latency cascade (fixed).** `reserve_budget()`'s generic
+   `except Exception` branch (Redis *configured but failing* — a network
+   blip or timeout, not simply unset) originally fell through to
+   `check_budget()` + `record_call()`, chaining up to 3 sequential Redis
+   round-trips onto a connection that had just failed. `backend/utils/redis_client.py`
+   sets no socket timeout, and `backend/routes/rides/booking.py`'s no-token
+   safety net awaits `_fetch_directions_route` inline with no timeout wrapper
+   of its own (unlike `estimates.py`'s bounded `asyncio.wait`), so a
+   degraded-but-not-instantly-refused Redis connection could hang this path
+   well past any latency budget. Fixed: the generic-`Exception` branch now
+   returns the permissive default (`True, 0.0, budget`) directly, with one
+   warning log — no further Redis calls. The `RuntimeError` branch (Redis
+   *unconfigured*) is unchanged and stays chained to `check_budget()`/
+   `record_call()`, since that path's fallback calls hit the fast in-process
+   dict, not a struggling network connection, so there is no cascade risk to
+   fix there.
+2. **Scope claim overstated (corrected here, in this addendum).** "Closes
+   C104's race on this call site" is accurate but should be read narrowly:
+   the reviewer confirmed the Lua script itself is correct and, for the one
+   migrated caller, stronger than documented (an *allowed* reservation can
+   never leave the persisted total over budget at all, not just "at most one
+   call's worth" of overshoot). But 3 of the 8 still-non-atomic call sites
+   (`route_distance.py`'s live-route/OSRM-fallback path, `maps_proxy.py`'s
+   own Directions proxy, `tools_booking.py`'s AI tool) write the exact same
+   shared `"directions"` Redis key this fix reads. A burst through any of
+   those unmigrated sites still reproduces C104's named failure mode against
+   the same shared daily total. This fix closes the race for this one
+   caller's own reservation; it does not close the breaker's overall
+   burst-safety until the remaining call sites are migrated too (tracked in
+   `ACTION_ITEMS.md` C104's follow-up note).
+
+Also confirmed by the same review, no code change needed: the R8 fare-estimate
+cache and `booking.py`'s no-token safety net both call the identical
+`_fetch_directions_route`, so both get the same atomic protection and the
+same disclosed reserve-before-call trade-off consistently — no divergent
+behavior between the two callers. A minor Lua edge case (the very first
+reservation of a UTC day, if itself over budget, leaves a harmless
+zero-valued key with a live TTL) and a latent non-clustered-Redis assumption
+(`_key()` builds unrelated key names with no hash-tag, so this would need
+`{...}` tagging if this repo ever moved to Redis Cluster) were both noted as
+informational, not requiring action now.
+
+Test coverage was also strengthened per the review: added price-value and
+TTL-argument assertions to `test_script_args_use_the_right_sku_index_and_key_order`
+(previously only checked keys and the incr-index), and replaced
+`test_falls_back_on_any_other_redis_eval_error_too` with
+`test_generic_redis_eval_error_fails_open_without_further_redis_calls`,
+which asserts `check_budget`/`record_call` are **not** called on this path —
+pinning fix #1 above.

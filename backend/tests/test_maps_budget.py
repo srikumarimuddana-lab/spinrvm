@@ -140,7 +140,10 @@ class TestReserveBudget:
         assert numkeys == len(skus)
         assert list(rest[: len(skus)]) == expected_keys
         prices_and_tail = rest[len(skus) :]
+        expected_prices = [str(price) for _sku, price in skus]
+        assert list(prices_and_tail[: len(skus)]) == expected_prices
         assert prices_and_tail[-3] == str(expected_incr_idx)
+        assert prices_and_tail[-1] == str(mb._BUCKET_TTL_SECONDS)
         assert prices_and_tail[-2] == "5.0"
 
     @pytest.mark.asyncio
@@ -175,18 +178,25 @@ class TestReserveBudget:
         record_mock.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_falls_back_on_any_other_redis_eval_error_too(self):
-        """A configured-but-unavailable Redis (redis_eval's other error
-        path) must fail open the same way as the unconfigured case, not
-        propagate and 500 the caller."""
-        check_mock = AsyncMock(return_value=(True, 0.5, 5.0))
+    async def test_generic_redis_eval_error_fails_open_without_further_redis_calls(self):
+        """A configured-but-failing Redis (redis_eval's other error path —
+        the realistic degraded-connection case, not simply unset) must fail
+        open immediately, WITHOUT chaining check_budget()'s mget + a
+        potential record_call()'s incr onto a connection that just failed —
+        spinr-performance-sla-reviewer's C104 follow-up review found the
+        original fallback-to-check-and-record here could stack up to 3
+        sequential un-timeboxed Redis round-trips on booking.py's inline
+        (no-timeout) caller. Must return the permissive default directly."""
+        check_mock = AsyncMock()
         record_mock = AsyncMock()
         with (
             patch.object(mb, "redis_eval", AsyncMock(side_effect=Exception("connection reset"))),
+            patch.object(mb, "_daily_budget_usd", return_value=5.0),
             patch.object(mb, "check_budget", check_mock),
             patch.object(mb, "record_call", record_mock),
         ):
             allowed, spent, budget = await mb.reserve_budget("directions")
 
-        assert (allowed, spent, budget) == (True, 0.5, 5.0)
-        record_mock.assert_awaited_once_with("directions")
+        assert (allowed, spent, budget) == (True, 0.0, 5.0)
+        check_mock.assert_not_called()
+        record_mock.assert_not_called()

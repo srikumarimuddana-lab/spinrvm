@@ -345,13 +345,26 @@ async def reserve_budget(sku: Sku) -> tuple[bool, float, float]:
         allowed_flag, total_str = raw_result
         return bool(int(allowed_flag)), float(total_str), budget
     except RuntimeError:
+        # No REDIS_URL configured: check_budget()/record_call() hit the same
+        # in-process dict fallback redis_eval() itself has no equivalent
+        # for, so this is two fast, non-network calls — safe to chain.
         allowed, spent, budget = await check_budget()
         if allowed:
             await record_call(sku)
         return allowed, spent, budget
     except Exception:
-        logger.warning("[maps_budget] reserve_budget(%s) failed; falling back to permissive check", sku, exc_info=False)
-        allowed, spent, budget = await check_budget()
-        if allowed:
-            await record_call(sku)
-        return allowed, spent, budget
+        # Redis is *configured* but this call failed (network blip, timeout,
+        # connection error) — unlike the RuntimeError branch above, falling
+        # through to check_budget()+record_call() here would chain two more
+        # real network round-trips onto a connection that just failed, with
+        # no timeout budget of its own (spinr-performance-sla-reviewer,
+        # C104 follow-up review: this call site's own caller,
+        # routes/rides/booking.py's no-token safety net, awaits this inline
+        # with no timeout wrapper, unlike estimates.py's bounded
+        # asyncio.wait). Fail open immediately instead — one warning log,
+        # no further Redis calls — matching this module's documented
+        # "errors fail open" contract without the added latency risk.
+        logger.warning(
+            "[maps_budget] reserve_budget(%s) failed; failing open without further Redis calls", sku, exc_info=False
+        )
+        return True, 0.0, budget

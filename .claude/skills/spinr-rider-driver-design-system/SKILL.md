@@ -29,6 +29,27 @@ should read warmer and more energetic than admin-dashboard's restraint —
 don't import Quiet Console's "most of the screen should be neutral" premise
 into judgments about these two surfaces.
 
+## Minimalism as the shared cross-app principle (decided 2026-09-12)
+
+Decided 2026-09-12 (user decision). "Minimalism" is the shared design
+principle across all three Spinr surfaces — but as a **discipline**, not a
+literal shared look. For rider-app/driver-app that discipline means: no
+unrelated elements competing for attention, consistent spacing/type/token
+usage, and no decoration that isn't carrying information. It does **not**
+mean adopting Quiet Console's calmer palette or lower motion budget — the
+"warmer than admin-dashboard" direction above and the rider-vs-driver tone
+split are unchanged and remain authoritative.
+
+For driver-app specifically, apply minimalism as *reduced chrome, not
+reduced signal*: strip non-essential elements aggressively everywhere so
+that the essential ones stand out more, not less. The three real-time/safety
+elements named below (`DriverIdlePanel`'s GO/STOP toggle, `CarMarker`'s live
+position animation, `RideOfferPanel`'s countdown) are a **permanent carve-out**
+from any decluttering pass — their visual weight and motion are the signal
+minimalism is supposed to protect, not noise it should remove. Never propose
+dimming, flattening, or "calming down" these three regardless of a general
+minimalism push elsewhere in the app.
+
 ## Rider-app vs. driver-app: related, not identical
 
 Decided 2026-09-10 (user decision). The two apps are **not** meant to share

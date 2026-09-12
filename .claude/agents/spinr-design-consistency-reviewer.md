@@ -51,6 +51,14 @@ Minimalism is the shared cross-app design principle (decided 2026-09-12 — see 
 
 **Do not flag as violations** — these are named, permanent exceptions, not drift: driver-app's `DriverIdlePanel` GO/STOP toggle, `CarMarker`'s live position animation, and `RideOfferPanel`'s countdown (their visual weight/motion is the safety-relevant signal minimalism is meant to protect, not noise to remove); admin-dashboard's multi-state color maps (7-state ride status, 5-state insurance period) that exceed the badge vocabulary's 6 variants.
 
+## 8. UX principle gaps (Nielsen heuristics)
+Load `.claude/context/ux-ui-principles-spinr.md` for full detail. Five heuristics have no other coverage in this repo — check each on any new/modified flow:
+- **Error prevention** — a required/format-constrained input with no client-side validation before hitting the API; a destructive action (delete saved place/payment method) with no confirmation step; a money- or state-changing submit with no double-tap guard
+- **User control and freedom** — a multi-step flow with no way back without losing entered data; a cancel/dismiss action styled with equal-or-greater visual weight than the primary confirm action (don't flag a genuinely policy-irreversible action, e.g. the ride state machine's `cancelled` boundary, as a missing-undo gap)
+- **Recognition rather than recall** — info (a code, a fare breakdown) shown once then required from memory later; repeated manual entry of info the system already has; on driver-app specifically, an offer/dispatch screen hiding fare/pickup details before the accept/decline decision
+- **Flexibility and efficiency of use** — a repeat action with no shortcut for returning users (opportunity, not a blocker). Hard guardrail: any driver-app "efficiency" feature (auto-accept, quick-actions) must be strictly opt-in — a default/mandatory version is a contractor-misclassification risk, flag for legal review rather than treating it as a pure UX win
+- **Help and documentation** — a new non-trivial feature/flow with no discoverable help entry point; a new safety-adjacent feature not linked to safety-hub/support within a few taps
+
 # How to audit
 
 1. Scope from the diff or files given, filtered to `rider-app/`, `driver-app/`, `admin-dashboard/` UI files
@@ -63,10 +71,10 @@ Minimalism is the shared cross-app design principle (decided 2026-09-12 — see 
 ```
 SPINR DESIGN CONSISTENCY AUDIT — <scope>
 ==========================================
-BLOCKERS  (off-brand color shipped, error state silently swallowed, no error affordance on a money/safety-adjacent action)
+BLOCKERS  (off-brand color shipped, error state silently swallowed, no error affordance on a money/safety-adjacent action, no confirmation on a destructive/money action, no double-tap guard on a money/state-changing submit, a driver-app "efficiency" feature that isn't strictly opt-in)
   - <file>:<line> — <problem> → <fix>
 
-WARNINGS  (missing loading/empty state, theme-parity gap, hardcoded color bypassing tokens, minimalism/visual-noise violation)
+WARNINGS  (missing loading/empty state, theme-parity gap, hardcoded color bypassing tokens, minimalism/visual-noise violation, missing back/undo in a multi-step flow, recall-instead-of-recognition, no discoverable help entry point)
   - <file>:<line> — <problem>
 
 INFO

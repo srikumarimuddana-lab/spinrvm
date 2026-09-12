@@ -537,7 +537,24 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             // back toward wherever the car used to be — re-seed at the raw
             // (unsmoothed) fix instead.
             smoothingStateRef.current = null;
-            hasMovementBearingRef.current = false;
+            if (isFirstFix) {
+                // Only a genuine first-ever fix (freshly mounted, nothing to
+                // trust yet) should re-open the raw-heading fallback in
+                // selectBearing() — see hasMovementBearingRef's own doc
+                // comment above. A jump-triggered reset (shouldResetBuffer)
+                // means the OLD POSITION is stale, not that the car's
+                // established direction of travel became untrustworthy;
+                // clearing this unconditionally re-exposed the exact
+                // "reported heading is often a platform placeholder, not a
+                // real course" failure mode hasMovementBearing exists to
+                // shut out, on every reset a live vehicle goes through
+                // (offline→online remount, ride-end mapKey bump, a real
+                // background/tunnel gap) — live-testing report: the marker
+                // snapping to a wrong heading (e.g. "facing east") right
+                // after one of these resets, before the next real movement
+                // re-established a trustworthy bearing.
+                hasMovementBearingRef.current = false;
+            }
             // Reset on BOTH platforms — the ticker's next tick measures
             // "moved" distance from this, so leaving it stale (as before,
             // iOS-only) would still glide iOS from wherever it last was.
@@ -584,8 +601,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     // ── Fix ingest: every coordinate prop change lands in the playback
     // buffer. A jump past SNAP_DISTANCE_M (stale fix after backgrounding,
     // ride handoff) resets the buffer so the marker snaps once instead of
-    // gliding across the city; it also clears the movement-bearing latch,
-    // since the old direction says nothing about the new location.
+    // gliding across the city. It does NOT clear the movement-bearing latch
+    // (hasMovementBearingRef, inside ingestFix) — only a genuine first-ever
+    // fix does that. A jump means the OLD POSITION is stale, but reaching
+    // for the raw platform heading as a replacement is exactly the
+    // unreliable fallback hasMovementBearingRef exists to shut out once
+    // real movement has ever established a direction; freezing the visual
+    // bearing until movement resumes is the safer of the two guesses.
     useEffect(() => {
         const prev = prevCoordRef.current;
         const now = Date.now();

@@ -50,12 +50,23 @@ jest.mock('react-native-maps', () => {
 
 // markerPlayback is a value import CarMarker needs at runtime — stub the
 // minimal surface it calls, same as driver-app's CarMarker.test.tsx.
-jest.mock('@shared/utils/markerPlayback', () => ({
-  PLAYBACK_DELAY_MS: 300,
-  playbackPosition: jest.fn(() => null), // default: no buffered fix, ticker is a no-op
-  pushFix: jest.fn(),
-  shouldResetBuffer: () => false,
-}));
+jest.mock('@shared/utils/markerPlayback', () => {
+  // pushFix/shouldResetBuffer are the REAL implementations (cheap, pure array
+  // ops) wrapped in jest.fn() so bufferRef.current genuinely accumulates —
+  // most describe blocks below never look at that array (playbackPosition
+  // stays fully mocked, so the ticker's rendered position/bearing is always
+  // whatever a test sets it to), but the "jump-triggered reset" describe
+  // block needs isFirstFix to actually turn false after a real fix has been
+  // ingested, which a permanent no-op mock could never produce. Ported from
+  // driver-app's own CarMarker.test.tsx (2026-09-12 fix).
+  const actual = jest.requireActual('@shared/utils/markerPlayback');
+  return {
+    PLAYBACK_DELAY_MS: 300,
+    playbackPosition: jest.fn(() => null), // default: no buffered fix, ticker is a no-op
+    pushFix: jest.fn(actual.pushFix),
+    shouldResetBuffer: jest.fn(actual.shouldResetBuffer),
+  };
+});
 
 jest.mock('expo-image', () => {
   const ReactActual = require('react');
@@ -424,5 +435,90 @@ describe('CarMarker — first fix after a remount snaps instead of gliding (2026
       setValueSpy.mockRestore();
       Platform.OS = originalPlatformOS;
     }
+  });
+});
+
+/**
+ * Ported from driver-app's own copy of this component (2026-09-12 fix,
+ * live-testing report "vehicle is facing east"): hasMovementBearingRef
+ * exists so a platform-placeholder heading (Android's literal 0 for "no
+ * bearing", or any other stale/garbage value) can never override a
+ * direction the marker has already established from real movement — see
+ * selectBearing()'s own doc comment. Before this fix, ANY buffer reset
+ * (isFirstFix OR shouldResetBuffer) cleared that latch, re-opening the
+ * exact placeholder-heading window on every jump this marker goes through
+ * — including rider-app's own ride-phase screen remounts, not just a
+ * genuine first-ever mount.
+ */
+describe('CarMarker — a jump-triggered reset does not re-open the raw-heading fallback (2026-09-12, "facing east")', () => {
+  // Unlike driver-app's copy, the shared component has no onBearingChange
+  // callback — bearing is only observable through the rendered Marker's own
+  // `rotation` prop, so this test reads that instead (Android path: a plain
+  // `setAndroidRotation`, immediately reflected — no per-frame tween to step
+  // through, unlike driver-app's own animateAndroidRotationTo).
+  const mockPlaybackPosition = playbackPosition as jest.Mock;
+  const originalPlatformOS = Platform.OS;
+  const mountCoord = { latitude: 50.4452, longitude: -104.6189 };
+  // ~89m due north — clears MIN_BEARING_MOVE_M so the first tick selects a
+  // real 'travel' bearing and sets hasMovementBearingRef true.
+  const drivingNorthTo = { latitude: 50.446, longitude: -104.6189 };
+  // ~800m away — comfortably past SNAP_DISTANCE_M(500), so shouldResetBuffer
+  // (now the REAL implementation — see the module mock above) returns true.
+  const jumpTarget = { latitude: mountCoord.latitude + 0.0072, longitude: mountCoord.longitude };
+  const BASE = 1_700_000_000_000;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(BASE);
+    Platform.OS = 'android';
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    Platform.OS = originalPlatformOS;
+    mockPlaybackPosition.mockReturnValue(null);
+  });
+
+  it('freezes the bearing instead of trusting a raw heading right after the jump, once movement had already established one', () => {
+    mockPlaybackPosition.mockReturnValue({
+      coordinate: drivingNorthTo,
+      bearing: 0, // due north — a clean, distinct value from the "wrong" 90 below
+      mode: 'interpolating',
+    });
+    const { UNSAFE_root, rerender, unmount } = render(
+      <CarMarker coordinate={mountCoord} heading={0} fixTimestampMs={BASE} />,
+    );
+
+    // Establish a real movement bearing (source: 'travel') — hasMovementBearingRef
+    // is now true.
+    act(() => { jest.advanceTimersByTime(500); });
+    expect(UNSAFE_root.findByType(Marker).props.rotation).toBe(0);
+
+    // A real, plausible jump (~800m in 25s ≈ 32 m/s — under MAX_PLAUSIBLE_SPEED_MPS,
+    // so isImplausibleJump does not reject it), arriving with a "wrong" raw
+    // heading of 90 (east) — exactly the live-testing report's symptom.
+    jest.setSystemTime(BASE + 25_000);
+    mockPlaybackPosition.mockReturnValue({
+      // ~1.1m from the reset anchor (jumpTarget, which the reset sets as
+      // prevTargetRef.current): far enough to clear the ticker's 0.5m
+      // "parked, skip churn" guard (which would return before ever calling
+      // selectBearing, making this test pass vacuously either way) but well
+      // under MIN_BEARING_MOVE_M(3), so selectBearing takes the "under
+      // threshold" branch that falls back to the raw reported heading.
+      coordinate: { latitude: jumpTarget.latitude + 0.00001, longitude: jumpTarget.longitude },
+      bearing: null,
+      mode: 'waiting', // not interpolating/extrapolating — no playback-spline override
+    });
+    rerender(<CarMarker coordinate={jumpTarget} heading={90} fixTimestampMs={BASE + 25_000} />);
+    act(() => { jest.advanceTimersByTime(500); });
+
+    // Before this fix: the reset cleared hasMovementBearingRef, so the raw
+    // heading (90) would win and setAndroidRotation(90) would fire. After
+    // this fix: hasMovementBearingRef survives a non-first-fix reset, so
+    // selectBearing returns {bearing: null, source: 'none'} and the ticker
+    // applies nothing this tick — the icon stays frozen at its last known
+    // (north) rotation instead of snapping to a placeholder-adjacent guess.
+    expect(UNSAFE_root.findByType(Marker).props.rotation).toBe(0);
+
+    unmount();
   });
 });

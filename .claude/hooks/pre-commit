@@ -23,7 +23,7 @@ echo -e "${BLUE}spinr pre-commit security check...${NC}"
 BLOCKED=0
 
 # 1. Gitleaks (entropy + pattern based, if installed)
-echo "1/10 Running gitleaks (if installed)..."
+echo "1/11 Running gitleaks (if installed)..."
 if command -v gitleaks >/dev/null 2>&1; then
   if ! gitleaks protect --staged --config .gitleaks.toml --redact; then
     echo -e "${RED}  BLOCKED — gitleaks found a likely secret${NC}"
@@ -34,7 +34,7 @@ else
 fi
 
 # 2. Secrets (pattern fallback — catches common cases even without gitleaks)
-echo "2/10 Scanning for secrets (pattern fallback)..."
+echo "2/11 Scanning for secrets (pattern fallback)..."
 PATTERNS=(
   "sk_live_[a-zA-Z0-9]+"
   "pk_live_[a-zA-Z0-9]+"
@@ -65,7 +65,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 3. Forbidden files
-echo "3/10 Checking forbidden files..."
+echo "3/11 Checking forbidden files..."
 FORBIDDEN=(".env" ".env.local" ".env.production" ".env.staging" "*.pem" "*.key" "serviceAccountKey.json")
 FOUND=0
 for f in "${FORBIDDEN[@]}"; do
@@ -78,7 +78,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 4. PII in logs
-echo "4/10 Checking for PII in logs..."
+echo "4/11 Checking for PII in logs..."
 PII_PATTERNS=(
   "print.*lat.*lng"
   "print.*latitude"
@@ -98,7 +98,7 @@ done
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 
 # 5. Branch protection
-echo "5/10 Checking branch..."
+echo "5/11 Checking branch..."
 BRANCH=$(git branch --show-current)
 if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
   echo -e "${RED}  BLOCKED — direct commits to $BRANCH not allowed${NC}"
@@ -110,7 +110,7 @@ else
 fi
 
 # 6. Float money check
-echo "6/10 Checking money arithmetic..."
+echo "6/11 Checking money arithmetic..."
 FLOAT=$(git diff --cached -U0 -- '*.py' '*.ts' | grep "^+" | grep -iE "(fare|price|amount|earning|payout)\s*[+\-\*\/]\s*[0-9]*\.[0-9]+" 2>/dev/null)
 if [ -n "$FLOAT" ]; then
   echo -e "${YELLOW}  WARNING — possible float money arithmetic. Use Decimal or integer cents.${NC}"
@@ -119,7 +119,7 @@ else
 fi
 
 # 7. Python lint (staged backend/*.py — folded in from .husky/pre-commit)
-echo "7/10 Running ruff (staged backend/*.py)..."
+echo "7/11 Running ruff (staged backend/*.py)..."
 STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '^backend/.*\.py$' || true)
 if [ -n "$STAGED_PY" ]; then
   if command -v ruff >/dev/null 2>&1; then
@@ -138,7 +138,7 @@ else
 fi
 
 # 8. TypeScript lint (staged admin-dashboard/src — folded in from .husky/pre-commit)
-echo "8/10 Running eslint (staged admin-dashboard/src)..."
+echo "8/11 Running eslint (staged admin-dashboard/src)..."
 STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep '^admin-dashboard/src/.*\.\(ts\|tsx\)$' || true)
 if [ -n "$STAGED_TS" ]; then
   # shellcheck disable=SC2001  # per-line ^-anchored strip; a bash-native
@@ -160,7 +160,7 @@ fi
 # Warning-only: reports backtick-quoted paths that look like repo files/dirs
 # but don't exist on disk. Never blocks a commit while in this mode.
 # TODO(2026-09-01): flip to blocking (exit 1) once the warning backlog is clear.
-echo "9/10 Checking doc-cited file paths (warning only)..."
+echo "9/11 Checking doc-cited file paths (warning only)..."
 DOC_PATH_TMP=$(mktemp 2>/dev/null)
 check_doc_paths() {
   set -e
@@ -214,7 +214,7 @@ rm -f "$DOC_PATH_TMP"
 # ci-guardrails.yml's own Change Impact Log check verifies), so this can only
 # nudge: flag a staged file that looks shared and hasn't been paired with a
 # new docs/change-log/ entry in the same commit, never block on it.
-echo "10/10 Checking shared-component Change Impact Log reminder (warning only)..."
+echo "10/11 Checking shared-component Change Impact Log reminder (warning only)..."
 SHARED_DIRS='^(admin-dashboard/src/components/|rider-app/components/|driver-app/components/|shared/)'
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
 STAGED_SHARED=$(printf '%s\n' "$STAGED_FILES" | grep -E "$SHARED_DIRS" | grep -viE '__tests__|\.(test|spec)\.' 2>/dev/null)
@@ -241,6 +241,40 @@ if [ -n "$STAGED_SHARED" ]; then
 fi
 [ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
 [ $FOUND -eq 1 ] && echo -e "${YELLOW}  (warning-only — not blocking commit; the real gate is ci-guardrails.yml's Change Impact Log check on the PR)${NC}"
+
+# 11. Known-fork one-sided-change reminder (warning only)
+# docs/known-forks.md tracks file pairs that are intentionally duplicated
+# (e.g. shared/components/CarMarker.tsx <-> driver-app/components/CarMarker.tsx).
+# The 2026-09-12 ride-experience audit found fixes had been ported one-way by
+# hand five times with nothing catching a missed port — one of those misses
+# left a live-tested rider-facing bug unfixed for a full day. This can only
+# nudge (a fork registry entry doesn't know whether a given change actually
+# needs porting), never block.
+echo "11/11 Checking known-fork registry (warning only)..."
+FOUND=0
+if [ -f docs/known-forks.md ]; then
+  STAGED_FILES=${STAGED_FILES:-$(git diff --cached --name-only --diff-filter=ACM)}
+  # Pull "File A | File B" pairs out of the registry table (skip header/separator rows).
+  PAIRS=$(grep -oE '^\| `[^`]+` \| `[^`]+` \|' docs/known-forks.md 2>/dev/null | sed -E 's/^\| `([^`]+)` \| `([^`]+)` \|/\1\t\2/')
+  if [ -n "$PAIRS" ]; then
+    while IFS=$'\t' read -r fileA fileB; do
+      [ -z "$fileA" ] && continue
+      hasA=$(printf '%s\n' "$STAGED_FILES" | grep -Fxc "$fileA")
+      hasB=$(printf '%s\n' "$STAGED_FILES" | grep -Fxc "$fileB")
+      if [ "$hasA" -gt 0 ] && [ "$hasB" -eq 0 ]; then
+        echo -e "${YELLOW}  WARN — $fileA is staged but its tracked fork $fileB is not. Check docs/known-forks.md — does this change need porting to the sibling too?${NC}"
+        FOUND=1
+      elif [ "$hasB" -gt 0 ] && [ "$hasA" -eq 0 ]; then
+        echo -e "${YELLOW}  WARN — $fileB is staged but its tracked fork $fileA is not. Check docs/known-forks.md — does this change need porting to the sibling too?${NC}"
+        FOUND=1
+      fi
+    done <<< "$PAIRS"
+  fi
+else
+  echo -e "${YELLOW}  ⚠ docs/known-forks.md not found — skipping${NC}"
+fi
+[ $FOUND -eq 0 ] && echo -e "${GREEN}  ✅ Clean${NC}"
+[ $FOUND -eq 1 ] && echo -e "${YELLOW}  (warning-only — not blocking commit; use judgment on whether this specific change applies to the sibling)${NC}"
 
 echo ""
 if [ $BLOCKED -eq 1 ]; then

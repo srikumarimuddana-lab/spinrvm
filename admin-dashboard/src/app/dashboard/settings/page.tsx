@@ -1202,6 +1202,23 @@ export default function SettingsPage() {
                                     onCheckedChange={(v) => update("corporate_billing_enabled", v)}
                                 />
                             </div>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <Label htmlFor="stale-ride-alert-enabled">Stale in-progress ride alert</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Pauses the alert for an in-progress ride whose driver hasn&apos;t reported a
+                                        location in 10+ minutes (a likely abandoned/force-killed app). Alert-only —
+                                        never touches ride state or insurance periods either way; flip off only to
+                                        silence alert noise.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="stale-ride-alert-enabled"
+                                    aria-label="Stale in-progress ride alert enabled"
+                                    checked={settings.stale_in_progress_ride_alert_enabled !== false}
+                                    onCheckedChange={(v) => update("stale_in_progress_ride_alert_enabled", v)}
+                                />
+                            </div>
                         </CardContent>
                     </Card>
 

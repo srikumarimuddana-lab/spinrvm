@@ -25354,6 +25354,34 @@ how much they de-risk a public launch._
   interface and fails on any undeclared prop divergence, closing the "sixth gap recurs silently"
   risk this line used to describe as open. See `docs/known-forks.md`'s registry row.
 
+### C102. Receipt PDF/HTML generator (`utils/receipt_pdf.py` + `utils/email_receipt.py`) never renders a discount/promo line, unlike the JSON receipt endpoint
+
+- [ ] **Status:** OPEN — found, not fixed, deliberately out of scope for the change that surfaced it.
+- **Found by:** `spinr-money-auditor`'s adversarial review of the R9 receipt-PDF-reconciliation
+  change (`docs/audit/ride-experience/ROADMAP.md` R9,
+  `docs/change-log/2026-09-12-receipt-pdf-reconciliation.md`).
+- **What's wrong:** `receipt_pdf.py`'s `_fare_lines` and `email_receipt.py`'s `_build_fare_rows`
+  (shared by the emailed-receipt PDF and, as of R9, the new `GET /rides/{id}/receipt.pdf`
+  rider-facing download) never append a `Promo (...)`/`Promo discount` negative line when
+  `discount_amount > 0`. `backend/routes/rides/_shared.py::_build_fare_breakdown` — used by the
+  JSON receipt endpoint (`GET /rides/{id}/receipt`, the in-app receipt screen) — already does
+  this correctly. The PDF's total still reconciles to what was actually charged (the discount is
+  baked into `grand_total`), so this is a line-item-transparency gap, not a money-correctness or
+  overcharge bug: CLAUDE.md's "every charge maps to a disclosed line item" principle is about
+  disclosed *charges*, and a discount is the one line type this generator omits.
+- **Why not fixed as part of R9:** R9's stated scope was "make the app fetch the existing
+  generator's bytes instead of building its own" (generator parity, not generator correctness).
+  This gap pre-dates R9 entirely — the deleted client-side `buildReceiptHtml` didn't render a
+  discount line either, so R9 didn't regress anything — but R9 does make the gap directly
+  rider-triggerable on demand (`GET /rides/{id}/receipt.pdf`) rather than only reachable via an
+  emailed attachment nobody re-triggers, which is why the auditor flagged it now rather than it
+  staying unnoticed indefinitely.
+- **Suggested fix:** add the same discount-line logic `_build_fare_breakdown` already has to
+  `_fare_lines`/`_build_fare_rows` (or better, have both read from one shared line-builder so a
+  future fare-line type doesn't have to be added in three places — but that refactor is a
+  separate, larger change from this one-line fix and should be scoped on its own merits, not
+  bundled here).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

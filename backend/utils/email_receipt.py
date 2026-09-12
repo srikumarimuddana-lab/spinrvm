@@ -667,9 +667,19 @@ async def build_receipt_pdf_bytes(ride: dict, rider: dict, driver: dict = None, 
     Deliberately independent of :func:`send_receipt_email_result` rather than
     a shared internal call — that function's own snapshot/company resolution
     stays untouched so this addition carries zero risk to the existing,
-    already-shipped email-receipt flow. The Decimal-money and PIPEDA (no
-    driver phone/plate) invariants documented in ``receipt_pdf.py`` apply
-    here unchanged, since it is the exact same generator.
+    already-shipped email-receipt flow (routing through this helper there
+    would double the route-snapshot DB poll and image fetch per email). The
+    Decimal-money and PIPEDA (no driver phone/plate) invariants documented in
+    ``receipt_pdf.py`` apply here unchanged, since it is the exact same
+    generator.
+
+    KEEP THIS SETUP SEQUENCE IN SYNC with :func:`send_receipt_email_result`'s
+    own inline ``_await_route_receipt_projection`` →
+    ``_route_snapshot_presentation`` → ``_download_route_snapshot`` →
+    ``_branded_company`` steps below — the two call sites duplicate this
+    orchestration on purpose (see above), so a step added/reordered in one
+    must be mirrored in the other or the emailed and downloaded PDFs can
+    silently diverge.
     """
     ride = await _await_route_receipt_projection(ride)
     snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
@@ -706,6 +716,12 @@ async def send_receipt_email_result(
     ``recipient_email`` overrides the destination address (admin "send to a
     different email"). When omitted, the receipt goes to the rider on file.
     The receipt body still reflects the rider — only the To: address changes.
+
+    KEEP THIS SETUP SEQUENCE IN SYNC with :func:`build_receipt_pdf_bytes`'s
+    own ``_await_route_receipt_projection`` → ``_route_snapshot_presentation``
+    → ``_download_route_snapshot`` → ``_branded_company`` steps — see that
+    function's docstring for why the two call sites duplicate this
+    orchestration instead of sharing it.
     """
     ride = await _await_route_receipt_projection(ride)
     email = (recipient_email or rider.get("email") or "").strip()

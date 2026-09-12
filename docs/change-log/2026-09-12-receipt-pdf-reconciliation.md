@@ -77,21 +77,38 @@ implementation.
   `rider-app/package.json`. Because it already ships as part of every Expo SDK 57 native build
   today, this is not a new native module requiring an EAS rebuild before it works — it is
   already compiled into the currently-shipped binary.
-- **Adversarial post-implementation review findings, fixed before this commit's follow-up:**
-  `spinr-security-auditor` found the new endpoint had no dedicated rate limit — the sibling
-  JSON receipt endpoint (`get_ride_receipt`) also has none, but this endpoint's actual cost is
-  materially higher (an outbound route-snapshot HTTP fetch plus a synchronous PDF render per
-  call), so the loose IP-keyed global default (`100/minute`, `1000/hour`) was too permissive
-  for its resource profile. Fixed by adding `@ride_read_limit` (`120/minute`, per-user keyed —
-  the same limiter `get_ride`/`get_ride_history` already use), verified against
-  `tests/test_rate_limit_decorator_order.py` (which specifically catches the "decorator applied
-  above `@router.get`, silently never runs" failure mode this repo has hit before) before this
-  commit. `spinr-money-auditor`'s review (in progress in parallel, results pending) covers
-  receipt-correctness/PII; no blocking findings from the security pass otherwise — see that
-  review's INFO-level notes on `ride_code`'s header-injection surface (confirmed non-exploitable
-  today: server-generated from a fixed alphanumeric alphabet, verified by grepping every write
-  site) and the pre-existing 404-vs-403 existence-disclosure pattern this endpoint inherits
-  unchanged from its sibling.
+- **Adversarial post-implementation review findings:**
+  - `spinr-security-auditor`: no blockers. Found the new endpoint had no dedicated rate limit —
+    the sibling JSON receipt endpoint (`get_ride_receipt`) also has none, but this endpoint's
+    actual cost is materially higher (an outbound route-snapshot HTTP fetch plus a synchronous
+    PDF render per call), so the loose IP-keyed global default (`100/minute`, `1000/hour`) was
+    too permissive for its resource profile. **Fixed** by adding `@ride_read_limit`
+    (`120/minute`, per-user keyed — the same limiter `get_ride`/`get_ride_history` already use),
+    verified against `tests/test_rate_limit_decorator_order.py` (which specifically catches the
+    "decorator applied above `@router.get`, silently never runs" failure mode this repo has hit
+    before). Also noted, non-blocking: `ride_code`'s header-injection surface (confirmed
+    non-exploitable today — server-generated from a fixed alphanumeric alphabet, verified by
+    grepping every write site) and the pre-existing 404-vs-403 existence-disclosure pattern this
+    endpoint inherits unchanged from its sibling.
+  - `spinr-money-auditor`: **"SAFE TO MERGE"**, no blockers. Verified the Decimal/tip handling,
+    the fare-lock/snapshot consistency between this endpoint and the already-shipped emailed-PDF
+    path, and the PII scope of the driver hydration — all confirmed consistent with what already
+    ships today, not new risk. Two non-blocking findings, both filed rather than fixed inline
+    (out of this change's stated scope — see each item):
+    - The shared PDF/HTML generator (`receipt_pdf.py`/`email_receipt.py`) never renders a
+      discount/promo line, unlike the JSON receipt endpoint's `_build_fare_breakdown`. This is
+      **pre-existing** (the deleted client-side `buildReceiptHtml` didn't render one either — R9
+      doesn't regress this), but R9 does make the gap directly rider-triggerable on demand for
+      the first time. Filed as `ACTION_ITEMS.md` C102 rather than fixed here, since R9's scope
+      was generator *parity*, not generator *correctness* — a separate, reviewable fix.
+    - `build_receipt_pdf_bytes` re-runs the same 4-step route-snapshot/company setup sequence
+      `send_receipt_email_result` already runs inline, rather than the latter calling the new
+      helper — a narrower instance of the "two independent implementations" pattern R9 exists to
+      close, though deliberately so (routing the email path through the new helper would double
+      its route-snapshot DB poll and image fetch per email — see the function's own docstring).
+      Addressed with a paired "keep these two call sites' step order in sync" comment on both
+      functions rather than a structural refactor, since collapsing them for real would need to
+      solve the doubled-cost problem first — out of scope for this fix.
 - **Fare/tax correctness note (checked, not just assumed):** `get_ride_receipt_pdf` does NOT
   duplicate the JSON receipt endpoint's fare-lock/snapshot relabeling logic
   (`get_ride_receipt`'s `fare_locked`/`relabel_booked_distance_lines` branch) — it hands the raw

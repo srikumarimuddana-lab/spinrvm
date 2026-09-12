@@ -255,6 +255,7 @@ FOUND=0
 if [ -f docs/known-forks.md ]; then
   STAGED_FILES=${STAGED_FILES:-$(git diff --cached --name-only --diff-filter=ACM)}
   # Pull "File A | File B" pairs out of the registry table (skip header/separator rows).
+  # shellcheck disable=SC2016  # backticks below are literal Markdown code-span delimiters, not command substitution
   PAIRS=$(grep -oE '^\| `[^`]+` \| `[^`]+` \|' docs/known-forks.md 2>/dev/null | sed -E 's/^\| `([^`]+)` \| `([^`]+)` \|/\1\t\2/')
   if [ -n "$PAIRS" ]; then
     while IFS=$'\t' read -r fileA fileB; do

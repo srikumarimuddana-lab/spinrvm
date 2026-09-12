@@ -428,6 +428,60 @@ async def test_directions_rejects_out_of_range_coordinates(mock_redis, monkeypat
 
 
 @pytest.mark.anyio
+async def test_directions_rejects_malformed_waypoint(mock_redis, monkeypatch):
+    """`_parse_latlng` is reused for each waypoint pair -- a bad one must 400
+    the same way a bad origin/destination does, not 500 or silently drop."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    with pytest.raises(HTTPException) as exc:
+        await maps_proxy.get_directions(
+            request=_fake_request(),
+            origin="38.5,-120.2",
+            destination="43.252,-126.453",
+            waypoints="40.0,-121.0|bad-data",
+            current_user={"id": "rider_1"},
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_directions_502s_on_malformed_polyline(mock_redis, monkeypatch):
+    """decode_polyline raises ValueError on a truncated/malformed encoded
+    string -- must surface as a clean 502, not an unhandled 500."""
+    from routes import maps_proxy
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    bad_payload = {
+        "status": "OK",
+        "routes": [
+            {
+                "legs": [{"distance": {"value": 5000}, "duration": {"value": 600}}],
+                # Truncated mid-varint -- decode_polyline can't terminate cleanly.
+                "overview_polyline": {"points": "_p~iF~ps|U_ulL"},
+            }
+        ],
+    }
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(bad_payload))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(HTTPException) as exc:
+            await maps_proxy.get_directions(
+                request=_fake_request(),
+                origin="38.5,-120.2",
+                destination="43.252,-126.453",
+                waypoints=None,
+                current_user={"id": "rider_1"},
+            )
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.anyio
 async def test_directions_502s_on_non_ok_status(mock_redis, monkeypatch):
     from routes import maps_proxy
 

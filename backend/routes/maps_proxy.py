@@ -53,6 +53,7 @@ try:
     from ..utils.maps_budget import check_budget, record_call
     from ..utils.polyline import decode_polyline
     from ..utils.rate_limiter import default_limiter as limiter
+    from ..utils.rate_limiter import get_user_or_ip_key
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:  # pragma: no cover - dual import path
     import db_supabase  # type: ignore
@@ -71,6 +72,7 @@ except ImportError:  # pragma: no cover - dual import path
     from utils.maps_budget import check_budget, record_call  # type: ignore
     from utils.polyline import decode_polyline  # type: ignore
     from utils.rate_limiter import default_limiter as limiter  # type: ignore
+    from utils.rate_limiter import get_user_or_ip_key  # type: ignore
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -273,7 +275,7 @@ def _parse_latlng(raw: str, field: str) -> tuple:
 
 
 @api_router.get("/directions")
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", key_func=get_user_or_ip_key)
 async def get_directions(
     request: Request,
     origin: str = Query(..., min_length=1, max_length=64, description="'lat,lng'"),

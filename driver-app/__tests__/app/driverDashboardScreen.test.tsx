@@ -1162,3 +1162,57 @@ describe('follow-camera throttle (CAMERA_ANIM_MS coalescing)', () => {
     expect(animateCamera).toHaveBeenCalledTimes(2); // leading edge again, no wait
   });
 });
+
+describe('offline<->online camera framing', () => {
+  // rideState stays 'idle' across this toggle (only `isOnline` changes), and
+  // going offline halts watchPositionAsync entirely (useDriverDashboard.ts),
+  // so before this fix nothing ever re-framed the camera on this transition
+  // — it just stayed wherever the follow-camera effect had last left it.
+  // CarMarker is mocked to `() => null` (see top-of-file comment), so
+  // camBearingRef/markerPosRef stay null and `center`/`heading` are always
+  // derived from the raw location fix, same as the throttle tests above.
+  it('zooms out on going offline', async () => {
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    animateCamera.mockClear(); // drop the mount-time leading-edge call
+
+    act(() => {
+      mockDashboardState = { ...mockDashboardState, isOnline: false };
+      r.update(<DriverDashboardScreen />);
+    });
+
+    expect(animateCamera).toHaveBeenCalledTimes(1);
+    const call = animateCamera.mock.calls[0][0];
+    expect(call.zoom).toBe(14);
+    expect(call.heading).toBe(0);
+    expect(call.center).toEqual({ latitude: LOCATION.coords.latitude, longitude: LOCATION.coords.longitude });
+  });
+
+  it('zooms back in on returning online', async () => {
+    mockDashboardState = { ...mockDashboardState, isOnline: false };
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    animateCamera.mockClear();
+
+    act(() => {
+      mockDashboardState = { ...mockDashboardState, isOnline: true };
+      r.update(<DriverDashboardScreen />);
+    });
+
+    expect(animateCamera).toHaveBeenCalledTimes(1);
+    expect(animateCamera.mock.calls[0][0].zoom).toBe(17.5); // FOLLOW_ZOOM_TIERS[0] — stopped/idle tier
+  });
+
+  it('does not fire on a re-render where isOnline is unchanged', async () => {
+    const r = await renderScreen();
+    const animateCamera = mockDashboardState.mapRef.current.animateCamera;
+    animateCamera.mockClear();
+
+    act(() => {
+      mockDashboardState = { ...mockDashboardState, wsLatency: 42 }; // unrelated re-render
+      r.update(<DriverDashboardScreen />);
+    });
+
+    expect(animateCamera).not.toHaveBeenCalled();
+  });
+});

@@ -95,6 +95,10 @@ Do not rely on "commit, observe, roll back if broken" for anything touching a li
 - Only escalate via `AskUserQuestion` when a fix is architecturally significant or genuinely ambiguous; otherwise just do it.
 - **Same discipline applies to any other automated-fix source** — notably Sentry's Seer, piloted 2026-09-08 (`.claude/context/connector-scoping.md`'s Sentry row, `docs/audit/2026-09-08-agentic-tooling-atlas.md`): a Seer-suggested fix gets the same verify-then-fix-or-explain treatment as a Codex comment, and is never applied or merged without going through the normal Change Impact Log gate. Automation drafting a fix does not waive review.
 
+### PR labeling can race a fast merge (CR-2026-034)
+
+`pr-checks.yml`'s `Auto-label by path` and `Apply risk label` jobs correctly re-run on the `ready_for_review` event, but they are not required status checks — nothing blocks a merge from completing before they finish. Marking a PR ready and merging it in immediate succession (e.g. via the GitHub API back-to-back, or a fast manual click) can land the PR with no path label or a stale risk label. Low-consequence (metadata only, no CLAUDE.md pre-merge gate depends on it) but easy to avoid: on a PR merged shortly after being marked ready for review, give the `Auto-label by path`/`Apply risk label` checks a few seconds to complete before merging, or re-check the PR's labels once merged. See `#5279` for the full writeup; making the labeling job a required check is tracked there as a follow-up gated behind `ACTION_ITEMS.md` C21's required-checks audit.
+
 ## Context Imports
 
 Sprint-scoped and domain-deep context is loaded on demand, not baked into this file. Reference these when the task enters the relevant area:

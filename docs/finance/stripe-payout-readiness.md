@@ -225,13 +225,58 @@ This is a planning model built from Spinr's own real driver-count and
 Uride's real comparable-market bonus figures, plus two explicitly-flagged
 placeholder assumptions (rides/day, avg fare) standing in for ride-volume
 and pricing data that don't exist yet. **It is not a substitute for the
-actual Stripe conversation in §4.2 / `saskatoon-launch.md` P-5.** This
-session has no Stripe dashboard or API access (Stripe MCP tools require
-OAuth not available here) and has not obtained, and does not claim to
-have obtained, Spinr-specific reserve-percentage or payout-timeline terms
-from Stripe. The dollar ranges in §6.5 exist so that conversation has a
-concrete number to react to ("is 25–50% realistic for our account, and is
-$12–26K enough cushion") — not to close out P-5 or G1 on their own.
+actual Stripe conversation in §4.2 / `saskatoon-launch.md` P-5.**
+**Correction (2026-09-12): the "no Stripe access" premise below no longer
+holds — see §7.** This paragraph previously said this session has no
+Stripe dashboard or API access and has not obtained Spinr-specific
+reserve-percentage or payout-timeline terms from Stripe. A later session
+got Stripe connector access authorized and pulled the real account data in
+§7 directly. The dollar ranges in §6.5 remain a planning model (still built
+on two placeholder assumptions), but the "is 25–50% realistic for our
+account" question is now partly answered: see §7 for what's now
+account-specific fact vs. still-unconfirmed.
+
+## 7. Real account data confirmed 2026-09-12 (supersedes §6.7's "no access" premise)
+
+Queried directly via the Stripe API (account `acct_1SSk2XFXFgLO2LdO`, "Spinr
+Mobility Inc", livemode) once connector access was authorized. This is
+account-specific fact, not public-docs-default or modeled:
+
+| Question | §1/§6 assumption (public docs) | Confirmed real value |
+|---|---|---|
+| First-payout / standing payout delay | 7–14 days (Stripe's published new-account ceiling) | **`delay_days: 3`** (`GET /v1/accounts/acct_1SSk2XFXFgLO2LdO`, `settings.payouts.schedule`) — materially better than the figure this model was built on |
+| Payout interval | Assumed automatic (implicit in §1's framing) | **`interval: "manual"`** — payouts do NOT happen automatically; someone must manually trigger each one via Dashboard or API |
+| Active reserve hold right now | Modeled scenario (§6.3), not known to be active or not | **`connect_reserved: $0 CAD`** (`GET /v1/balance`) — no reserve is currently held |
+| Account standing | Treated as a "new platform account" (the clause this whole item is about) | **Created 2025-11-12** (`GET /v1/accounts/...` → `created`) — ~10 months old as of this check, `charges_enabled: true`, `payouts_enabled: true`, `requirements.currently_due: []` — fully verified, well past Stripe's new-account scrutiny window |
+| Payout history | Unknown | **Exactly one payout, ever**: `po_1TH1XLFXFgLO2LdOIoBXKxGr`, $92.96 CAD, created 2026-03-31, `method: "standard"`. `has_more: false` on `GET /v1/payouts` — this is the complete list. |
+| Current un-paid-out balance | Unknown | `available: $415.79 CAD`, `pending: $18.52 CAD` (`GET /v1/balance`, checked 2026-09-12) — sitting in Stripe, not yet paid to the bank account |
+
+**New finding, more urgent than the original reserve-hold worry this
+document was written for:** the manual payout schedule plus "exactly one
+payout ever, 2026-03-31" strongly suggests nobody has been manually
+triggering payouts since then — real revenue has been accumulating in
+Stripe's balance for months rather than reaching Spinr's bank account.
+This is not a Stripe-imposed delay at all; it's an account configuration
+choice (`interval: "manual"`) that is fully within Spinr's control to
+change. **This needs an explicit owner decision, not an engineering
+default**: switch to an automatic schedule (e.g. `interval: "daily"` or
+`"weekly"`, keeping `delay_days` as Stripe sets it) so payouts happen
+without someone remembering to trigger them, or keep manual deliberately
+(e.g. to batch payouts for accounting reasons) and establish an explicit
+recurring reminder/process so cash doesn't silently sit unclaimed. Not
+changed here — this is a live production financial-account setting change,
+squarely the kind of decision `CLAUDE.md`'s money-caution principle
+reserves for the user, not a default a session should flip unilaterally.
+
+**Still not confirmed by this check:** Spinr's actual reserve *percentage*
+policy (the 10–50% scenarios modeled in §6.3) — `connect_reserved: $0`
+only proves no hold is active *right now*, at this account's current,
+very low volume; it says nothing about what Stripe would impose under a
+real launch-week volume spike. That remains genuinely unknowable without
+either a real volume event or a direct conversation with Stripe support
+(§4.2/§6.6 option 3) — the account-data pull above narrows the "is our
+delay still the public 7–14 day default" question but does not resolve
+the reserve-percentage question the §6.3 scenarios were modeling.
 
 ## Sources (external research, not Spinr-verified)
 

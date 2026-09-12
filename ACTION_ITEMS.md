@@ -7808,9 +7808,35 @@ record of what was assumed vs. what was actually true</summary>
   exists yet) to produce a modeled total cash-gap range of **≈$2,050 (low
   scenario) to ≈$25,500 (high scenario)** across 10%/25%/50% Stripe reserve-hold
   scenarios. This checkbox stays unchecked: the model is planning input, not the
-  acceptance criterion. The actual acceptance bar below — a real, Stripe-confirmed
-  (not publicly-documented-default) account-specific timeline — is still open and
-  cannot be completed from this session (no Stripe dashboard/API access here).
+  acceptance criterion.
+  **Update 2026-09-12 — the "no Stripe access" blocker is gone; half the
+  acceptance bar is now confirmed, the other half surfaced a bigger, more
+  urgent finding.** Stripe connector access was authorized this session.
+  Pulled real account data directly (`acct_1SSk2XFXFgLO2LdO`) — full detail in
+  `docs/finance/stripe-payout-readiness.md` §7:
+  - Real payout delay is **`delay_days: 3`**, not the public-docs 7–14 day
+    figure this model was built on — materially better.
+  - Account is ~10 months old (created 2025-11-12), fully verified
+    (`charges_enabled`/`payouts_enabled: true`, no `requirements.currently_due`)
+    — well past Stripe's new-account scrutiny window this whole item was
+    originally worried about.
+  - **No reserve is currently held** (`connect_reserved: $0 CAD`).
+  - **New finding, more urgent than the original reserve-hold worry:** the
+    account's payout `interval` is **`"manual"`**, and there has been
+    **exactly one payout, ever** (2026-03-31, $92.96 CAD — confirmed complete
+    via `has_more: false`). `$415.79 CAD` is sitting available in the Stripe
+    balance right now, un-paid-out, because nobody has been manually
+    triggering payouts. This is an account-configuration choice, not a
+    Stripe-imposed delay — fully within Spinr's control, but **needs the
+    owner's decision** (switch to automatic daily/weekly payouts, or keep
+    manual deliberately with an explicit recurring process) — not something
+    to flip unilaterally. Not changed here.
+  - **Still not resolved:** the actual reserve-*percentage* policy under a
+    real launch-week volume spike (the 10–50% scenarios in §6.3) —
+    `connect_reserved: $0` only proves no hold is active today at current
+    (near-zero) volume; it says nothing about what a real spike would
+    trigger. That still needs either a real volume event or the direct
+    Stripe conversation in §4.2/§6.6 option 3.
 - **Issue/gap:** Stripe imposes a non-waivable 7–14 day first-payout delay for new
   platform accounts and can hold reserves for up to 180 days, explicitly triggered by
   "a sales spike, a promotion, or a sudden increase in disputes." Spinr's planned
@@ -7830,17 +7856,22 @@ record of what was assumed vs. what was actually true</summary>
   2026-08-31, see §6 below**); consider staggering the driver blitz and rider promo
   rather than running both at full intensity in week 1. Full detail and mitigation
   options: `docs/finance/stripe-payout-readiness.md` (§6 for the dollar model, §4/§6.6
-  for mitigation tradeoffs). **The direct-with-Stripe confirmation itself remains
-  outstanding — not something a coding session can do.**
+  for mitigation tradeoffs; §7, added 2026-09-12, for the real account data now
+  confirmed directly via Stripe's API). **The reserve-*percentage* question under
+  real launch-week volume still needs either a real volume event or a direct
+  Stripe conversation (§4.2/§6.6 option 3) — that part remains outstanding, not
+  something any session can confirm from API access alone.**
 - **Files:** none (operational/financial planning, not a code fix) — reference doc at
   `docs/finance/stripe-payout-readiness.md`; cross-referenced from
   `docs/runbooks/saskatoon-launch.md` §P-5 (new gate added same pass).
-- **Acceptance (still open):** real (not publicly-documented-default) Stripe payout
-  timeline confirmed for Spinr's account, and a written answer to "can operating cash
-  cover driver payouts if Stripe holds a reserve during the launch-week spike." The
-  second half now has a first-pass written answer (the §6 model: ≈$2K–$25.5K modeled
-  gap, mitigation options laid out) — the first half (actual Stripe confirmation) is
-  the remaining blocker to closing this item.
+- **Acceptance (partially closed 2026-09-12):** real (not publicly-documented-default)
+  Stripe payout timeline confirmed for Spinr's account — **done** (§7: `delay_days: 3`,
+  account ~10 months old and fully verified, no active reserve hold). Still open:
+  the reserve-*percentage* policy under real launch-week volume (needs a real spike
+  or a direct Stripe conversation), and — newly surfaced, not part of the original
+  acceptance bar but arguably more urgent — the owner's decision on the account's
+  manual payout schedule (see §7's new finding above: real revenue sitting unpaid-out
+  in Stripe since the account's one-and-only payout, 2026-03-31).
 
 ### G2. 116 migration files merged to `main` had never been applied to the live database
 - [x] **Status:** CLOSED 2026-08-21 (same session) — schema-drift audit run, confirmed

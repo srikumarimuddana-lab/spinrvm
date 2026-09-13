@@ -1,9 +1,37 @@
 diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
-index ebf8780..f1f6c2d 100644
 --- a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
 +++ b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
-@@ -334,14 +334,18 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+@@ -92,6 +92,7 @@
+     public GoogleMap map;
+     private Bundle savedMapState;
+     private ArrayList<MapFeature> savedFeatures = null;
++    private int featureRestoreGeneration = 0;
+     private boolean shouldRestorePadding = false;
+
+     private MarkerManager markerManager;
+@@ -319,6 +320,7 @@
+     @Override
+     protected void onAttachedToWindow() {
+         super.onAttachedToWindow();
++        final int restoreGeneration = ++featureRestoreGeneration;
+
+         // Reset lifecycle flags when reattaching
+         synchronized (this) {
+@@ -326,22 +328,30 @@
+         }
+
+         attachLifecycleObserver();
+-        if (savedMapState != null) {
++        if (savedMapState != null || savedFeatures != null) {
+             super.onCreate(savedMapState);
+             super.onStart();
+             super.onResume();
+             prepareAttacherView();
              getMapAsync((map)->{
++                // A newer attachment owns the saved children after a detach.
++                if (destroyed || restoreGeneration != featureRestoreGeneration) {
++                    return;
++                }
                  onMapReady(map);
                  if (savedFeatures != null && !savedFeatures.isEmpty()) {
 -                    for (int i = 0; i < savedFeatures.size(); i++) {
@@ -24,9 +52,29 @@ index ebf8780..f1f6c2d 100644
              });
          }
      }
-@@ -1166,27 +1170,36 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+@@ -349,6 +359,7 @@
+     // Override onDetachedFromWindow to detach lifecycle observer
+     @Override
+     protected void onDetachedFromWindow() {
++        ++featureRestoreGeneration;
+         synchronized (this) {
+             // Save instance state if not already saved and map is ready
+             if (map != null && isMapReady) {
+@@ -377,7 +388,10 @@
+             Log.e("MapView", "Error during stop in onDetachedFromWindow: " + e.getMessage());
+         }
+
+-        savedFeatures = new ArrayList<>(features);
++        // Re-detaching before getMapAsync completes must keep pending children.
++        if (savedFeatures == null) {
++            savedFeatures = new ArrayList<>(features);
++        }
+         features.clear();
+         shouldRestorePadding = true;
+         removeView(attacherGroup);
+@@ -1166,27 +1180,36 @@
      }
- 
+
      private void safeAddFeature(int index, MapFeature mapFeature){
 -        if(paused || features.size() < index){
 -            if (savedFeatures == null) {
@@ -43,7 +91,7 @@ index ebf8780..f1f6c2d 100644
 +            savedFeatures.add(index, mapFeature);
              return;
          }
- 
+
          // Ensure the list is large enough to set at the given index
 -        while(features.size() <= index){
 +        while(features.size() < index){
@@ -52,7 +100,7 @@ index ebf8780..f1f6c2d 100644
 -        features.set(index, mapFeature);
 +        features.add(index, mapFeature);
      }
- 
+
      public void addFeature(View child, int index) {
 +        // When detached, skip addToMap calls and just track in savedFeatures
 +        if (savedFeatures != null) {
@@ -70,16 +118,16 @@ index ebf8780..f1f6c2d 100644
          // Our desired API is to pass up annotations/overlays as children to the mapview component.
          // This is where we intercept them and do the appropriate underlying mapview action.
          if (child instanceof MapMarker) {
-@@ -1273,10 +1286,19 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+@@ -1273,10 +1296,19 @@
      }
- 
+
      public int getFeatureCount() {
 +        if (savedFeatures != null) {
 +            return savedFeatures.size();
 +        }
          return features.size();
      }
- 
+
      public View getFeatureAt(int index) {
 +        if (savedFeatures != null) {
 +            if (index < savedFeatures.size()) {
@@ -90,9 +138,9 @@ index ebf8780..f1f6c2d 100644
          if (index < features.size()) {
              return features.get(index);
          }
-@@ -1284,7 +1306,16 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+@@ -1284,7 +1316,16 @@
      }
- 
+
      public void removeFeatureAt(int index) {
 -        MapFeature feature = features.remove(index);
 +        MapFeature feature;

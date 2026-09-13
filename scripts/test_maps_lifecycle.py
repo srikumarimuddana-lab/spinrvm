@@ -63,7 +63,11 @@ public class MapLifecycleHarness extends NativeMap {
     void detachLifecycleObserver() {}
     void prepareAttacherView() { attacherGroup = new Object(); }
     void getMapAsync(Consumer<Object> callback) { callbacks.add(callback); }
-    void onMapReady(Object value) { map = value; readyCalls++; }
+    void onMapReady(Object value) {
+        if (destroyed) return; // Same early-return contract as the real method.
+        map = value;
+        readyCalls++;
+    }
     // Only the Google/Android draw boundary is modeled. List insertion below
     // runs the library's actual safeAddFeature method, extracted unchanged.
     void addFeature(MapFeature feature, int index) {
@@ -105,10 +109,70 @@ public class MapLifecycleHarness extends NativeMap {
         view.addFeature(new MapFeature(), 0);
         check(view.drawn.size() == 1, "new route after idle must draw");
     }
+    static void interruptedRestore() {
+        MapLifecycleHarness view = seeded();
+        view.onDetachedFromWindow();
+        view.onAttachedToWindow(); // queues restore; Google Maps has not answered
+        MapFeature added = new MapFeature();
+        view.addFeature(added, 1);
+        view.onDetachedFromWindow();
+        check(view.getFeatureCount() == 5, "second detach erased saved route children");
+        check(view.getFeatureAt(1) == added, "pending React mutation was lost");
+        view.onAttachedToWindow();
+        view.callbacks.get(1).accept(new Object());
+        check(view.drawn.size() == 5, "latest attachment must restore the full route");
+    }
+    static void staleCallback() {
+        for (boolean reattach : new boolean[]{false, true}) {
+            MapLifecycleHarness view = seeded();
+            view.onDetachedFromWindow();
+            view.onAttachedToWindow();
+            view.onDetachedFromWindow();
+            if (reattach) view.onAttachedToWindow();
+            view.callbacks.get(0).accept(new Object());
+            check(view.readyCalls == 0, "obsolete callback reinitialized the map");
+            check(view.drawn.isEmpty(), "obsolete callback drew a detached route");
+            check(view.getFeatureCount() == 4, "obsolete callback lost children");
+            if (reattach) {
+                view.callbacks.get(1).accept(new Object());
+                check(view.drawn.size() == 4, "current callback must still restore");
+                view.callbacks.get(0).accept(new Object());
+                check(view.readyCalls == 1, "late obsolete callback replaced current map");
+            }
+        }
+    }
+    static void coldDetach() {
+        MapLifecycleHarness view = seeded();
+        view.map = null;
+        view.isMapReady = false;
+        view.onDetachedFromWindow();
+        check(view.savedMapState == null, "cold map has no saved Google state");
+        view.onAttachedToWindow();
+        check(view.callbacks.size() == 1, "cold detach never schedules child restore");
+        view.callbacks.get(0).accept(new Object());
+        check(view.drawn.size() == 4, "cold attachment must restore route children");
+    }
+    static void destroyedCallback() {
+        MapLifecycleHarness view = seeded();
+        view.onDetachedFromWindow();
+        view.onAttachedToWindow();
+        view.doDestroy();
+        view.callbacks.get(0).accept(new Object());
+        check(view.readyCalls == 0, "restore callback ran after destroy");
+    }
     public static void main(String[] args) {
-        normalRestore();
-        emptyRestore();
-        System.out.println("PASS: normal restore, detached insertion, empty restore");
+        Runnable[] cases = {MapLifecycleHarness::normalRestore, MapLifecycleHarness::emptyRestore,
+            MapLifecycleHarness::interruptedRestore, MapLifecycleHarness::staleCallback,
+            MapLifecycleHarness::coldDetach, MapLifecycleHarness::destroyedCallback};
+        int failed = 0;
+        for (Runnable test : cases) {
+            try { test.run(); } catch (AssertionError e) {
+                failed++;
+                System.err.println("FAIL: " + e.getMessage());
+            }
+        }
+        if (failed > 0) throw new AssertionError(failed + " lifecycle cases failed");
+        System.out.println("PASS: " + cases.length + " MapView lifecycle cases");
     }
 }
 """

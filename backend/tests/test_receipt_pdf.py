@@ -100,6 +100,51 @@ def test_no_minimum_fare_row_when_not_clamped_pdf():
     assert "Minimum fare adjustment" not in [r[0] for r in rows]
 
 
+# ── Promo/discount line item (C102) ───────────────────────────────────────
+#
+# ACTION_ITEMS.md C102: the PDF receipt never disclosed a discount line,
+# unlike the JSON receipt's _build_fare_breakdown (routes/rides/_shared.py) —
+# a line-item-transparency gap, not a money-correctness bug, since the
+# persisted grand_total already reconciled to what was actually charged.
+
+
+def test_promo_discount_line_is_pure_disclosure_when_grand_total_persisted():
+    ride = {**_RIDE, "discount_amount": "4.00", "promo_code": "SAVE10"}
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo (SAVE10)", "-$4.00") in rows
+    assert grand == Decimal("12.21")  # persisted grand_total, unchanged
+
+
+def test_promo_discount_without_code_uses_generic_label_pdf():
+    ride = {**_RIDE, "discount_amount": "1.50", "promo_code": None}
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo discount", "-$1.50") in rows
+
+
+def test_no_promo_row_when_discount_is_zero_pdf():
+    rows, _grand = _fare_lines(_RIDE, Decimal("0"))
+    assert not any(label.startswith("Promo") for label, _amt in rows)
+
+
+def test_promo_discount_capped_at_ride_fare_not_raw_amount_pdf():
+    # ride fare portion = base 5.00 + distance 3.00 + time 2.00 = 10.00;
+    # a $20 promo must render capped at $10.00, never the raw $20.
+    ride = {**_RIDE, "discount_amount": "20.00", "promo_code": "HUGE"}
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo (HUGE)", "-$10.00") in rows
+
+
+def test_fallback_total_without_persisted_grand_total_subtracts_discount_pdf():
+    """When grand_total isn't persisted, the reconstructed total must still
+    subtract the discount or the visible rows no longer sum to the printed
+    total now that the discount is a real line item."""
+    ride = {**_RIDE, "grand_total": None, "discount_amount": "2.50", "promo_code": None}
+    rows, grand = _fare_lines(ride, Decimal("0"))
+    assert ("Promo discount", "-$2.50") in rows
+    # subtotal 11.00 + tax (0.55+0.66=1.21) - discount 2.50
+    assert grand == Decimal("9.71")
+
+
 # ── Surge as a real dollar line item (ranked #26 / audit N14) ─────────────
 #
 # Before this fix the PDF receipt never disclosed surge at all (no footnote,

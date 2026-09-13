@@ -1489,47 +1489,21 @@ function DriverDashboard() {
           }
 
           /*
-            The rideState key here looks removable and is NOT. Recording the
-            analysis so the next person does not re-derive it.
+            Keep the existing overlay remount workaround pending Android testing.
+            carSurface.tsx also keys overlays per leg to clear stale routes.
+            Removing this key reduces child churn but cannot repair a native
+            list lost during detach (PR #5333 versus #5332).
 
-            Against it: re-keying unmounts and remounts up to 24 sibling
-            <Polyline>s on every ride-state transition, and that mass churn is
-            what react-native-maps@1.27.2 mishandles natively —
-            MapView.onDetachedFromWindow clears its `features` list behind
-            React's back and restores it asynchronously via getMapAsync,
-            removeFeatureAt has no bounds check, and safeAddFeature uses
-            List.set where removeFeatureAt uses List.remove, so they are not
-            inverses. Production IllegalStateExceptions clustered seconds after
-            ride start and completion, i.e. on exactly these transitions.
+            Both apps patch maps 1.27.2 with upstream's feature-list fix plus
+            interrupted-restore guards: retain pending children across another
+            detach, reject callbacks from old attachments, and restore children
+            even when no Google map state was saved. JVM tests exercise those
+            methods; they do not prove Android rendering is fixed.
 
-            For it: lib/androidAuto/carSurface.tsx keys RouteLine/RoutePins on
-            route.leg for a DOCUMENTED reason — it is the overlay-level
-            replacement for once keying the whole car MapView on the leg, which
-            existed to drop a leftover route overlay per leg and which ANR'd the
-            head unit on the 2026-09-11 test ride. So this pattern is
-            load-bearing elsewhere in this app for a real bug.
-
-            Both symptoms are the same library defect from opposite sides:
-            keeping the key risks the crash, dropping it risks a stale route
-            line that never clears. A JS change only picks which one you get.
-
-            The actual fix is upstream's own, now backported to the SDK-pinned
-            1.27.2 as patches/react-native-maps+1.27.2.patch: react-native-maps
-            1.29.0 made savedFeatures the single source of truth while detached,
-            so getFeatureCount/getFeatureAt/removeFeatureAt/safeAddFeature all
-            agree on one list, removeFeatureAt bounds-checks, and add uses
-            add(index) rather than set(index) so it is a true inverse of remove.
-
-            THE KEY STAYS UNTIL THAT PATCH IS CONFIRMED ON A DEVICE. The patch
-            applies cleanly and is upstream's tested code, but nothing here has
-            run it on an Android head unit, and inferred native rendering fixes
-            have failed in this repo before. Once a device shows a clean
-            pickup -> dropoff -> idle cycle with no crash and no vanished route,
-            this key and carSurface.tsx's route.leg keys can both go, and the
-            child-count churn they exist to manage stops mattering.
-
-            shared/components/__tests__/RouteLine.test.tsx pins the child-count
-            and no-remount behaviour this all turns on.
+            Verify a new native build through pickup -> dropoff -> idle and
+            repeated background/reconnect cycles. Any later key removal needs
+            its own device check for stale overlays. Analysis and release steps:
+            docs/change-log/2026-09-13-map-restore-lifecycle.md.
           */
           return (
             <React.Fragment key={`route-${rideState}`}>

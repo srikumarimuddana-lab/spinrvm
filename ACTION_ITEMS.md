@@ -2012,6 +2012,14 @@ covering all 9+ call sites. Found earlier the same day while closing A25/P0-B
         (but well-typed) list. Full suite: `6865 passed, 8 skipped,
         1 xfailed, 0 failed`. See
         `docs/change-log/2026-08-02-a1b-websocket-coverage.md`.
+        **Correction (2026-09-13):** re-checked against the current
+        `routes/websocket.py` — this gap is already fixed (by an
+        uncredited later session, no matching change-log entry found).
+        The handler now has an explicit
+        `if driver_id and isinstance(points, list) and not points:`
+        branch that acks with `count: 0` for the empty-but-valid-list
+        case, with an inline comment referencing this exact fix. Not
+        an open item; flagging so nobody re-investigates it as one.
       - `routes/drivers/subscriptions.py` — **CLOSED, 61% → 99%** (575
         stmts, 227→6 missing), across two same-day sessions. Spinr Pass,
         money-adjacent (NOT the same file as `routes/admin/subscriptions.py`,

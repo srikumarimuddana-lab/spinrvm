@@ -160,6 +160,31 @@ describe('RouteLine rendering', () => {
     expect(countPolylines(<RouteLine paths={sections} segments={24} />)).toBe(50);
   });
 
+  it('shrinks the child count via vehiclePosition — the prop the dashboard passes', () => {
+    // The driver dashboard passes vehiclePosition, and trimTraveled inside
+    // RouteLine is the ONLY mechanism that shrinks the count mid-trip. Every
+    // other test here fakes that by shortening the input array by hand, so a
+    // change to the `trimTraveled(clean(path), vehiclePosition)` call site
+    // would alter the real mid-trip child count with nothing failing. This
+    // renders the actual prop combination instead.
+    const road = longRoad(600);
+    const untrimmed = countPolylines(<RouteLine path={road} segments={24} />);
+    expect(untrimmed).toBe(24);
+
+    // Vehicle sitting on a point near the end: the traveled prefix is dropped,
+    // so only a short remainder is drawn.
+    const nearEnd = countPolylines(
+      <RouteLine path={road} segments={24} vehiclePosition={road[595]} />,
+    );
+    expect(nearEnd).toBeLessThan(untrimmed);
+    expect(nearEnd).toBeGreaterThan(0);
+
+    // Vehicle at the very start trims nothing, so the cap still applies.
+    expect(
+      countPolylines(<RouteLine path={road} segments={24} vehiclePosition={road[0]} />),
+    ).toBe(24);
+  });
+
   it('is deterministic — identical props give an identical child count', () => {
     // Deliberately NOT claiming to prove purity: two renders of the same props
     // would also match if the component held state or ran effects, so this is a

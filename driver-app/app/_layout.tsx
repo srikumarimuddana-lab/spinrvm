@@ -116,7 +116,7 @@ setAppCheckTokenProvider(getAppCheckToken);
 // build-time fallback for environments where that's unset (e.g. web).
 setAppIdentity('driver', Constants.nativeApplicationVersion || Constants.expoConfig?.version || '0.0.0');
 
-const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id0000000000';
+const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id6755680810';
 const DRIVER_APP_STORE_ANDROID = 'https://play.google.com/store/apps/details?id=com.spinr.driver';
 
 // Notifee — rich notifications (heads-up + full-screen intent + Accept/Decline

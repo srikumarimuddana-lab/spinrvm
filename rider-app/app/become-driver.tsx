@@ -38,7 +38,7 @@ import {
 import { FONT } from '@shared/utils/responsive';
 
 const DRIVER_APP_SCHEME = 'spinr-driver://';
-const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id0000000000';
+const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id6755680810';
 const DRIVER_APP_STORE_ANDROID = 'https://play.google.com/store/apps/details?id=com.spinr.driver';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review

@@ -25114,8 +25114,57 @@ how much they de-risk a public launch._
   "un-actioned, forward-looking risk" this entry already named). Full detail, blast-radius greps,
   and verification: `docs/change-log/2026-09-11-c97-push-notification-fixes.md`. **Still open:**
   #1 (ops check on Fly/Railway Firebase credential) — blocked on C99, no ops access from any
-  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — needs a real compiled iOS build not
-  available here.
+  Claude session; #5 (iOS `UIBackgroundModes` confirmation) — see 2026-09-13 addendum below,
+  which resolves this without needing a compiled build.
+- **Addendum (2026-09-13) — #5 resolved via exhaustive config-plugin source trace, not a compiled
+  build, and rescoped to a much narrower (currently inert) impact than finding #10 implied:**
+  `driver-app` has no checked-in `ios/` directory (confirmed: pure managed Expo workflow), so the
+  generated `Info.plist`'s `UIBackgroundModes` array can only be populated by a config plugin
+  listed in `driver-app/app.config.ts`'s `plugins` array — there is no other path (no hand-edited
+  native project) for this key to be set. Read every plugin in that array that touches
+  `UIBackgroundModes`:
+  - `expo-location` (`isIosBackgroundLocationEnabled: true`, `app.config.ts:233`) —
+    `node_modules/expo-location/plugin/build/withLocation.js:26-36` unconditionally pushes
+    `'location'` into the array. **Confirmed present.**
+  - `'expo-notifications'` is **not listed** in `app.config.ts`'s `plugins` array at all, so its
+    plugin (`node_modules/expo-notifications/plugin/build/withNotificationsIOS.js`) never runs.
+    Even if it were added bare, `withBackgroundRemoteNotifications` (lines 21-29) only pushes
+    `'remote-notification'` when `enableBackgroundRemoteNotifications` is explicitly `true` — the
+    default is `undefined` (falsy), so a bare `'expo-notifications'` entry would still be a no-op
+    here.
+  - `@react-native-firebase/messaging`'s config plugin was grepped along with every other
+    `@react-native-firebase/*` plugin file for `UIBackgroundModes` — zero hits. It does not touch
+    this key on iOS at all (only Android FCM-icon setup).
+  - **Conclusion: `UIBackgroundModes` will contain `['location']` but not `'remote-notification'`**
+    — upgrading finding #10 from SUSPECTED to confirmed, short only of physically inspecting a
+    compiled `Info.plist` from a real EAS build (the one remaining gap, but a static trace of
+    every plugin that could set this key leaves no other candidate).
+  - **Rescoped impact — this does NOT explain the ride-offer or general-notification complaints.**
+    Read the actual APNs payload construction in `backend/features.py:1376-1421`:
+    `new_ride_assignment` (`is_dispatch`) is sent with a real `aps.alert` block (`messaging.Aps(
+    alert=messaging.ApsAlert(title=title, body=body), ...)`, `apns-push-type: "alert"`) — a
+    normal visible push, not a silent one, so iOS delivers/displays it regardless of
+    `UIBackgroundModes`. Every non-data-only type gets a real `messaging.Notification(title, body)`
+    block for the same reason. **Only `is_live_activity` is sent as a genuinely silent push**
+    (`messaging.Aps(content_available=True)`, `apns-push-type: "background"`,
+    `backend/features.py:1403-1405`) — that is the one case `UIBackgroundModes: remote-notification`
+    would actually matter for on iOS.
+  - **And that one case has no live user impact today:** grepped `driver-app` for
+    `ActivityKit`/`widget`/`LiveActivity` and found no native Live Activity extension target, no
+    config plugin for one, and no dedicated `live_activity` display branch in
+    `useDriverDashboard.ts` or `backgroundMessaging.ts` beyond the log-only fallback comment
+    already covered by recommendation #4's 2026-09-11 fix. iOS Live Activities are not a shipped
+    feature in this codebase yet, so the missing background mode currently has zero observable
+    effect on any real driver.
+  - **Recommendation: no code change now** (simplicity-first — fixing a config gap for a feature
+    that isn't built yet is speculative work with no bug behind it today). If/when a native iOS
+    Live Activity feature is actually implemented, add `'expo-notifications'` to
+    `app.config.ts`'s `plugins` array with `{ enableBackgroundRemoteNotifications: true }` (or a
+    small custom config plugin matching the existing `driver-app/plugins/` pattern) at that time,
+    and re-verify with a real EAS build before shipping.
+  - **What was NOT verified:** an actual compiled `Info.plist` from a real EAS iOS build (this
+    session has no such artifact) — the conclusion above is a static trace of every plugin that
+    could write this key, not a physical read of the generated file.
 
 ### C98. Both apps' `react-native` patch-package patches fail to apply — Android crash workaround currently inactive — CORRECTED 2026-09-10, false alarm caused by this cloud sandbox's own broken `react-native` install
 

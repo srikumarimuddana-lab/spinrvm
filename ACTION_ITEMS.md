@@ -25647,6 +25647,47 @@ how much they de-risk a public launch._
   `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7,
   `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
 
+### C107. Migration 142's `role IN ('admin','super_admin')` RLS idiom may be unreachable for any admin provisioned after migration 256 — spans 10 tables
+- [ ] **Status:** OPEN — found during independent security review of PR #5307 (a follow-up fix
+  applying migration 142's admin-lockdown pattern to `corporate_accounts`, the one table missed
+  when that pattern was first rolled out to its 9 siblings). Not fixed by this entry — this is a
+  tracking item for a systemic correctness question, not a code change.
+- **Issue/gap:** `backend/migrations/142_fix_rls_financial_tables.sql` (and now
+  `416_corporate_accounts_rls_super_admin_fix.sql`, PR #5307) gate admin access to 10 tables via
+  RLS policies checking `EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND
+  users.role IN ('admin', 'super_admin'))`. But `backend/migrations/256_users_role_reject_admin_values.sql`
+  adds `chk_users_role_not_admin`, a `CHECK (role NOT IN ('admin','super_admin',...))` on the
+  `users` table — blocking any row from ever holding `role='admin'`/`'super_admin'` again once
+  256 is applied. Real admin auth already runs through a separate identity model
+  (`admin_staff` + `_verify_admin_payload`, `backend/dependencies/__init__.py`), per CLAUDE.md's
+  documented JWT trust model — `users.role` is not how admins actually authenticate today.
+- **Why it matters:** net effect, per independent grep/read during PR #5307's review: the
+  `role IN ('admin','super_admin')` policy on all 10 tables (the 9 migration-142 tables plus
+  `corporate_accounts`) is only reachable for a `users` row that predates migration 256 and was
+  never subsequently updated. For any admin/super_admin provisioned under the current
+  `admin_staff` model, these RLS policies cannot ever admit them — the "fix" migration 142
+  established, and that PR #5307 correctly mirrored for parity, may be **cosmetically correct but
+  functionally unreachable** across the board. Nobody has verified whether a legacy `role='admin'`
+  `users` row still exists in production to even make the policy theoretically reachable today.
+  Real production impact is currently believed to be **none**, because (confirmed independently
+  during PR #5307's review) the backend's only Supabase client (`backend/supabase_client.py`)
+  always uses the service-role key, bypassing RLS entirely — so this is a defense-in-depth
+  correctness gap, not a live incident, but it means the migration-142 hardening effort should not
+  be considered "done" while it rests on a check that may be permanently unreachable.
+- **Action:** (1) check production `users` table for any surviving `role IN ('admin',
+  'super_admin')` row to confirm the policy is fully unreachable today, not just theoretically;
+  (2) decide whether to update these 10 policies to check `admin_staff` (the real admin identity
+  table) instead of `users.role`, or to explicitly document the `users.role` check as legacy/dead
+  and rely solely on the service-role-bypasses-RLS + `admin_staff` JWT model for these tables.
+  Escalate to whoever owns the admin-identity model (CLAUDE.md's "JWT trust model" section) if the
+  intended answer isn't obvious from the code alone.
+- **Files:** `backend/migrations/142_fix_rls_financial_tables.sql`,
+  `backend/migrations/256_users_role_reject_admin_values.sql`,
+  `backend/migrations/416_corporate_accounts_rls_super_admin_fix.sql`, `backend/dependencies/__init__.py`
+  (`_verify_admin_payload`), `backend/tests/rls/test_corporate_accounts_super_admin_fix.py` (its
+  schema fixture applies migrations 05/17/416 only, not 256 — its passing tests seed `users.role`
+  directly and so do not, by themselves, demonstrate reachability against the real current schema).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

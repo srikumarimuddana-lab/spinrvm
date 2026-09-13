@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import {
     View, TouchableOpacity, StyleSheet, ActivityIndicator,
-    BackHandler, Animated, Easing, Dimensions, Platform, Vibration
+    BackHandler, Animated, Easing, Dimensions, Platform, Vibration, ScrollView
 } from 'react-native';
 import { Text } from '@shared/components/Text';
 import { Image } from 'expo-image';
@@ -90,6 +90,14 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const { colors, isDark } = useTheme();
     const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
     const screenHeight = Dimensions.get('window').height;
+    // Caps the card's total rendered height so a tall content stack (several
+    // optional badges + an incentive chip + a quest hint + a long rider name,
+    // worse under a larger accessibility font scale) can never push the card
+    // above the top of the screen with no way back — same technique
+    // ActiveRidePanel.tsx already uses (`maxPanelHeight`) for its own
+    // bottom-anchored sheet. The scrollable body below is what actually
+    // absorbs the extra height; this is just the hard ceiling.
+    const cardMaxHeight = screenHeight * 0.88;
 
     // react-hooks/refs ("Cannot access refs during render") flags the JSX
     // uses of these two below (interpolate() calls, transform binding).
@@ -214,7 +222,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
             {/* eslint-disable-next-line react-hooks/refs -- stable Animated.Value driver ref, see note above declarations */}
             <Animated.View style={[styles.container, { transform: [{ translateY: slideAnim }] }]}>
-                <View style={styles.card}>
+                <View style={[styles.card, { maxHeight: cardMaxHeight }]}>
 
                     {/* Timer bar */}
                     <View style={styles.timerTrack}>
@@ -268,6 +276,18 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             <Text style={[styles.timerUnit, { color: timerColor }]}>s</Text>
                         </View>
                     </View>
+
+                    {/* Scrollable informational body (earnings, badges, incentives,
+                        quest, route). `flex: 1` (not just maxHeight on the card
+                        above) is required here — without it a ScrollView doesn't
+                        actually bound itself to the remaining space and instead
+                        lays out at full content height, which would push the
+                        action bar below past the card's clipped edge instead of
+                        making this section scroll. Bounded this way, a worst-case
+                        content stack scrolls internally here instead of pushing
+                        the timer/header above or the action bar below off the
+                        screen — both of those stay outside this ScrollView. */}
+                    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
 
                     {/* Earnings hero + trip metrics side by side */}
                     <View style={styles.earningsSection}>
@@ -407,8 +427,9 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                     </View>
 
+                    </ScrollView>
 
-                    {/* Action buttons — Decline left, Accept right (reversed from typical so Accept is away from next screen's Cancel) */}
+                    {/* Action buttons — Decline left, Accept right (reversed from typical so Accept is away from next screen's Cancel) — pinned outside the ScrollView above: always visible and tappable without scrolling */}
                     <View style={styles.actionBar}>
                         {/* UX3 (ACTION_ITEMS.md): migrated onto the shared Button
                             primitive — this is the exact call site size="lg" /

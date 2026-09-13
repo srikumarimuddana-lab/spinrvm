@@ -186,7 +186,7 @@ class TestFindPlaceHardRestriction:
             _patch_budget(),
             _patch_area(),
             patch.object(tools_booking, "_maps_post", AsyncMock(side_effect=maps_post)),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
@@ -282,7 +282,7 @@ class TestFindPlaceHardRestriction:
             _patch_budget(),
             _patch_area(),
             patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, departments))),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
@@ -317,7 +317,7 @@ class TestFindPlaceHardRestriction:
             _patch_budget(),
             _patch_area(),
             patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, plaza))),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
             patch.object(
                 tools_booking, "_rank_named_place_candidates_by_route", AsyncMock(side_effect=lambda c, *a: (c, False))
             ),
@@ -353,7 +353,7 @@ class TestFindPlaceHardRestriction:
             _patch_budget(),
             _patch_area(),
             patch.object(tools_booking, "_maps_get", AsyncMock(return_value=neighbours)),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place", {"query": "4325 wakeling st", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
@@ -380,7 +380,7 @@ class TestFindPlaceHardRestriction:
             _patch_budget(),
             _patch_area(),
             patch.object(tools_booking, "_maps_post", AsyncMock(side_effect=maps_post)),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             _, ok = await execute_tool(
                 "find_place", {"query": "canadian tire", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
@@ -406,7 +406,7 @@ class TestFindPlaceHardRestriction:
             _patch_budget(),
             patch.object(tools_booking, "_maps_post", AsyncMock(side_effect=maps_post)),
             patch.object(tools_booking, "_maps_get", AsyncMock(return_value={"status": "ZERO_RESULTS"})),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
 
@@ -423,7 +423,7 @@ class TestFindPlaceHardRestriction:
                 "_maps_post",
                 AsyncMock(return_value=(403, {"error": {"message": "API key not valid"}})),
             ),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
@@ -442,7 +442,7 @@ class TestFindPlace:
             _patch_http(GEOCODE_OK),
             _patch_area(),
             _patch_last_ride(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "saskatoon airport"}, user=RIDER)
         assert ok
@@ -463,7 +463,7 @@ class TestFindPlace:
             _patch_http(GEOCODE_OK),
             _patch_area(area=None),
             _patch_last_ride(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
         assert ok
@@ -481,7 +481,7 @@ class TestFindPlace:
             _patch_http(GEOCODE_OK),
             _patch_area(),
             _patch_last_ride(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
         assert ok
@@ -511,7 +511,7 @@ class TestFindPlace:
             _patch_settings(),
             _patch_budget(),
             patch("backend.ai.tools_booking.httpx.AsyncClient", return_value=ctx),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": query}, user=RIDER)
         assert ok
@@ -527,7 +527,7 @@ class TestFindPlace:
             _patch_budget(),
             _patch_http(PLACES_OK),
             _patch_area(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
         assert ok
@@ -542,7 +542,7 @@ class TestFindPlace:
             _patch_budget(),
             _patch_http(PLACES_OK),
             _patch_area(area=None),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "walmart"}, user=RIDER)
         assert ok
@@ -556,7 +556,7 @@ class TestFindPlace:
             _patch_http(PLACES_OK),
             _patch_area(),
             _patch_last_ride([LAST_RIDE]),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "superstore"}, user=RIDER)
         assert ok
@@ -573,7 +573,7 @@ class TestFindPlace:
             _patch_http(PLACES_OK),
             _patch_area(),
             patch.object(tools_booking.db_supabase, "get_rows", rides_lookup),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "superstore"}, user=rider)
         assert ok
@@ -587,7 +587,7 @@ class TestFindPlace:
             _patch_budget(),
             _patch_http(PLACES_OK),
             _patch_area(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place",
@@ -628,7 +628,7 @@ class TestFindPlace:
                 "_rank_named_place_candidates_by_route",
                 AsyncMock(side_effect=lambda candidates, *_args: (candidates, False)),
             ),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place",
@@ -679,7 +679,7 @@ class TestFindPlace:
             _patch_area(),
             patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, PLACES_OK))),
             patch.object(tools_booking, "_maps_get", AsyncMock(side_effect=maps_get)),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place",
@@ -704,7 +704,7 @@ class TestFindPlace:
             _patch_area(),
             patch.object(tools_booking, "_maps_post", AsyncMock(return_value=(200, PLACES_OK))),
             patch.object(tools_booking, "_maps_get", AsyncMock(side_effect=maps_get)),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool(
                 "find_place", {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65}, user=RIDER
@@ -755,7 +755,7 @@ class TestGeocodeBias:
             _patch_budget(),
             http_patch,
             _patch_area(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok and result["candidates"]
@@ -773,7 +773,7 @@ class TestGeocodeBias:
             http_patch,
             _patch_area(),
             _patch_last_ride([]),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st"}, user=RIDER)
         assert ok and result["candidates"]
@@ -801,7 +801,7 @@ class TestGeocodeBias:
             _patch_budget(),
             _patch_http(far_first),
             _patch_area(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok
@@ -826,7 +826,7 @@ class TestGeocodeBias:
             _patch_budget(),
             _patch_http(far_only),
             _patch_area(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok
@@ -850,7 +850,7 @@ class TestGeocodeLocalityFilter:
             _patch_budget(),
             http_patch,
             _patch_area({"id": "area-1", "name": "Regina", "city": "Regina"}),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok and result["candidates"]
@@ -866,7 +866,7 @@ class TestGeocodeLocalityFilter:
             _patch_budget(),
             http_patch,
             _patch_area({"id": "area-1", "name": "Saskatoon"}),  # no "city" key
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok and result["candidates"]
@@ -882,7 +882,7 @@ class TestGeocodeLocalityFilter:
             _patch_budget(),
             http_patch,
             _patch_area(None),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok and result["candidates"]
@@ -905,7 +905,7 @@ class TestGeocodeLocalityFilter:
             _patch_budget(),
             patch.object(tools_booking.httpx, "AsyncClient", MagicMock(return_value=ctx)),
             _patch_area({"id": "area-1", "name": "Regina", "city": "Regina"}),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok and result["candidates"]
@@ -939,7 +939,7 @@ class TestGeocodeLocalityFilter:
             _patch_budget(),
             _patch_http(far_and_ambiguous),
             _patch_area(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("find_place", {"query": "4325 wakeling st", **self.NEAR}, user=RIDER)
         assert ok
@@ -974,7 +974,7 @@ class TestAddressPrecision:
             _patch_budget(),
             _patch_http(payload),
             _patch_area(),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             return await execute_tool("find_place", {"query": query, **self.NEAR}, user=RIDER)
 
@@ -1504,7 +1504,7 @@ class TestFareQuote:
             _patch_settings(),
             _patch_budget(),
             _patch_http(correct),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
             patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
@@ -1566,7 +1566,7 @@ class TestFareQuote:
             _patch_settings(),
             _patch_budget(),
             _patch_http(walmart),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
         assert ok
@@ -1758,7 +1758,7 @@ class TestProposal:
             _patch_settings(),
             _patch_budget(),
             _patch_http(downtown),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
             patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)
@@ -1796,7 +1796,7 @@ class TestProposal:
             _patch_settings(),
             _patch_budget(),
             _patch_http(correct),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
             patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
@@ -1826,7 +1826,7 @@ class TestProposal:
             _patch_settings(),
             _patch_budget(),
             _patch_http(near),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
             patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
@@ -1910,7 +1910,7 @@ class TestProposal:
             _patch_settings(),
             _patch_budget(),
             _patch_http(two),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
             patch.object(tools_booking, "_dropoff_pair_refusal", AsyncMock(return_value=None)),
         ):
             result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
@@ -2428,7 +2428,7 @@ class TestCardsKeepPostalCodes:
                 "_rank_named_place_candidates_by_route",
                 AsyncMock(side_effect=lambda candidates, *_args: (candidates, False)),
             ),
-            patch.object(tools_booking, "record_call", AsyncMock()),
+            patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(True, 1.0, 10.0))),
         ):
             # near_* is the rider's point beside the Prince of Wales store;
             # candidates are re-sorted nearest-first, and this test is about

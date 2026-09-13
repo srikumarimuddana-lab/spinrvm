@@ -876,9 +876,6 @@ def test_valid_live_coordinates_edge_cases():
 
 
 def test_get_nearby_drivers_kill_switch_returns_empty(app_with_ws):
-    extra = [
-        patch("backend.routes.websocket.settings_loader_get_app_settings_placeholder", create=True),
-    ]
     # map_settings / prematch_driver_list / dispatch_geo_bounds are imported
     # inline inside the handler via nested try/except — patch the modules
     # they resolve to directly.
@@ -957,7 +954,13 @@ def test_chat_message_blank_text_is_ignored(app_with_ws):
 
 
 def test_admin_snapshot_message_types(app_with_ws):
-    admin_user = {"id": "admin_snap_1", "email": "a@spinr.test", "role": "admin", "token_version": 0}
+    admin_user = {
+        "id": "admin_snap_1",
+        "email": "a@spinr.test",
+        "role": "admin",
+        "token_version": 0,
+        "_admin_verified": True,
+    }
     ps = [
         patch("backend.routes.websocket.firebase_auth.verify_id_token", side_effect=Exception("no firebase")),
         patch(
@@ -994,7 +997,13 @@ def test_admin_snapshot_message_types(app_with_ws):
 
 
 def test_admin_snapshot_fetch_failure_returns_error(app_with_ws):
-    admin_user = {"id": "admin_snap_2", "email": "a2@spinr.test", "role": "admin", "token_version": 0}
+    admin_user = {
+        "id": "admin_snap_2",
+        "email": "a2@spinr.test",
+        "role": "admin",
+        "token_version": 0,
+        "_admin_verified": True,
+    }
     ps = [
         patch("backend.routes.websocket.firebase_auth.verify_id_token", side_effect=Exception("no firebase")),
         patch(

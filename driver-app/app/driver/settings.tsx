@@ -50,6 +50,7 @@ export default function SettingsScreen() {
     const [showDeleteStep2, setShowDeleteStep2] = useState(false);
     const [deleteInput, setDeleteInput] = useState('');
     const [exportingData, setExportingData] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     // Sound & haptics are device behaviours → device-local AsyncStorage
     // (alertPrefsStore), not notification_preferences on the server.
@@ -192,10 +193,14 @@ export default function SettingsScreen() {
     };
 
     const executeDelete = async () => {
+        // Guard against a double-tap firing a second DELETE while the first
+        // is still in flight — this is a destructive, unrecoverable action.
+        if (isDeleting) return;
         if (!isDeleteConfirmationValid(deleteInput)) {
             showToast('warning', t('settings.notConfirmedTitle'), t('settings.notConfirmedMsg'));
             return;
         }
+        setIsDeleting(true);
         try {
             // PIPEDA-compliant soft delete: DELETE /users/account locks the
             // account immediately but schedules the actual data deletion for
@@ -212,6 +217,8 @@ export default function SettingsScreen() {
             // Deletion rejections are actionable (active ride, unsettled
             // balance, pending payout) — show the backend's reason.
             showToast('error', t('settings.deleteFailedTitle'), getApiErrorMessage(err, t('settings.deleteFailedMsg')));
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -561,8 +568,17 @@ export default function SettingsScreen() {
                             <TouchableOpacity style={[styles.deleteModalBtn, { backgroundColor: colors.surface }]} onPress={() => setShowDeleteStep2(false)}>
                                 <Text style={[styles.deleteModalBtnText, { color: colors.text }]}>{t('settings.cancel')}</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={[styles.deleteModalBtn, { backgroundColor: colors.error }]} onPress={executeDelete}>
-                                <Text style={[styles.deleteModalBtnText, { color: '#fff' }]}>{t('settings.deleteForever')}</Text>
+                            <TouchableOpacity
+                                testID="deleteForeverButton"
+                                style={[styles.deleteModalBtn, { backgroundColor: colors.error }]}
+                                onPress={executeDelete}
+                                disabled={isDeleting}
+                            >
+                                {isDeleting ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text style={[styles.deleteModalBtnText, { color: '#fff' }]}>{t('settings.deleteForever')}</Text>
+                                )}
                             </TouchableOpacity>
                         </View>
                     </Pressable>

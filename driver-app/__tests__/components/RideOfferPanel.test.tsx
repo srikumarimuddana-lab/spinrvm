@@ -132,6 +132,59 @@ describe('RideOfferPanel', () => {
     expect(toJSON()).toBeNull();
   });
 
+  // Design-audit finding: an offer with several optional sections stacked
+  // (badges + incentive + quest + long rider name/address) had no
+  // scroll/height safeguard and could push content off the top of the
+  // screen. The fix wraps the informational content in a bounded
+  // ScrollView while keeping the timer and action bar outside it. This
+  // test can only prove Accept/Decline stay in the render tree and enabled
+  // under that worst-case stack -- it does NOT prove they are visually
+  // on-screen on a real device (no simulator/device is available here).
+  it('keeps Accept and Decline present and enabled under a worst-case content stack (all badges + incentive + quest + long name/address)', () => {
+    const worstCaseRide = {
+      ...mockRide,
+      rider_name: 'Alexandria Something-Very-Long Montgomery-Whitfield III',
+      pickup_address:
+        '1234 Extremely Long Boulevard Avenue Northwest, Building C, Suite 4500, Saskatoon, Saskatchewan',
+      dropoff_address:
+        '9876 Another Ridiculously Long Crescent Drive, Unit 12B, Regina, Saskatchewan',
+      surge_multiplier: 2.0,
+      requires_wav: true,
+      quiet_mode: true,
+      payment_method: 'cash',
+      is_scheduled: true,
+      total_bonus: 5,
+      incentives: [{ name: 'Peak hour bonus', bonus_amount: 3.5, incentive_type: 'peak' }],
+      quest_hint: {
+        title: 'Weekend Warrior',
+        current_value: 7,
+        target_value: 10,
+        progress_pct: 70,
+        reward_amount: 25,
+      },
+    };
+    const { getByLabelText, getByText } = render(
+      <RideOfferPanel {...defaultProps} incomingRide={worstCaseRide} />,
+    );
+
+    // Confirm the stack really is worst-case (every optional section
+    // actually rendered), not silently skipped.
+    expect(getByText('Pre-booked')).toBeTruthy();
+    expect(getByText('2.0x Surge')).toBeTruthy();
+    expect(getByText('WAV')).toBeTruthy();
+    expect(getByText('Quiet ride')).toBeTruthy();
+    expect(getByText('Cash')).toBeTruthy();
+    expect(getByText('Peak hour bonus')).toBeTruthy();
+    expect(getByText('Weekend Warrior — 7/10')).toBeTruthy();
+
+    const acceptBtn = getByLabelText('Accept ride');
+    const declineBtn = getByLabelText('Decline ride');
+    expect(acceptBtn).toBeTruthy();
+    expect(declineBtn).toBeTruthy();
+    expect(acceptBtn.props.disabled).toBeFalsy();
+    expect(declineBtn.props.disabled).toBeFalsy();
+  });
+
   // Gap #13: a pre-accept decline had no reason at all, so trust & safety
   // had no way to detect a driver refusing a service animal. A long-press
   // on Decline now offers a single, optional flag for that reason. The
@@ -222,6 +275,15 @@ describe('RideOfferPanel', () => {
   it('does not show the Pre-booked badge when is_scheduled is absent (backward-compatible offer payload)', () => {
     const { queryByText } = render(<RideOfferPanel {...defaultProps} incomingRide={mockRide} />);
     expect(queryByText('Pre-booked')).toBeNull();
+  });
+
+  // Design-audit finding: pickup/dropoff addresses were hard-truncated to
+  // one line (numberOfLines={1}) with no way to see the rest. Widened to 2
+  // lines so most real addresses show in full instead of clipping.
+  it('allows pickup/dropoff addresses to wrap onto up to 2 lines instead of hard-truncating to 1', () => {
+    const { getByText } = render(<RideOfferPanel {...defaultProps} />);
+    expect(getByText('123 Main St').props.numberOfLines).toBe(2);
+    expect(getByText('456 Elm Ave').props.numberOfLines).toBe(2);
   });
 
   describe('isLoading (double-tap guard on accept/decline)', () => {

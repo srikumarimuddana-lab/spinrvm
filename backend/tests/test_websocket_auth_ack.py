@@ -291,3 +291,41 @@ def test_admin_without_admin_role_gets_error_not_ack(app_with_ws):
     finally:
         for p in patches:
             p.stop()
+
+
+def test_ordinary_token_cannot_ride_a_stray_admin_role_column_into_admin_socket(app_with_ws):
+    """P0 regression (see test_admin_privilege_escalation.py): a normal,
+    legitimately-issued mobile JWT (aud=JWT_AUD_MOBILE, role='rider' in the
+    token itself) must NOT gain admin WebSocket access just because the
+    users-table row it resolves to happens to carry role='admin' — a stray
+    value from a legacy row, an ops data-fix, or a migration bug, not from
+    ever completing the real admin pipeline (_verify_admin_payload's
+    aud + JTI denylist + admin_staff active + token_version + idle-timeout
+    chain). Before the fix, the endpoint fell through to a bare users.role
+    check on this exact DB row and let it through with zero admin
+    verification — the same bug class already closed for get_admin_user and
+    the MCP gate, just missed on this call site."""
+    # The token itself is an ordinary rider token: role='rider' keeps
+    # _patch_jwt_auth_and_db on the JWT_AUD_MOBILE / no-admin_staff-row path.
+    jwt_user = {"id": "user_stray_role_1", "role": "rider", "phone": "+15559998888"}
+    # The DB row this token's user_id resolves to independently carries
+    # role='admin' -- the attacker-controlled/legacy column value the fix
+    # must not trust.
+    db_row_with_stray_admin_role = {"id": "user_stray_role_1", "role": "admin", "phone": "+15559998888"}
+    patches = _patch_jwt_auth_and_db(jwt_user, db_user=db_row_with_stray_admin_role)
+    for p in patches:
+        p.start()
+    try:
+        from starlette.websockets import WebSocketDisconnect
+
+        client = TestClient(app_with_ws)
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(f"/ws/admin/{jwt_user['id']}") as ws:
+                ws.send_json({"type": "auth", "token": "fake-jwt-token"})
+                msg = ws.receive_json()
+                assert msg["type"] == "error"
+                assert msg["message"] == "admin_access_required"
+                ws.receive_json()
+    finally:
+        for p in patches:
+            p.stop()

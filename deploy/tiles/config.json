@@ -1,0 +1,37 @@
+{
+  "$comment": [
+    "tileserver-gl config for the Spinr self-hosted basemap. Paths are relative",
+    "to options.paths.root and must line up with where the Dockerfile copies",
+    "each artifact: /data/styles/basemap/style.json, /data/fonts/<Font>/<range>.pbf",
+    "and /data/tiles.mbtiles.",
+    "",
+    "The style's vector source is rewritten at build time to mbtiles://{v3},",
+    "so the 'v3' key under 'data' below is load-bearing — renaming it without",
+    "passing a matching --build-arg DATA_ID leaves the style pointing at a",
+    "source that does not exist and every tile renders empty."
+  ],
+  "options": {
+    "paths": {
+      "root": "/data",
+      "fonts": "fonts",
+      "styles": "styles",
+      "mbtiles": "."
+    },
+    "serveAllFonts": true,
+    "formatQuality": {
+      "jpeg": 80,
+      "webp": 90
+    },
+    "maxScaleFactor": 2
+  },
+  "styles": {
+    "basemap": {
+      "style": "basemap/style.json"
+    }
+  },
+  "data": {
+    "v3": {
+      "mbtiles": "tiles.mbtiles"
+    }
+  }
+}

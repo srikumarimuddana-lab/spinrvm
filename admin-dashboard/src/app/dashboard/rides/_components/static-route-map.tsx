@@ -32,10 +32,65 @@ import {
 
 const TILE_SIZE = 256;
 const MIN_ZOOM = 1;
-/** Carto's light_all raster pyramid tops out here. */
+/** Carto's light_all raster pyramid tops out here. Kept as the ceiling for
+ *  every provider: tileserver-gl rasterises by overzooming its vector data so
+ *  it answers past its own maxzoom anyway, and a provider that doesn't just
+ *  404s — which the per-tile onError already hides, leaving the route and pins
+ *  untouched. */
 const MAX_ZOOM = 20;
-const TILE_URL = (z: number, x: number, y: number) =>
-    `https://basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`;
+
+/** Keyless Carto raster pyramid — the default when nothing is self-hosted.
+ *  OpenFreeMap is not an option here: it serves vector only, and its one raster
+ *  endpoint is low-zoom shaded relief rather than a street map. */
+export const DEFAULT_RASTER_TILE_URL =
+    "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
+
+/**
+ * Raster tile URL template, overridable with NEXT_PUBLIC_RASTER_TILE_URL so a
+ * self-hosted tile server (deploy/tiles) can feed this renderer too. Vector
+ * self-hosting alone cannot: this component deliberately uses no WebGL and no
+ * vector tiles, so it needs real rasterised PNGs.
+ *
+ * Read at call time rather than module scope so tests can drive it with
+ * vi.stubEnv; Next.js still inlines the literal at build time.
+ */
+export function rasterTileUrlTemplate(): string {
+    return process.env.NEXT_PUBLIC_RASTER_TILE_URL?.trim() || DEFAULT_RASTER_TILE_URL;
+}
+
+/** Substitute {z}/{x}/{y} in the configured template. Exported for the test:
+ *  a template whose placeholders silently fail to substitute requests one wrong
+ *  URL forever, which is indistinguishable from a dead tile host. */
+export function rasterTileUrl(z: number, x: number, y: number, template?: string): string {
+    return (template ?? rasterTileUrlTemplate())
+        .replace(/\{z\}/g, String(z))
+        .replace(/\{x\}/g, String(x))
+        .replace(/\{y\}/g, String(y));
+}
+
+/**
+ * Attribution line for whoever actually served the tiles.
+ *
+ * OpenStreetMap's is required for any OSM-derived basemap, self-hosted
+ * included — that one never drops. Carto's is required only when Carto served
+ * the tiles; leaving it hardcoded would credit them for bytes from our own tile
+ * server, which is false rather than merely redundant.
+ *
+ * A third-party provider that is neither of these gets OSM attribution only,
+ * which may under-credit them — add a case here if you point
+ * NEXT_PUBLIC_RASTER_TILE_URL at one.
+ */
+export function rasterAttribution(template?: string): string {
+    const t = template ?? rasterTileUrlTemplate();
+    // Case-insensitive: hostnames are, and an operator who types the Carto host
+    // with different casing would otherwise silently UNDER-credit them — the
+    // exact failure this function exists to prevent, just in the other
+    // direction. Anchored to a `.`, `//` or string start so a lookalike host
+    // like evilcartocdn.com cannot claim Carto's attribution.
+    return /(^|\/\/|\.)cartocdn\.com/i.test(t)
+        ? "© OpenStreetMap contributors © CARTO"
+        : "© OpenStreetMap contributors";
+}
 
 export interface StaticRoutePath {
     points: { lat: number; lng: number }[];
@@ -160,6 +215,9 @@ export default function StaticRouteMap({
         };
 
         const worldTiles = 2 ** zoom;
+        // Resolved once per layout rather than per tile — a viewport can be a
+        // couple of dozen tiles and the template cannot change mid-render.
+        const tileTemplate = rasterTileUrlTemplate();
         const tiles: { key: string; url: string; left: number; top: number }[] = [];
         const x0 = Math.floor(originX / TILE_SIZE);
         const x1 = Math.floor((originX + size.w) / TILE_SIZE);
@@ -172,7 +230,7 @@ export default function StaticRouteMap({
                 const wrapped = ((tx % worldTiles) + worldTiles) % worldTiles;
                 tiles.push({
                     key: `${zoom}/${tx}/${ty}`,
-                    url: TILE_URL(zoom, wrapped, ty),
+                    url: rasterTileUrl(zoom, wrapped, ty, tileTemplate),
                     left: tx * TILE_SIZE - originX,
                     top: ty * TILE_SIZE - originY,
                 });
@@ -202,6 +260,7 @@ export default function StaticRouteMap({
         return {
             tiles,
             strokes,
+            attribution: rasterAttribution(tileTemplate),
             pins: pins.map((p) => ({ ...p, ...toLocal(p.lat, p.lng) })),
         };
     }, [size, pickupLat, pickupLng, dropoffLat, dropoffLng, paths, topPadding]);
@@ -275,10 +334,13 @@ export default function StaticRouteMap({
                 />
             ))}
 
-            {/* Required by Carto's and OSM's terms — a licensing condition of
-                the free tiles, not decoration. */}
+            {/* Required by OSM's terms — and by Carto's when Carto served the
+                tiles — a licensing condition of the free tiles, not decoration.
+                Tracks the configured provider rather than being hardcoded; see
+                rasterAttribution(). Rendered even before the first layout so a
+                map that never sizes still carries its attribution. */}
             <div className="absolute bottom-0 right-0 bg-background/80 px-1.5 py-0.5 text-[9px] text-muted-foreground">
-                © OpenStreetMap contributors © CARTO
+                {view?.attribution ?? rasterAttribution()}
             </div>
         </div>
     );

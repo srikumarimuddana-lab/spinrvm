@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { project } from './static-route-map';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  DEFAULT_RASTER_TILE_URL,
+  project,
+  rasterAttribution,
+  rasterTileUrl,
+  rasterTileUrlTemplate,
+} from './static-route-map';
 
 const TILE = 256;
 const tileOf = (lat: number, lng: number, z: number) => {
@@ -52,5 +58,74 @@ describe('static route map projection', () => {
       expect(Number.isFinite(y)).toBe(true);
     }
     expect(project(90, 0, 13).y).toBeCloseTo(project(85.05112878, 0, 13).y, 6);
+  });
+});
+
+// This renderer needs real rasterised PNGs — it deliberately uses no WebGL and
+// no vector tiles — so self-hosting the vector basemap alone cannot feed it.
+// NEXT_PUBLIC_RASTER_TILE_URL points it at deploy/tiles' raster endpoint.
+describe('raster tile source', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('defaults to the keyless Carto pyramid, unchanged from before', () => {
+    expect(rasterTileUrlTemplate()).toBe(DEFAULT_RASTER_TILE_URL);
+    expect(rasterTileUrl(13, 1668, 2701)).toBe(
+      'https://basemaps.cartocdn.com/light_all/13/1668/2701.png',
+    );
+  });
+
+  it('substitutes every placeholder in a configured template', () => {
+    vi.stubEnv(
+      'NEXT_PUBLIC_RASTER_TILE_URL',
+      'https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png',
+    );
+    expect(rasterTileUrl(13, 1668, 2701)).toBe(
+      'https://maps.spinr.ca/styles/basemap/13/1668/2701.png',
+    );
+  });
+
+  // A leftover placeholder requests one wrong URL forever, which renders an
+  // empty grid — indistinguishable from a dead tile host.
+  it('leaves no placeholder behind, even when one repeats', () => {
+    const url = rasterTileUrl(5, 6, 7, 'https://t.example/{z}/{x}/{y}/{z}.png');
+    expect(url).toBe('https://t.example/5/6/7/5.png');
+    expect(url).not.toMatch(/\{[zxy]\}/);
+  });
+
+  it('ignores whitespace-only configuration rather than requesting it', () => {
+    vi.stubEnv('NEXT_PUBLIC_RASTER_TILE_URL', '   ');
+    expect(rasterTileUrlTemplate()).toBe(DEFAULT_RASTER_TILE_URL);
+  });
+
+  // Attribution is a licensing condition, not decoration. OSM's is always
+  // required; Carto's only when Carto actually served the bytes.
+  it('always credits OpenStreetMap', () => {
+    expect(rasterAttribution()).toContain('OpenStreetMap');
+    expect(rasterAttribution('https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png'))
+      .toContain('OpenStreetMap');
+  });
+
+  it('credits CARTO only while Carto is serving the tiles', () => {
+    expect(rasterAttribution(DEFAULT_RASTER_TILE_URL)).toContain('CARTO');
+    expect(rasterAttribution('https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'))
+      .toContain('CARTO');
+    // Crediting Carto for bytes from our own tile server would be false, not
+    // merely redundant.
+    expect(rasterAttribution('https://maps.spinr.ca/styles/basemap/{z}/{x}/{y}.png'))
+      .not.toContain('CARTO');
+  });
+
+  it('matches the Carto host regardless of casing', () => {
+    // Hostnames are case-insensitive. A config typo here would UNDER-credit
+    // Carto — the same licensing failure this function prevents, inverted.
+    expect(rasterAttribution('https://BaseMaps.CartoCDN.com/light_all/{z}/{x}/{y}.png'))
+      .toContain('CARTO');
+  });
+
+  it('does not hand Carto attribution to a lookalike host', () => {
+    // The match is anchored to a dot, "//" or string start, so a host that
+    // merely contains the string cannot claim someone else's credit.
+    expect(rasterAttribution('https://evilcartocdn.com/light_all/{z}/{x}/{y}.png'))
+      .not.toContain('CARTO');
   });
 });

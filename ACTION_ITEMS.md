@@ -25606,6 +25606,31 @@ how much they de-risk a public launch._
   `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7,
   `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
 
+### C107. `test_settings_column_parity.py`'s regression check only covers migration 313's original 24 fields, not any `SettingsUpdateRequest` field added since
+- [ ] **Status:** OPEN — found, not fixed. Documentation/test-coverage gap, not a live bug.
+- **Found by:** `spinr-migration-reviewer`'s pre-merge review of PR #5312 (`driver_turn_by_turn_enabled`
+  settings-write fix, migration 416).
+- **What's wrong:** `test_every_api_field_has_a_column` in `backend/tests/test_settings_column_parity.py`
+  cross-checks parsed `settings` columns against a hardcoded `_EXPECTED_313_COLUMNS` set — the 24
+  fields migration 313 originally fixed. Any `SettingsUpdateRequest` field declared after 313
+  (confirmed for both `directions_proxy_enabled`, migration 415, and `driver_turn_by_turn_enabled`,
+  migration 416) is invisible to that regression loop. If either PR had added its
+  `SettingsUpdateRequest` field without its matching migration, this test would still have passed —
+  the exact PGRST204 "whole save 500s" failure mode migration 313 exists to prevent would have shipped
+  undetected by the shared gate.
+- **Why it hasn't bitten yet:** both 415 and 416 happened to also ship a bespoke, field-specific test
+  (`test_migration_401_adds_the_column_with_false_default`-style) that regexes the new migration's SQL
+  directly — real protection, but dependent on each PR's author remembering to write one, which is
+  exactly the manual-discipline failure mode migration 313 was created to eliminate in the first place.
+- **Recommendation:** extend `test_every_api_field_has_a_column`'s check to cross-reference *every*
+  `Optional[...]` field on `SettingsUpdateRequest` against `_declared_settings_columns()`, not just the
+  pinned 313 set — the parsing helper already exists and already works (confirmed it correctly picks up
+  migration 416's `ADD COLUMN` statement). Once generic, a future flag needs no bespoke test for this
+  specific protection (a flag-specific test is still good practice for its own default-value/behavior
+  assertions, just not required to catch a missing-migration regression).
+- **Files:** `backend/tests/test_settings_column_parity.py` (`_EXPECTED_313_COLUMNS`,
+  `test_every_api_field_has_a_column`), `backend/routes/admin/settings.py` (`SettingsUpdateRequest`).
+
 ## Recently completed (do not redo)
 
 | Item | Where |

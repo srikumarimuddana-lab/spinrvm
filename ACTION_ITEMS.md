@@ -25673,10 +25673,34 @@ how much they de-risk a public launch._
   `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
 
 ### C107. Migration 142's `role IN ('admin','super_admin')` RLS idiom may be unreachable for any admin provisioned after migration 256 — spans 10 tables
-- [ ] **Status:** OPEN — found during independent security review of PR #5307 (a follow-up fix
-  applying migration 142's admin-lockdown pattern to `corporate_accounts`, the one table missed
-  when that pattern was first rolled out to its 9 siblings). Not fixed by this entry — this is a
-  tracking item for a systemic correctness question, not a code change.
+- [x] **Status:** CLOSED (2026-09-13) — both open actions resolved with direct production
+  evidence, not inference. **(1) Legacy row check:** queried the real production database
+  (`spinrmobileapp`, `soavhtdhefowwvforzwb`) read-only. Exactly one `users` row has
+  `role = 'admin'` (id `71ba3eea-287f-41d8-8e48-9d794ea531e0`, created 2026-02-14) — matches
+  this entry's own prediction of "the single historical `make_admin.py` target" exactly. That
+  row has **no corresponding `auth.users` row at all** — it cannot obtain a real Supabase-issued
+  session under any circumstance, so it cannot exercise the RLS policy in question no matter
+  what. The "unreachable" theory is confirmed, not just plausible. **(2) Policy decision:**
+  documenting the `users.role` check as legacy/dead (this entry's proposed Option B) is correct,
+  and switching it to check `admin_staff` instead (Option A) was considered and rejected — see
+  **C108** below for why: it would not add any real reachability today regardless of which table
+  the `EXISTS` subquery reads, because the underlying blocker isn't which identity table is
+  checked, it's that this app has never issued a single real Supabase Auth session to any user of
+  any kind. No migration/policy change made — the correct fix is documentation, not code, per
+  that analysis. **Escalation to the admin-identity model owner (as this entry proposed if the
+  answer wasn't obvious from code alone) turned out to be unnecessary** — direct production
+  querying gave an unambiguous, low-risk answer without needing to guess at intent.
+  **Follow-up hardening done the same session, prompted by `spinr-security-auditor`'s
+  adversarial review of this closure (see C109 below for the real finding that review
+  surfaced):** the legacy row (id `71ba3eea-287f-41d8-8e48-9d794ea531e0`) had zero
+  `admin_staff` linkage, zero rides as rider or driver, and `is_driver=false` — confirmed
+  never a functioning account of any kind, not just an RLS-unreachable one. Reset its
+  `role` to `'rider'` directly in production, then ran
+  `ALTER TABLE users VALIDATE CONSTRAINT chk_users_role_not_admin` (previously `NOT VALID`
+  since migration 256) — now a standing, Postgres-enforced guarantee that no `users` row
+  can hold an admin-shaped role value, not just a one-time manual check. Both actions
+  verified: a follow-up `count(*)` query confirmed zero rows remain with any of the six
+  admin-shaped role strings before running `VALIDATE CONSTRAINT`.
 - **Issue/gap:** `backend/migrations/142_fix_rls_financial_tables.sql` (and now
   `416_corporate_accounts_rls_super_admin_fix.sql`, PR #5307) gate admin access to 10 tables via
   RLS policies checking `EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND
@@ -25712,6 +25736,156 @@ how much they de-risk a public launch._
   (`_verify_admin_payload`), `backend/tests/rls/test_corporate_accounts_super_admin_fix.py` (its
   schema fixture applies migrations 05/17/416 only, not 256 — its passing tests seed `users.role`
   directly and so do not, by themselves, demonstrate reachability against the real current schema).
+
+### C108. `auth.users` is completely empty in production — every `auth.uid()`-based RLS policy in the schema (not just C107's 10 tables) is currently unreachable for the same reason
+- [ ] **Status:** OPEN, informational/documentation-debt — no live incident, no action required
+  today. Found while closing C107: querying the real production database
+  (`spinrmobileapp`, `soavhtdhefowwvforzwb`) to check for a legacy `role='admin'` row also
+  surfaced a much bigger fact underneath it.
+  **Correction (2026-09-13, same day, per `spinr-security-auditor`'s adversarial review of this
+  entry's own closure of C107): the load-bearing mechanism below was wrong, though the
+  conclusion survives on different grounds.** An empty `auth.users` does NOT by itself mean
+  PostgREST can never see an `authenticated`-role request — GoTrue-style JWT validation checks
+  a *signature*, not that the `sub` claim maps to a real `auth.users` row; a self-minted JWT
+  signed with whatever secret the project's PostgREST trusts would be honored regardless of
+  `auth.users` population. The actual, verified guarantee is narrower and stronger: (a) no
+  anon/publishable-key Supabase client (`createClient(...)`) exists anywhere in shipped code —
+  grepped the full repo; the only hit is `frontend/config/supabase.ts`, inside the explicitly
+  `frontend/DEPRECATED.md`-marked directory, with literal placeholder credentials (matches the
+  pre-existing ACTION_ITEMS.md C43 finding, independently re-confirmed here); and (b) this app's
+  `JWT_SECRET` (`backend/dependencies/__init__.py`) is a wholly separate secret from whatever key
+  Supabase's PostgREST validates `authenticated` JWTs against — no `SUPABASE_JWT_SECRET`-equivalent
+  env var or GoTrue-signing usage exists anywhere in this codebase, so this app's own tokens
+  could not be replayed against PostgREST as `authenticated` even if someone tried. The
+  `auth.users`-empty fact below is corroborating evidence that no one has ever exercised this
+  path, not the reason it cannot be exercised. Added to the suggested-next-step list below:
+  confirm no Supabase "Third-Party Auth" issuer is configured in the project's own Auth
+  settings — a project-config fact no SQL query can surface, and the one remaining way this
+  guarantee could be quietly invalidated in the future.
+- **What was found:** `SELECT count(*) FROM auth.users` returns **0**, against 1,955 rows in
+  `public.users`. This app has never created a single Supabase Auth account for any rider,
+  driver, or admin. Confirmed by joining on id: zero of the 1,955 `public.users` rows have a
+  matching `auth.users` row (checked all of them, not a sample).
+- **Why this matters beyond C107:** C107 asked "can an admin ever present a real
+  `authenticated`-role JWT that satisfies `users.role IN ('admin','super_admin')`" and the
+  answer was no, because migration 256 blocks that role value AND (per this finding) there's no
+  `auth.users` row to attach a real session to regardless. But the same underlying fact —
+  no `auth.users` rows exist at all — means this isn't specific to admin policies or to
+  migration 256. **Every RLS policy anywhere in this schema that checks `auth.uid() = <col>`
+  for the `authenticated` role** (rider-owns-own-ride, driver-owns-own-record, the
+  member-read-own-corporate-row policies migration 27/142 added, all of `backend/supabase_rls.sql`,
+  etc.) is equally unreachable today, for the identical reason: there is no code path, anywhere,
+  by which a rider or driver obtains a real Supabase-issued session JWT. The app's entire auth
+  model is the custom JWT scheme CLAUDE.md documents (`JWT_SECRET`-signed, verified by the
+  backend's own dependency functions) — Supabase Auth (`auth.users`, `auth.uid()`,
+  `GoTrue`/`/auth/v1/*`) is provisioned by the platform but simply never used to authenticate a
+  real person. The backend's exclusive use of the service-role key (bypasses RLS) is why none of
+  this has ever mattered functionally — but it means C49's whole "DB-role-level RLS test
+  coverage" effort (`backend/tests/rls/`, 194 tests as of this writing) is pinning policy *logic*
+  correctness (given some claim set, is access granted/denied correctly) rather than anything
+  currently *exercised* in production — `conftest.py`'s `as_role()` helper directly sets
+  `request.jwt.claims`/`SET ROLE` to simulate what PostgREST does after validating a real JWT;
+  it does not and cannot prove such a JWT is ever actually issued. That's a legitimate and
+  valuable thing to test (protects against a future direct-PostgREST path, and against RLS
+  regressions if the auth model ever changes), but the C49 test suite's own docstrings and this
+  repo's broader RLS documentation should not imply these policies are live-enforced against
+  real traffic today — they are dormant-but-correct, not active.
+- **Production impact:** none currently, for the same reason C107 concluded none — service-role
+  bypass is the only path any real request takes. This is not a vulnerability (nothing is
+  granted that shouldn't be); it's an architecture-clarity gap that could mislead someone
+  drawing false comfort from "we have RLS" without realizing the `authenticated`-role half of
+  that story has no live traffic to protect against right now.
+- **Not a repeat of C107:** C107 was scoped to one specific idiom (migration 142/416's admin
+  check) on 10 tables and is now closed. This entry is the broader, schema-wide version of the
+  same underlying fact, left open because deciding what (if anything) to do about it — e.g.
+  whether Supabase Auth should ever be wired up for real end-user sessions, whether
+  `backend/tests/rls/`'s documentation should be reworded to say "policy-logic coverage, not
+  live-traffic coverage," or whether this is simply accepted as the permanent architecture — is
+  a product/architecture decision, not a mechanical fix.
+- **Suggested next step (not done here):** reword `backend/tests/rls/README`-equivalent
+  documentation (its module docstrings, and CLAUDE.md's Testing Conventions RLS paragraph) to
+  state plainly that this tier proves policy logic, not production reachability, citing the
+  corrected mechanism above (no anon-key client + separate JWT secrets), not the `auth.users`
+  count. Confirm no Supabase "Third-Party Auth" issuer is configured in the project's Auth
+  settings (see the correction above — this is the one gap no SQL query can check). Escalate the
+  bigger question (does Supabase Auth get wired up for real sessions, ever) to whoever owns the
+  auth roadmap if it becomes relevant — e.g. if a future feature needs direct-from-client
+  PostgREST access instead of always going through the backend.
+- **Verification performed:** direct, read-only SQL against the real production database via
+  the Supabase MCP connector (`execute_sql`, `SELECT count(*)` / existence-check queries only —
+  no row-level PII was read or is reproduced here beyond one internal `user_id` UUID, consistent
+  with this repo's own logging convention of using `user_id` rather than PII as an identifier).
+  Not verified: whether any *other* Supabase project this app might use in a different
+  environment (staging, if one exists on a separate project) shows the same pattern — this
+  check covered only the one confirmed-production project this session has access to.
+- **Files (reference only, no code changed by this entry):** `backend/supabase_rls.sql`,
+  every `backend/migrations/*.sql` file creating a `CREATE POLICY ... TO authenticated USING
+  (auth.uid() = ...)`-shaped policy, `backend/tests/rls/conftest.py` (`as_role()`),
+  `backend/tests/rls/README`-equivalent docstrings across that directory's test files.
+
+### C109. WebSocket admin gate trusted the raw `users.role` column, not the `_admin_verified` marker — same privilege-escalation class as the already-fixed HTTP/MCP gates, just missed on this call site
+- [x] **Status:** CLOSED (2026-09-13) — found by `spinr-security-auditor`'s adversarial review
+  of C107's own closure (asked to double-check whether the legacy `role='admin'` row deserved
+  more urgency than "not done here"), fixed the same session. This is a real, live P0-class bug,
+  not a documentation gap like C107/C108 above — flagging that distinction explicitly so closing
+  C107/C108 doesn't read as "nothing further to do here."
+- **Issue/gap:** `backend/routes/websocket.py`'s `client_type == "admin"` gate
+  (previously ~line 692) checked `user.get("role") not in _ADMIN_ROLES` against whatever dict
+  `user` happened to be at that point in the function — including, on the ordinary-JWT fallback
+  path, a **plain `db_supabase.get_user_by_id()` result with no admin verification at all.**
+  `backend/tests/test_admin_privilege_escalation.py` already documents this exact vulnerability
+  class as found-and-fixed for `get_admin_user` (`backend/dependencies/__init__.py:777`, HTTP
+  routes) and the MCP gate (`backend/ai/mcp_server.py:105`) — both were hardened to require the
+  private `_admin_verified` marker that ONLY `_verify_admin_payload` sets, after the full admin
+  pipeline (aud=spinr:admin + JTI denylist + admin_staff active + token_version + idle timeout).
+  The WebSocket handler was never updated to match when those fixes landed.
+- **Exploit trace:** an ordinary, legitimately-issued 15-minute mobile JWT (`aud=spinr:rider` or
+  `spinr:driver`, no admin claims) for ANY account whose `users.role` database column happens to
+  hold one of `{admin, super_admin, operations, support, finance, custom}` — a legacy row, an
+  ops data-fix, a migration bug, anything that ever wrote that column — reaches
+  `verify_jwt_token()` → `_verify_admin_payload()` correctly returns `None` (wrong audience, by
+  design) → the endpoint's fallback does a bare `get_user_by_id()` lookup → that dict carries
+  `role` but no `_admin_verified` → the old `role in _ADMIN_ROLES` check passed anyway. The
+  connection registers as a real admin socket (`admin_<user_id>`) and can call
+  `get_drivers_snapshot`/`get_rides_snapshot` (fleet-wide live driver locations and all active
+  ride data) and receive `manager.broadcast_to_admins` traffic — with zero MFA, zero
+  `admin_staff` check, zero idle timeout, zero JTI revocation.
+- **Actual exposure today:** contingent on C107's one legacy row (`role='admin'`, id
+  `71ba3eea-287f-41d8-8e48-9d794ea531e0`) being able to complete a normal OTP/Firebase login —
+  nothing in `routes/auth.py`'s login endpoints filters against `role`. That row has now been
+  reset to `role='rider'` (see C107's follow-up note) and `chk_users_role_not_admin` is fully
+  `VALIDATE`d, so no `users` row can hold an admin-shaped role value going forward — but the code
+  path itself was the real bug and needed fixing regardless of whether any row currently
+  exploited it.
+- **Fix:** `backend/routes/websocket.py`'s admin gate now checks `not user.get("_admin_verified")`
+  instead of the raw `role` string, mirroring `get_admin_user` exactly. The now-unused
+  `_ADMIN_ROLES` module constant (this file's only reference to it) was removed as orphaned by
+  this change. Verified real admin logins still work: `_verify_admin_payload`'s success path
+  (staff, break-glass, and `admin-001` env-var identities all reach the function's shared return
+  statement) sets `_admin_verified: True` unconditionally, so the new gate does not regress any
+  legitimate admin connection.
+- **Regression test:** `backend/tests/test_websocket_auth_ack.py::test_ordinary_token_cannot_ride_a_stray_admin_role_column_into_admin_socket`
+  — an ordinary rider-shaped JWT resolving to a DB row with a stray `role='admin'` value must be
+  rejected with `admin_access_required`, never `auth_success`. Confirmed the test actually
+  catches the bug: reverted the fix locally, re-ran the test, watched it fail with the exploit
+  succeeding (`auth_success` sent instead of `error`), then restored the fix and confirmed it
+  passes. Full existing suite re-run alongside it (92 tests across
+  `test_websocket_auth_ack.py`, `test_admin_privilege_escalation.py`, `test_websocket_auth.py`,
+  `test_websocket_token_revocation.py`, `test_logout_all.py`,
+  `test_refresh_token_reuse_detection.py`) — all pass, no regression to any legitimate
+  driver/rider/admin WebSocket flow.
+- **Blast radius grep performed:** searched the whole backend for the same pattern (an
+  ADMIT-direction check against `user.get("role")`/`current_user.get("role")` for platform-admin
+  purposes, not the corporate company-role checks in `corporate_company_bookings.py`/
+  `dependencies/company_guard.py`, which are a different, unrelated authorization dimension).
+  Every other hit is either (a) downstream of a FastAPI `Depends(get_admin_user)` (or equivalent)
+  that already enforces `_admin_verified` before the route body runs, where a further
+  `role == 'super_admin'` check is a safe, fine-grained distinction between admin tiers on an
+  already-verified caller (`routes/admin/*.py`'s ~40 `admin.get("role") != "super_admin"` checks,
+  `dependencies/__init__.py:799,823`), or (b) DENY-direction (`ai_console.py`, `mcp_server.py`,
+  reject-if-role-matches), the safe direction for an over-broad `role` check. This WebSocket gate
+  was the only ADMIT-direction, unguarded instance found.
+- **Files:** `backend/routes/websocket.py`, `backend/tests/test_websocket_auth_ack.py`.
 
 ## Recently completed (do not redo)
 

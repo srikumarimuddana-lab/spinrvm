@@ -201,6 +201,7 @@ this is also stated as the top-of-file comment in migration 416 itself, per
 - [x] `python -m py_compile backend/tests/rls/test_corporate_accounts_super_admin_fix.py` — passes.
 - [x] `ruff check backend/tests/rls/test_corporate_accounts_super_admin_fix.py` — passes, no findings.
 - [x] `pytest tests/rls/test_corporate_accounts_super_admin_fix.py -c /dev/null --confcutdir=tests/rls --collect-only` — collects all 6 tests cleanly, same shape/imports as the existing RLS test files in this directory.
+- [x] Confirmed CI *will* give this a genuine real-Postgres run even though this sandbox couldn't: `.github/workflows/ci.yml`'s dedicated "Run RLS role-level tests (real Postgres)" step runs `TEST_DATABASE_URL=... pytest tests/rls -c /dev/null --confcutdir=tests/rls -v` against a real `postgres:15` service container on every PR — this new file is picked up by that same `tests/rls` invocation with no workflow change needed.
 - [x] Blast-radius grep performed — see §4 (every backend `corporate_accounts` reader/writer traced to the service-role client; every frontend surface checked for a direct Supabase client; no other migration/code references this policy by name).
 - [x] Reviewed against `backend/migrations/CLAUDE.md` (naming, append-only, RLS pattern) and `CLAUDE.md`'s RLS/Query-filter/data-layer conventions.
 - [x] Self-applied the `spinr-migration-reviewer` and `spinr-security-auditor` checklists against the diff (no dedicated Agent-launch tool was available in this sandbox to invoke them as actual subagents — see PR description for the full self-review output and that caveat). No blockers found by either checklist.
@@ -208,28 +209,35 @@ this is also stated as the top-of-file comment in migration 416 itself, per
 
 ## 10. What was NOT verified
 
-- **No real-Postgres run.** This sandbox has no reachable Postgres with
-  `CREATE DATABASE`/`CREATE ROLE` rights for `backend/tests/rls/` (attempting
+- **No real-Postgres run performed by this session.** This sandbox has no
+  reachable Postgres with `CREATE DATABASE`/`CREATE ROLE` rights for
+  `backend/tests/rls/` (attempting
   `pytest tests/rls/... -c /dev/null --confcutdir=tests/rls` without
   `TEST_DATABASE_URL`/`DATABASE_URL` set produces a real `psycopg2
   .OperationalError: ... role "root" does not exist` from `psycopg2.connect
   (None)` falling back to local peer auth as the sandbox's OS user — expected
   and not worked around, per instructions). The migration's SQL has not
   executed against a real Postgres in this session; only `py_compile` +
-  `ruff` + `--collect-only` verification was possible here.
-  - **Side finding, not fixed here**: reproduced the identical connection
-    error against an already-merged sibling file
-    (`tests/rls/test_money_and_safety_rls.py`) and confirmed the root cause —
-    `backend/tests/rls/conftest.py`'s module-level
-    `pytestmark = pytest.mark.skipif(...)` has no effect on *other* test
-    modules that merely consume its fixtures (`pytestmark` only marks tests
-    within the module that defines it); it does not actually gate `pg_conn`/
-    `pg_cur` from attempting a real connection when no test DB is configured,
-    contrary to this repo's own documentation ("self-skips (not fails)
-    otherwise", `CLAUDE.md` Testing Conventions and the conftest module
-    docstring). This is a pre-existing harness bug affecting every file in
-    `backend/tests/rls/`, not something this PR introduces or is scoped to
-    fix — flagged here rather than silently observed.
+  `ruff` + `--collect-only` verification was possible here. **This PR's own
+  CI will run it for real regardless** — see §9: `ci.yml` runs `tests/rls`
+  against a real `postgres:15` service container on every PR, so the actual
+  merge-gating signal for this test file will be a genuine real-Postgres
+  result, just not one this session could produce itself.
+  - While confirming the above, reproduced the same local connection error
+    against an already-merged sibling file
+    (`tests/rls/test_money_and_safety_rls.py`), which independently confirms
+    a quirk `ci.yml` itself already documents in its own comments (search
+    "does NOT propagate to sibling test modules" in the RLS step's
+    surrounding comment block): `backend/tests/rls/conftest.py`'s
+    module-level `pytestmark = pytest.mark.skipif(...)` does not actually
+    gate other test modules' fixtures from attempting a real connection when
+    no test DB is configured (`pytestmark` only marks tests within the
+    module that defines it) — it only *reads* as a clean self-skip when
+    `TEST_DATABASE_URL`/`DATABASE_URL` happen to be genuinely unset **and**
+    unreachable-by-default, which isn't this sandbox's situation. Not a new
+    finding, not this PR's to fix, and irrelevant to CI (which always sets
+    `TEST_DATABASE_URL` for real) — noted only so "collect-only, not a real
+    run" isn't mistaken for a clean self-skip in this write-up.
 - **Production `users` table state for the migration-256 caveat in §4** —
   whether any legacy `users.role = 'admin'`/`'super_admin'` rows still exist
   (pre-dating migration 256's `NOT VALID` constraint) was not checked; this

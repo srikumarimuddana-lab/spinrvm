@@ -7,12 +7,24 @@ import { RouteLine, trimTraveled, type RoutePoint } from '../RouteLine';
 // findable host element rather than null (the pattern driver-app's
 // HeatmapCells.test.tsx uses) so the RENDERING block below can count children —
 // the trimTraveled tests never render, so they are unaffected either way.
+// The stub records MOUNTS, not just presence. A count-only assertion cannot
+// tell "React updated 24 polylines in place" from "React destroyed 24 and built
+// 24 new ones" — and that distinction is the entire point of the churn tests
+// below, so counting host nodes alone would let a key change regress silently.
+const mountCount = { n: 0 };
 jest.mock('react-native-maps', () => {
   const ReactActual = require('react');
   const { View } = require('react-native');
   return {
     __esModule: true,
-    Polyline: () => ReactActual.createElement(View, { testID: 'route-polyline' }),
+    Polyline: () => {
+      ReactActual.useEffect(() => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        jest.requireMock('react-native-maps').__mountCount.n += 1;
+      }, []);
+      return ReactActual.createElement(View, { testID: 'route-polyline' });
+    },
+    __mountCount: mountCount,
   };
 });
 
@@ -88,9 +100,10 @@ describe('RouteLine rendering', () => {
     expect(countPolylines(<RouteLine path={[ROAD[0]]} />)).toBe(0);
   });
 
-  it('caps the child count at `segments` however long the path is', () => {
+  it('caps the child count at `segments` for a single `path`, however long', () => {
     // A real trip's trail is hundreds of points; the gradient must not emit one
-    // Polyline per point.
+    // Polyline per point. NOTE this cap is a property of the single-`path`
+    // branch only — see the `paths` test below, where it does NOT hold.
     expect(countPolylines(<RouteLine path={longRoad(600)} segments={24} />)).toBe(24);
     expect(countPolylines(<RouteLine path={longRoad(600)} segments={8} />)).toBe(8);
   });
@@ -105,27 +118,79 @@ describe('RouteLine rendering', () => {
     expect(countPolylines(<RouteLine path={longRoad(2)} segments={24} />)).toBe(1);
   });
 
-  it('adds and removes NO children when the path updates above the cap', () => {
-    // Why the driver dashboard does not need to re-key this subtree on ride
-    // state. Both paths exceed `segments`, so the child count is identical
-    // before and after — React updates coordinates in place and the native
-    // MapView sees zero add/remove churn. Re-keying an ancestor instead
-    // destroys and recreates all 24 at once, which is the mass churn
-    // react-native-maps@1.27.2 turns into an IllegalStateException.
+  it('does not REMOUNT children when the path updates above the cap', () => {
+    // Both paths exceed `segments`, so React updates coordinates in place and
+    // the native MapView sees zero add/remove churn. Re-keying an ANCESTOR
+    // instead destroys and recreates all 24 at once, which is the mass churn
+    // react-native-maps mishandles natively.
+    //
+    // This does NOT by itself license removing the driver dashboard's rideState
+    // key — carSurface.tsx keys RouteLine on route.leg deliberately, to drop a
+    // leftover route overlay per leg. See the comment at that key in
+    // driver-app/app/driver/(tabs)/index.tsx for which trade-off applies and
+    // what has to be verified before either key moves.
+    mountCount.n = 0;
     const view = render(<RouteLine path={longRoad(600)} segments={24} />);
     expect(view.queryAllByTestId('route-polyline')).toHaveLength(24);
+    expect(mountCount.n).toBe(24); // the initial mount
 
     view.rerender(<RouteLine path={longRoad(300)} segments={24} />);
     expect(view.queryAllByTestId('route-polyline')).toHaveLength(24);
+    // The assertion that matters: still 24 TOTAL mounts, so nothing was
+    // destroyed and rebuilt. A content-derived key (e.g. keying on colour or a
+    // coordinate hash) would remount all 24 here and push this to 48.
+    expect(mountCount.n).toBe(24);
 
     // Dropping below the cap is the only case that changes the count at all.
     view.rerender(<RouteLine path={longRoad(10)} segments={24} />);
     expect(view.queryAllByTestId('route-polyline')).toHaveLength(9);
   });
 
-  it('is a pure render — identical props give an identical child count', () => {
-    // Pins that RouteLine holds no state and runs no effects, which is what
-    // makes dropping an ancestor's remount key behaviour-preserving.
+  it('does NOT cap the child count on the `paths` (multi-section) branch', () => {
+    // Characterising a real difference rather than asserting a cap that does not
+    // exist. buildMultiPathGradient floors each section at Math.max(1, ...), so
+    // N sections emit at least N polylines no matter what `segments` says — a
+    // completed ride captured as many short sections (backgrounding, GPS gaps)
+    // renders far more than 24. Live on rider-app's ride-details and
+    // ride-completed maps and driver-app's ride-detail.
+    const sections = Array.from({ length: 50 }, (_, k) => [
+      { latitude: 50.445 + k * 0.01, longitude: -104.62 },
+      { latitude: 50.445 + k * 0.01, longitude: -104.6199 },
+    ]);
+    expect(countPolylines(<RouteLine paths={sections} segments={24} />)).toBe(50);
+  });
+
+  it('shrinks the child count via vehiclePosition — the prop the dashboard passes', () => {
+    // The driver dashboard passes vehiclePosition, and trimTraveled inside
+    // RouteLine is the ONLY mechanism that shrinks the count mid-trip. Every
+    // other test here fakes that by shortening the input array by hand, so a
+    // change to the `trimTraveled(clean(path), vehiclePosition)` call site
+    // would alter the real mid-trip child count with nothing failing. This
+    // renders the actual prop combination instead.
+    const road = longRoad(600);
+    const untrimmed = countPolylines(<RouteLine path={road} segments={24} />);
+    expect(untrimmed).toBe(24);
+
+    // Vehicle sitting on a point near the end: the traveled prefix is dropped,
+    // so only a short remainder is drawn.
+    const nearEnd = countPolylines(
+      <RouteLine path={road} segments={24} vehiclePosition={road[595]} />,
+    );
+    expect(nearEnd).toBeLessThan(untrimmed);
+    expect(nearEnd).toBeGreaterThan(0);
+
+    // Vehicle at the very start trims nothing, so the cap still applies.
+    expect(
+      countPolylines(<RouteLine path={road} segments={24} vehiclePosition={road[0]} />),
+    ).toBe(24);
+  });
+
+  it('is deterministic — identical props give an identical child count', () => {
+    // Deliberately NOT claiming to prove purity: two renders of the same props
+    // would also match if the component held state or ran effects, so this is a
+    // determinism check, not a no-state proof. RouteLine's statelessness is
+    // evident from its source (no hooks), and the remount assertion above is
+    // what actually guards the behaviour that depends on it.
     expect(countPolylines(<RouteLine path={longRoad(50)} segments={24} />)).toBe(
       countPolylines(<RouteLine path={longRoad(50)} segments={24} />),
     );

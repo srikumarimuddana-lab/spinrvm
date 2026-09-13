@@ -1264,15 +1264,29 @@ describe('MapView child churn', () => {
     'utf8',
   );
 
-  it('does not re-key the route subtree on ride state', () => {
-    // Re-keying an ancestor unmounts and remounts up to 24 sibling <Polyline>s
-    // on every ride-state transition. react-native-maps@1.27.2 mishandles that
-    // churn natively (features list cleared on detach and restored async,
-    // removeFeatureAt unbounded, add uses List.set where remove uses
-    // List.remove), which is the IllegalStateException seen in production
-    // seconds after ride start and completion. MapViewDirections carries its own
-    // key and RouteLine is a pure stateless render, so the ancestor key bought
-    // nothing.
-    expect(src).not.toContain('key={`route-${rideState}`}');
+  it('KEEPS the rideState key until the native patch is device-verified', () => {
+    // Inverted from its original form on purpose. Re-keying an ancestor churns
+    // up to 24 sibling <Polyline>s per ride-state transition, which is the
+    // crash trigger — so removing this key looks like the fix and briefly was
+    // one. It is not, yet:
+    //
+    //   * carSurface.tsx keys RouteLine/RoutePins on route.leg DELIBERATELY, to
+    //     drop a leftover route overlay per leg. That is the documented
+    //     replacement for once keying the whole car MapView, which ANR'd the
+    //     head unit on the 2026-09-11 test ride. The same pattern is therefore
+    //     load-bearing elsewhere in this app.
+    //   * A driver reported the route vanishing mid-drive on Android Auto —
+    //     the same library defect from the other side. Keeping the key risks
+    //     the crash; dropping it risks a stale route line. A JS change only
+    //     picks which.
+    //
+    // The real fix is patches/react-native-maps+1.27.2.patch, and it has NOT
+    // been run on a device. Remove this key only after a real head unit shows a
+    // clean pickup -> dropoff -> idle cycle with that patch built in, and delete
+    // this test in the same commit.
+    //
+    // Single-line needle on purpose: this working tree is CRLF on Windows, so a
+    // needle spanning two lines can never match here even though it would in CI.
+    expect(src).toContain('key={`route-${rideState}`}');
   });
 });

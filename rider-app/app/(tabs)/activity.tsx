@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   FlatList,
   ScrollView,
@@ -10,6 +9,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';

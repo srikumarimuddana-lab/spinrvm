@@ -761,6 +761,8 @@ jobs:
     continue-on-error: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -840,15 +842,32 @@ jobs:
           extra_args: --only-verified
 
       - name: Check EXPO_PUBLIC_ variable exposure
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 - <<'PYEOF'
-          import subprocess, re, sys
+          import os, subprocess, re, sys
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
+
+          # Diff from the actual merge-base, not raw BASE_SHA — same CR-2026-035
+          # bug class fixed elsewhere in this file (PR #5326): BASE_SHA is main's
+          # tip at scan time, which keeps moving, so a PR branch that lags main
+          # folds every file main gained since the branch's fork point into
+          # "changed", scanning phantom files this PR never touched. Falls back
+          # to BASE_SHA if merge-base computation fails/returns empty (this is a
+          # hard-blocking gate). See CR-2026-084 / #5329.
+          merge_base_result = subprocess.run(
+              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
 
           # Scan changed files in PR for accidental private key exposure via EXPO_PUBLIC_
           result = subprocess.run(
-              ['git', 'diff', '--name-only',
-               '${{ github.event.pull_request.base.sha }}',
-               '${{ github.event.pull_request.head.sha }}'],
+              ['git', 'diff', '--name-only', MERGE_BASE, HEAD_SHA],
               capture_output=True, text=True
           )
           changed = [f for f in result.stdout.strip().split('\n')

@@ -1736,8 +1736,19 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
             # id on this path that is never existence-checked, since rides
             # .rider_id and drivers.user_id are both protected by the PIPEDA
             # purge's own ordering. That is a terminal, expected condition, not
-            # a DB fault, and logging it at error attributed "[DB] Supabase call
-            # failed" noise to /webhooks/stripe.
+            # a DB fault, so this call site stops reporting it as one.
+            #
+            # PARTIAL by construction — worth knowing before assuming the Sentry
+            # issue is gone. repositories/_base.py logs
+            # `[DB] Supabase call failed (<exc>): ...` at ERROR level
+            # unconditionally before it wraps and raises the DatabaseError, so
+            # that event still fires and is still attributed to
+            # /webhooks/stripe. This removes the duplicate second error from
+            # THIS layer, not the first one. Fully silencing it needs either a
+            # 23503 carve-out at the _base.py choke point — rejected, because a
+            # 23503 on a ride or payment insert IS a real error that must stay
+            # loud — or an existence check on the recipient before inserting,
+            # which costs a DB read on every push. Left as a follow-up.
             #
             # This does NOT soften CLAUDE.md's no-swallowing rule: exactly one
             # known SQLSTATE is reclassified, and every other error still gets

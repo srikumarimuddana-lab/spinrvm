@@ -60,6 +60,12 @@ MAX_BREADCRUMB_POINTS = 200
 # times on 2026-09-13 01:56 once GPS started actually producing points: the
 # table was empty before, so this loop had never run at volume.
 # Falling through the cap uses the haversine interpolation branch below.
+#
+# The budget is checked BEFORE starting a connector, never enforced on the
+# connector itself, so the honest worst case is the budget plus one full
+# OSRM+Google pair — about 1.5 + 2.0 + 2.0 = 5.5 s, not 1.5 s. That is a
+# deliberate simplicity trade (no per-call wait_for wrapper) and still an order
+# of magnitude under the 80 s it replaces, but do not read 1.5 s as the bound.
 LIVE_CONNECTOR_BUDGET_S = 1.5
 LIVE_MAX_CONNECTORS = 4
 
@@ -109,6 +115,14 @@ async def get_gap_filled_breadcrumbs(ride_id: str) -> List[List[float]]:
     # logged 564 points, so the rider's map showed only the first third of it.
     # columns= drops ~200 full GPS rows per poll (get_rows selects "*" by
     # default); only lat/lng/captured_at are read from these rows.
+    #
+    # Known limitation, stated rather than implied: this changes WHICH 200 points
+    # are visible, it does not make a long trip fully visible. On a 564-point ride
+    # the trail is the newest ~35% and its start slides forward each poll, so the
+    # earlier route is no longer rendered. That is strictly better than freezing
+    # on the first 200 forever, but a DB-side stride/downsample (or a higher cap
+    # on this path) is what would show the whole trip — a behaviour change worth
+    # its own review rather than a rider-facing surface changed in passing here.
     # captured_at IS NOT NULL is load-bearing with desc=True: Postgres sorts
     # NULLs FIRST under ORDER BY ... DESC, so a row with no capture time would
     # take one of the 200 newest slots ahead of genuinely recent points — the

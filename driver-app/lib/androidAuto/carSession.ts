@@ -43,7 +43,7 @@ import {
 } from '../../services/backgroundMessaging';
 import { pushDebug, setDebugFact } from './carDebug';
 import { startCarLocationService } from './carLocationTask';
-import { consumeFixCount } from './carFixChannel';
+import { consumeFixCount, consumeTaskFixCount } from './carFixChannel';
 import { recordNonFatal } from '../../utils/crashlytics';
 
 const log = (...args: unknown[]) => {
@@ -269,10 +269,18 @@ function onBackgroundDispatch(event: BackgroundDispatchEvent): void {
  * the observed rate is enough to answer the question.
  */
 function reportFixRate(): void {
+  // `fixes` is ALL arrivals — the user-facing question, "does the car map have a
+  // current position". `taskFixes` is task-origin only, the Android-throttling
+  // diagnostic. Alarming on the task counter alone produced false reports while
+  // the surface was healthy; alarming on a single combined counter could never
+  // fire at all, because the surface's own 2s watcher clears the threshold
+  // whenever this function runs. So: alarm on arrivals, carry the task rate as
+  // context. See carFixChannel's arrivedSinceRead for the full rationale.
   const fixes = consumeFixCount();
+  const taskFixes = consumeTaskFixCount();
   rateTicks += 1;
-  setDebugFact('fixRate', `${fixes}/min`);
-  log('fix rate', `${fixes}/min`);
+  setDebugFact('fixRate', `${fixes}/min (task ${taskFixes}/min)`);
+  log('fix rate', `${fixes}/min`, `task ${taskFixes}/min`);
   if (rateReported || rateTicks <= RATE_GRACE_TICKS) return;
   if (fixes >= STARVED_FIXES_PER_MIN) return;
   rateReported = true;
@@ -281,6 +289,7 @@ function reportFixRate(): void {
     module: 'androidAuto',
     reason: 'car_location_throttled',
     fixes_per_min: String(fixes),
+    task_fixes_per_min: String(taskFixes),
   });
 }
 

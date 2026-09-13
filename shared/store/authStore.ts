@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback, setSuppressRefreshSignOut } from '../api/client';
 import { appCache, CACHE_KEYS } from '../cache';
 import { SESSION_ENDED_KEY } from '../auth/sessionMarker';
+import { captureMessage } from '../services/errorReporting';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
 // their photo, name, phone, and vehicle after a long idle period or when the
@@ -96,16 +97,15 @@ async function clearAuthStorage(): Promise<void> {
 // Web relies entirely on HttpOnly cookies set by the backend — no client-side
 // token storage, so XSS cannot exfiltrate session tokens. Native uses SecureStore.
 const storage = {
-  async getItem(key: string): Promise<string | null> {
+  // undefined means unavailable; null means a successful read found no value.
+  async getItem(key: string): Promise<string | null | undefined> {
     try {
       if (Platform.OS === 'web') return null;
       return await SecureStore.getItemAsync(key);
     } catch (e) {
-      if (__DEV__) {
-        console.warn('[Storage] SecureStore.getItemAsync failed — tokens will not persist across restarts:',
-          e instanceof Error ? e.message : e);
-      }
-      return null;
+      console.error('[Auth] Secure storage read failed');
+      captureMessage('Secure storage read failed', 'error', { tags: { domain: 'auth' } });
+      return undefined;
     }
   },
   async setItem(key: string, value: string): Promise<void> {
@@ -287,7 +287,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // reading storage first lets the foreground pick up a rotation the
     // background already performed instead of replaying a stale in-memory
     // token (which the backend then 401s as a benign rotation race).
-    let candidate = (await storage.getItem('refresh_token')) ?? get().refreshToken ?? null;
+    const storedCandidate = await storage.getItem('refresh_token');
+    // Never replay a potentially stale in-memory token when the shared
+    // credential could not be read (the headless context may have rotated it).
+    if (storedCandidate === undefined) return false;
+    let candidate = storedCandidate ?? get().refreshToken ?? null;
     if (!candidate) {
       // No refresh token but an active session: the session cannot be
       // recovered, so tear it down here — the interceptor's G2 backstop no
@@ -356,6 +360,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             for (const waitMs of [0, 250, 500, 1000, 2000]) {
               if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
               const v = await storage.getItem('refresh_token');
+              if (v === undefined) return false;
               if (v && v !== candidate) { latest = v; break; }
             }
             if (latest !== candidate) {
@@ -394,6 +399,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // refresh token. On cold start (memory wiped), this is the normal path
     // to restore a session without forcing the user back to the OTP screen.
     const storedRefresh = await storage.getItem('refresh_token');
+    if (storedRefresh === undefined) {
+      // A locked/unavailable keychain is not evidence of sign-out. Preserve
+      // all credentials and let the existing recovery flow retry the read.
+      set({ isInitialized: true, isLoading: false, sessionRecoverable: true });
+      return;
+    }
     if (storedRefresh) {
       // Optimistic hydration: paint the last-known profile from cache before
       // the network round-trips below resolve, so the first frame after the
@@ -490,7 +501,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // B. Transient error (5xx, timeout, "Network request failed") →
       //    refresh token is still valid and still in SecureStore. Do NOT
       //    delete it — the next app launch should retry.
-      if (get().refreshToken || await storage.getItem('refresh_token')) {
+      if (get().refreshToken || (await storage.getItem('refresh_token')) !== null) {
         if (__DEV__) console.log('[Auth] Refresh failed transiently — session recoverable on resume');
         setInMemoryToken(null);
         setCsrfToken(null);
@@ -502,7 +513,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // ── No valid stored token → logged out ──
     if (__DEV__) console.log('[Auth] No stored token → logged out');
     await clearAuthStorage();
-    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
+    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false, sessionRecoverable: false });
   },
 
   createProfile: async (data: Parameters<AuthState['createProfile']>[0]) => {

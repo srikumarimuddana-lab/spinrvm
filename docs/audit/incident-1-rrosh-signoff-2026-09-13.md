@@ -42,5 +42,6 @@ This determination should be revisited, not treated as settled indefinitely, if 
 | Signed by | Repository Owner (Privacy Officer) |
 | Date | 2026-09-13 |
 | Basis | Facts and rationale above; supersedes the 2026-08-27 rationale recorded in `docs/audit/breach-record.md`, Incident 1 |
+| Attestation confirmed | Yes — the Repository Owner (Privacy Officer) was presented with this document's facts-considered and rationale sections and explicitly confirmed, in this working session on 2026-09-13, both that "Repository Owner (Privacy Officer)" is the correct signer identity and that they attest to its content as their formal sign-off. |
 
 This is a named, dated, written attestation in the same standard the register already applies to its verbal 2026-08-27 and 2026-09-13 determinations. It is not a cryptographic or wet signature; per this register's own conventions, a documented and dated attestation from the accountable individual is treated as its sign-off record.

@@ -113,10 +113,9 @@ const storage = {
       if (Platform.OS === 'web') return;
       return await SecureStore.setItemAsync(key, value);
     } catch (e) {
-      if (__DEV__) {
-        console.warn('[Storage] SecureStore.setItemAsync failed — tokens will not persist across restarts:',
-          e instanceof Error ? e.message : e);
-      }
+      console.error('[Auth] Secure storage write failed');
+      captureMessage('Secure storage write failed', 'error', { tags: { domain: 'auth' } });
+      throw new Error('Unable to save your session securely. Please try again.');
     }
   },
   async deleteItem(key: string): Promise<void> {
@@ -263,8 +262,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setTokens: async (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => {
     const expiresAt = Date.now() + expiresIn * 1000;
-    setInMemoryToken(token);
-    if (csrfToken !== undefined) setCsrfToken(csrfToken);
     // A live session exists again — clear the end-of-session marker before
     // writing tokens, so a headless task that fires mid-write can never see
     // fresh tokens alongside a stale "signed out" marker and tear itself down.
@@ -277,6 +274,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await storage.setItem('fg_access_token', token);
     // Remove any previously-persisted access token from older app versions.
     await storage.deleteItem('auth_token');
+    // Publish the session only after its credentials have been persisted.
+    // A failed Keychain write must not look like a successful sign-in.
+    setInMemoryToken(token);
+    if (csrfToken !== undefined) setCsrfToken(csrfToken);
     set({ token, refreshToken, tokenExpiresAt: expiresAt });
   },
 
@@ -712,13 +713,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // cannot read this store (see shared/auth/sessionMarker.ts). Written before
     // the logout callbacks below so the driver-app teardown — and any headless
     // task that fires while it runs — both observe it.
-    await storage.setItem(SESSION_ENDED_KEY, '1');
-    // Clear user cache on logout
-    await appCache.clearUserCache();
-    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });
-    // Reset all registered per-session stores (rideStore, driverStore) so a
-    // subsequent login never sees ghost data from the previous user.
-    await _runLogoutCallbacks();
+    try {
+      await storage.setItem(SESSION_ENDED_KEY, '1');
+    } finally {
+      // A failed marker write must surface, but cannot skip local teardown.
+      set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false, sessionRecoverable: false });
+      try {
+        await appCache.clearUserCache();
+      } finally {
+        // Reset all registered per-session stores even if cache clearing fails.
+        await _runLogoutCallbacks();
+      }
+    }
   },
 
   // "Sign out of all devices" — closes B-P1-13. Backend bumps

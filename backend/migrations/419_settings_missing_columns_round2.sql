@@ -5,10 +5,10 @@
 -- spinr-test-coverage-reviewer's adversarial pass on that fix.
 --
 -- Unlike the other 15 fields the C110 fix baselined as pre-migration-tracking
--- (confirmed present in backend/supabase_schema.sql's bootstrap
--- `CREATE TABLE settings (...)` block), these 7 appear in NEITHER
--- supabase_schema.sql NOR any file under backend/migrations/ -- there is no
--- tracked evidence the `settings` table has ever had these columns:
+-- (confirmed present in backend/supabase_schema.sql's bootstrap table-creation
+-- block for `settings`), these 7 appear in NEITHER supabase_schema.sql NOR any
+-- file under backend/migrations/ -- there is no tracked evidence the
+-- `settings` table has ever had these columns:
 --   company_app_download_url, safety_team_email, safety_team_phone,
 --   sos_show_share_trip, sos_show_report_issue, new_ride_requests_enabled,
 --   dispute_stripe_evidence_submission_enabled

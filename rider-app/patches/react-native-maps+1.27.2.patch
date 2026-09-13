@@ -7,19 +7,19 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
      private ArrayList<MapFeature> savedFeatures = null;
 +    private int featureRestoreGeneration = 0;
      private boolean shouldRestorePadding = false;
-
+ 
      private MarkerManager markerManager;
 @@ -319,6 +320,7 @@
      @Override
      protected void onAttachedToWindow() {
          super.onAttachedToWindow();
 +        final int restoreGeneration = ++featureRestoreGeneration;
-
+ 
          // Reset lifecycle flags when reattaching
          synchronized (this) {
 @@ -326,22 +328,30 @@
          }
-
+ 
          attachLifecycleObserver();
 -        if (savedMapState != null) {
 +        if (savedMapState != null || savedFeatures != null) {
@@ -63,7 +63,7 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
 @@ -377,7 +388,10 @@
              Log.e("MapView", "Error during stop in onDetachedFromWindow: " + e.getMessage());
          }
-
+ 
 -        savedFeatures = new ArrayList<>(features);
 +        // Re-detaching before getMapAsync completes must keep pending children.
 +        if (savedFeatures == null) {
@@ -74,7 +74,7 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
          removeView(attacherGroup);
 @@ -1166,27 +1180,36 @@
      }
-
+ 
      private void safeAddFeature(int index, MapFeature mapFeature){
 -        if(paused || features.size() < index){
 -            if (savedFeatures == null) {
@@ -91,7 +91,7 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
 +            savedFeatures.add(index, mapFeature);
              return;
          }
-
+ 
          // Ensure the list is large enough to set at the given index
 -        while(features.size() <= index){
 +        while(features.size() < index){
@@ -100,7 +100,7 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
 -        features.set(index, mapFeature);
 +        features.add(index, mapFeature);
      }
-
+ 
      public void addFeature(View child, int index) {
 +        // When detached, skip addToMap calls and just track in savedFeatures
 +        if (savedFeatures != null) {
@@ -120,14 +120,14 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
          if (child instanceof MapMarker) {
 @@ -1273,10 +1296,19 @@
      }
-
+ 
      public int getFeatureCount() {
 +        if (savedFeatures != null) {
 +            return savedFeatures.size();
 +        }
          return features.size();
      }
-
+ 
      public View getFeatureAt(int index) {
 +        if (savedFeatures != null) {
 +            if (index < savedFeatures.size()) {
@@ -140,7 +140,7 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
          }
 @@ -1284,7 +1316,16 @@
      }
-
+ 
      public void removeFeatureAt(int index) {
 -        MapFeature feature = features.remove(index);
 +        MapFeature feature;

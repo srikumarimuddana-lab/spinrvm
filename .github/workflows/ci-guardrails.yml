@@ -761,6 +761,8 @@ jobs:
     continue-on-error: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
@@ -840,15 +842,32 @@ jobs:
           extra_args: --only-verified
 
       - name: Check EXPO_PUBLIC_ variable exposure
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 - <<'PYEOF'
-          import subprocess, re, sys
+          import os, subprocess, re, sys
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
+
+          # Diff from the actual merge-base, not raw BASE_SHA — same CR-2026-035
+          # bug class fixed elsewhere in this file (PR #5326): BASE_SHA is main's
+          # tip at scan time, which keeps moving, so a PR branch that lags main
+          # folds every file main gained since the branch's fork point into
+          # "changed", scanning phantom files this PR never touched. Falls back
+          # to BASE_SHA if merge-base computation fails/returns empty (this is a
+          # hard-blocking gate). See CR-2026-084 / #5329.
+          merge_base_result = subprocess.run(
+              ['git', 'merge-base', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          MERGE_BASE = merge_base_result.stdout.strip() or BASE_SHA
 
           # Scan changed files in PR for accidental private key exposure via EXPO_PUBLIC_
           result = subprocess.run(
-              ['git', 'diff', '--name-only',
-               '${{ github.event.pull_request.base.sha }}',
-               '${{ github.event.pull_request.head.sha }}'],
+              ['git', 'diff', '--name-only', MERGE_BASE, HEAD_SHA],
               capture_output=True, text=True
           )
           changed = [f for f in result.stdout.strip().split('\n')
@@ -936,7 +955,8 @@ jobs:
           DANGEROUS = [
               (r'\bDROP\s+TABLE\b',         "DROP TABLE — data loss risk"),
               (r'\bDROP\s+COLUMN\b',        "DROP COLUMN — data loss risk"),
-              (r'\bTRUNCATE\b',             "TRUNCATE — data loss risk"),
+              # TRUNCATE is handled separately below, not in this list — see
+              # the privilege-list masking right before the DANGEROUS loop.
               (r'\bDELETE\s+FROM\b',        "DELETE FROM in migration — unintended data loss"),
               (r'\bALTER\s+TABLE.*NOT\s+NULL\b', "Adding NOT NULL without default — locks table"),
               (r'WITHOUT\s+ROWID',          "WITHOUT ROWID — irreversible schema change"),
@@ -988,6 +1008,29 @@ jobs:
                   for pattern, description in DANGEROUS:
                       if re.search(pattern, content, re.IGNORECASE):
                           issues.append(f"{filepath}: {description}")
+
+                  # TRUNCATE gets its own check, not the generic DANGEROUS
+                  # loop above: it's the one keyword in this list that is
+                  # also a valid GRANT/REVOKE privilege name, e.g. this
+                  # repo's own `REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON x
+                  # FROM authenticated;` RLS-lockdown idiom (migrations 51,
+                  # 142, 151, 286, 290, 416). An earlier fix here excluded
+                  # only a TRUNCATE immediately followed by "ON", which is
+                  # order-dependent — REVOKE TRUNCATE, DELETE ON x FROM y;
+                  # (TRUNCATE not last in the list) still false-positived.
+                  # Masking every GRANT/REVOKE ... ON clause first — a
+                  # GRANT/REVOKE statement always has exactly one ON
+                  # separating its privilege list from its target, so a
+                  # non-greedy match to the first ON covers the whole list
+                  # regardless of TRUNCATE's position in it — then scanning
+                  # what's left for a bare TRUNCATE catches only an actual
+                  # TRUNCATE statement. See CR-2026-036 / #5309.
+                  content_sans_privilege_lists = re.sub(
+                      r'\b(?:GRANT|REVOKE)\b.*?\bON\b', ' ',
+                      content, flags=re.IGNORECASE | re.DOTALL,
+                  )
+                  if re.search(r'\bTRUNCATE\b', content_sans_privilege_lists, re.IGNORECASE):
+                      issues.append(f"{filepath}: TRUNCATE — data loss risk")
               except OSError:
                   pass
 

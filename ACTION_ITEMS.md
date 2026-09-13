@@ -25475,37 +25475,30 @@ how much they de-risk a public launch._
   ROADMAP.md` (R14).
 
 ### C104. `maps_budget.py`'s daily-spend circuit breaker is a non-atomic check-then-increment — a request burst can overshoot the cap before it trips
-- [~] **Status:** PARTIALLY CLOSED (2026-09-12) — the atomic primitive
-  (`reserve_budget()`, a Lua script run via `redis_eval()`) now exists in
-  `backend/utils/maps_budget.py` and is proven on the highest-volume call
-  site: `backend/routes/rides/_shared.py`'s `_fetch_directions_route`
-  (R2/R8's fare-estimate Directions call) now uses it instead of the old
-  `check_budget()`+`record_call()` pair. See
-  `docs/change-log/2026-09-12-atomic-budget-reserve-c104.md` for the full
-  writeup, including the disclosed reserve-before-call timing change and
-  what was NOT verified (no real-Redis atomicity proof — this repo's unit
-  tests have no real Redis to run the Lua script against).
-  **Remaining, tracked as a clean follow-up:** the other 8 call sites still
-  use the old non-atomic pair and are NOT yet migrated —
-  `backend/routes/maps_proxy.py`'s 4 endpoints (autocomplete, details,
-  reverse-geocode, directions), `backend/ai/tools_booking.py`'s 3 sites, and
-  `backend/utils/maps_eta.py`'s R4 Distance Matrix fallback. The primitive
-  already exists — each remaining site just needs its
-  `check_budget()`/`record_call()` pair swapped for one `reserve_budget(sku)`
-  call, the same one-line-per-site change made to `_shared.py`. Deliberately
-  not done in the same change per CLAUDE.md's task-decomposition guidance
-  (would have exceeded 5 files in one commit) — a future session/PR should
-  pick this up mechanically, file-by-file, each its own small commit.
-  **Practical scope, precisely (per the fix's own follow-up adversarial
-  review):** 3 of these 8 remaining sites (`route_distance.py`'s
-  live-route/OSRM-fallback path, `maps_proxy.py`'s own Directions proxy,
-  `tools_booking.py`'s AI tool) write the exact same shared `"directions"`
-  Redis key `reserve_budget()` now reads atomically. A request burst through
-  any of those unmigrated sites still reproduces this item's original
-  failure mode against the same shared daily total — "closes C104" should be
-  read as "closes it for the one migrated caller's own reservation," not as
-  "the breaker's overall burst-safety is now closed." That only happens once
-  the remaining 8 sites are migrated too.
+- [x] **Status:** CLOSED (2026-09-13) — every remaining production call site
+  now uses `reserve_budget(sku)`. Follow-up to the 2026-09-12 partial close
+  (`docs/change-log/2026-09-12-atomic-budget-reserve-c104.md`), completed in
+  `docs/change-log/2026-09-13-c104-remaining-callsites.md`: migrated
+  `backend/routes/maps_proxy.py` (4 endpoints), `backend/ai/tools_booking.py`
+  (4 call sites — not 3 as originally estimated here),
+  `backend/utils/maps_eta.py` (2 call sites — not 1 as originally estimated
+  here), `backend/utils/route_distance.py` (2 call sites, named in this
+  entry's own "Practical scope" note below but not in the original file
+  list), and `backend/utils/address_verification.py` (1 call site, not
+  previously named anywhere in this entry — found only via a full-repo grep
+  for every remaining `check_budget()`/`record_call()` caller). A repo-wide
+  grep after the fact confirms zero production call sites left on the old
+  non-atomic pair — the only remaining references are `tools_booking.py`'s
+  intentionally-unchanged `_places_available()` advisory pre-check (makes no
+  paid call itself) and `maps_budget.py`'s own `check_budget()`/`record_call()`
+  definitions (kept for `reserve_budget()`'s `RuntimeError`-fallback path and
+  for that advisory pre-check).
+  **What was NOT verified (carried over from 2026-09-12, still true):** no
+  real-Redis atomicity proof — this repo's unit-test tier has no real Redis
+  to run the Lua script against, so `reserve_budget()`'s correctness under
+  genuine concurrent Redis clients remains unproven beyond the mocked
+  `redis_eval()` tests. See the 2026-09-13 change-log entry's own "What was
+  NOT verified" section for the rest.
 - **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
   `docs/change-log/2026-09-12-directions-proxy-r7.md`).

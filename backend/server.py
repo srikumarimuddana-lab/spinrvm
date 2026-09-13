@@ -229,7 +229,20 @@ async def _db_ready() -> "tuple[bool, dict]":
         # the traceback. This is the stdlib logger imported at the top of the
         # module, not loguru, so exc_info= is honoured here.
         _detail = str(exc) or repr(exc)
-        _orig = getattr(exc, "details", {}).get("original") if hasattr(exc, "details") else None
+        # Walk the __cause__ chain for the FIRST informative "original". ping()
+        # catches run_sync's DatabaseError and re-raises its own, so the outer
+        # details["original"] is just str(inner) == "Database operation failed"
+        # — the real PostgREST/httpx text is one level further down. Take the
+        # deepest non-sentinel value rather than the first one found.
+        _orig = None
+        _seen, _cur = 0, exc
+        while _cur is not None and _seen < 5:
+            _candidate = getattr(_cur, "details", None)
+            if isinstance(_candidate, dict):
+                _val = _candidate.get("original")
+                if _val and _val != "Database operation failed":
+                    _orig = _val
+            _cur, _seen = getattr(_cur, "__cause__", None), _seen + 1
         _logging.getLogger(__name__).error(
             "/health DB readiness check failed after %.1fs: %s: %s%s",
             _HEALTH_PING_TIMEOUT,

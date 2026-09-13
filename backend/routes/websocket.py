@@ -206,8 +206,6 @@ WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 # focus / resync, never in bursts.
 RIDE_STATUS_ECHO_COOLDOWN_S = 2.0
 
-_ADMIN_ROLES = {"admin", "super_admin", "operations", "support", "finance", "custom"}
-
 
 async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | None) -> None:
     """Narrow post-disconnect hook: surface "socket dropped" to admins.
@@ -691,7 +689,19 @@ async def websocket_endpoint(
                 return
             current_driver_id = driver_profile["id"]
         elif client_type == "admin":
-            if user.get("role") not in _ADMIN_ROLES:
+            # P0: gate on the private _admin_verified marker that ONLY
+            # _verify_admin_payload sets after the full admin pipeline
+            # (aud=spinr:admin + JTI denylist + admin_staff active +
+            # token_version + idle timeout) -- never on the raw `role`
+            # column. `role` is a users-table column an ordinary rider/driver
+            # token's user row also carries (make_admin.py, an ops data-fix,
+            # a migration bug), so a bare `role in {...}` check here let any
+            # account whose users.role was ever set to an admin string open
+            # an admin socket with a normal 15-min mobile token -- no MFA, no
+            # admin_staff row. Same fix already applied to get_admin_user
+            # (dependencies/__init__.py) and the MCP gate (ai/mcp_server.py);
+            # this call site was missed. See test_admin_privilege_escalation.py.
+            if not user.get("_admin_verified"):
                 await websocket.send_json({"type": "error", "message": "admin_access_required"})
                 await websocket.close()
                 return

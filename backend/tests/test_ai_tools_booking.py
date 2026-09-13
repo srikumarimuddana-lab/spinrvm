@@ -87,7 +87,7 @@ def _patch_settings(key="gmaps-key"):
 
 
 def _patch_budget(within=True):
-    return patch.object(tools_booking, "reserve_budget", AsyncMock(return_value=(within, 1.0, 10.0)))
+    return patch.object(tools_booking, "check_budget", AsyncMock(return_value=(within, 1.0, 10.0)))
 
 
 LAST_RIDE = {"pickup_lat": 50.4501, "pickup_lng": -104.6178, "pickup_address": "4325 Wakeling St, Regina"}

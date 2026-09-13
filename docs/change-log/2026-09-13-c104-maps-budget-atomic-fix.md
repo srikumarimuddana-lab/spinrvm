@@ -268,3 +268,42 @@ between versions to worry about mid-rollback.
   - IMPACT MISMATCHES: none — no PR-body money-touching box applies here.
   - VERDICT: SAFE TO MERGE (out of this auditor's scope — no fare/payment/wallet/Stripe
     code touched).
+
+## 11. Follow-up fix (2026-09-13, same PR): `_places_available()` reverted to non-charging
+
+An independent `spinr-security-auditor` review of this PR (run after the above, verified
+against a real local Redis instance, not just the fallback path) found a real, previously
+undisclosed regression in `backend/ai/tools_booking.py`'s `_places_available()` gate: it had
+been converted from a non-charging `check_budget()` read to a charging `reserve_budget("geocode")`
+call, intended as a conservative admission charge to close the coarse version of this PR's race
+for that one ambiguous, multi-path gate (see the function's original docstring). In practice this
+double-counted spend whenever the flow went on to make a real geocode call (charged once at the
+gate, again by the existing downstream `record_call("geocode")`), and phantom-charged when the
+flow took a different path (e.g. `text_search_new`) that never touched the geocode SKU at all.
+
+**Verified independently, not just taken on the reviewer's word**: read `_places_available()`
+and its 4 call sites (`find_place`, `get_rider_location`, and two more), confirmed the double/
+phantom-charge pattern is real for this file's actual control flow.
+
+**Fix**: reverted `_places_available()` to a non-charging `check_budget()` read (the exact
+function this file's other individual call sites already use for their own `record_call()`-based
+bookkeeping) rather than the alternative of stripping the now-redundant downstream `record_call()`
+calls — the revert is strictly simpler, and per §3's own reasoning above, this file's coarse
+admission race was already accepted as an out-of-scope residual gap for this PR (the "finer-grained,
+multiple-calls-per-admission case" the docstring already named), so reverting gives up no
+guarantee this PR actually established, while removing a real, verified accounting defect that
+would otherwise ship silently.
+
+**Files touched by this follow-up**: `backend/ai/tools_booking.py` (`_places_available()` body
++ docstring, both dual-import branches' `from ...maps_budget import ...` lines — `reserve_budget`
+dropped since it's no longer used anywhere in this file, `check_budget` added), `backend/tests/test_ai_tools_booking.py`
+(`_patch_budget()` helper now patches `check_budget` instead of `reserve_budget` — this one shared
+helper gates ~37 test cases in this file, all still passing).
+
+**Verification**: `ruff check` + `ruff format --check` clean on both files;
+`pytest tests/test_ai_tools_booking.py tests/test_maps_budget.py` — 121 passed, 0 failed.
+
+**What this follow-up does NOT change**: the 6 "clean" 1:1 call-site conversions (`maps_proxy.py`,
+`_shared.py`, `route_distance.py`×2, `address_verification.py`, `maps_eta.py`×2) are untouched —
+the reviewer confirmed those have no double-counting issue, only this one ambiguous multi-path
+gate did.

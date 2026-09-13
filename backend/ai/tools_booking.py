@@ -54,7 +54,7 @@ try:
         legacy_place_results_from_text_search,
         places_new_headers,
     )
-    from ..utils.maps_budget import record_call, reserve_budget
+    from ..utils.maps_budget import check_budget, record_call
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:
     import db_supabase
@@ -66,7 +66,7 @@ except ImportError:
         legacy_place_results_from_text_search,
         places_new_headers,
     )
-    from utils.maps_budget import record_call, reserve_budget
+    from utils.maps_budget import check_budget, record_call
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -559,13 +559,16 @@ async def _places_available() -> tuple:
     one, or several differently-priced Google calls (geocode, text_search_new,
     or N concurrent directions calls in _rank_named_place_candidates_by_route)
     — unlike this file's other Maps call sites, there is no one known SKU to
-    atomically reserve for here. reserve_budget("geocode") is used as a
-    conservative admission charge (geocode is this module's cheapest, most
-    common downstream call) so concurrent admissions can no longer all pass
-    once the account is genuinely near the cap, closing the coarse version of
-    C104's race for this gate. This does not make the finer-grained,
-    multiple-calls-per-admission case below fully atomic too — those
-    individual calls still use plain record_call() bookkeeping, as before.
+    atomically reserve for here. An earlier version of this fix used
+    reserve_budget("geocode") as a conservative admission charge, but that
+    charged "geocode" on every admission regardless of which call(s) the flow
+    actually went on to make (or none at all), double-counting spend whenever
+    the flow's own downstream record_call() also fired and phantom-charging
+    when it took a non-geocode path — a real accounting regression an
+    independent review caught. This gate stays a non-charging check_budget()
+    read, same as before C104: the coarse admission race here remains open
+    (as it always was), same as the finer-grained, multiple-calls-per-
+    admission case below, which still uses plain record_call() bookkeeping.
     """
     settings = await get_app_settings()
     api_key = settings.get("google_maps_api_key") or ""
@@ -574,7 +577,7 @@ async def _places_available() -> tuple:
             "error": "place lookup is not available right now — ask the rider to pick the location in the app"
         }
 
-    within, spent, budget = await reserve_budget("geocode")
+    within, spent, budget = await check_budget()
     if not within:
         logger.error("ai find_place blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
         return None, {

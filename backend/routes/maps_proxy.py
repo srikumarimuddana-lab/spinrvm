@@ -51,7 +51,7 @@ try:
         places_new_details_url,
         places_new_headers,
     )
-    from ..utils.maps_budget import check_budget, record_call
+    from ..utils.maps_budget import Sku, reserve_budget
     from ..utils.polyline import decode_polyline
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.rate_limiter import get_user_or_ip_key
@@ -70,7 +70,7 @@ except ImportError:  # pragma: no cover - dual import path
         places_new_details_url,
         places_new_headers,
     )
-    from utils.maps_budget import check_budget, record_call  # type: ignore
+    from utils.maps_budget import Sku, reserve_budget  # type: ignore
     from utils.polyline import decode_polyline  # type: ignore
     from utils.rate_limiter import default_limiter as limiter  # type: ignore
     from utils.rate_limiter import get_user_or_ip_key  # type: ignore
@@ -106,8 +106,15 @@ _DIRECTIONS_CACHE_TTL_S = 30
 _DIRECTIONS_CACHE_PRECISION = 5  # decimals — ~1 m grid, every coordinate
 
 
-async def _ensure_budget() -> None:
-    allowed, spent, budget = await check_budget()
+async def _ensure_budget(sku: Sku) -> None:
+    """Atomically reserve today's spend for ``sku`` (ACTION_ITEMS.md C104).
+
+    Replaces the old check_budget()-before / record_call()-after pair: the
+    caller's own record_call(sku) call is no longer needed, since
+    reserve_budget() already records the spend as part of this same atomic
+    step.
+    """
+    allowed, spent, budget = await reserve_budget(sku)
     if not allowed:
         logger.error(
             "[maps_proxy] daily budget exceeded — refusing call",
@@ -138,7 +145,10 @@ async def places_autocomplete(
     current_user: dict = Depends(get_current_user),
 ):
     """Proxy Places API (New) Autocomplete using session_token when present."""
-    await _ensure_budget()
+    # Places API (New) bills autocomplete requests individually for sessions
+    # ending in Place Details Essentials, so every proxied request reserves
+    # spend regardless of session_token.
+    await _ensure_budget("autocomplete")
     api_key = await _maps_key()
 
     payload = build_autocomplete_payload(input, session_token, location, radius)
@@ -169,10 +179,6 @@ async def places_autocomplete(
     except Exception as e:
         logger.error("[maps_proxy] autocomplete(new) request failed: %s", e)
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
-
-    # Places API (New) bills autocomplete requests individually for sessions
-    # ending in Place Details Essentials, so record each proxied request.
-    await record_call("autocomplete")
 
     predictions = legacy_predictions_from_new_response(data)
 
@@ -205,7 +211,7 @@ async def places_details(
     current_user: dict = Depends(get_current_user),
 ):
     """Proxy Place Details. Same session_token closes the billing session."""
-    await _ensure_budget()
+    await _ensure_budget("details")
     api_key = await _maps_key()
 
     params: dict = {}
@@ -227,8 +233,6 @@ async def places_details(
     except Exception as e:
         logger.error("[maps_proxy] details(new) request failed: %s", e)
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
-
-    await record_call("details")
 
     return legacy_details_from_new_response(data)
 
@@ -253,7 +257,7 @@ async def reverse_geocode(
     if cached:
         return {"formatted_address": cached, "cached": True}
 
-    await _ensure_budget()
+    await _ensure_budget("geocode")
     api_key = await _maps_key()
 
     try:
@@ -270,8 +274,6 @@ async def reverse_geocode(
     if data.get("status") not in ("OK", "ZERO_RESULTS"):
         logger.error("[maps_proxy] reverse-geocode API error: %s", data.get("status"))
         raise HTTPException(status_code=502, detail="Geocoding API error")
-
-    await record_call("geocode")
 
     results = data.get("results", [])
     formatted = results[0]["formatted_address"] if results else f"{cache_lat}, {cache_lng}"
@@ -365,7 +367,7 @@ async def get_directions(
     except Exception:
         logger.warning("[maps_proxy] directions cache get failed", exc_info=False)
 
-    await _ensure_budget()
+    await _ensure_budget("directions")
     api_key = await _maps_key()
 
     params: dict = {
@@ -383,8 +385,6 @@ async def get_directions(
     except Exception as e:
         logger.error("[maps_proxy] directions request failed: %s", e)
         raise HTTPException(status_code=502, detail="Failed to call Directions API") from e
-
-    await record_call("directions")
 
     if data.get("status") != "OK" or not data.get("routes"):
         logger.warning("[maps_proxy] directions API non-OK status: %s", data.get("status"))

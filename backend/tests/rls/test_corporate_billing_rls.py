@@ -30,11 +30,18 @@ Three of the nine (`corporate_members`, `corporate_member_allowances`,
 so a company member can see their own membership/allowance/request rows
 without being an admin. This file covers those three plus
 `corporate_wallets`/`corporate_wallet_transactions` (the two direct
-money-mutation tables 142's own header comment calls out by name); the
-remaining four of the nine (`corporate_policies`, `corporate_allowed_domains`,
-`ride_payment_sources`, `corporate_policy_evaluations`) share the identical
-admin-read/no-write shape with no member-read-own wrinkle and are left for a
-future round (see conftest.py's coverage-scope note).
+money-mutation tables 142's own header comment calls out by name), plus --
+picked up in a later round -- the remaining four of the nine:
+`corporate_policies`, `corporate_allowed_domains`, `corporate_policy_evaluations`
+(added to `_ADMIN_ONLY_MONEY_TABLES` below; confirmed by reading migration
+142's actual `DO $$ ... FOREACH t IN ARRAY [...]` loop that all nine tables,
+these three included, get the identical DROP-FOR-ALL/CREATE-SELECT-ADMIN-READ/
+REVOKE-ALL-anon/REVOKE-write-authenticated treatment, with no member-read-own
+wrinkle for any of the three) and `ride_payment_sources` (same policy shape,
+but its own dedicated test block below rather than the shared parametrize --
+its primary key column is `ride_id`, not `id`, so the generic
+`SELECT/UPDATE/DELETE ... WHERE id = %s` the parametrized tests use doesn't
+apply verbatim).
 
 Gap found writing this file, fixed before merge: `corporate_accounts`'s own
 admin policy (migration 17) was never included in migration 142's
@@ -65,6 +72,9 @@ _ADMIN_ONLY_MONEY_TABLES = (
     "corporate_members",
     "corporate_member_allowances",
     "corporate_allowance_requests",
+    "corporate_policies",
+    "corporate_allowed_domains",
+    "corporate_policy_evaluations",
 )
 
 
@@ -121,18 +131,56 @@ def _seed_allowance_request(cur, request_id: str, member_id: str) -> None:
     )
 
 
+def _seed_policy(cur, policy_id: str, company_id: str) -> None:
+    cur.execute(
+        "INSERT INTO corporate_policies (id, company_id) VALUES (%s, %s)",
+        (policy_id, company_id),
+    )
+
+
+def _seed_allowed_domain(cur, domain_id: str, company_id: str) -> None:
+    cur.execute(
+        "INSERT INTO corporate_allowed_domains (id, company_id, domain) VALUES (%s, %s, %s)",
+        (domain_id, company_id, f"{domain_id[:8]}.example.com"),
+    )
+
+
+def _seed_policy_evaluation(cur, eval_id: str, company_id: str) -> None:
+    cur.execute(
+        "INSERT INTO corporate_policy_evaluations (id, ride_id, company_id, result, phase) "
+        "VALUES (%s, %s, %s, 'pass', 'booking')",
+        (eval_id, _uuid(), company_id),
+    )
+
+
+def _seed_ride_payment_source(cur, ride_id: str, company_id: str) -> None:
+    cur.execute(
+        "INSERT INTO ride_payment_sources (ride_id, source_type, company_id, policy_check_result) "
+        "VALUES (%s, 'company_allowance', %s, 'pass')",
+        (ride_id, company_id),
+    )
+
+
 def _seed_chain(cur, member_user_id: str | None = None) -> dict:
     """Seeds one company -> wallet -> (wallet txn) and one company -> member
-    -> (allowance, allowance request), returning the FK ids plus a
-    table -> its-own-seeded-row-id map for the parametrized tests below."""
+    -> (allowance, allowance request), plus one row each in the three
+    remaining admin-only-shaped tables (policy, allowed domain, policy
+    evaluation), returning the FK ids plus a table -> its-own-seeded-row-id
+    map for the parametrized tests below. `ride_payment_sources` is seeded
+    separately (see `_seed_ride_payment_source`/its own dedicated test
+    block) since its primary key is `ride_id`, not `id`."""
     company_id, wallet_id, txn_id = _uuid(), _uuid(), _uuid()
     member_id, allowance_id, request_id = _uuid(), _uuid(), _uuid()
+    policy_id, domain_id, eval_id = _uuid(), _uuid(), _uuid()
     _seed_company(cur, company_id)
     _seed_wallet(cur, wallet_id, company_id)
     _seed_wallet_txn(cur, txn_id, wallet_id)
     _seed_member(cur, member_id, company_id, member_user_id)
     _seed_allowance(cur, allowance_id, member_id)
     _seed_allowance_request(cur, request_id, member_id)
+    _seed_policy(cur, policy_id, company_id)
+    _seed_allowed_domain(cur, domain_id, company_id)
+    _seed_policy_evaluation(cur, eval_id, company_id)
     return {
         "company_id": company_id,
         "wallet_id": wallet_id,
@@ -143,8 +191,24 @@ def _seed_chain(cur, member_user_id: str | None = None) -> dict:
             "corporate_members": member_id,
             "corporate_member_allowances": allowance_id,
             "corporate_allowance_requests": request_id,
+            "corporate_policies": policy_id,
+            "corporate_allowed_domains": domain_id,
+            "corporate_policy_evaluations": eval_id,
         },
     }
+
+
+def _insert_new_corporate_policy(cur, ids: dict) -> None:
+    """corporate_policies.company_id is UNIQUE, and _seed_chain already used
+    ids["company_id"] for its own policy row -- reusing it here would hit
+    that constraint the moment INSERT privilege was ever (re-)granted,
+    turning a future RLS regression into a confusing UniqueViolation
+    failure instead of the clear InsufficientPrivilege every other table's
+    insert-denial test produces. Seed a fresh company instead so this
+    table's failure mode stays unambiguous too."""
+    fresh_company_id = _uuid()
+    _seed_company(cur, fresh_company_id)
+    _seed_policy(cur, _uuid(), fresh_company_id)
 
 
 _INSERT_FN = {
@@ -153,6 +217,9 @@ _INSERT_FN = {
     "corporate_members": lambda cur, ids: _seed_member(cur, _uuid(), ids["company_id"]),
     "corporate_member_allowances": lambda cur, ids: _seed_allowance(cur, _uuid(), ids["member_id"]),
     "corporate_allowance_requests": lambda cur, ids: _seed_allowance_request(cur, _uuid(), ids["member_id"]),
+    "corporate_policies": _insert_new_corporate_policy,
+    "corporate_allowed_domains": lambda cur, ids: _seed_allowed_domain(cur, _uuid(), ids["company_id"]),
+    "corporate_policy_evaluations": lambda cur, ids: _seed_policy_evaluation(cur, _uuid(), ids["company_id"]),
 }
 
 
@@ -265,6 +332,109 @@ def test_service_role_bypasses(pg_cur, table):
     as_role(pg_cur, "service_role", None)
     pg_cur.execute(f"SELECT id FROM {table} WHERE id = %s", (ids["row_id"][table],))
     assert [r[0] for r in pg_cur.fetchall()] == [ids["row_id"][table]]
+
+
+# ── ride_payment_sources (same admin-read/no-write shape as the tables above,
+#    but keyed by ride_id rather than id -- migration 27's own primary key
+#    choice -- so it can't share the generic id-based parametrized tests) ──
+
+
+def test_admin_can_select_ride_payment_source(pg_cur):
+    admin = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    ids = _seed_chain(pg_cur)
+    ride_id = _uuid()
+    _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    pg_cur.execute("SELECT ride_id FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
+    assert [r[0] for r in pg_cur.fetchall()] == [ride_id]
+
+
+def test_super_admin_can_select_ride_payment_source(pg_cur):
+    super_admin = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, super_admin, role="super_admin")
+    ids = _seed_chain(pg_cur)
+    ride_id = _uuid()
+    _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
+    as_role(pg_cur, "authenticated", {"sub": super_admin, "role": "authenticated"})
+    pg_cur.execute("SELECT ride_id FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
+    assert [r[0] for r in pg_cur.fetchall()] == [ride_id]
+
+
+def test_non_admin_stranger_cannot_select_ride_payment_source(pg_cur):
+    stranger = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, stranger, role="rider")
+    ids = _seed_chain(pg_cur)
+    ride_id = _uuid()
+    _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
+    as_role(pg_cur, "authenticated", {"sub": stranger, "role": "authenticated"})
+    pg_cur.execute("SELECT ride_id FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
+    assert pg_cur.fetchall() == []
+
+
+def test_anon_cannot_select_ride_payment_source(pg_cur):
+    as_role(pg_cur, None)
+    ids = _seed_chain(pg_cur)
+    ride_id = _uuid()
+    _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
+    as_role(pg_cur, "anon", None)
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("SELECT ride_id FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
+
+
+def test_authenticated_cannot_insert_ride_payment_source(pg_cur):
+    admin = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    ids = _seed_chain(pg_cur)
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        _seed_ride_payment_source(pg_cur, _uuid(), ids["company_id"])
+
+
+def test_anon_cannot_insert_ride_payment_source(pg_cur):
+    as_role(pg_cur, None)
+    ids = _seed_chain(pg_cur)
+    as_role(pg_cur, "anon", None)
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        _seed_ride_payment_source(pg_cur, _uuid(), ids["company_id"])
+
+
+def test_authenticated_cannot_update_ride_payment_source(pg_cur):
+    admin = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    ids = _seed_chain(pg_cur)
+    ride_id = _uuid()
+    _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("UPDATE ride_payment_sources SET ride_id = ride_id WHERE ride_id = %s", (ride_id,))
+
+
+def test_authenticated_cannot_delete_ride_payment_source(pg_cur):
+    admin = _uuid()
+    as_role(pg_cur, None)
+    _seed_user(pg_cur, admin, role="admin")
+    ids = _seed_chain(pg_cur)
+    ride_id = _uuid()
+    _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
+    as_role(pg_cur, "authenticated", {"sub": admin, "role": "authenticated"})
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        pg_cur.execute("DELETE FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
+
+
+def test_service_role_bypasses_ride_payment_source(pg_cur):
+    as_role(pg_cur, None)
+    ids = _seed_chain(pg_cur)
+    ride_id = _uuid()
+    _seed_ride_payment_source(pg_cur, ride_id, ids["company_id"])
+    as_role(pg_cur, "service_role", None)
+    pg_cur.execute("SELECT ride_id FROM ride_payment_sources WHERE ride_id = %s", (ride_id,))
+    assert [r[0] for r in pg_cur.fetchall()] == [ride_id]
 
 
 # ── member-read-own (corporate_members / _member_allowances / _allowance_requests) ─

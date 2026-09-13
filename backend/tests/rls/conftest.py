@@ -49,10 +49,14 @@ consequence (`users`, `drivers`, `rides` from `backend/supabase_rls.sql`,
 safety audit trail migration 64); extended since across several rounds
 (`saved_addresses`, the transactional outbox, `lost_and_found`(_messages),
 `referral_payouts`, `auto_payout_batches`, `complaints`, the migration-26
-deny-all tables, and -- this round -- the `corporate_*` money/PII tables
-(migrations 05/17/27/142) plus `stripe_disputes`/`stripe_orphan_refunds`
-(88/254)). See each test file's own docstring for what it covers, and
-ACTION_ITEMS.md C49 for the current fraction covered.
+deny-all tables, the `corporate_*` money/PII tables (migrations 05/17/27/142)
+plus `stripe_disputes`/`stripe_orphan_refunds` (88/254), `otp_records`/
+`rider_email_verification_otp`/`emergency_contacts`/`safety_incidents`/
+`safety_incident_photos`, and -- this round -- the remaining four of the
+nine migration-27 corporate tables (`corporate_policies`,
+`corporate_allowed_domains`, `ride_payment_sources`,
+`corporate_policy_evaluations`)). See each test file's own docstring for
+what it covers, and ACTION_ITEMS.md C49 for the current fraction covered.
 
 Running these tests
 --------------------
@@ -610,6 +614,10 @@ def pg_cur(pg_conn):
         "corporate_members",
         "corporate_member_allowances",
         "corporate_allowance_requests",
+        "corporate_policies",
+        "corporate_allowed_domains",
+        "corporate_policy_evaluations",
+        "ride_payment_sources",
         "stripe_disputes",
         "stripe_orphan_refunds",
         "otp_records",

@@ -21610,6 +21610,46 @@ how much they de-risk a public launch._
     which ~36 tables remain outside this set with a plan to close them —
     only a repo-wide table list exists now, not a table-by-table backlog.
   Change log: `docs/change-log/2026-09-13-c49-otp-and-safety-rls-coverage.md`.
+- [ ] **Status (2026-09-13, same day, round 2): 4 more tables, on the same PR.**
+  `test_corporate_billing_rls.py`'s own docstring explicitly earmarked
+  `corporate_policies`, `corporate_allowed_domains`, `ride_payment_sources`,
+  `corporate_policy_evaluations` (the remaining 4 of migration 27's 9
+  corporate tables) as "left for a future round" — all 4 were already
+  created and access-granted in the test harness, just never tested. Closed
+  that gap: extended `_ADMIN_ONLY_MONEY_TABLES` to cover the 3 that share
+  the existing table's generic `id`-keyed shape (reusing all 8 existing
+  parametrized tests unchanged), and added a dedicated 9-test block for
+  `ride_payment_sources` (keyed by `ride_id`, not `id`, so it can't share
+  the generic SQL). 92 tests in the file total (was already-passing before
+  this round; +32 net new/re-parametrized); full `tests/rls` suite: 266
+  passed, 0 failed. Kept on the *same* branch/PR as the round above
+  (`mvapps/dreamy-faraday-2wz914-c49-rls-coverage`, PR #5343) rather than a
+  new one, specifically because a separate PR would have guaranteed a merge
+  conflict on `conftest.py`'s `pg_cur` TRUNCATE list with the already-open
+  PR — same file, same insertion point.
+  - **Adversarial review** (`spinr-money-auditor`, CLAUDE.md gate #10,
+    money-touching surface): independently re-derived migration 142's
+    policy treatment of all 4 tables from the SQL itself (confirmed
+    identical DROP/CREATE-SELECT-admin/REVOKE/GRANT shape, no member-read-
+    own wrinkle on any of the 4); found one real-but-harmless subtlety —
+    `corporate_policies.company_id` is `UNIQUE`, and the insert-denial test
+    was reusing an already-seeded `company_id`, which would raise
+    `UniqueViolation` instead of the intended `InsufficientPrivilege` *if*
+    Postgres ever evaluated constraints before privilege grants (it
+    doesn't — confirmed by direct reproduction outside the suite, so the
+    test was passing for the right reason, not by accident); fixed anyway
+    as a diagnostic-clarity improvement (seed a fresh company for that one
+    insert instead) so a real future regression fails unambiguously rather
+    than looking like a broken test. Cross-checked all 4 tables' real
+    production write paths (`repositories/corporate_repo.py`,
+    `services/payment_service.py`, `routes/corporate_company.py`,
+    `routes/corporate_rider.py`, `services/corporate_membership_service.py`)
+    — every one goes through the service-role client; the tests' "no
+    authenticated write" assertion matches reality. **Verdict: safe to
+    merge, zero bugs found.**
+  - **Running total after this round:** 32 of ~64 distinct policy-bearing
+    tables (28 + these 4). Still not closed — same caveat as above.
+  Change log: `docs/change-log/2026-09-13-c49-corporate-remaining-round2.md`.
 - [ ] **Status (2026-09-11): more progress, still not closed.** Since
   2026-08-31, other sessions independently added `saved_addresses`
   (migration 378, `test_saved_addresses_rls.py`) and the transactional

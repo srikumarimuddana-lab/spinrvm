@@ -1488,8 +1488,33 @@ function DriverDashboard() {
             destination = { latitude: pNavLat, longitude: pNavLng };
           }
 
+          /*
+              Deliberately NOT keyed on rideState. This Fragment wraps exactly
+              two children: MapViewDirections, which carries its own
+              `key={directionsKey}` and so remounts on its own terms, and
+              RouteLine, which is a pure stateless render whose Polylines are
+              keyed `route-gradient-${i}`. So the ancestor key bought nothing —
+              while costing a full unmount+remount of up to 24 sibling
+              <Polyline>s on every ride-state transition.
+
+              That mass churn is what react-native-maps@1.27.2 mishandles
+              natively: MapView.onDetachedFromWindow clears its `features` list
+              behind React's back and restores it asynchronously via
+              getMapAsync, removeFeatureAt has no bounds check, and
+              safeAddFeature uses List.set where removeFeatureAt uses
+              List.remove — so they are not inverses. The crashes clustered
+              seconds after ride start and completion, i.e. on exactly these
+              transitions (Sentry, driver 2.0.0+29, 19:18:28 / 00:51:11 /
+              01:48:50). Dropping the key lets React update props in place
+              instead. shared/components/__tests__/RouteLine.test.tsx pins the
+              key stability and the purity this relies on.
+
+              This reduces the TRIGGER; it does not fix the library. The detach
+              path still clears the list when the app is backgrounded, which
+              needs the patch-package fix and a device repro to verify.
+          */
           return (
-            <React.Fragment key={`route-${rideState}`}>
+            <React.Fragment>
               {needsDirections && (
               <MapViewDirections
                 key={directionsKey}

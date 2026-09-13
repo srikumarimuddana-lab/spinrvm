@@ -1488,6 +1488,37 @@ function DriverDashboard() {
             destination = { latitude: pNavLat, longitude: pNavLng };
           }
 
+          /*
+            The rideState key here looks removable and is NOT. Recording the
+            analysis so the next person does not re-derive it.
+
+            Against it: re-keying unmounts and remounts up to 24 sibling
+            <Polyline>s on every ride-state transition, and that mass churn is
+            what react-native-maps@1.27.2 mishandles natively —
+            MapView.onDetachedFromWindow clears its `features` list behind
+            React's back and restores it asynchronously via getMapAsync,
+            removeFeatureAt has no bounds check, and safeAddFeature uses
+            List.set where removeFeatureAt uses List.remove, so they are not
+            inverses. Production IllegalStateExceptions clustered seconds after
+            ride start and completion, i.e. on exactly these transitions.
+
+            For it: lib/androidAuto/carSurface.tsx keys RouteLine/RoutePins on
+            route.leg for a DOCUMENTED reason — it is the overlay-level
+            replacement for once keying the whole car MapView on the leg, which
+            existed to drop a leftover route overlay per leg and which ANR'd the
+            head unit on the 2026-09-11 test ride. So this pattern is
+            load-bearing elsewhere in this app for a real bug.
+
+            Both symptoms are the same library defect from opposite sides:
+            keeping the key risks the crash, dropping it risks a stale route
+            line that never clears. A JS change only picks which one you get.
+            The actual fix is the patch-package patch to react-native-maps
+            (bounds guard in removeFeatureAt, do not clear on detach,
+            features.add(index) instead of set) — held for a device repro,
+            because inferred native rendering fixes have failed in this repo
+            before. shared/components/__tests__/RouteLine.test.tsx now pins the
+            child-count behaviour this all turns on.
+          */
           return (
             <React.Fragment key={`route-${rideState}`}>
               {needsDirections && (

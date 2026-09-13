@@ -395,6 +395,12 @@ class SettingsUpdateRequest(BaseModel):
     # a subset. Not a credential, no special masking/super-admin gate
     # needed.
     admin_theme_v2_enabled: Optional[bool] = None
+    # Driver-app in-app turn-by-turn navigation dark-launch gate (Phase 1,
+    # docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md).
+    # Backed by migration 416 -- see that file's header for why a column was
+    # required before this field could be declared here at all. Not a
+    # credential, no special masking/super-admin gate needed.
+    driver_turn_by_turn_enabled: Optional[bool] = None
     # Admin command palette (Cmd+K/Ctrl+K route jumper) — same shape as
     # admin_theme_v2_enabled above. Not a credential, no masking/
     # super-admin gate needed. See migration 374.

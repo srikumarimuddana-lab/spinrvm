@@ -1728,7 +1728,27 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
                     "is_read": False,
                 },
             )
-        except Exception:
+        except Exception as exc:
+            # 23503 on notifications_user_id_fkey means the recipient is no
+            # longer in `users`. The commonest source is metadata.user_id read
+            # back off a Stripe object stamped weeks or months earlier
+            # (routes/webhooks.py) for a since-deleted user — the one recipient
+            # id on this path that is never existence-checked, since rides
+            # .rider_id and drivers.user_id are both protected by the PIPEDA
+            # purge's own ordering. That is a terminal, expected condition, not
+            # a DB fault, and logging it at error attributed "[DB] Supabase call
+            # failed" noise to /webhooks/stripe.
+            #
+            # This does NOT soften CLAUDE.md's no-swallowing rule: exactly one
+            # known SQLSTATE is reclassified, and every other error still gets
+            # logger.error plus the traceback below.
+            try:
+                from .utils.error_handling import pg_error_code
+            except ImportError:  # pragma: no cover
+                from utils.error_handling import pg_error_code  # type: ignore
+            if pg_error_code(exc) == "23503":
+                logger.warning(f"push: inbox row skipped — recipient {user_id} no longer exists")
+                return
             logger.opt(exception=True).error(f"push: failed to record in-app notification for user {user_id}")
 
     try:

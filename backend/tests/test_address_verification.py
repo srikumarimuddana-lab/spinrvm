@@ -54,7 +54,7 @@ async def test_budget_exhausted_fails_open():
             "utils.address_verification.get_app_settings",
             AsyncMock(return_value={"google_maps_api_key": "fake-key"}),
         ),
-        patch("utils.address_verification.check_budget", AsyncMock(return_value=(False, 1000, 1000))),
+        patch("utils.address_verification.reserve_budget", AsyncMock(return_value=(False, 1000, 1000))),
     ):
         ok, reason, place_id = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
     assert ok is True
@@ -82,8 +82,7 @@ async def test_precise_geocode_far_away_rejects():
             "utils.address_verification.get_app_settings",
             AsyncMock(return_value={"google_maps_api_key": "fake-key"}),
         ),
-        patch("utils.address_verification.check_budget", AsyncMock(return_value=(True, 0, 1000))),
-        patch("utils.address_verification.record_call", AsyncMock()),
+        patch("utils.address_verification.reserve_budget", AsyncMock(return_value=(True, 0, 1000))),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
         ok, reason, place_id = await verify_address_matches_coordinate("456 Office Blvd", 52.2, -106.1)
@@ -102,8 +101,7 @@ async def test_precise_geocode_nearby_passes():
             "utils.address_verification.get_app_settings",
             AsyncMock(return_value={"google_maps_api_key": "fake-key"}),
         ),
-        patch("utils.address_verification.check_budget", AsyncMock(return_value=(True, 0, 1000))),
-        patch("utils.address_verification.record_call", AsyncMock()),
+        patch("utils.address_verification.reserve_budget", AsyncMock(return_value=(True, 0, 1000))),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
         ok, reason, place_id = await verify_address_matches_coordinate("456 Office Blvd", 52.2, -106.1)
@@ -120,8 +118,7 @@ async def test_approximate_geocode_fails_open_but_still_returns_place_id():
             "utils.address_verification.get_app_settings",
             AsyncMock(return_value={"google_maps_api_key": "fake-key"}),
         ),
-        patch("utils.address_verification.check_budget", AsyncMock(return_value=(True, 0, 1000))),
-        patch("utils.address_verification.record_call", AsyncMock()),
+        patch("utils.address_verification.reserve_budget", AsyncMock(return_value=(True, 0, 1000))),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
         ok, reason, place_id = await verify_address_matches_coordinate("Some Business Name", 52.2, -106.1)
@@ -138,8 +135,7 @@ async def test_partial_match_fails_open_but_still_returns_place_id():
             "utils.address_verification.get_app_settings",
             AsyncMock(return_value={"google_maps_api_key": "fake-key"}),
         ),
-        patch("utils.address_verification.check_budget", AsyncMock(return_value=(True, 0, 1000))),
-        patch("utils.address_verification.record_call", AsyncMock()),
+        patch("utils.address_verification.reserve_budget", AsyncMock(return_value=(True, 0, 1000))),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
         ok, reason, place_id = await verify_address_matches_coordinate("Mistyped Address", 52.2, -106.1)
@@ -155,7 +151,7 @@ async def test_geocode_call_failure_fails_open():
             "utils.address_verification.get_app_settings",
             AsyncMock(return_value={"google_maps_api_key": "fake-key"}),
         ),
-        patch("utils.address_verification.check_budget", AsyncMock(return_value=(True, 0, 1000))),
+        patch("utils.address_verification.reserve_budget", AsyncMock(return_value=(True, 0, 1000))),
         patch("utils.address_verification.httpx.AsyncClient", side_effect=RuntimeError("network down")),
     ):
         ok, reason, place_id = await verify_address_matches_coordinate("123 Main St", 52.1, -106.0)
@@ -172,8 +168,7 @@ async def test_zero_results_fails_open():
             "utils.address_verification.get_app_settings",
             AsyncMock(return_value={"google_maps_api_key": "fake-key"}),
         ),
-        patch("utils.address_verification.check_budget", AsyncMock(return_value=(True, 0, 1000))),
-        patch("utils.address_verification.record_call", AsyncMock()),
+        patch("utils.address_verification.reserve_budget", AsyncMock(return_value=(True, 0, 1000))),
         patch("utils.address_verification.httpx.AsyncClient", return_value=_mock_http_client(response_json)),
     ):
         ok, reason, place_id = await verify_address_matches_coordinate("Nonexistent Place XYZ", 52.1, -106.0)

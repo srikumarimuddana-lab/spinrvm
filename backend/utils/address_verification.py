@@ -37,10 +37,10 @@ except ImportError:
 
 try:
     from ..settings_loader import get_app_settings
-    from ..utils.maps_budget import check_budget, record_call
+    from ..utils.maps_budget import reserve_budget
 except ImportError:
     from settings_loader import get_app_settings
-    from utils.maps_budget import check_budget, record_call
+    from utils.maps_budget import reserve_budget
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +83,13 @@ async def verify_address_matches_coordinate(
     if not api_key:
         return True, None, None
 
+    # ACTION_ITEMS.md C104: reserve_budget() records the spend atomically as
+    # part of the same reservation step, right before the call is made — no
+    # separate post-call record_call() needed.
     try:
-        within_budget, _spent, _budget = await check_budget()
+        within_budget, _spent, _budget = await reserve_budget("geocode")
     except Exception as exc:
-        logger.warning("address_verification: budget check failed, failing open: %s", exc)
+        logger.warning("address_verification: budget reservation failed, failing open: %s", exc)
         return True, None, None
     if not within_budget:
         return True, None, None
@@ -98,7 +101,6 @@ async def verify_address_matches_coordinate(
                 params={"address": address, "region": "ca", "key": api_key, "language": "en"},
             )
             data = resp.json()
-        await record_call("geocode")
     except Exception as exc:
         logger.warning("address_verification: geocode call failed, failing open: %s", exc)
         return True, None, None

@@ -410,7 +410,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                                         <Text style={styles.routeDistance}>{pickupStr} away</Text>
                                     )}
                                 </View>
-                                <Text style={styles.routeAddress} numberOfLines={1}>
+                                <Text style={styles.routeAddress} numberOfLines={2}>
                                     {incomingRide.pickup_address || 'Pickup location'}
                                 </Text>
                             </View>
@@ -420,7 +420,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             <View style={[styles.routeDot, { backgroundColor: colors.error }]} />
                             <View style={styles.routeContent}>
                                 <Text style={styles.routeLabel}>DROP-OFF</Text>
-                                <Text style={styles.routeAddress} numberOfLines={1}>
+                                <Text style={styles.routeAddress} numberOfLines={2}>
                                     {incomingRide.dropoff_address || 'Drop-off location'}
                                 </Text>
                             </View>

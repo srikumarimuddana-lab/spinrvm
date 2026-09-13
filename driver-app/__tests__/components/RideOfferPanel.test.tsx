@@ -277,6 +277,15 @@ describe('RideOfferPanel', () => {
     expect(queryByText('Pre-booked')).toBeNull();
   });
 
+  // Design-audit finding: pickup/dropoff addresses were hard-truncated to
+  // one line (numberOfLines={1}) with no way to see the rest. Widened to 2
+  // lines so most real addresses show in full instead of clipping.
+  it('allows pickup/dropoff addresses to wrap onto up to 2 lines instead of hard-truncating to 1', () => {
+    const { getByText } = render(<RideOfferPanel {...defaultProps} />);
+    expect(getByText('123 Main St').props.numberOfLines).toBe(2);
+    expect(getByText('456 Elm Ave').props.numberOfLines).toBe(2);
+  });
+
   describe('isLoading (double-tap guard on accept/decline)', () => {
     it('fires onAccept and onDecline when not loading', () => {
       const onAccept = jest.fn();

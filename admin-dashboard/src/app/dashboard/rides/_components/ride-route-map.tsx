@@ -10,6 +10,7 @@ import {
     fitBoundsToPoints,
     makeRoutePinEl,
 } from "@/lib/map/maplibre-base";
+import StaticRouteMap from "./static-route-map";
 import { toGeoJsonMultiLineString } from "@spinr/shared/utils/routeSegments";
 import {
     buildPathGradient,
@@ -94,6 +95,30 @@ const ROUTE_LAYER_PAIRS: readonly (readonly [string, string])[] = [
     [TRIP_TRAIL_LAYER_ID, TRIP_TRAIL_SOURCE_ID],
 ];
 
+/**
+ * Can this browser actually render a MapLibre map?
+ *
+ * Not just "does getContext succeed": privacy and ad-blocking extensions
+ * commonly hand back a stubbed WebGL context that never throws and never
+ * draws, which produced a blank canvas with no error of any kind — no failed
+ * request, no CSP violation, nothing in the console. Probing a real parameter
+ * separates a working context from a stub. Falling back costs a slightly
+ * plainer map; guessing wrong costs an empty panel on the dispute-review
+ * screen, so this fails toward the raster renderer.
+ */
+function hasWebGL(): boolean {
+    if (typeof document === "undefined") return false;
+    try {
+        const canvas = document.createElement("canvas");
+        const gl = (canvas.getContext("webgl2") ||
+            canvas.getContext("webgl")) as WebGLRenderingContext | null;
+        if (!gl || typeof gl.getParameter !== "function") return false;
+        return Boolean(gl.getParameter(gl.VERSION));
+    } catch {
+        return false;
+    }
+}
+
 /** Drop every route layer/source this component owns, so a redraw (new phase
  *  data, or a basemap provider swap) is idempotent rather than throwing
  *  "source already exists". */
@@ -123,9 +148,36 @@ export default function RideRouteMap({
     // case — never flashes a banner. "retrying" only appears once a hop has
     // actually failed, which is the 8-24s window that would otherwise be silent.
     const [basemapStatus, setBasemapStatus] = useState<"ok" | "retrying" | "failed">("ok");
+    // Probed once, lazily, on first render. Safe here because ride-detail-modal
+    // loads this component with ssr:false, so there is always a document; doing
+    // it in an effect instead would cost an extra render and briefly mount a
+    // MapLibre map we may be about to discard.
+    const [webglOk] = useState<boolean>(() => hasWebGL());
     // Memoize so the draw effect does not rebuild the geometry on every parent
     // re-render — an unmemoized new object here churns the route layers.
     const actualGeometry = useMemo(() => toGeoJsonMultiLineString(actualSegments), [actualSegments]);
+
+    // Hand off to the no-WebGL renderer when MapLibre either cannot run at all
+    // or has exhausted every basemap provider.
+    const useStatic = !webglOk || basemapStatus === "failed";
+
+    // The same trail-priority the MapLibre draw path applies, flattened into
+    // plain polylines for the raster renderer. Only computed when it is needed.
+    const staticPaths = useMemo(() => {
+        if (!useStatic) return undefined;
+        const out: { points: { lat: number; lng: number }[]; approx?: boolean }[] = [];
+        const push = (pts: { lat: number; lng: number }[] | undefined, approx?: boolean) => {
+            if (pts && pts.length > 1) out.push({ points: pts, approx });
+        };
+        push(plannedTrail);
+        for (const segment of actualGeometry.coordinates) {
+            push(segment.map(([lng, lat]) => ({ lat, lng })));
+        }
+        push(pickupTrail, pickupApprox);
+        push(tripTrail);
+        if (out.length === 0) push(locationTrail);
+        return out;
+    }, [useStatic, plannedTrail, actualGeometry, pickupTrail, pickupApprox, tripTrail, locationTrail]);
 
     // The latest "draw the route onto this map" routine, held in a ref so the
     // map-creation effect below can call it without taking the route data as a
@@ -332,7 +384,9 @@ export default function RideRouteMap({
     // Depends on the pickup/dropoff primitives only. Route data is *not* a
     // dependency here — see drawRef above for why that matters.
     useEffect(() => {
-        if (!containerRef.current) return;
+        // No usable WebGL means never build a MapLibre map at all — it would
+        // only ever produce a blank canvas.
+        if (!containerRef.current || !webglOk) return;
 
         const chain = basemapChain();
         let disposed = false;
@@ -415,12 +469,26 @@ export default function RideRouteMap({
             current?.remove();
             mapRef.current = null;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, webglOk]);
 
     return (
         <div className="relative w-full h-[280px] rounded-xl overflow-hidden">
-            <div ref={containerRef} className="absolute inset-0" />
-            {basemapStatus !== "ok" && (
+            {useStatic ? (
+                <StaticRouteMap
+                    pickupLat={pickupLat}
+                    pickupLng={pickupLng}
+                    dropoffLat={dropoffLat}
+                    dropoffLng={dropoffLng}
+                    paths={suppressStraightFallback && staticPaths?.length === 0 ? [] : staticPaths}
+                />
+            ) : (
+                <div ref={containerRef} className="absolute inset-0" />
+            )}
+            {/* Only while MapLibre is still failing over. Once the chain is
+                exhausted we hand off to StaticRouteMap, which renders a real
+                basemap from a different host with no WebGL — so the old
+                "basemap unavailable" wording would have been untrue there. */}
+            {basemapStatus === "retrying" && !useStatic && (
                 // bg-background (not /90), matching monitoring-map.tsx's demand
                 // legend: a translucent panel over map content puts muted text
                 // right at the contrast floor with what's underneath unknowable
@@ -440,9 +508,7 @@ export default function RideRouteMap({
                     role="status"
                     className="absolute inset-x-0 top-0 z-10 border-b border-border bg-background px-3 py-1.5 text-[10px] text-muted-foreground"
                 >
-                    {basemapStatus === "retrying"
-                        ? "Basemap slow to load — trying another provider…"
-                        : "Basemap unavailable — route and pins still shown."}
+                    Basemap slow to load — trying another provider…
                 </div>
             )}
         </div>

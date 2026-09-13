@@ -36,6 +36,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 try:
     from .. import db_supabase  # type: ignore
+    from ..features import send_push_notification  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
     from ..utils.error_handling import DuplicateRecordError  # type: ignore
     from ..utils.redis_client import (  # type: ignore
@@ -50,6 +51,7 @@ try:
     )
 except ImportError:
     import db_supabase  # type: ignore
+    from features import send_push_notification  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
     from utils.redis_client import (  # type: ignore
@@ -912,3 +914,37 @@ async def _credit(user_id: str, amount: Decimal, kind: str, reference_id: str, t
                 exc_info=True,
             )
         raise
+
+    # R31 follow-up (ACTION_ITEMS.md): the rider wallet credit above had no
+    # notification anywhere — a rider had no way to know they'd earned a
+    # referral reward/bonus. Best-effort, informational (priority="normal");
+    # the credit + ledger entry above have already committed, so a lookup or
+    # push failure here must never surface as a failed credit.
+    #
+    # target_app is resolved from the recipient's actual role, NOT assumed
+    # "rider" from kind != "driver": `kind` is the referral-CODE type (rider-
+    # referral vs driver-referral program), not the recipient's account role
+    # — routes/users.py's apply_rider_referral resolves the referrer from the
+    # shared `users` table with no role filter, so a driver account can end
+    # up as `referrer_user_id` on a kind="rider" payout. Mirrors
+    # routes/admin/wallet.py's _wallet_target_app.
+    _title = "Referral reward earned!" if txn_type == "referral_reward" else "Referral bonus earned!"
+    try:
+        _recipient = await db_supabase.get_user_by_id(user_id)
+        _target_app = "driver" if _recipient and _recipient.get("role") == "driver" else "rider"
+        await send_push_notification(
+            user_id,
+            _title,
+            f"${_f(amount)} was added to your wallet.",
+            data={
+                "type": "referral_payout",
+                "amount": _f(amount),
+                "referral_payout_id": reference_id,
+            },
+            target_app=_target_app,
+        )
+    except Exception as e:
+        logger.warning(
+            f"referral_payout: push failed user_id={user_id} reference_id={reference_id}: {e}",
+            exc_info=True,
+        )

@@ -460,6 +460,21 @@ async def run_sync(
                 ).error("[DB] Executor wait exceeded the request deadline")
                 _breaker.release_probe()
                 raise ServiceUnavailableException("database") from None
+            except asyncio.CancelledError:
+                # An OUTER wait_for cancels us here — e.g. server.py::_db_ready
+                # bounds its health ping at _HEALTH_PING_TIMEOUT (3s), and that
+                # fires against this same executor path 100+ times a week.
+                # CancelledError is BaseException-only, so neither the
+                # `except TimeoutError` above nor the `except Exception` below
+                # ever sees it, and this was the one exit path that released
+                # neither the probe nor recorded success. If the cancelled call
+                # happened to be the breaker's single half-open probe,
+                # _probe_in_flight leaked True and should_allow() never granted
+                # another one — every DB call 503s until the process restarts,
+                # which is exactly what release_probe() exists to prevent.
+                future.cancel()
+                _breaker.release_probe()
+                raise
             finally:
                 _record_db_queue_depth()
 

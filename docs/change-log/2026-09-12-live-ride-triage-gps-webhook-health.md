@@ -212,6 +212,11 @@ Its metadata is `{"booking": "6aa5d89dca6c0d82be72f2aa", "type": "card", "user_i
 
 Not fixed here because the remedy is a `patch-package` patch to native Java that **cannot be verified without a physical Android device**, and this repo's recorded experience is that inferred native rendering fixes fail — three inferred car-marker fixes failed in one day before a device observation identified the real cause. It needs a device repro first. Tracked as the top follow-up.
 
+**Two facts for whoever picks it up, so the decision does not have to be re-derived:**
+
+1. **Fix it in the `react-native-maps` patch, not in `shared/components/RouteLine.tsx`.** The tempting app-side fix — give `RouteLine` a stable child count instead of a variable one — would ship to **8 screens across two apps** (6 rider-app screens: `driver-arrived`, `driver-arriving`, `ride-completed`, `ride-details`, `ride-in-progress`, `ride-options`; plus `driver-app/app/driver/(tabs)/index.tsx` and `driver-app/app/driver/ride-detail.tsx`; `RoutePins` adds `lib/androidAuto/carSurface.tsx`). And there is **zero real test coverage of either component anywhere in the monorepo**: every consumer's test stubs them to `() => null`, and the only two suites that do not stub assert on *import-statement source text* rather than rendering. Per CLAUDE.md pre-merge gate 1 that is zero coverage, not coverage — so a shared-component change would reach 8 live screens with no visual tooling and no functional test that renders it even once. The native patch has zero JS blast radius by comparison.
+2. **The patch must be added to `rider-app/patches/` as well as `driver-app/patches/`.** rider-app has its own `node_modules`, renders the same variable-child-count polyline pattern on 6 map screens, and consumes a third `MapView` surface (`AppMap`) — so it is exposed to the identical crash. Patching only driver-app would leave riders crashing.
+
 ## 12. Sign-off
 
 - [x] Rollback plan is concrete and testable (§8), with the two redeploy-only cases named and justified rather than glossed.

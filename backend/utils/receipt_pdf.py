@@ -171,13 +171,29 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
             tax_total = gap
             rows.append(("Tax", _money(gap)))
 
+    # Promo/discount disclosure line (C102) — parity with the JSON receipt's
+    # _build_fare_breakdown (routes/rides/_shared.py), which already shows
+    # this. Capped at the ride-fare portion a promo actually discounts (the
+    # driver's 100%-share base plus any minimum-fare uplift), mirroring that
+    # function's cap exactly — never fees or taxes. persisted_grand is
+    # already net of this discount, so the line is pure disclosure there;
+    # the no-persisted-total fallback below also subtracts it so the rows
+    # keep summing to the shown total either way.
+    discount = _d(ride.get("discount_amount"))
+    capped_discount = Decimal("0")
+    if discount > 0:
+        promo_label = f"Promo ({ride['promo_code']})" if ride.get("promo_code") else "Promo discount"
+        ride_fare_for_cap = base + dist + time_ + min_fare_uplift
+        capped_discount = min(discount, ride_fare_for_cap) if ride_fare_for_cap > 0 else discount
+        rows.append((promo_label, f"-{_money(capped_discount)}"))
+
     if tip > 0:
         rows.append(("Tip", _money(tip)))
 
     if persisted_grand not in (None, "", 0):
         grand = _q(_d(persisted_grand) + tip)
     else:
-        grand = _q(subtotal + area_total + tax_total + tip)
+        grand = _q(subtotal + area_total + tax_total + tip - capped_discount)
     return rows, grand
 
 

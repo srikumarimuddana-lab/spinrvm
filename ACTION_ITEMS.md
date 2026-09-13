@@ -25400,7 +25400,7 @@ how much they de-risk a public launch._
 
 ### C102. Receipt PDF/HTML generator (`utils/receipt_pdf.py` + `utils/email_receipt.py`) never renders a discount/promo line, unlike the JSON receipt endpoint
 
-- [ ] **Status:** OPEN — found, not fixed, deliberately out of scope for the change that surfaced it.
+- [x] **Status:** CLOSED (2026-09-13). Both generators now render the discount line.
 - **Found by:** `spinr-money-auditor`'s adversarial review of the R9 receipt-PDF-reconciliation
   change (`docs/audit/ride-experience/ROADMAP.md` R9,
   `docs/change-log/2026-09-12-receipt-pdf-reconciliation.md`).
@@ -25420,11 +25420,27 @@ how much they de-risk a public launch._
   rider-triggerable on demand (`GET /rides/{id}/receipt.pdf`) rather than only reachable via an
   emailed attachment nobody re-triggers, which is why the auditor flagged it now rather than it
   staying unnoticed indefinitely.
-- **Suggested fix:** add the same discount-line logic `_build_fare_breakdown` already has to
-  `_fare_lines`/`_build_fare_rows` (or better, have both read from one shared line-builder so a
-  future fare-line type doesn't have to be added in three places — but that refactor is a
-  separate, larger change from this one-line fix and should be scoped on its own merits, not
-  bundled here).
+- **Fix:** added the same capped discount-line logic `_build_fare_breakdown` already has to both
+  `_fare_lines` and `_build_fare_rows` (same cap formula, same line position — after tax, before
+  tip). Also fixed the two functions' no-persisted-`grand_total` fallback totals to subtract the
+  discount, so the visible rows keep summing to the printed total now that the discount is a real
+  line item. Adversarial review (`spinr-money-auditor`, CLAUDE.md gate #10) before commit found
+  one real follow-on bug this introduced: `email_receipt.py::_receipt_total` (a third, independent
+  helper used only for the email subject line) had its own separate fallback formula that was
+  missed by the first pass, and would have kept overstating the subject-line total by the discount
+  amount in that fallback case — fixed in the same commit. Full detail, before/after, and blast
+  radius: `docs/change-log/2026-09-13-c102-receipt-discount-line.md`.
+- **Not fixed, deliberately out of scope (two pre-existing issues surfaced by the same review):**
+  1. the "gap"-based tax fallback in both files (used only when `tax_breakdown` is empty) can
+     silently omit the Tax line entirely when a large discount pushes the gap negative —
+     legacy-row-only.
+  2. `routes/rides/_shared.py`'s stop-edit re-estimate path already has a documented residual
+     (comment marked "N3") where its discount subtraction is uncapped, unlike every render-side
+     cap. Neither is introduced or worsened by this fix; both are candidates for their own
+     ACTION_ITEMS entries if picked up later.
+- **Shared-line-builder refactor** (a future fare-line type shouldn't have to be added in three
+  places) remains a separate, larger change from this one-line-item fix, out of scope here as
+  originally noted.
 
 ### C103. Device / ops verification access gap — one root cause behind five standing open items (C70, C90, C91's final step, C97 #1, C97 #5), consolidated per R14 rather than re-listed separately
 - [ ] **Status:** OPEN — governance/resourcing item, not a code change. Filed 2026-09-12 per

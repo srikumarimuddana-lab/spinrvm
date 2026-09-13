@@ -25673,10 +25673,23 @@ how much they de-risk a public launch._
   `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
 
 ### C107. Migration 142's `role IN ('admin','super_admin')` RLS idiom may be unreachable for any admin provisioned after migration 256 — spans 10 tables
-- [ ] **Status:** OPEN — found during independent security review of PR #5307 (a follow-up fix
-  applying migration 142's admin-lockdown pattern to `corporate_accounts`, the one table missed
-  when that pattern was first rolled out to its 9 siblings). Not fixed by this entry — this is a
-  tracking item for a systemic correctness question, not a code change.
+- [x] **Status:** CLOSED (2026-09-13) — both open actions resolved with direct production
+  evidence, not inference. **(1) Legacy row check:** queried the real production database
+  (`spinrmobileapp`, `soavhtdhefowwvforzwb`) read-only. Exactly one `users` row has
+  `role = 'admin'` (id `71ba3eea-287f-41d8-8e48-9d794ea531e0`, created 2026-02-14) — matches
+  this entry's own prediction of "the single historical `make_admin.py` target" exactly. That
+  row has **no corresponding `auth.users` row at all** — it cannot obtain a real Supabase-issued
+  session under any circumstance, so it cannot exercise the RLS policy in question no matter
+  what. The "unreachable" theory is confirmed, not just plausible. **(2) Policy decision:**
+  documenting the `users.role` check as legacy/dead (this entry's proposed Option B) is correct,
+  and switching it to check `admin_staff` instead (Option A) was considered and rejected — see
+  **C108** below for why: it would not add any real reachability today regardless of which table
+  the `EXISTS` subquery reads, because the underlying blocker isn't which identity table is
+  checked, it's that this app has never issued a single real Supabase Auth session to any user of
+  any kind. No migration/policy change made — the correct fix is documentation, not code, per
+  that analysis. **Escalation to the admin-identity model owner (as this entry proposed if the
+  answer wasn't obvious from code alone) turned out to be unnecessary** — direct production
+  querying gave an unambiguous, low-risk answer without needing to guess at intent.
 - **Issue/gap:** `backend/migrations/142_fix_rls_financial_tables.sql` (and now
   `416_corporate_accounts_rls_super_admin_fix.sql`, PR #5307) gate admin access to 10 tables via
   RLS policies checking `EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND
@@ -25712,6 +25725,71 @@ how much they de-risk a public launch._
   (`_verify_admin_payload`), `backend/tests/rls/test_corporate_accounts_super_admin_fix.py` (its
   schema fixture applies migrations 05/17/416 only, not 256 — its passing tests seed `users.role`
   directly and so do not, by themselves, demonstrate reachability against the real current schema).
+
+### C108. `auth.users` is completely empty in production — every `auth.uid()`-based RLS policy in the schema (not just C107's 10 tables) is currently unreachable for the same reason
+- [ ] **Status:** OPEN, informational/documentation-debt — no live incident, no action required
+  today. Found while closing C107: querying the real production database
+  (`spinrmobileapp`, `soavhtdhefowwvforzwb`) to check for a legacy `role='admin'` row also
+  surfaced a much bigger fact underneath it.
+- **What was found:** `SELECT count(*) FROM auth.users` returns **0**, against 1,955 rows in
+  `public.users`. This app has never created a single Supabase Auth account for any rider,
+  driver, or admin. Confirmed by joining on id: zero of the 1,955 `public.users` rows have a
+  matching `auth.users` row (checked all of them, not a sample).
+- **Why this matters beyond C107:** C107 asked "can an admin ever present a real
+  `authenticated`-role JWT that satisfies `users.role IN ('admin','super_admin')`" and the
+  answer was no, because migration 256 blocks that role value AND (per this finding) there's no
+  `auth.users` row to attach a real session to regardless. But the same underlying fact —
+  no `auth.users` rows exist at all — means this isn't specific to admin policies or to
+  migration 256. **Every RLS policy anywhere in this schema that checks `auth.uid() = <col>`
+  for the `authenticated` role** (rider-owns-own-ride, driver-owns-own-record, the
+  member-read-own-corporate-row policies migration 27/142 added, all of `backend/supabase_rls.sql`,
+  etc.) is equally unreachable today, for the identical reason: there is no code path, anywhere,
+  by which a rider or driver obtains a real Supabase-issued session JWT. The app's entire auth
+  model is the custom JWT scheme CLAUDE.md documents (`JWT_SECRET`-signed, verified by the
+  backend's own dependency functions) — Supabase Auth (`auth.users`, `auth.uid()`,
+  `GoTrue`/`/auth/v1/*`) is provisioned by the platform but simply never used to authenticate a
+  real person. The backend's exclusive use of the service-role key (bypasses RLS) is why none of
+  this has ever mattered functionally — but it means C49's whole "DB-role-level RLS test
+  coverage" effort (`backend/tests/rls/`, 194 tests as of this writing) is pinning policy *logic*
+  correctness (given some claim set, is access granted/denied correctly) rather than anything
+  currently *exercised* in production — `conftest.py`'s `as_role()` helper directly sets
+  `request.jwt.claims`/`SET ROLE` to simulate what PostgREST does after validating a real JWT;
+  it does not and cannot prove such a JWT is ever actually issued. That's a legitimate and
+  valuable thing to test (protects against a future direct-PostgREST path, and against RLS
+  regressions if the auth model ever changes), but the C49 test suite's own docstrings and this
+  repo's broader RLS documentation should not imply these policies are live-enforced against
+  real traffic today — they are dormant-but-correct, not active.
+- **Production impact:** none currently, for the same reason C107 concluded none — service-role
+  bypass is the only path any real request takes. This is not a vulnerability (nothing is
+  granted that shouldn't be); it's an architecture-clarity gap that could mislead someone
+  drawing false comfort from "we have RLS" without realizing the `authenticated`-role half of
+  that story has no live traffic to protect against right now.
+- **Not a repeat of C107:** C107 was scoped to one specific idiom (migration 142/416's admin
+  check) on 10 tables and is now closed. This entry is the broader, schema-wide version of the
+  same underlying fact, left open because deciding what (if anything) to do about it — e.g.
+  whether Supabase Auth should ever be wired up for real end-user sessions, whether
+  `backend/tests/rls/`'s documentation should be reworded to say "policy-logic coverage, not
+  live-traffic coverage," or whether this is simply accepted as the permanent architecture — is
+  a product/architecture decision, not a mechanical fix.
+- **Suggested next step (not done here):** reword `backend/tests/rls/README`-equivalent
+  documentation (its module docstrings, and CLAUDE.md's Testing Conventions RLS paragraph) to
+  state plainly that this tier proves policy logic, not production reachability, given zero
+  `auth.users` rows exist — a lower-risk, purely-documentation follow-up that doesn't require
+  the architecture decision above. Escalate the bigger question (does Supabase Auth get wired up
+  for real sessions, ever) to whoever owns the auth roadmap if it becomes relevant — e.g. if a
+  future feature needs direct-from-client PostgREST access instead of always going through the
+  backend.
+- **Verification performed:** direct, read-only SQL against the real production database via
+  the Supabase MCP connector (`execute_sql`, `SELECT count(*)` / existence-check queries only —
+  no row-level PII was read or is reproduced here beyond one internal `user_id` UUID, consistent
+  with this repo's own logging convention of using `user_id` rather than PII as an identifier).
+  Not verified: whether any *other* Supabase project this app might use in a different
+  environment (staging, if one exists on a separate project) shows the same pattern — this
+  check covered only the one confirmed-production project this session has access to.
+- **Files (reference only, no code changed by this entry):** `backend/supabase_rls.sql`,
+  every `backend/migrations/*.sql` file creating a `CREATE POLICY ... TO authenticated USING
+  (auth.uid() = ...)`-shaped policy, `backend/tests/rls/conftest.py` (`as_role()`),
+  `backend/tests/rls/README`-equivalent docstrings across that directory's test files.
 
 ## Recently completed (do not redo)
 

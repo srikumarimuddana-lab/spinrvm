@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
@@ -15,6 +14,7 @@ import {
   Alert,
   Image,
 } from 'react-native';
+import { Text } from '@shared/components/Text';
 // Avatar uses React Native's built-in Image (a core host component that is
 // always registered) instead of expo-image. On the New-Architecture release
 // build, expo-image's native Fabric view was resolving to a non-renderable

@@ -16,6 +16,12 @@ Canonical sources, in priority order — read these, don't re-derive values from
 
 **Current status: shipped in code, off in production.** Everything below (except the logo fix) lives behind the `admin_theme_v2_enabled` `app_settings` flag, currently `false`. Stage 4 (canary rollout, then flip the flag) is an explicit human decision, not yet made. When reasoning about what admin-dashboard *actually looks like today* to a real user, the answer is: the pre-Quiet-Console default styling, with one exception — the sidebar logo fix (below) shipped unconditionally.
 
+## Minimalism as the shared cross-app principle (decided 2026-09-12)
+
+Decided 2026-09-12 (user decision). "Minimalism" is now the explicit, shared design principle across all three surfaces (admin-dashboard, rider-app, driver-app) — see `spinr-rider-driver-design-system`'s companion section for the full rationale. For admin-dashboard specifically, this is not a new instruction: Quiet Console *is* the minimalism calibration for this surface, already the most restrained of the three (most of the screen neutral, color reserved for real signal). Nothing here changes as a result of this decision — treat it as confirmation, not a new brief.
+
+Minimalism is a discipline (no clutter, one clear primary action, purposeful color, consistent tokens), not a literal look every surface must share pixel-for-pixel. Don't use this section to argue admin-dashboard should look identical to rider-app/driver-app, or vice versa — the per-surface calibration in each doc stays authoritative.
+
 ## Tokens (light mode, `:root`)
 
 | Token | Value | Notes |

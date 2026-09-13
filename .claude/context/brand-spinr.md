@@ -67,6 +67,30 @@ background.
 If the source logo is ever updated, re-run the same resize into the backend copy
 rather than hand-editing it.
 
+## Design principle: minimalism (cross-app, decided 2026-09-12)
+
+Minimalism is the shared design principle across admin-dashboard, rider-app,
+and driver-app — but as a *discipline* (no visual clutter, one clear primary
+action per view, purposeful/restrained color, consistent spacing and
+typography), not one identical visual language all three must share. Each
+surface calibrates it differently:
+
+- **admin-dashboard** — full calibration: Quiet Console (see
+  `spinr-admin-design-system` skill) — calm, neutral-by-default, color
+  reserved for real signal.
+- **rider-app** — warmer, more considered than admin; declutter layouts and
+  enforce token consistency without losing brand warmth/personality (see
+  `spinr-rider-driver-design-system` skill).
+- **driver-app** — reduced chrome, not reduced signal: strip non-essential
+  elements so the app's punchier, faster-feeling real-time/safety cues (the
+  GO/STOP toggle, live position, ride-offer countdown) stand out more, not
+  less. These three are a permanent carve-out from decluttering, not a gap
+  to "fix."
+
+Don't treat minimalism as license to flatten brand color/personality out of
+rider-app, or to dial down driver-app's safety-relevant urgency cues — the
+goal is less noise, not less identity or less signal.
+
 ## No formal brand guideline doc (yet)
 
 There is no dedicated style-guide/brand-guideline document in `docs/` — these

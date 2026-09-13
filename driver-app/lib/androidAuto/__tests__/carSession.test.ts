@@ -79,7 +79,14 @@ jest.mock('../carLocationTask', () => ({
 }));
 
 const mockConsumeFixCount = jest.fn<number, []>(() => 30);
-jest.mock('../carFixChannel', () => ({ consumeFixCount: () => mockConsumeFixCount() }));
+// Task-origin count, reported as context but never the alarm condition on its
+// own — see carFixChannel's two-counter rationale. Defaults BELOW the starvation
+// threshold so these tests prove the alarm keys off arrivals, not off this.
+const mockConsumeTaskFixCount = jest.fn<number, []>(() => 0);
+jest.mock('../carFixChannel', () => ({
+  consumeFixCount: () => mockConsumeFixCount(),
+  consumeTaskFixCount: () => mockConsumeTaskFixCount(),
+}));
 
 const mockRecordNonFatal = jest.fn();
 jest.mock('../../../utils/crashlytics', () => ({
@@ -123,6 +130,7 @@ beforeEach(() => {
   mockDriver.incomingRide = null;
   mockConsumePending.mockResolvedValue(false);
   mockConsumeFixCount.mockReturnValue(30);
+  mockConsumeTaskFixCount.mockReturnValue(0);
   mockAppCheckReady.mockResolvedValue(true);
   mockInitFirebase.mockResolvedValue(undefined);
   mockApiGet.mockResolvedValue({ data: { ride_offer_timeout_seconds: 20 } });
@@ -390,6 +398,7 @@ describe('lifecycle', () => {
       expect(mockRecordNonFatal.mock.calls[0][1]).toMatchObject({
         reason: 'car_location_throttled',
         fixes_per_min: '1',
+        task_fixes_per_min: '0',
       });
 
       // Once per session, not once per minute of driving.
@@ -408,6 +417,47 @@ describe('lifecycle', () => {
       jest.advanceTimersByTime(300_000);
       await settle();
       expect(mockRecordNonFatal).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('a throttled background task alone does not raise the alarm', async () => {
+    // The regression guard for the two-counter split. The AA surface runs its own
+    // watchPositionAsync at timeInterval 2000 (~30/min) plus a 3s staleness
+    // watchdog, so while the surface is mounted the car map HAS a position even
+    // if the background task delivers nothing. That is the Android-throttling
+    // diagnostic, not a user-facing fault, so it rides along as context instead
+    // of firing "Car location starved".
+    jest.useFakeTimers();
+    try {
+      await startCarSession();
+      mockConsumeFixCount.mockReturnValue(30); // surface healthy
+      mockConsumeTaskFixCount.mockReturnValue(0); // task delivering nothing
+      jest.advanceTimersByTime(300_000);
+      await settle();
+      expect(mockRecordNonFatal).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('still alarms when arrivals are starved even if the task looks busy', async () => {
+    // The other direction: counting everything in ONE number would have made the
+    // alarm unfirable, because the surface's own watcher always clears the
+    // threshold whenever this check runs. The alarm must key off total arrivals.
+    jest.useFakeTimers();
+    try {
+      await startCarSession();
+      mockConsumeFixCount.mockReturnValue(0); // nothing reaching the car map
+      mockConsumeTaskFixCount.mockReturnValue(30);
+      jest.advanceTimersByTime(180_000); // past the grace ticks
+      await settle();
+      expect(mockRecordNonFatal).toHaveBeenCalledTimes(1);
+      expect(mockRecordNonFatal.mock.calls[0][1]).toMatchObject({
+        fixes_per_min: '0',
+        task_fixes_per_min: '30',
+      });
     } finally {
       jest.useRealTimers();
     }

@@ -11,7 +11,7 @@
  *
  * The phone already solved this: `app/driver/(tabs)/index.tsx` polls
  * `/rides/{id}/live-route` (self-hosted OSRM, so no metered Directions spend)
- * every 20s and draws that road-matched line from the driver's LIVE position to
+ * every 6s and draws that road-matched line from the driver's LIVE position to
  * the current destination. But it kept the result in component state, which the
  * car cannot read — and on a car-only cold launch that component never mounts
  * at all.

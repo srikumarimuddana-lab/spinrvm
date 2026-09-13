@@ -1065,6 +1065,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                             onError={handleImageError}
                             onLoad={handleImageLoaded}
                             contentFit="contain"
+                            cachePolicy="disk"
                             style={{
                                 width: size,
                                 height: size,

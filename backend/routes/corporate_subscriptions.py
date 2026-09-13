@@ -28,6 +28,7 @@ try:
         cancel_subscription,
     )
     from ..settings_loader import get_app_settings  # type: ignore
+    from ..utils.audit_logger import log_admin_action  # type: ignore
     from ..validators import validate_id  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
@@ -38,6 +39,7 @@ except ImportError:
         cancel_subscription,
     )
     from settings_loader import get_app_settings  # type: ignore
+    from utils.audit_logger import log_admin_action  # type: ignore
     from validators import validate_id  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,7 @@ _DEFAULT_BILLING_ENABLED = False
 
 _ERROR_STATUS = {
     "company_not_found": 404,
+    "company_not_in_pilot": 403,
     "plan_not_found_or_inactive": 404,
     "plan_missing_stripe_price": 422,
     "subscription_already_active": 409,
@@ -74,6 +77,11 @@ class AssignSubscriptionRequest(BaseModel):
 class CancelSubscriptionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     at_period_end: bool = True
+
+
+class SetSubscriptionPilotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
 
 
 @router.get("/subscription-plans")
@@ -130,3 +138,44 @@ async def cancel_company_subscription(
     except CorporateSubscriptionError as exc:
         raise _http_error(exc) from exc
     return row
+
+
+@router.post("/{company_id}/subscription-pilot")
+async def set_subscription_pilot(
+    company_id: str,
+    body: SetSubscriptionPilotRequest,
+    current_admin: dict = Depends(get_admin_user),
+):
+    """Per-company gate on top of the global corporate_subscription_billing_enabled
+    setting (migration 419) — lets billing be verified against one chosen company
+    (e.g. Spinr's own internal account) without exposing POST .../subscription
+    for every corporate account the moment the global flag is turned on. Never
+    starts or cancels a Stripe subscription itself; assign_company_subscription
+    still requires both this flag and the global setting to be true.
+    """
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    company = await db_supabase.get_corporate_account_by_id(normalized_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="company_not_found")
+
+    updated = await db_supabase.update_corporate_account(
+        normalized_id, {"subscription_billing_pilot_enabled": body.enabled}
+    )
+
+    await log_admin_action(
+        admin=current_admin,
+        action="corporate_subscription_pilot_toggled",
+        resource="corporate_accounts",
+        resource_id=normalized_id,
+        details={"company_id": normalized_id, "enabled": body.enabled},
+    )
+    logger.info(
+        "Corporate subscription pilot flag set: company=%s enabled=%s",
+        normalized_id,
+        body.enabled,
+        extra={"domain": "corporate"},
+    )
+    return {
+        "company_id": normalized_id,
+        "subscription_billing_pilot_enabled": (updated or {}).get("subscription_billing_pilot_enabled", body.enabled),
+    }

@@ -16,6 +16,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import stripe
 
 from backend.routes.drivers import _shared
 from backend.utils.sin import normalize_sin, sin_last4, validate_sin
@@ -349,6 +350,23 @@ class TestT4AWiring:
         assert "sin" not in summary or summary.get("sin") != "vault-uuid"
 
 
+# ── Stripe object shapes ─────────────────────────────────────────────────
+# stripe.Account.retrieve returns a StripeObject, NOT a dict: since
+# stripe-python 8, `.get()` on one raises
+#   AttributeError: 'get' is a dict method, but a Account is not a dict.
+# These tests used to mock it with a plain dict, so they passed while the
+# production read path raised on every real call — the SIN pre-fill silently
+# failed (swallowed by its best-effort except) and every driver was asked for
+# their SIN twice, the exact double-entry prefill_sin_to_stripe exists to
+# prevent. Observed in production 2026-09-12 on /stripe-onboard. Build the
+# real type here so a dict-shaped mock can never hide that again.
+def _stripe_account(individual: dict | None = None) -> "stripe.Account":
+    payload: dict = {"id": "acct_1"}
+    if individual is not None:
+        payload["individual"] = individual
+    return stripe.Account.construct_from(payload, "sk_test")
+
+
 class TestStripePrefill:
     """Hand Stripe the SIN we hold so its form stops asking, and the driver is
     never asked twice for the most sensitive number they have."""
@@ -371,7 +389,7 @@ class TestStripePrefill:
     async def test_prefills_when_stripe_still_needs_it(self):
         mod = self._mod()
         with (
-            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value=_stripe_account({}))),
             patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
             patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
         ):
@@ -385,7 +403,7 @@ class TestStripePrefill:
         mod = self._mod()
         with (
             patch.object(
-                mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {"id_number_provided": True}})
+                mod.stripe.Account, "retrieve", MagicMock(return_value=_stripe_account({"id_number_provided": True}))
             ),
             patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
             patch.object(mod, "_vault_decrypt", AsyncMock()) as dec,
@@ -415,7 +433,7 @@ class TestStripePrefill:
         mod = self._mod()
         driver = {"id": "d1", "sin": "vault-uuid", "stripe_id_number_provided": True, "stripe_account_id": "acct_old"}
         with (
-            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value=_stripe_account({}))),
             patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
             patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
             patch.object(mod.db_supabase, "update_one", AsyncMock()),
@@ -430,7 +448,7 @@ class TestStripePrefill:
         paying another Account.retrieve."""
         mod = self._mod()
         with (
-            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value=_stripe_account({}))),
             patch.object(mod.stripe.Account, "modify", MagicMock()),
             patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
             patch.object(mod.db_supabase, "update_one", AsyncMock()) as upd,
@@ -445,7 +463,7 @@ class TestStripePrefill:
         retrieve next call, never the prefill outcome itself."""
         mod = self._mod()
         with (
-            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value=_stripe_account({}))),
             patch.object(mod.stripe.Account, "modify", MagicMock()),
             patch.object(mod, "_vault_decrypt", AsyncMock(return_value=VALID_SIN)),
             patch.object(mod.db_supabase, "update_one", AsyncMock(side_effect=RuntimeError("db down"))),
@@ -459,7 +477,7 @@ class TestStripePrefill:
         that would register a UUID as somebody's SIN with Stripe."""
         mod = self._mod()
         with (
-            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value=_stripe_account({}))),
             patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
             patch.object(mod, "_vault_decrypt", AsyncMock(return_value="vault-uuid")),
         ):
@@ -471,7 +489,7 @@ class TestStripePrefill:
     async def test_malformed_plaintext_is_not_sent(self):
         mod = self._mod()
         with (
-            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value={"individual": {}})),
+            patch.object(mod.stripe.Account, "retrieve", MagicMock(return_value=_stripe_account({}))),
             patch.object(mod.stripe.Account, "modify", MagicMock()) as modify,
             patch.object(mod, "_vault_decrypt", AsyncMock(return_value="12345")),
         ):

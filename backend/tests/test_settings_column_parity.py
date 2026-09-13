@@ -20,7 +20,24 @@ enters the payload once an admin actually sets it, so the 500 fires exactly
 when someone first tries to change one — which for a kill switch means during
 an incident.
 
-Migration 313 added the columns. This test keeps them in step.
+Migration 313 added the columns for the 24 fields below. `test_every_api_field_has_a_column`
+originally only cross-checked those 24 against declared migration columns, so any
+`SettingsUpdateRequest` field added *after* 313 (`directions_proxy_enabled`,
+`driver_turn_by_turn_enabled`) was invisible to the regression loop — a missing-migration bug for
+either would have shipped undetected. The check is now generalized to every field on
+`SettingsUpdateRequest`, cross-referenced against `_declared_settings_columns()` (every migration's
+`ADD COLUMN`) unioned with `_baseline_settings_columns()` (see C110 in ACTION_ITEMS.md).
+
+`_baseline_settings_columns()` covers fields that predate migration tracking in this repo: it
+parses `backend/supabase_schema.sql`'s bootstrap `CREATE TABLE settings (...)` block — the "run
+this in the Supabase SQL Editor" DDL that is the actual origin of the table's original shape —
+rather than asserting a hand-typed list. 7 fields that were neither in that bootstrap file nor in
+any migration (`company_app_download_url`, `safety_team_email`, `safety_team_phone`,
+`sos_show_share_trip`, `sos_show_report_issue`, `new_ride_requests_enabled`,
+`dispute_stripe_evidence_submission_enabled` — two of them kill switches whose own Change Impact
+Logs admit they were never exercised against a real Supabase row) got migration 419 instead of a
+baseline guess, found by `spinr-test-coverage-reviewer`'s adversarial pass on this fix's first
+draft.
 """
 
 from __future__ import annotations
@@ -33,6 +50,7 @@ import pytest
 from backend.routes.admin.settings import SettingsUpdateRequest
 
 _MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
+_BOOTSTRAP_SCHEMA = Path(__file__).resolve().parents[1] / "supabase_schema.sql"
 
 # Fields that legitimately have no column. Empty today — kept as an explicit
 # seam so that if one is ever added, it is a deliberate line in this list with
@@ -69,42 +87,125 @@ def _declared_settings_columns() -> set[str]:
 
 
 def _baseline_settings_columns() -> set[str]:
-    """Columns that predate the migration files (the table's original shape).
+    """Columns declared on `settings` in the bootstrap schema script.
 
-    The `settings` table was not created by a migration in this repo, so its
-    original columns cannot be parsed. Rather than assert against an unknowable
-    baseline, this test only requires that fields introduced from migration 311
-    onward are backed — see the module docstring for why 313 is the reference
-    point. Fields older than that are covered by the fact that the settings
-    page has been saving them in production for months.
+    `backend/supabase_schema.sql` is the "run this in the Supabase SQL Editor"
+    bootstrap DDL — the actual origin of the table's original shape, which
+    predates this repo's migration tracking (see module docstring). Parsed
+    mechanically, the same way `_declared_settings_columns()` parses
+    `ADD COLUMN`, rather than hand-typed: a hand-typed list can only ever be
+    as good as whoever last reviewed it, which is exactly what put 7 fields
+    with zero schema evidence into an earlier draft of this allowlist before
+    `spinr-test-coverage-reviewer`'s pass caught it (see C110/C111 in
+    ACTION_ITEMS.md) — they got migration 419 instead.
     """
-    return set()
+    if not _BOOTSTRAP_SCHEMA.exists():
+        return set()
+    lines = _BOOTSTRAP_SCHEMA.read_text(encoding="utf-8").splitlines()
+    columns: set[str] = set()
+    in_settings_table = False
+    depth = 0
+    for line in lines:
+        stripped = line.strip()
+        if not in_settings_table:
+            if re.match(
+                r"CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?(public\.)?settings\s*\(",
+                stripped,
+                re.IGNORECASE,
+            ):
+                in_settings_table = True
+                depth = 1
+            continue
+        # Track paren depth per line (handles a type like NUMERIC(10, 2)) so
+        # the closing `);` of the CREATE TABLE, not a column definition, is
+        # what ends the scan.
+        depth += stripped.count("(") - stripped.count(")")
+        if depth <= 0:
+            break
+        match = re.match(r"([a-z_][a-z0-9_]*)\s+", stripped, re.IGNORECASE)
+        if match and match.group(1) not in {"id", "updated_at"}:
+            columns.add(match.group(1))
+    return columns
+
+
+def _fields_missing_columns(fields: set[str], declared: set[str], baseline: set[str]) -> list[str]:
+    """Pure helper so the regression logic is testable without a real request model."""
+    return sorted(fields - declared - baseline - _NOT_PERSISTED)
+
+
+def _regressed_settings_fields() -> list[str]:
+    """The exact field-selection + gap-check `test_every_api_field_has_a_column` asserts on.
+
+    Factored out (rather than inlined in the test) so
+    `test_a_field_with_no_column_and_no_baseline_entry_is_caught` below can
+    exercise this real code path — including the
+    `SettingsUpdateRequest.model_fields` read — instead of only the extracted
+    `_fields_missing_columns` set-arithmetic helper. A regression that
+    reintroduces a `_EXPECTED_313_COLUMNS`-style filter here would be caught
+    by that test; it would not have been if the test only called
+    `_fields_missing_columns` directly.
+    """
+    declared = _declared_settings_columns()
+    baseline = _baseline_settings_columns()
+    api_fields = set(SettingsUpdateRequest.model_fields.keys())
+    return _fields_missing_columns(api_fields, declared, baseline)
 
 
 def test_every_api_field_has_a_column():
-    """A field the API accepts with no column 500s the whole save."""
-    declared = _declared_settings_columns() | _baseline_settings_columns()
-    api_fields = set(SettingsUpdateRequest.model_fields.keys()) - _NOT_PERSISTED
+    """A field the API accepts with no column 500s the whole save.
 
-    # Restricted to what the migrations in this repo actually declare: anything
-    # not declared here is either pre-existing (fine) or newly added without a
-    # migration (the bug). The check below catches the second case for every
-    # field 313 knows about.
-    known_recent = _declared_settings_columns()
-    regressed = sorted(
-        f
-        for f in api_fields
-        # A field is "recent" if 313 had to add it. If someone removes its
-        # ADD COLUMN while leaving the API field, this fires.
-        if f in _EXPECTED_313_COLUMNS and f not in known_recent
-    )
+    Covers every field on `SettingsUpdateRequest`, not just the 24 migration
+    313 originally fixed — see the module docstring for why the narrower,
+    pinned check this replaced missed two later fields.
+    """
+    regressed = _regressed_settings_fields()
 
     assert not regressed, (
-        f"settings field(s) accepted by the API with no ADD COLUMN in any migration: {regressed}. "
-        "PUT /api/admin/settings sends these straight to Postgres, so the next save that "
-        "includes one returns PGRST204 -> 500 and loses every other field in the same request."
+        f"settings field(s) accepted by the API with no ADD COLUMN in any migration and not in "
+        f"_baseline_settings_columns(): {regressed}. PUT /api/admin/settings sends these straight "
+        "to Postgres, so the next save that includes one returns PGRST204 -> 500 and loses every "
+        "other field in the same request. If this is a genuinely new field, add a migration. If "
+        "it predates migration tracking and is confirmed working in production, add it to "
+        "_baseline_settings_columns() with a reason."
     )
-    assert declared, "no settings columns parsed from migrations — the parser is broken"
+    assert _declared_settings_columns(), "no settings columns parsed from migrations — the parser is broken"
+
+
+def test_a_field_with_no_column_and_no_baseline_entry_is_caught(monkeypatch):
+    """Guards the generalized check itself against regressing back to pinned-313-only scope.
+
+    Injects a hypothetical field with neither a migration nor a baseline
+    entry directly into `SettingsUpdateRequest.model_fields` and asserts
+    `_regressed_settings_fields()` — the same function the real test calls —
+    flags it. Exercising the real field-selection path (not just
+    `_fields_missing_columns` in isolation) means a future regression that
+    reintroduces a narrower filter at that call site would fail this test,
+    which is exactly the class of gap C110 found: a field added after 313
+    was invisible to the old check because it only ever looked at the pinned
+    313 set.
+    """
+    fake_fields = dict(SettingsUpdateRequest.model_fields)
+    fake_fields["totally_new_unbacked_flag_for_this_test_only"] = next(iter(fake_fields.values()))
+    monkeypatch.setattr(SettingsUpdateRequest, "model_fields", fake_fields)
+
+    assert "totally_new_unbacked_flag_for_this_test_only" in _regressed_settings_fields()
+
+
+def test_baseline_and_declared_do_not_overlap():
+    """Sanity check on the two parsers, not a hand-maintained list anymore.
+
+    A bootstrap-schema column that later also gained a migration's `ADD
+    COLUMN IF NOT EXISTS` would be harmless in practice (idempotent), but an
+    overlap is still worth surfacing — it usually means a migration re-added
+    a column the table already had, which is a sign to double check the
+    migration rather than something to silently allow.
+    """
+    declared = _declared_settings_columns()
+    overlap = sorted(_baseline_settings_columns() & declared)
+    assert not overlap, (
+        f"{overlap} are declared both in supabase_schema.sql's bootstrap CREATE TABLE and in a "
+        "migration's ADD COLUMN — harmless, but double check the migration isn't redundant."
+    )
 
 
 # The exact set migration 313 exists to add. Pinned so the migration cannot be

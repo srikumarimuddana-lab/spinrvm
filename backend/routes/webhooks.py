@@ -50,6 +50,30 @@ logger = logging.getLogger(__name__)
 # set used by the payment_succeeded branch, minus "processing": a ride still
 # processing has not settled, so a genuine failure on it must still be recorded.
 _SETTLED_PAYMENT_STATUSES = ("paid", "waived_admin", "refunded")
+
+# metadata.source stamped by utils/stripe_charge.authorize_ride on the
+# booking-time hold. That PaymentIntent is created BEFORE the ride row exists
+# (routes/rides/booking.py pre-authorizes, then calls _insert_ride_with_code),
+# so its payment_failed event can reach us while the row is not there yet — or,
+# on a genuine decline, when the booking raised 402 and the row will never
+# exist at all. NOTE rides.created_at is stamped when the Pydantic model is
+# built, ahead of the pre-auth, so it is NOT the insert time and must not be
+# used to argue the row "already existed".
+#
+# Neither case is linkable, neither moved money (a failed manual-capture hold
+# reserves nothing), and the rider already learned about it synchronously as
+# the 402 — while an unlinked failure 500s on every Stripe retry for 3 days, and
+# Stripe disables endpoints that fail persistently.
+#
+# IMPORTANT: this value alone is NOT sufficient to classify an event. Stripe
+# metadata is stamped once at PaymentIntent creation and never updated, so
+# increment_authorization and capture_ride carry this same source on the same PI
+# for the ride's entire life. A capture declined at settlement is therefore
+# indistinguishable by source from the booking-time hold failure — and that one
+# is a genuine failure whose only rider/driver notification is emitted further
+# down this handler. So the ack below additionally requires the ride row to be
+# ABSENT; see the `current is None` branch.
+_PREAUTH_METADATA_SOURCE = "ride_booking_authorization"
 api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 # B-P2-2: Explicit allowlist of Stripe event types we process. Any event type
@@ -985,6 +1009,40 @@ async def _dispatch_stripe_event(event_id, event_type, event_payload, data_objec
                 await unclaim_stripe_event(event_id)
                 raise HTTPException(status_code=503, detail="Ride lookup failed — Stripe will retry") from _read_err
             if current is None:
+                # A booking-stage hold failure for a ride that does not exist is
+                # the one unlinkable case — see _PREAUTH_METADATA_SOURCE above.
+                # Gated on `current is None`, NOT on metadata.source alone: that
+                # metadata is stamped once at PaymentIntent creation and is never
+                # updated, so increment_authorization and capture_ride carry the
+                # SAME source value on the SAME PI for the ride's whole life. A
+                # capture declined at settlement (services/payment_service.py's
+                # _settle_against_hold) therefore looks identical by source — and
+                # that one IS a real failure whose only rider/driver push lives
+                # further down this handler, so it must fall through to the CAS.
+                # Requiring the row to be absent makes that structurally
+                # impossible to swallow.
+                _preauth_orphan = (data_object.get("metadata") or {}).get("source") == _PREAUTH_METADATA_SOURCE
+                if _preauth_orphan:
+                    # app_settings kill switch — revertible without a deploy.
+                    try:
+                        _ack_preauth = bool(
+                            (await get_app_settings() or {}).get("webhook_preauth_failure_ack_enabled", True)
+                        )
+                    except Exception:
+                        logger.error(
+                            "[webhook] pre-auth ack flag read failed; defaulting on",
+                            exc_info=True,
+                            extra={"domain": "payments", "event_id": event_id},
+                        )
+                        _ack_preauth = True
+                    if _ack_preauth:
+                        logger.info(
+                            f"Webhook payment_intent.payment_failed: booking pre-auth {payment_intent_id} "
+                            f"for ride {ride_id} which does not exist — nothing to link, acking",
+                            extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                        )
+                        await mark_stripe_event_processed(event_id)
+                        return {"received": True, "preauth_stage": True, "event_id": event_id}
                 logger.error(
                     f"Webhook payment_intent.payment_failed: ride {ride_id} not found — "
                     f"payment failure {payment_intent_id} unlinked",

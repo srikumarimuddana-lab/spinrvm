@@ -23,6 +23,7 @@ import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SPACING, FONT } from '@shared/utils/responsive';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
 interface Notification {
     id: string;
@@ -48,7 +49,7 @@ function formatTime(dateStr: string): string {
     return `${days}d ago`;
 }
 
-export default function NotificationsScreen() {
+function NotificationsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { colors } = useTheme();
@@ -319,4 +320,21 @@ function createStyles(colors: ThemeColors) {
         },
         retryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
     });
+}
+
+// Reported live: a blank white screen with no header, spinner, or content —
+// stronger than a render crash the root-level ErrorBoundary in _layout.tsx
+// was expected to catch (this screen has already crashed twice before from
+// native-component issues, per SafeRefreshControl's own comment above). This
+// wraps the screen the same way activity.tsx/payout.tsx/tax-documents.tsx/
+// profile.tsx already do for the same reason: a screen-local boundary shows
+// the actual error name/message/stack on-device and reports it to Sentry via
+// ErrorBoundary's existing captureException wiring, instead of leaving a
+// third theory-based guess as the only diagnostic path.
+export default function NotificationsScreenWithBoundary() {
+    return (
+        <ErrorBoundary>
+            <NotificationsScreen />
+        </ErrorBoundary>
+    );
 }

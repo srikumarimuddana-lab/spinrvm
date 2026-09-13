@@ -1244,3 +1244,35 @@ describe('Directions proxy (R7)', () => {
     expect(mockFetchDirectionsRoute).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Source-text guard for the MapView child-churn fix.
+ *
+ * This suite mocks RouteLine/RoutePins/CarMarker to `() => null`, so it cannot
+ * observe map children at all — the assertion below is therefore deliberately a
+ * source check rather than a render one, matching the pattern several hooks
+ * suites in this app already use.
+ *
+ * Every needle is a SINGLE LINE on purpose: this repo's working tree is CRLF on
+ * Windows, and a multi-line needle containing \n can never match there even
+ * though it passes in CI on Linux. See
+ * docs/change-log/2026-09-12-live-ride-triage-gps-webhook-health.md.
+ */
+describe('MapView child churn', () => {
+  const src = require('fs').readFileSync(
+    require('path').resolve(__dirname, '../../app/driver/(tabs)/index.tsx'),
+    'utf8',
+  );
+
+  it('does not re-key the route subtree on ride state', () => {
+    // Re-keying an ancestor unmounts and remounts up to 24 sibling <Polyline>s
+    // on every ride-state transition. react-native-maps@1.27.2 mishandles that
+    // churn natively (features list cleared on detach and restored async,
+    // removeFeatureAt unbounded, add uses List.set where remove uses
+    // List.remove), which is the IllegalStateException seen in production
+    // seconds after ride start and completion. MapViewDirections carries its own
+    // key and RouteLine is a pure stateless render, so the ancestor key bought
+    // nothing.
+    expect(src).not.toContain('key={`route-${rideState}`}');
+  });
+});

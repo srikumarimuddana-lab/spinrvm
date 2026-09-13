@@ -936,7 +936,13 @@ jobs:
           DANGEROUS = [
               (r'\bDROP\s+TABLE\b',         "DROP TABLE — data loss risk"),
               (r'\bDROP\s+COLUMN\b',        "DROP COLUMN — data loss risk"),
-              (r'\bTRUNCATE\b',             "TRUNCATE — data loss risk"),
+              # Excludes TRUNCATE used as a privilege name (always followed by
+              # "ON <table>" per GRANT/REVOKE syntax, e.g. this repo's own
+              # `REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON x FROM authenticated;`
+              # RLS-lockdown idiom — migrations 51, 142, 151, 286, 290, 416) from
+              # an actual TRUNCATE TABLE/TRUNCATE <ident> statement, which is
+              # never followed by "ON". See CR-2026-036 / #5309.
+              (r'\bTRUNCATE\b(?!\s+ON\b)', "TRUNCATE — data loss risk"),
               (r'\bDELETE\s+FROM\b',        "DELETE FROM in migration — unintended data loss"),
               (r'\bALTER\s+TABLE.*NOT\s+NULL\b', "Adding NOT NULL without default — locks table"),
               (r'WITHOUT\s+ROWID',          "WITHOUT ROWID — irreversible schema change"),

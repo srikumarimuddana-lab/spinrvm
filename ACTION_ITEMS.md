@@ -21577,6 +21577,39 @@ how much they de-risk a public launch._
 > `anon`/`authenticated` role — 207 policy statements across 139 migrations
 > have zero DB-level allow/deny coverage."
 
+- [ ] **Status (2026-09-13): more progress, still not closed.** Two rounds of
+  undocumented progress from other sessions surfaced while picking this item
+  up, plus new work this session:
+  - **Undocumented (found on disk, not previously reflected here):** three
+    test files — `test_corporate_accounts_super_admin_fix.py`,
+    `test_corporate_billing_rls.py`, `test_stripe_admin_tables_rls.py` — add
+    real DB-role-level coverage for `corporate_accounts` (migrations 05/17/
+    416), `corporate_wallets`, `corporate_wallet_transactions`,
+    `corporate_members`, `corporate_member_allowances`,
+    `corporate_allowance_requests` (migrations 05/27/142), and
+    `stripe_disputes`/`stripe_orphan_refunds` (migrations 88/254) — 8 more
+    tables, dated 2026-09-12/13 in `conftest.py`'s own history.
+  - **This session:** added `otp_records`, `rider_email_verification_otp`,
+    `emergency_contacts`, `safety_incidents`, `safety_incident_photos` — the
+    5 highest-consequence (auth/OTP + safety/SOS) tables from the
+    ~41-table remaining gap, picked deliberately over a broader sweep to
+    keep the diff reviewable (CLAUDE.md's task-decomposition rule). New
+    file `backend/tests/rls/test_otp_and_safety_rls.py`, 36 new tests. Full
+    `tests/rls` suite: 230 passed, 0 failed, against a real local Postgres
+    16. Adversarial review (`spinr-security-auditor`, CLAUDE.md gate #10)
+    independently re-derived every asserted policy from the actual
+    migration SQL (not the test file's own docstring claims) before commit
+    — found zero bugs in the diff, but surfaced one real, pre-existing
+    production gap: see C111.
+  - **Running total:** roughly 28 of ~64 distinct policy-bearing tables
+    (a fresh count this session, via a repo-wide `CREATE POLICY ... ON
+    <table>` sweep — see the change log for the exact method and why this
+    doesn't reconcile cleanly to the audit's original "207 policy
+    statements" figure, same caveat as every prior round). Still not
+    closed: this entry has still never attempted a full inventory of
+    which ~36 tables remain outside this set with a plan to close them —
+    only a repo-wide table list exists now, not a table-by-table backlog.
+  Change log: `docs/change-log/2026-09-13-c49-otp-and-safety-rls-coverage.md`.
 - [ ] **Status (2026-09-11): more progress, still not closed.** Since
   2026-08-31, other sessions independently added `saved_addresses`
   (migration 378, `test_saved_addresses_rls.py`) and the transactional
@@ -21703,8 +21736,10 @@ how much they de-risk a public launch._
   larger fraction of the 207/127 policies has DB-role-level coverage.
   **(a) is now confirmed met** (since 2026-09-08, per the correction
   above) — `ci.yml` runs the suite on every backend-touching PR. That
-  still leaves (b): only ~29 distinct policies across ~10 tables have
-  DB-role-level coverage against a ~127–207 estimate. Whether "CI runs it"
+  still leaves (b): as of 2026-09-13, roughly 28 of ~64 distinct
+  policy-bearing tables have DB-role-level coverage (see the 2026-09-13
+  status entry above for the current table list and method) — up from
+  ~10 tables, but still well under half. Whether "CI runs it"
   alone is enough to close ranked blocker #29, or whether the team wants
   (b)'s coverage fraction materially higher first, is a call for whoever
   owns that audit finding — not decided by this entry. Do not mark #29
@@ -25944,6 +25979,40 @@ how much they de-risk a public launch._
   reject-if-role-matches), the safe direction for an over-broad `role` check. This WebSocket gate
   was the only ADMIT-direction, unguarded instance found.
 - **Files:** `backend/routes/websocket.py`, `backend/tests/test_websocket_auth_ack.py`.
+
+### C111. `emergency_contacts` (migration 120) has no admin/super_admin override policy — an admin JWT gets the exact same RLS deny as a stranger
+- [ ] **Status:** OPEN, informational — not a live bug, no code path is affected today.
+  Found by `spinr-security-auditor`'s adversarial review (CLAUDE.md gate #10) of this
+  session's C49 RLS-coverage work while independently re-deriving `emergency_contacts`'
+  policies from migration 120 itself.
+- **What's true today, and why it's not a live gap:** migration 120 ships exactly 3
+  policies (`emergency_contacts_owner_select`/`_owner_insert`/`_owner_delete`, all
+  `auth.uid()::text = user_id`) and no UPDATE policy and no admin/super_admin carve-out
+  at all — unlike `safety_incidents` (migration 94), which deliberately grants
+  admin/super_admin SELECT+UPDATE alongside the owner's own read. The actual SOS
+  pipeline (Twilio notification to a rider's emergency contacts, `routes/safety.py`)
+  reads this table via the backend's service-role Supabase client, which bypasses RLS
+  entirely — so today's only real read path is unaffected by the missing override.
+- **Why it's worth a future decision anyway:** grepped every `routes/admin/*.py` file —
+  none reads `emergency_contacts` today. But if a future feature lets a support/safety
+  agent look up a rider's emergency contact by name during a live incident via a
+  direct-Supabase-role read (an admin-authenticated endpoint using the `authenticated`
+  role rather than the service-role client), it would be silently denied with no
+  override, with no test or error message explaining why — the same class of choice
+  migration 94 already made explicitly for `safety_incidents`, just never made here.
+- **Recommendation:** not urgent, no fix required now. When/if an admin-facing
+  emergency-contact lookup is ever built, decide then whether it should read via
+  service-role (bypassing RLS, current pattern) or via an explicit admin-override
+  policy mirroring migration 94's shape — and write that decision down, rather than
+  discovering the silent deny in production.
+- **Also noted, not a defect:** migration 94's `"Admin read/update safety_incidents"`
+  policy is declared `FOR SELECT` only despite its name implying both read and update —
+  the actual UPDATE grant lives in a separately-named `"Admin update safety_incidents"`
+  policy in the same file. Cosmetic naming inconsistency in already-shipped SQL, not
+  something to fix retroactively (append-only migrations).
+- **Files (reference only, nothing changed by this entry):**
+  `backend/migrations/120_ensure_emergency_contacts_and_gps_column.sql`,
+  `backend/migrations/94_safety_incidents.sql`, `backend/routes/safety.py`.
 
 ## Recently completed (do not redo)
 

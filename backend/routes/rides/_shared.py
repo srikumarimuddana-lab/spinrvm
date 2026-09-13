@@ -177,10 +177,13 @@ async def _fetch_directions_route(
     # ``None`` result as "fall back to straight-line distance") rather than
     # raising, which would break that contract for every caller.
     #
-    # reserve_budget() atomically checks AND records this call in one step
-    # (C104) — no separate record_call() afterward, and unlike the old
-    # check_budget() read, concurrent callers can't all pass this gate
-    # before any of them counts.
+    # ACTION_ITEMS.md C104: uses reserve_budget() (atomic reserve-then-check)
+    # rather than the old check_budget()-then-record_call() pair — this is
+    # this repo's highest-volume Directions call site, so it was the first
+    # migrated once C104's atomic primitive existed. The spend is now
+    # reserved *before* the Google call below rather than recorded after it
+    # reaches Google; see reserve_budget()'s own docstring for the disclosed
+    # trade-off (a pre-call network failure now counts toward spend too).
     allowed, spent, budget = await reserve_budget("directions")
     if not allowed:
         logger.warning(

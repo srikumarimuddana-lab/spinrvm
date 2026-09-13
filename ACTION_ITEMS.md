@@ -21709,16 +21709,28 @@ how much they de-risk a public launch._
   correction. A 2026-09-11 session nearly re-dispatched this exact retro as
   fresh work off this stale line; verify the change-log/audit-doc trail
   before trusting an "Action" list's ordering, same lesson this file's own
-  history keeps teaching. Next actionable step is **T3**: additive per-phase
+  history keeps teaching. ~~Next actionable step is **T3**: additive per-phase
   timing metrics in `repositories/_base.py` `run_sync` and the dispatch
-  attempt → T4 staging (E1 — three human actions) → T5 run
-  `loadtest/locustfile.py` at 600 users against staging and record the numbers
-  → T6 confirm pooler mode/port/pool-size/IPv4 reachability on the real project
-  → T7 write ADR-011 (Accepted or Rejected) and add it to `docs/adr/README.md`.
-  Decisions D1–D6 in the plan's §8 need Kiran.
-- **Files:** none changed yet. Phase 0 targets: `backend/repositories/_base.py`,
+  attempt~~ **T3 done — correcting a second stale pointer found 2026-09-12.**
+  T3 shipped 2026-09-04 via PR #4968: `spinr_dispatch_attempt_duration_ms{phase=candidate_read|rank|claim|offer_insert|insurance|notify}`,
+  `spinr_db_run_sync_queue_wait_ms`/`spinr_db_run_sync_exec_ms`,
+  `spinr_dispatch_attempt_db_calls`, and `spinr_dispatch_claim_path_total{path=...}` are
+  all live on `main`, with tests in `backend/tests/test_dispatch_metrics.py`
+  (10/10 passing, re-verified 2026-09-12) — see
+  `docs/change-log/2026-09-04-c50-phase0-t3-dispatch-timing-metrics.md`. A
+  2026-09-12 session nearly re-implemented this exact instrumentation as fresh
+  work off this stale line — the same trap this entry already flagged for T2
+  above; it stopped short of opening a duplicate PR once it read the actual
+  code first. Next actionable step is now → T4 staging (E1 — three human
+  actions) → T5 run `loadtest/locustfile.py` at 600 users against staging and
+  record the numbers → T6 confirm pooler mode/port/pool-size/IPv4 reachability
+  on the real project → T7 write ADR-011 (Accepted or Rejected) and add it to
+  `docs/adr/README.md`. Decisions D1–D6 in the plan's §8 need Kiran.
+- **Files:** T3's files (`backend/repositories/_base.py`,
   `backend/routes/rides/matching.py`, `backend/tests/test_dispatch_metrics.py`,
-  `loadtest/README.md`. Phase 1+ files are enumerated per task in the plan.
+  `loadtest/README.md`) already changed via PR #4968 — see correction above.
+  Remaining Phase 0 steps (T4–T7) are staging/ops/decision work, not new code
+  files. Phase 1+ files are enumerated per task in the plan.
 - **Acceptance:** ADR-011 exists in `docs/adr/` with a recorded decision. If
   Rejected, close this item. If Accepted, this item stays open through the
   plan's Phase 3 (flag `dispatch_direct_pool_enabled` on in production for a
@@ -25463,31 +25475,53 @@ how much they de-risk a public launch._
   ROADMAP.md` (R14).
 
 ### C104. `maps_budget.py`'s daily-spend circuit breaker is a non-atomic check-then-increment — a request burst can overshoot the cap before it trips
-- [x] **Status:** RESOLVED (2026-09-13) — `reserve_budget(sku)` added to `maps_budget.py`:
-  a Redis Lua script (`_RESERVE_LUA`) folds the read-and-compare and the increment into one
-  atomic `EVAL`, with an `asyncio.Lock`-guarded equivalent for the `REDIS_URL`-unset
-  in-process-dict fallback. Applied to every clean 1:1 check-then-later-record call site
-  found by grepping the whole repo (more than this entry's own list — see below), each
-  converted to reserve atomically right before the network call instead of checking early
-  and recording late. Concurrency regression test in `backend/tests/test_maps_budget.py`
-  (`test_reserve_budget_never_overshoots_by_more_than_one_call_under_concurrency` + a
-  companion test reproducing the old race for contrast). Full writeup:
-  `docs/change-log/2026-09-13-c104-maps-budget-atomic-fix.md`.
-  - **Blast radius was wider than this entry's own list**: beyond `maps_proxy.py`'s 4
-    endpoints and `_shared.py`'s fare-estimate Directions call (both named below), grepping
-    also found `utils/route_distance.py` (2 call sites: live-route fallback +
-    `compute_navigation_steps`, only one of which — the live-route fallback — was
-    mentioned here, and only as context, not as an enumerated call site) and
-    `utils/maps_eta.py` (2 call sites: `get_ride_eta_seconds` + `batch_get_etas`, the latter
-    on the dispatch-matching hot path — **not mentioned in this entry at all**). All 4 of
-    these newly-found call sites were converted too.
-  - **Residual gap, not closed by this fix**: `ai/tools_booking.py`'s coarse
-    `_places_available()` gate was converted (closes the coarse "many concurrent AI-chat
-    tool calls admitted at once" race), but its 5 individual `record_call()` sites deeper in
-    the file (tied to a 1-of-2 geocode retry, or N concurrent `directions` calls in
-    `asyncio.gather`, where no single SKU/count is known at gate time) were deliberately left
-    as non-atomic bookkeeping, same as before — see the change-log's "What was NOT verified"
-    for the reasoning and a suggested follow-up.
+- [x] **Status:** RESOLVED (2026-09-13) — closed in two independent, sequential passes that
+  landed within a day of each other and were reconciled at merge time (see note below).
+  - **Pass 1 (2026-09-12, PR #5299):** added the atomic primitive itself —
+    `reserve_budget(sku)` in `backend/utils/maps_budget.py`, a Redis Lua script
+    (`_RESERVE_BUDGET_LUA`, run via `redis_eval()`) that folds the read-and-compare and the
+    increment into one atomic `EVAL`, with a fallback to the old `check_budget()`+
+    `record_call()` pair when `REDIS_URL` is unset (fast, non-network, single-process —
+    accepted as low-risk since production always sets `REDIS_URL`). Proven on the
+    highest-volume call site, `backend/routes/rides/_shared.py`'s `_fetch_directions_route`.
+    A same-PR adversarial review (`spinr-performance-sla-reviewer`) found and fixed a real
+    latency-cascade risk in the generic-exception fallback branch. Full writeup:
+    `docs/change-log/2026-09-12-atomic-budget-reserve-c104.md`.
+  - **Pass 2 (2026-09-13, PR #5306):** migrated every remaining `check_budget()`+
+    `record_call()` call site onto pass 1's `reserve_budget()` primitive — wider than
+    originally scoped: `backend/routes/maps_proxy.py`'s 4 endpoints (autocomplete, details,
+    reverse-geocode, directions — directions endpoint keeps its C105 Redis cache, layered
+    with the atomic reservation on a cache miss), plus two newly-found sites not on any
+    prior list — `backend/utils/route_distance.py` (`compute_navigation_steps`) and
+    `backend/utils/maps_eta.py`'s `batch_get_etas` (on the dispatch-matching hot path) —
+    and `backend/utils/address_verification.py`. An independent `spinr-security-auditor`
+    review (run against a real local Redis, not just the mocked fallback) confirmed the
+    primitive itself closes the race under genuine concurrency, and separately caught a real
+    accounting bug this pass's own conversion of `ai/tools_booking.py`'s coarse
+    `_places_available()` admission gate had introduced (double/phantom-charging spend on
+    every admission) — reverted that one gate back to a non-charging `check_budget()` read
+    rather than ship the regression; its 5 individual `record_call()` sites remain
+    non-atomic bookkeeping, same as before either pass (tied to a 1-of-2 geocode retry, or N
+    concurrent `directions` calls in `asyncio.gather`, where no single SKU/count is known at
+    gate time — the same reasoning both passes independently reached). Full writeup:
+    `docs/change-log/2026-09-13-c104-maps-budget-atomic-fix.md` (its own §11 documents the
+    `ai/tools_booking.py` revert; its earlier sections describe a since-discarded competing
+    `reserve_budget()` implementation this pass initially wrote independently, before
+    discovering pass 1 had already merged the same primitive — see the merge-conflict note
+    immediately below).
+  - **Merge-conflict note:** pass 2 was built independently and had reimplemented its own
+    `reserve_budget()`/Lua script before pass 1's PR merged to `main`. Resolving the
+    resulting conflict kept pass 1's already-reviewed `_RESERVE_BUDGET_LUA` primitive as
+    canonical (including its fallback-cascade fix) and re-applied pass 2's real, additive
+    value — the remaining call-site migrations and the `ai/tools_booking.py` bug fix — on
+    top of it, rather than shipping two competing implementations of the same function.
+    Concurrency and behavioral tests for the primitive are pass 1's (`backend/tests/test_maps_budget.py::TestReserveBudget`,
+    6 tests); pass 2's own parallel test suite for its discarded implementation was dropped
+    as redundant, not merged.
+  - Both passes independently reached, and agree on, the same disclosed trade-off: spend is
+    now reserved *before* the Google HTTP call fires rather than recorded after, so a
+    request that never reaches Google (network error, timeout) still counts toward today's
+    spend — a minor over-count, matching this breaker's own "overestimating is safe" bias.
 - **Found by:** `spinr-security-auditor`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (`docs/audit/ride-experience/ROADMAP.md` R7,
   `docs/change-log/2026-09-12-directions-proxy-r7.md`).
@@ -25539,8 +25573,19 @@ how much they de-risk a public launch._
   should account for `_shared.py`'s call site too, not just `maps_proxy.py`'s four.
 
 ### C105. `GET /maps/directions` proxy has no result cache, unlike its sibling live-route endpoint — acceptable for dark-launch, should close before broad rollout
-- [ ] **Status:** OPEN — found, not fixed. Explicitly flagged by the reviewer as acceptable to
-  ship as-is for now, not a blocker for R7's dark-launched merge.
+- [x] **Status:** CLOSED (2026-09-12) — Redis result cache added to `get_directions`, 30s TTL,
+  fail-open, never caches a degenerate (`distance_km: None`/empty-`coordinates`) result. Uses
+  UNIFORM fine (5-decimal, ~1m) precision on every coordinate (origin, destination, waypoints) —
+  NOT `_compute_route_via_google`'s coarse-origin scheme, despite this entry's own suggestion
+  below to mirror it. An implementation pass checked all 5 real client call sites first and found
+  3 of them (`ride-options.tsx`, `ride-in-progress.tsx`, `driver-arrived.tsx`) pass a FIXED,
+  per-ride pickup as "origin" paired with a fixed dropoff, not a moving position — coarsening the
+  origin there would let two different bookings' distinct-but-nearby pickups collide in the
+  cache whenever their dropoffs also round together (e.g. two riders headed to the same airport
+  from doors 100m apart), serving one rider's confirmed route to another. Only
+  `driver-arriving.tsx` and the driver dashboard have a genuinely moving origin; fine precision
+  there is a cache-hit-rate cost, not a correctness one. See
+  `docs/change-log/2026-09-12-directions-proxy-cache-c105.md` for the full writeup.
 - **Found by:** `spinr-performance-sla-reviewer`'s adversarial review of R7's new
   `GET /maps/directions` proxy endpoint (same source as C104 above).
 - **What's wrong:** `backend/utils/route_distance.py`'s sibling live-route fallback
@@ -25574,6 +25619,90 @@ how much they de-risk a public launch._
 - **Files (reference only, no code changed by this entry):** `backend/routes/maps_proxy.py`
   (`get_directions`, `_HTTP_TIMEOUT`), `backend/utils/route_distance.py`
   (`_compute_route_via_google`, reference pattern to adapt, not copy verbatim).
+
+### C106. R12 Phase 1 (turn-by-turn navigation) shipped on the Legacy Google Directions API, not the Routes API this session's own ROADMAP.md audit required
+- [ ] **Status:** OPEN — found, not fixed. Documentation-only finding; no code changed by this
+  entry.
+- **Found by:** cross-session verification against `git log origin/main` while checking R12/R13
+  status before starting follow-up work. R12 Phase 1 (PRs #5289, #5292, #5294, #5295, merged
+  2026-09-12 13:43–16:56) shipped from a **parallel** Claude Code session
+  (`session_01XWMswUC9h7qTYCt6mLiw2A`) while this session's own PR #5290 — which authored the
+  ROADMAP.md entry below — was still in flight. Neither session's audit trail was visible to the
+  other before both merged to `main` within hours of each other.
+- **What's wrong:** `docs/audit/ride-experience/ROADMAP.md`'s R12 entry explicitly required:
+  "**Architecture change to the proposal:** build against the **Routes API** (`computeRoutes`,
+  `routes.legs.steps.navigationInstruction` FieldMask), **not** by flipping `steps=true` on the
+  Legacy Directions endpoint. Legacy went to maintenance status 2025-03-01 and gets no new
+  features; building new maneuver parsing on it is day-one technical debt." The shipped
+  implementation does exactly what this said not to do:
+  `backend/utils/route_distance.py::compute_navigation_steps`'s own docstring reads "Turn-by-turn
+  maneuver list via Google Directions **steps=true**" — the Legacy endpoint — called from the new
+  `GET /rides/{ride_id}/navigation-steps` endpoint in `backend/routes/rides/tracking.py`.
+- **Why this happened:** the parallel session's own decision log
+  (`docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7.2, "Decisions (answered
+  via `AskUserQuestion`, 2026-09-12)") records 3 decisions — steps-call caching strategy, Phase 1
+  scope (no live re-route), and the `app_settings` flag — but never addresses Legacy-vs-Routes-API
+  at all. Its own §7.1 re-verification pass covered the current backend call sites in real detail
+  but had no way to cross-reference this session's ROADMAP.md R12 entry, written concurrently in a
+  different session.
+- **What's confirmed fine:** budget gating was addressed, matching the proposal's own §7.1-flagged
+  requirement ("the new steps-fetching call must not repeat that gap") —
+  `compute_navigation_steps`'s docstring confirms "budget-gated." This is not a cost-governance
+  gap, only an API-generation choice.
+- **Impact if left as-is:** Legacy Directions works today and is not scheduled for shutdown, only
+  maintenance mode (no new features — e.g. no future traffic-aware turn refinements). Real but not
+  urgent technical debt, not a live bug or regression.
+- **Recommendation:** do not silently rewrite the already-shipped, driver-facing navigation
+  endpoint without the same review this session's other changes got (CLAUDE.md gate #10). A
+  future session/human should decide GO/NO-GO on migrating `compute_navigation_steps` to Routes
+  API's `computeRoutes`, weighing the ROADMAP's own original SKU-tier concern (Routes API's
+  traffic-aware routing is an Advanced-SKU pricing trigger, unlike Legacy) against Legacy's frozen
+  feature set.
+- **Files (reference only, no code changed by this entry):** `backend/utils/route_distance.py`
+  (`compute_navigation_steps`), `backend/routes/rides/tracking.py` (`get_navigation_steps`),
+  `docs/proposals/2026-09-01-driver-in-app-turn-by-turn-navigation.md` §7,
+  `docs/audit/ride-experience/ROADMAP.md`'s R12 entry.
+
+### C107. Migration 142's `role IN ('admin','super_admin')` RLS idiom may be unreachable for any admin provisioned after migration 256 — spans 10 tables
+- [ ] **Status:** OPEN — found during independent security review of PR #5307 (a follow-up fix
+  applying migration 142's admin-lockdown pattern to `corporate_accounts`, the one table missed
+  when that pattern was first rolled out to its 9 siblings). Not fixed by this entry — this is a
+  tracking item for a systemic correctness question, not a code change.
+- **Issue/gap:** `backend/migrations/142_fix_rls_financial_tables.sql` (and now
+  `416_corporate_accounts_rls_super_admin_fix.sql`, PR #5307) gate admin access to 10 tables via
+  RLS policies checking `EXISTS (SELECT 1 FROM users WHERE users.id = auth.uid()::text AND
+  users.role IN ('admin', 'super_admin'))`. But `backend/migrations/256_users_role_reject_admin_values.sql`
+  adds `chk_users_role_not_admin`, a `CHECK (role NOT IN ('admin','super_admin',...))` on the
+  `users` table — blocking any row from ever holding `role='admin'`/`'super_admin'` again once
+  256 is applied. Real admin auth already runs through a separate identity model
+  (`admin_staff` + `_verify_admin_payload`, `backend/dependencies/__init__.py`), per CLAUDE.md's
+  documented JWT trust model — `users.role` is not how admins actually authenticate today.
+- **Why it matters:** net effect, per independent grep/read during PR #5307's review: the
+  `role IN ('admin','super_admin')` policy on all 10 tables (the 9 migration-142 tables plus
+  `corporate_accounts`) is only reachable for a `users` row that predates migration 256 and was
+  never subsequently updated. For any admin/super_admin provisioned under the current
+  `admin_staff` model, these RLS policies cannot ever admit them — the "fix" migration 142
+  established, and that PR #5307 correctly mirrored for parity, may be **cosmetically correct but
+  functionally unreachable** across the board. Nobody has verified whether a legacy `role='admin'`
+  `users` row still exists in production to even make the policy theoretically reachable today.
+  Real production impact is currently believed to be **none**, because (confirmed independently
+  during PR #5307's review) the backend's only Supabase client (`backend/supabase_client.py`)
+  always uses the service-role key, bypassing RLS entirely — so this is a defense-in-depth
+  correctness gap, not a live incident, but it means the migration-142 hardening effort should not
+  be considered "done" while it rests on a check that may be permanently unreachable.
+- **Action:** (1) check production `users` table for any surviving `role IN ('admin',
+  'super_admin')` row to confirm the policy is fully unreachable today, not just theoretically;
+  (2) decide whether to update these 10 policies to check `admin_staff` (the real admin identity
+  table) instead of `users.role`, or to explicitly document the `users.role` check as legacy/dead
+  and rely solely on the service-role-bypasses-RLS + `admin_staff` JWT model for these tables.
+  Escalate to whoever owns the admin-identity model (CLAUDE.md's "JWT trust model" section) if the
+  intended answer isn't obvious from the code alone.
+- **Files:** `backend/migrations/142_fix_rls_financial_tables.sql`,
+  `backend/migrations/256_users_role_reject_admin_values.sql`,
+  `backend/migrations/416_corporate_accounts_rls_super_admin_fix.sql`, `backend/dependencies/__init__.py`
+  (`_verify_admin_payload`), `backend/tests/rls/test_corporate_accounts_super_admin_fix.py` (its
+  schema fixture applies migrations 05/17/416 only, not 256 — its passing tests seed `users.role`
+  directly and so do not, by themselves, demonstrate reachability against the real current schema).
 
 ## Recently completed (do not redo)
 

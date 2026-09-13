@@ -1,5 +1,22 @@
 # Change Impact & Risk Log
 
+> **Correction (2026-09-13, at merge time):** this PR was built independently and had
+> reimplemented its own `reserve_budget()`/Lua script (`_RESERVE_LUA` in the sections below)
+> before discovering, at merge time, that `docs/change-log/2026-09-12-atomic-budget-reserve-c104.md`
+> (PR #5299, merged first) had already added the same atomic primitive to `main` — under the
+> name `_RESERVE_BUDGET_LUA` — with its own adversarial review that found and fixed a real
+> latency-cascade bug. Resolving the merge conflict kept PR #5299's already-reviewed primitive
+> as canonical rather than ship two competing implementations of the same function; every
+> section below describing `_RESERVE_LUA`, `_SKU_ORDER`, or this PR's own concurrency test
+> suite describes that **discarded** implementation, kept here only as the historical record
+> of what this PR actually built and tested before reconciliation — it is not what shipped.
+> **What this PR's work actually contributed to the final, merged state:** migrating the
+> remaining `check_budget()`+`record_call()` call sites (`maps_proxy.py`'s 4 endpoints,
+> `route_distance.py`, `maps_eta.py`, `address_verification.py`) onto PR #5299's primitive,
+> plus finding and fixing a real double/phantom-counting bug in `ai/tools_booking.py`'s gate
+> conversion (§11 below — that section describes the real, shipped fix). See `ACTION_ITEMS.md`
+> C104's entry for the authoritative, reconciled account of both passes.
+
 ## Summary
 
 | Field | Value |

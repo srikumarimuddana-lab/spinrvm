@@ -10,7 +10,6 @@ redis_mget batch call) and its fail-open behavior on a Redis error, since
 redis_mget raises on failure unlike redis_get's own per-key soft-fail.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -82,142 +81,122 @@ async def test_distance_matrix_is_a_registered_sku():
     assert mb._PRICE_USD["distance_matrix"] > 0
 
 
-# ── C104: atomic check-and-increment (reserve_budget) ───────────────────────
-#
-# check_budget() (a read) followed later by record_call() (a write) is a
-# classic check-then-act race: N concurrent callers can all read "under
-# budget" before any of them increments, letting all N through and
-# collectively blowing well past MAPS_DAILY_BUDGET_USD. These tests run
-# entirely against the in-process dict fallback (REDIS_URL is unset in this
-# suite) — see the C104 Change Impact Log for what this does NOT verify
-# (the real Redis Lua-script path has no coverage here).
+class TestReserveBudget:
+    """ACTION_ITEMS.md C104: reserve_budget() closes the check_budget() +
+    record_call() check-then-act race via a single atomic Redis Lua script
+    (run through redis_eval()). These tests mock redis_eval() itself, so
+    they pin reserve_budget()'s own argument-construction and
+    response-parsing logic and its fallback behavior — they cannot prove
+    real cross-request atomicity, since this repo's unit-test tier has no
+    real Redis to run the Lua script against (same limitation
+    utils/h3_location_index.py's own Lua-based upsert_driver() tests carry;
+    see this item's Change Impact Log for what that leaves unverified)."""
 
+    @pytest.mark.asyncio
+    async def test_allowed_when_lua_reports_under_budget(self):
+        eval_mock = AsyncMock(return_value=[1, "2.50"])
+        with (
+            patch.object(mb, "redis_eval", eval_mock),
+            patch.object(mb, "_daily_budget_usd", return_value=5.0),
+        ):
+            allowed, spent, budget = await mb.reserve_budget("directions")
 
-async def _racy_check_then_increment(mock_redis, sku: str) -> bool:
-    """Reference reimplementation of the OLD check_budget()+record_call()
-    pattern, with an explicit yield between the two steps standing in for
-    the real, unbounded-latency Google HTTP call that sits between them in
-    every real call site. Used only to demonstrate the race this ticket
-    closes -- production code never looked like this function.
-    """
-    allowed, _spent, budget = await mb.check_budget()
-    if not allowed:
-        return False
-    await asyncio.sleep(0)  # yield -- lets sibling callers run their own "check" here
-    await mb.record_call(sku)
-    return True
+        assert allowed is True
+        assert spent == 2.50
+        assert budget == 5.0
+        eval_mock.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_denied_when_lua_reports_over_budget(self):
+        eval_mock = AsyncMock(return_value=[0, "6.10"])
+        with (
+            patch.object(mb, "redis_eval", eval_mock),
+            patch.object(mb, "_daily_budget_usd", return_value=5.0),
+        ):
+            allowed, spent, budget = await mb.reserve_budget("directions")
 
-@pytest.mark.asyncio
-async def test_old_check_then_act_pattern_overshoots_budget_under_concurrency(mock_redis, monkeypatch):
-    """Demonstrates the bug this ticket fixes: with a yield between the read
-    and the write (standing in for the real Google HTTP call), concurrent
-    callers all observe the same stale "under budget" reading and all get
-    admitted -- total spend sails past the cap by far more than one call's
-    worth. This is the failure mode reserve_budget() (tested below) closes.
-    """
-    monkeypatch.setattr(mb, "_daily_budget_usd", lambda: 0.05)  # cap = $0.05
-    price = mb._PRICE_USD["geocode"]  # $0.005/call -> cap allows ~10 calls
+        assert allowed is False
+        assert spent == 6.10
+        assert budget == 5.0
 
-    results = await asyncio.gather(*(_racy_check_then_increment(mock_redis, "geocode") for _ in range(40)))
+    @pytest.mark.asyncio
+    async def test_script_args_use_the_right_sku_index_and_key_order(self):
+        """KEYS must be every tracked SKU's key in _PRICE_USD's fixed order;
+        the 1-based incr-index argument must point at the SKU being
+        reserved ("directions" is the 6th of 7 entries)."""
+        skus = list(mb._PRICE_USD.items())
+        expected_keys = [mb._key(sku) for sku, _price in skus]
+        expected_incr_idx = next(i for i, (sku, _price) in enumerate(skus, start=1) if sku == "directions")
 
-    admitted = sum(results)
-    spent = await mb.estimate_today_usd()
-    # All 40 raced past the same stale read and got admitted -- nowhere
-    # near the ~10-call cap the budget should have enforced.
-    assert admitted == 40
-    assert spent == pytest.approx(40 * price, rel=1e-6)
-    assert spent > 0.05 + price  # overshoots by far more than one call's worth
+        eval_mock = AsyncMock(return_value=[1, "0.0"])
+        with (
+            patch.object(mb, "redis_eval", eval_mock),
+            patch.object(mb, "_daily_budget_usd", return_value=5.0),
+        ):
+            await mb.reserve_budget("directions")
 
+        args, _kwargs = eval_mock.call_args
+        _script, numkeys, *rest = args
+        assert numkeys == len(skus)
+        assert list(rest[: len(skus)]) == expected_keys
+        prices_and_tail = rest[len(skus) :]
+        expected_prices = [str(price) for _sku, price in skus]
+        assert list(prices_and_tail[: len(skus)]) == expected_prices
+        assert prices_and_tail[-3] == str(expected_incr_idx)
+        assert prices_and_tail[-1] == str(mb._BUCKET_TTL_SECONDS)
+        assert prices_and_tail[-2] == "5.0"
 
-@pytest.mark.asyncio
-async def test_reserve_budget_never_overshoots_by_more_than_one_call_under_concurrency(mock_redis, monkeypatch):
-    """C104 fix: reserve_budget() folds the check and the increment into one
-    atomic step, so the same 40-concurrent-callers scenario above must admit
-    only as many calls as a correct, perfectly-sequential caller would have
-    admitted -- never more, and total spend must never exceed the cap by
-    more than one call's worth (the call that crosses the threshold is
-    still allowed; the one after it is not -- same tolerance a single
-    sequential caller would have).
+    @pytest.mark.asyncio
+    async def test_falls_back_to_check_and_record_when_redis_unconfigured(self):
+        """redis_eval() raises RuntimeError when REDIS_URL is unset — there
+        is no in-process Lua interpreter (see its own docstring). This must
+        degrade to the old, non-atomic pair rather than raise or deny."""
+        check_mock = AsyncMock(return_value=(True, 1.0, 5.0))
+        record_mock = AsyncMock()
+        with (
+            patch.object(mb, "redis_eval", AsyncMock(side_effect=RuntimeError("no redis"))),
+            patch.object(mb, "check_budget", check_mock),
+            patch.object(mb, "record_call", record_mock),
+        ):
+            allowed, spent, budget = await mb.reserve_budget("directions")
 
-    The "correct" admitted count is computed by replaying the SAME
-    before-total-vs-budget arithmetic reserve_budget() itself uses
-    (integer call count times price, not accumulated float addition, which
-    drifts differently) rather than hardcoding a count.
-    """
-    budget = 0.05
-    monkeypatch.setattr(mb, "_daily_budget_usd", lambda: budget)
-    price = mb._PRICE_USD["geocode"]  # $0.005/call -> ~10 calls fit under $0.05
+        assert (allowed, spent, budget) == (True, 1.0, 5.0)
+        record_mock.assert_awaited_once_with("directions")
 
-    expected_admitted = 0
-    for _ in range(40):
-        before_total = expected_admitted * price
-        if before_total >= budget:
-            break
-        expected_admitted += 1
-    seq_total = expected_admitted * price
+    @pytest.mark.asyncio
+    async def test_fallback_does_not_record_when_check_denies(self):
+        check_mock = AsyncMock(return_value=(False, 5.5, 5.0))
+        record_mock = AsyncMock()
+        with (
+            patch.object(mb, "redis_eval", AsyncMock(side_effect=RuntimeError("no redis"))),
+            patch.object(mb, "check_budget", check_mock),
+            patch.object(mb, "record_call", record_mock),
+        ):
+            allowed, spent, budget = await mb.reserve_budget("directions")
 
-    results = await asyncio.gather(*(mb.reserve_budget("geocode") for _ in range(40)))
+        assert allowed is False
+        record_mock.assert_not_called()
 
-    admitted = [r for r in results if r[0]]
-    rejected = [r for r in results if not r[0]]
-    spent = await mb.estimate_today_usd()
+    @pytest.mark.asyncio
+    async def test_generic_redis_eval_error_fails_open_without_further_redis_calls(self):
+        """A configured-but-failing Redis (redis_eval's other error path —
+        the realistic degraded-connection case, not simply unset) must fail
+        open immediately, WITHOUT chaining check_budget()'s mget + a
+        potential record_call()'s incr onto a connection that just failed —
+        spinr-performance-sla-reviewer's C104 follow-up review found the
+        original fallback-to-check-and-record here could stack up to 3
+        sequential un-timeboxed Redis round-trips on booking.py's inline
+        (no-timeout) caller. Must return the permissive default directly."""
+        check_mock = AsyncMock()
+        record_mock = AsyncMock()
+        with (
+            patch.object(mb, "redis_eval", AsyncMock(side_effect=Exception("connection reset"))),
+            patch.object(mb, "_daily_budget_usd", return_value=5.0),
+            patch.object(mb, "check_budget", check_mock),
+            patch.object(mb, "record_call", record_mock),
+        ):
+            allowed, spent, budget = await mb.reserve_budget("directions")
 
-    assert 0 < expected_admitted < 40  # sanity: the scenario is neither trivial nor unbounded
-    assert len(admitted) == expected_admitted  # matches sequential ground truth exactly, not 40
-    assert len(rejected) == 40 - expected_admitted
-    # Total spend matches exactly what was admitted -- no lost or duplicated
-    # increments from concurrent reservations stepping on each other.
-    assert spent == pytest.approx(seq_total, rel=1e-9)
-    # And it never overshoots the cap by more than one call's worth.
-    assert spent < budget + price
-    # Every rejected reservation reports the SAME pre-cap total (nothing was
-    # charged for a rejected attempt) and the real daily budget.
-    for _allowed, rejected_spent, rejected_budget in rejected:
-        assert rejected_spent == pytest.approx(seq_total, rel=1e-9)
-        assert rejected_budget == budget
-
-
-@pytest.mark.asyncio
-async def test_reserve_budget_rejects_without_recording_when_over_budget(mock_redis, monkeypatch):
-    monkeypatch.setattr(mb, "_daily_budget_usd", lambda: 0.001)
-    await mb.record_call("geocode")  # $0.005 spent, already over the $0.001 cap
-
-    allowed, spent, budget = await mb.reserve_budget("geocode")
-
-    assert allowed is False
-    assert spent == pytest.approx(mb._PRICE_USD["geocode"], rel=1e-6)
-    assert budget == 0.001
-    # Rejected -- the counter must be unchanged, not incremented-then-rolled-back
-    # into some other visible intermediate state.
-    assert await mb.estimate_today_usd() == pytest.approx(mb._PRICE_USD["geocode"], rel=1e-6)
-
-
-@pytest.mark.asyncio
-async def test_reserve_budget_allows_and_records_under_ceiling(mock_redis, monkeypatch):
-    monkeypatch.setattr(mb, "_daily_budget_usd", lambda: 1.0)
-
-    allowed, spent, budget = await mb.reserve_budget("directions")
-
-    assert allowed is True
-    assert spent == pytest.approx(mb._PRICE_USD["directions"], rel=1e-6)
-    assert budget == 1.0
-    assert await mb.estimate_today_usd() == pytest.approx(mb._PRICE_USD["directions"], rel=1e-6)
-
-
-@pytest.mark.asyncio
-async def test_reserve_budget_falls_open_on_a_real_redis_error(mock_redis, monkeypatch):
-    """Matches check_budget()'s/record_call()'s documented "errors fail
-    open" contract -- a genuine (non-RuntimeError) failure from redis_eval
-    must never block Maps traffic."""
-
-    async def _boom(*_a, **_kw):
-        raise ConnectionError("redis down")
-
-    monkeypatch.setattr(mb, "redis_eval", _boom)
-
-    allowed, spent, budget = await mb.reserve_budget("geocode")
-
-    assert allowed is True
-    assert spent == 0.0
-    assert budget == mb._daily_budget_usd()
+        assert (allowed, spent, budget) == (True, 0.0, 5.0)
+        check_mock.assert_not_called()
+        record_mock.assert_not_called()

@@ -30,6 +30,7 @@ redeploy.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -82,6 +83,27 @@ api_router = APIRouter(prefix="/maps", tags=["Maps"])
 _HTTP_TIMEOUT = 5.0
 _REVERSE_GEOCODE_TTL = 24 * 3600  # 24 h — addresses are stable
 _GEOCODE_CACHE_PRECISION = 4  # decimals — ~11 m grid
+
+# C105 (ACTION_ITEMS.md): dedupe concurrent viewers of the same leg, mirroring
+# route_distance.py's _LIVE_ROUTE_CACHE_TTL_S. Uniform fine precision on
+# every coordinate -- same scheme as routes/rides/_shared.py's
+# _fare_directions_cache_key, NOT route_distance.py's coarse-origin scheme.
+# route_distance.py can safely coarsen its origin because its only caller is
+# a live driver GPS position; this endpoint has no such guarantee. Checked
+# against all 5 real client call sites (rider-app + driver-app) before
+# picking this: driver-arriving.tsx and the driver dashboard do pass a
+# moving position as origin, but ride-options.tsx, ride-in-progress.tsx and
+# driver-arrived.tsx all pass a FIXED, per-ride pickup as "origin" paired
+# with a FIXED dropoff. Coarsening the origin there would let two different
+# bookings' distinct-but-nearby pickups (e.g. two entrances on the same
+# block) collide in the cache whenever their dropoffs also round together
+# (common for a popular shared destination, e.g. an airport) -- silently
+# serving one rider's confirmed route to another. Fine precision on the
+# origin costs some cache-hit rate for the two genuinely-moving-origin call
+# sites (a jittery GPS ping less often re-rounds to the same bucket) but
+# that is a pure efficiency trade-off, not a correctness one.
+_DIRECTIONS_CACHE_TTL_S = 30
+_DIRECTIONS_CACHE_PRECISION = 5  # decimals — ~1 m grid, every coordinate
 
 
 async def _ensure_budget(sku) -> None:
@@ -276,6 +298,21 @@ def _parse_latlng(raw: str, field: str) -> tuple:
     return lat, lng
 
 
+def _directions_cache_key(o_lat: float, o_lng: float, d_lat: float, d_lng: float, stops: list) -> str:
+    """Cache key for get_directions — uniform fine precision on every
+    coordinate (see the _DIRECTIONS_CACHE_PRECISION comment above for why).
+    Waypoints are included in order: order is never optimized, so a
+    different stop sequence for the same origin/destination is a different
+    route and must not collide.
+    """
+    p = _DIRECTIONS_CACHE_PRECISION
+    key = f"maps_directions:{round(o_lat, p)},{round(o_lng, p)}:{round(d_lat, p)},{round(d_lng, p)}"
+    if stops:
+        wp = "|".join(f"{round(lat, p)},{round(lng, p)}" for lat, lng in stops)
+        key += f":wp={wp}"
+    return key
+
+
 @api_router.get("/directions")
 @limiter.limit("60/minute", key_func=get_user_or_ip_key)
 async def get_directions(
@@ -304,23 +341,41 @@ async def get_directions(
     silently reorder them.
 
     Returns ``{"coordinates": [[lat, lng], ...], "distance_km": float|None,
-    "duration_minutes": float|None}`` — the same information a
+    "duration_minutes": float|None, "cached": bool}`` — the same information a
     `MapViewDirections.onReady` callback provides, pre-decoded so the client
     doesn't need its own polyline decoder for this path.
-    """
-    await _ensure_budget("directions")
-    api_key = await _maps_key()
 
+    Redis-cached for ``_DIRECTIONS_CACHE_TTL_S`` seconds (C105,
+    ACTION_ITEMS.md) to dedupe concurrent viewers of the same leg — e.g. the
+    driver dashboard's origin→pickup fetch and the rider's driver-arriving
+    fetch requesting near-identical coordinates around the same ride. A
+    Redis outage never breaks this endpoint: cache get/set failures are
+    caught and logged, falling through to (or skipping) the direct Google
+    call exactly as if there were no cache at all. A malformed/degenerate
+    result (no billable distance, or no decoded coordinates) is never
+    cached, so a bad response can't keep being served for the TTL window.
+    """
     o_lat, o_lng = _parse_latlng(origin, "origin")
     d_lat, d_lng = _parse_latlng(destination, "destination")
+    stops = [_parse_latlng(pair, "waypoints") for pair in waypoints.split("|")] if waypoints else []
+
+    cache_key = _directions_cache_key(o_lat, o_lng, d_lat, d_lng, stops)
+    try:
+        cached = await redis_get(cache_key)
+        if cached:
+            return {**json.loads(cached), "cached": True}
+    except Exception:
+        logger.warning("[maps_proxy] directions cache get failed", exc_info=False)
+
+    await _ensure_budget("directions")
+    api_key = await _maps_key()
 
     params: dict = {
         "origin": f"{o_lat},{o_lng}",
         "destination": f"{d_lat},{d_lng}",
         "key": api_key,
     }
-    if waypoints:
-        stops = [_parse_latlng(pair, "waypoints") for pair in waypoints.split("|")]
+    if stops:
         params["waypoints"] = "|".join(f"{lat},{lng}" for lat, lng in stops)
 
     try:
@@ -347,11 +402,22 @@ async def get_directions(
         logger.error("[maps_proxy] directions polyline decode failed: %s", e)
         raise HTTPException(status_code=502, detail="Malformed route from Directions API") from e
 
-    return {
+    result = {
         "coordinates": coordinates,
         "distance_km": round(distance_m / 1000, 2) if distance_m else None,
         "duration_minutes": round(duration_s / 60, 1) if duration_s else None,
     }
+
+    # Never cache a malformed/degenerate result — a stale bad entry would
+    # keep returning it for the whole TTL window (same rule as _shared.py's
+    # _fetch_directions_route).
+    if result["distance_km"] is not None and coordinates:
+        try:
+            await redis_set(cache_key, json.dumps(result), ttl=_DIRECTIONS_CACHE_TTL_S)
+        except Exception:
+            logger.warning("[maps_proxy] directions cache set failed", exc_info=False)
+
+    return {**result, "cached": False}
 
 
 def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:

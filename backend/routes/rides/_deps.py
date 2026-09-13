@@ -262,6 +262,6 @@ import re as _re
 import httpx as _httpx  # noqa: E402 — late import to avoid circular at module load
 
 try:
-    from ...utils.maps_budget import reserve_budget
+    from ...utils.maps_budget import check_budget, record_call, reserve_budget
 except ImportError:
-    from utils.maps_budget import reserve_budget  # type: ignore
+    from utils.maps_budget import check_budget, record_call, reserve_budget  # type: ignore

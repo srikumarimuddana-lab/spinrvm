@@ -192,7 +192,10 @@ class TestBudgetGate:
         assert route is None, "budget-exhausted state must soft-fail into haversine, not raise"
         client_cls.assert_not_called(), "no Google call — and no spend — once the breaker is open"
 
-    async def test_budget_allowed_records_spend_on_success(self):
+    async def test_budget_allowed_reserves_spend_before_the_call(self):
+        """C104: this call site now reserves spend atomically (before the
+        Google call) via reserve_budget(), not check_budget()+record_call()
+        after. Confirms the reservation happens with the right SKU name."""
         payload = _ok_payload([{"distance": {"value": 1800}, "duration": {"value": 360}}])
         reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
         with (
@@ -208,10 +211,11 @@ class TestBudgetGate:
         assert route is not None
         reserve_mock.assert_awaited_once_with("directions")
 
-    async def test_budget_allowed_records_spend_even_on_non_ok_status(self):
-        """The reservation happens before the request even goes out — it's
-        recorded regardless of what Google answers, same placement as
-        route_distance.py's sibling "directions" call site."""
+    async def test_budget_reserved_even_on_non_ok_status(self):
+        """The reservation happens before the Google call, so it's already
+        made regardless of what Google eventually answers — unlike the old
+        record_call()-after-the-fact placement, this doesn't depend on the
+        response at all."""
         reserve_mock = AsyncMock(return_value=(True, 0.0, 5.0))
         with (
             patch(f"{_TARGET}.reserve_budget", reserve_mock),

@@ -449,10 +449,12 @@ def pg_conn(pg_test_dbname):
     # follow it in the same file section, verbatim.
     #
     # Note: corporate_accounts's OWN admin policy (migration 17) was never
-    # touched by 142's fix -- it still checks `users.role = 'admin'` only,
-    # excluding super_admin, unlike the 9 sibling tables. This is real,
-    # pre-existing, unfixed drift (see test_corporate_billing_rls.py), not a
-    # harness bug -- left exactly as shipped. ---
+    # touched by 142's fix -- it still checked `users.role = 'admin'` only,
+    # excluding super_admin, unlike the 9 sibling tables. Migration 416 (PR
+    # #5307) closed this the same day, applying 142's exact fix pattern to
+    # this one table -- applied below, after the baseline grant block, for
+    # the same reason 142's own fix is sequenced after it (see that block's
+    # comment: granting then narrowing, not narrowing then re-granting). ---
     cur.execute((migrations_dir / "05_corporate_accounts.sql").read_text())
     cur.execute((migrations_dir / "17_corporate_accounts_fk.sql").read_text())
     cur.execute((migrations_dir / "27_corporate_b2b_v1.sql").read_text())
@@ -484,6 +486,12 @@ def pg_conn(pg_test_dbname):
             "-- 3. PIPEDA data minimization:",
         )
     )
+
+    # Migration 416 (PR #5307): corporate_accounts's own admin-policy fix,
+    # verbatim -- applies 142's exact pattern (SELECT-only admin/super_admin
+    # policy + REVOKE/GRANT write lockdown) to this one table, which 142
+    # itself never touched.
+    cur.execute((migrations_dir / "416_corporate_accounts_rls_super_admin_fix.sql").read_text())
 
     # --- stripe_disputes (migration 88) / stripe_orphan_refunds (migration
     # 254): admin-only read tables, verbatim. Unlike every other
